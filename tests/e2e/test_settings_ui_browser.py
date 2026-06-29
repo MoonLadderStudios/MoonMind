@@ -93,7 +93,7 @@ def _fill_queue_task_create_form(page):
 
 def _mock_queue_runtime_capabilities(page):
     page.route(
-        "**/api/queue/workers/runtime-capabilities",
+        "**/api/workers/runtime-capabilities",
         lambda route: route.fulfill(
             status=200,
             content_type="application/json",

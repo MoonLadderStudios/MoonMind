@@ -7,13 +7,6 @@
     "section": "providers-secrets",
     "type": "secret_ref"
   },
-  "live_sessions.default_enabled": {
-    "scopes": [
-      "workspace"
-    ],
-    "section": "user-workspace",
-    "type": "boolean"
-  },
   "skills.canary_percent": {
     "scopes": [
       "workspace"

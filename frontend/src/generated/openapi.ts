@@ -567,7 +567,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/workflows/codex/shards": {
+    "/api/v1/operations/codex/shards": {
         parameters: {
             query?: never;
             header?: never;
@@ -578,7 +578,7 @@ export interface paths {
          * List Codex Shards
          * @description Return Codex shard health and associated volume metadata.
          */
-        get: operations["list_codex_shards_api_workflows_codex_shards_get"];
+        get: operations["list_codex_shards_api_v1_operations_codex_shards_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -587,7 +587,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/workflows/runs/{run_id}/codex/preflight": {
+    "/api/v1/operations/codex/preflight/{run_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -600,7 +600,7 @@ export interface paths {
          * Trigger Codex Preflight
          * @description Run the Codex login status check for the specified workflow run.
          */
-        post: operations["trigger_codex_preflight_api_workflows_runs__run_id__codex_preflight_post"];
+        post: operations["trigger_codex_preflight_api_v1_operations_codex_preflight__run_id__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -614,11 +614,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Workflow Runs
-         * @description Return workflow runs filtered by query parameters.
-         */
-        get: operations["list_workflow_runs_api_workflows_runs_get"];
+        /** Legacy List Workflow Runs Gone */
+        get: operations["legacy_list_workflow_runs_gone_api_workflows_runs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -634,11 +631,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Get Automation Run
-         * @description Return run status, per-phase metadata, and artifact summaries.
-         */
-        get: operations["get_automation_run_api_workflows_runs__run_id__get"];
+        /** Legacy Get Workflow Run Gone */
+        get: operations["legacy_get_workflow_run_gone_api_workflows_runs__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -654,11 +648,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Workflow Run Tasks
-         * @description Return ordered task states for the specified workflow run.
-         */
-        get: operations["list_workflow_run_tasks_api_workflows_runs__run_id__tasks_get"];
+        /** Legacy List Workflow Run Tasks Gone */
+        get: operations["legacy_list_workflow_run_tasks_gone_api_workflows_runs__run_id__tasks_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -674,11 +665,42 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Workflow Run Artifacts
-         * @description Return artifact metadata for the specified workflow run.
-         */
-        get: operations["list_workflow_run_artifacts_api_workflows_runs__run_id__artifacts_get"];
+        /** Legacy List Workflow Run Artifacts Gone */
+        get: operations["legacy_list_workflow_run_artifacts_gone_api_workflows_runs__run_id__artifacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflows/runs/{run_id}/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Legacy Get Workflow Run Artifact Gone */
+        get: operations["legacy_get_workflow_run_artifact_gone_api_workflows_runs__run_id__artifacts__artifact_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflows/runs/{run_id}/artifacts/{artifact_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Legacy Download Workflow Run Artifact Gone */
+        get: operations["legacy_download_workflow_run_artifact_gone_api_workflows_runs__run_id__artifacts__artifact_id__download_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -696,11 +718,42 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Retry Workflow Run
-         * @description Retry a failed workflow run starting from the failed stage.
-         */
-        post: operations["retry_workflow_run_api_workflows_runs__run_id__retry_post"];
+        /** Legacy Retry Workflow Run Gone */
+        post: operations["legacy_retry_workflow_run_gone_api_workflows_runs__run_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflows/codex/shards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Legacy List Codex Shards Gone */
+        get: operations["legacy_list_codex_shards_gone_api_workflows_codex_shards_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflows/runs/{run_id}/codex/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Legacy Trigger Codex Preflight Gone */
+        post: operations["legacy_trigger_codex_preflight_gone_api_workflows_runs__run_id__codex_preflight_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1753,7 +1806,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/workflows/runs/{run_id}/artifacts/{artifact_id}": {
+    "/api/v1/operations/automation/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Automation Run
+         * @description Return run status, per-phase metadata, and artifact summaries.
+         */
+        get: operations["get_automation_run_api_v1_operations_automation_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/automation/runs/{run_id}/artifacts/{artifact_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1764,7 +1837,7 @@ export interface paths {
          * Get Automation Artifact
          * @description Return detailed metadata for a specific automation artifact.
          */
-        get: operations["get_automation_artifact_api_workflows_runs__run_id__artifacts__artifact_id__get"];
+        get: operations["get_automation_artifact_api_v1_operations_automation_runs__run_id__artifacts__artifact_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1773,7 +1846,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/workflows/runs/{run_id}/artifacts/{artifact_id}/download": {
+    "/api/v1/operations/automation/runs/{run_id}/artifacts/{artifact_id}/download": {
         parameters: {
             query?: never;
             header?: never;
@@ -1784,7 +1857,7 @@ export interface paths {
          * Download Automation Artifact
          * @description Return the artifact file as a streamed download.
          */
-        get: operations["download_automation_artifact_api_workflows_runs__run_id__artifacts__artifact_id__download_get"];
+        get: operations["download_automation_artifact_api_v1_operations_automation_runs__run_id__artifacts__artifact_id__download_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3700,12 +3773,6 @@ export interface components {
          */
         CodexAuthVolumeStatus: "ready" | "needs_auth" | "error";
         /**
-         * CodexCredentialStatus
-         * @description Result of Codex credential validation.
-         * @enum {string}
-         */
-        CodexCredentialStatus: "valid" | "invalid" | "expires_soon";
-        /**
          * CodexPreflightRequest
          * @description Request payload accepted by the Codex pre-flight endpoint.
          */
@@ -5555,12 +5622,6 @@ export interface components {
             /** Artifactref */
             artifactRef?: string | null;
         };
-        /**
-         * GitHubCredentialStatus
-         * @description Result of GitHub credential validation.
-         * @enum {string}
-         */
-        GitHubCredentialStatus: "valid" | "invalid" | "scope_missing";
         /** GitHubLoadRequest */
         GitHubLoadRequest: {
             /** Repo */
@@ -7782,22 +7843,6 @@ export interface components {
             /** Planning Ref */
             planning_ref?: string | null;
         };
-        /**
-         * RetryWorkflowMode
-         * @description Retry semantics supported by the workflow API.
-         * @enum {string}
-         */
-        RetryWorkflowMode: "resume_failed_task" | "restart_from_discovery";
-        /**
-         * RetryWorkflowRunRequest
-         * @description Request payload for retrying a failed workflow run.
-         */
-        RetryWorkflowRunRequest: {
-            /** @default resume_failed_task */
-            mode: components["schemas"]["RetryWorkflowMode"];
-            /** Notes */
-            notes?: string | null;
-        };
         /** RollbackEligibilityModel */
         RollbackEligibilityModel: {
             /** Eligible */
@@ -8919,56 +8964,6 @@ export interface components {
             signalStatus?: string | null;
         };
         /**
-         * WorkflowArtifactListResponse
-         * @description Envelope returned when listing artifacts for a workflow run.
-         */
-        WorkflowArtifactListResponse: {
-            /**
-             * Runid
-             * Format: uuid
-             */
-            runId: string;
-            /** Artifacts */
-            artifacts?: components["schemas"]["WorkflowArtifactModel"][];
-        };
-        /**
-         * WorkflowArtifactModel
-         * @description Schema for stored workflow artifacts.
-         */
-        WorkflowArtifactModel: {
-            /** Id */
-            id?: string | null;
-            artifactType: components["schemas"]["WorkflowArtifactType"];
-            /** Path */
-            path: string;
-            /** Contenttype */
-            contentType?: string | null;
-            /** Sizebytes */
-            sizeBytes?: number | null;
-            /** Digest */
-            digest?: string | null;
-            /** Createdat */
-            createdAt?: string | null;
-        };
-        /**
-         * WorkflowArtifactType
-         * @description Artifacts captured while the Spec workflow executes.
-         * @enum {string}
-         */
-        WorkflowArtifactType: "codex_logs" | "codex_patch" | "gh_push_log" | "gh_pr_response" | "apply_output" | "pr_payload" | "retry_context";
-        /**
-         * WorkflowCredentialAuditModel
-         * @description Schema describing credential validation results.
-         */
-        WorkflowCredentialAuditModel: {
-            codexStatus: components["schemas"]["CodexCredentialStatus"];
-            githubStatus: components["schemas"]["GitHubCredentialStatus"];
-            /** Checkedat */
-            checkedAt?: string | null;
-            /** Notes */
-            notes?: string | null;
-        };
-        /**
          * WorkflowInputSnapshotDescriptorModel
          * @description Compact pointer to the authoritative original task input snapshot.
          */
@@ -9340,158 +9335,11 @@ export interface components {
          */
         WorkflowProposalStatus: "open" | "promoted" | "dismissed" | "accepted" | "rejected";
         /**
-         * WorkflowRunCollectionResponse
-         * @description Envelope returned when listing workflow runs.
-         */
-        WorkflowRunCollectionResponse: {
-            /** Items */
-            items?: components["schemas"]["WorkflowRunModel"][];
-            /** Nextcursor */
-            nextCursor?: string | null;
-        };
-        /**
-         * WorkflowRunModel
-         * @description Full representation of a workflow run exposed via the API.
-         */
-        WorkflowRunModel: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Featurekey */
-            featureKey: string;
-            status: components["schemas"]["WorkflowRunStatus"];
-            phase: components["schemas"]["WorkflowRunPhase"];
-            /** Repository */
-            repository?: string | null;
-            /** Branchname */
-            branchName?: string | null;
-            /** Prurl */
-            prUrl?: string | null;
-            /** Codextaskid */
-            codexTaskId?: string | null;
-            /** Codexqueue */
-            codexQueue?: string | null;
-            /** Codexvolume */
-            codexVolume?: string | null;
-            codexPreflightStatus?: components["schemas"]["CodexPreflightStatus"] | null;
-            /** Codexpreflightmessage */
-            codexPreflightMessage?: string | null;
-            /** Codexlogspath */
-            codexLogsPath?: string | null;
-            /** Codexpatchpath */
-            codexPatchPath?: string | null;
-            /** Legacychainid */
-            legacyChainId?: string | null;
-            /** Requestedby */
-            requestedBy?: string | null;
-            /** Createdby */
-            createdBy?: string | null;
-            currentTaskName?: components["schemas"]["WorkflowTaskName"] | null;
-            /** Startedat */
-            startedAt?: string | null;
-            /** Finishedat */
-            finishedAt?: string | null;
-            /** Completedat */
-            completedAt?: string | null;
-            /** Artifactspath */
-            artifactsPath?: string | null;
-            /** Createdat */
-            createdAt?: string | null;
-            /** Updatedat */
-            updatedAt?: string | null;
-            /** Tasks */
-            tasks?: components["schemas"]["WorkflowTaskStateModel"][];
-            /** Tasksummary */
-            taskSummary?: components["schemas"]["WorkflowTaskSummaryModel"][];
-            /** Artifacts */
-            artifacts?: components["schemas"]["WorkflowArtifactModel"][];
-            credentialAudit?: components["schemas"]["WorkflowCredentialAuditModel"] | null;
-        };
-        /**
-         * WorkflowRunPhase
-         * @description High-level phase executed by the Spec workflow chain.
-         * @enum {string}
-         */
-        WorkflowRunPhase: "discover" | "submit" | "apply" | "publish" | "complete";
-        /**
          * WorkflowRunStatus
          * @description Lifecycle states tracked for Spec workflow runs.
          * @enum {string}
          */
         WorkflowRunStatus: "pending" | "running" | "succeeded" | "failed" | "no_work" | "cancelled" | "retrying";
-        /**
-         * WorkflowTaskName
-         * @description Supported workflow task identifiers for the chain.
-         * @enum {string}
-         */
-        WorkflowTaskName: "discover" | "submit" | "apply" | "publish" | "finalize" | "retry-hook";
-        /**
-         * WorkflowTaskStateListResponse
-         * @description Envelope returned when listing task states for a workflow run.
-         */
-        WorkflowTaskStateListResponse: {
-            /**
-             * Runid
-             * Format: uuid
-             */
-            runId: string;
-            /** Tasks */
-            tasks?: components["schemas"]["WorkflowTaskStateModel"][];
-        };
-        /**
-         * WorkflowTaskStateModel
-         * @description Schema for individual workflow task states.
-         */
-        WorkflowTaskStateModel: {
-            /** Id */
-            id?: string | null;
-            /** Taskname */
-            taskName: string;
-            status: components["schemas"]["WorkflowTaskStatus"];
-            /** Executionordinal */
-            executionOrdinal: number;
-            /** Payload */
-            payload?: {
-                [key: string]: unknown;
-            } | null;
-            /** Message */
-            message?: string | null;
-            /** Artifactpaths */
-            artifactPaths?: string[];
-            /** Startedat */
-            startedAt?: string | null;
-            /** Finishedat */
-            finishedAt?: string | null;
-            /** Createdat */
-            createdAt?: string | null;
-            /** Updatedat */
-            updatedAt?: string | null;
-        };
-        /**
-         * WorkflowTaskStatus
-         * @description Execution state tracked for each workflow task.
-         * @enum {string}
-         */
-        WorkflowTaskStatus: "queued" | "running" | "succeeded" | "failed" | "skipped";
-        /**
-         * WorkflowTaskSummaryModel
-         * @description Schema capturing the latest state per workflow task.
-         */
-        WorkflowTaskSummaryModel: {
-            /** Taskname */
-            taskName: string;
-            status: components["schemas"]["WorkflowTaskStatus"];
-            /** Executionordinal */
-            executionOrdinal: number;
-            /** Startedat */
-            startedAt?: string | null;
-            /** Finishedat */
-            finishedAt?: string | null;
-            /** Updatedat */
-            updatedAt?: string | null;
-        };
     };
     responses: never;
     parameters: never;
@@ -10475,7 +10323,7 @@ export interface operations {
             };
         };
     };
-    list_codex_shards_api_workflows_codex_shards_get: {
+    list_codex_shards_api_v1_operations_codex_shards_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10495,7 +10343,7 @@ export interface operations {
             };
         };
     };
-    trigger_codex_preflight_api_workflows_runs__run_id__codex_preflight_post: {
+    trigger_codex_preflight_api_v1_operations_codex_preflight__run_id__post: {
         parameters: {
             query?: never;
             header?: never;
@@ -10530,16 +10378,9 @@ export interface operations {
             };
         };
     };
-    list_workflow_runs_api_workflows_runs_get: {
+    legacy_list_workflow_runs_gone_api_workflows_runs_get: {
         parameters: {
-            query?: {
-                status?: string | null;
-                featureKey?: string | null;
-                createdBy?: string | null;
-                limit?: number;
-                cursor?: string | null;
-                includeTasks?: boolean;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -10552,21 +10393,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkflowRunCollectionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": unknown;
                 };
             };
         };
     };
-    get_automation_run_api_workflows_runs__run_id__get: {
+    legacy_get_workflow_run_gone_api_workflows_runs__run_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10583,7 +10415,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AutomationRunDetail"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -10597,7 +10429,7 @@ export interface operations {
             };
         };
     };
-    list_workflow_run_tasks_api_workflows_runs__run_id__tasks_get: {
+    legacy_list_workflow_run_tasks_gone_api_workflows_runs__run_id__tasks_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10614,7 +10446,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkflowTaskStateListResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -10628,7 +10460,7 @@ export interface operations {
             };
         };
     };
-    list_workflow_run_artifacts_api_workflows_runs__run_id__artifacts_get: {
+    legacy_list_workflow_run_artifacts_gone_api_workflows_runs__run_id__artifacts_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10645,7 +10477,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkflowArtifactListResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -10659,7 +10491,71 @@ export interface operations {
             };
         };
     };
-    retry_workflow_run_api_workflows_runs__run_id__retry_post: {
+    legacy_get_workflow_run_artifact_gone_api_workflows_runs__run_id__artifacts__artifact_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    legacy_download_workflow_run_artifact_gone_api_workflows_runs__run_id__artifacts__artifact_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    legacy_retry_workflow_run_gone_api_workflows_runs__run_id__retry_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -10668,19 +10564,66 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["RetryWorkflowRunRequest"] | null;
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
-            202: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkflowRunModel"];
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    legacy_list_codex_shards_gone_api_workflows_codex_shards_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    legacy_trigger_codex_preflight_gone_api_workflows_runs__run_id__codex_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -13063,7 +13006,38 @@ export interface operations {
             };
         };
     };
-    get_automation_artifact_api_workflows_runs__run_id__artifacts__artifact_id__get: {
+    get_automation_run_api_v1_operations_automation_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationRunDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_automation_artifact_api_v1_operations_automation_runs__run_id__artifacts__artifact_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13095,7 +13069,7 @@ export interface operations {
             };
         };
     };
-    download_automation_artifact_api_workflows_runs__run_id__artifacts__artifact_id__download_get: {
+    download_automation_artifact_api_v1_operations_automation_runs__run_id__artifacts__artifact_id__download_get: {
         parameters: {
             query?: never;
             header?: never;

@@ -181,7 +181,7 @@ def test_get_run_detail_success(
 
     repo.get_run_detail.return_value = (run, [task_state], [artifact])
 
-    response = http_client.get(f"/api/workflows/runs/{run_id}")
+    response = http_client.get(f"/api/v1/operations/automation/runs/{run_id}")
 
     assert response.status_code == 200
     data = response.json()
@@ -215,7 +215,7 @@ def test_get_run_detail_uses_explicit_skill_metadata(
     )
     repo.get_run_detail.return_value = (run, [task_state], [])
 
-    response = http_client.get(f"/api/workflows/runs/{run_id}")
+    response = http_client.get(f"/api/v1/operations/automation/runs/{run_id}")
 
     assert response.status_code == 200
     payload = response.json()
@@ -244,7 +244,7 @@ def test_get_run_detail_backfills_blank_moonspec_adapter_fields(
     )
     repo.get_run_detail.return_value = (run, [task_state], [])
 
-    response = http_client.get(f"/api/workflows/runs/{run_id}")
+    response = http_client.get(f"/api/v1/operations/automation/runs/{run_id}")
 
     assert response.status_code == 200
     phase_payload = response.json()["phases"][0]
@@ -267,7 +267,7 @@ def test_get_run_detail_keeps_non_moonspec_partial_metadata(
     )
     repo.get_run_detail.return_value = (run, [task_state], [])
 
-    response = http_client.get(f"/api/workflows/runs/{run_id}")
+    response = http_client.get(f"/api/v1/operations/automation/runs/{run_id}")
 
     assert response.status_code == 200
     phase_payload = response.json()["phases"][0]
@@ -284,7 +284,7 @@ def test_get_run_detail_not_found(
     run_id = uuid4()
     repo.get_run_detail.return_value = None
 
-    response = http_client.get(f"/api/workflows/runs/{run_id}")
+    response = http_client.get(f"/api/v1/operations/automation/runs/{run_id}")
 
     assert response.status_code == 404
     repo.get_run_detail.assert_awaited_once_with(run_id)
@@ -306,7 +306,7 @@ def test_get_artifact_detail_success(
     repo.get_artifact.return_value = artifact
 
     response = http_client.get(
-        f"/api/workflows/runs/{run_id}/artifacts/{artifact.id}"
+        f"/api/v1/operations/automation/runs/{run_id}/artifacts/{artifact.id}"
     )
 
     assert response.status_code == 200
@@ -314,7 +314,7 @@ def test_get_artifact_detail_success(
     assert payload["artifact_id"] == str(artifact.id)
     assert (
         payload["download_url"]
-        == f"http://testserver/api/workflows/runs/{run_id}/artifacts/{artifact.id}/download"
+        == f"http://testserver/api/v1/operations/automation/runs/{run_id}/artifacts/{artifact.id}/download"
     )
     repo.get_artifact.assert_awaited_once_with(run_id=run_id, artifact_id=artifact.id)
 
@@ -327,7 +327,7 @@ def test_get_artifact_detail_not_found(
     repo.get_artifact.return_value = None
 
     response = http_client.get(
-        f"/api/workflows/runs/{run_id}/artifacts/{artifact_id}"
+        f"/api/v1/operations/automation/runs/{run_id}/artifacts/{artifact_id}"
     )
 
     assert response.status_code == 404
@@ -343,7 +343,7 @@ def test_get_run_detail_forbidden(
     run.repository = "forbidden/repo"
     repo.get_run_detail.return_value = (run, [], [])
 
-    response = http_client.get(f"/api/workflows/runs/{run_id}")
+    response = http_client.get(f"/api/v1/operations/automation/runs/{run_id}")
 
     assert response.status_code == 403
 
@@ -366,7 +366,7 @@ def test_get_artifact_detail_forbidden(
     repo.get_artifact.return_value = artifact
 
     response = http_client.get(
-        f"/api/workflows/runs/{run_id}/artifacts/{artifact.id}"
+        f"/api/v1/operations/automation/runs/{run_id}/artifacts/{artifact.id}"
     )
 
     assert response.status_code == 403
@@ -400,7 +400,7 @@ def test_download_artifact_success(
     )
 
     response = http_client.get(
-        f"/api/workflows/runs/{run_id}/artifacts/{artifact.id}/download"
+        f"/api/v1/operations/automation/runs/{run_id}/artifacts/{artifact.id}/download"
     )
 
     assert response.status_code == 200
@@ -433,7 +433,7 @@ def test_download_artifact_missing_file(
     )
 
     response = http_client.get(
-        f"/api/workflows/runs/{run_id}/artifacts/{artifact.id}/download"
+        f"/api/v1/operations/automation/runs/{run_id}/artifacts/{artifact.id}/download"
     )
 
     assert response.status_code == 404

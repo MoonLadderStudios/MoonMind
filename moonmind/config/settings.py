@@ -967,64 +967,10 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices("WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR"),
         description="Enable startup validation of the configured local skill mirror root.",
     )
-    live_session_enabled_default: bool = Field(
-        True,
-        validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT"),
-        description="Enable live sessions by default for queued workflow runs.",
-        json_schema_extra={
-            "moonmind": {
-                "expose": True,
-                "key": "live_sessions.default_enabled",
-                "section": "user-workspace",
-                "category": "Live Sessions",
-                "scopes": ["workspace"],
-                "ui": "toggle",
-                "type": "boolean",
-                "requires_reload": False,
-                "apply_mode": "next_workflow",
-                "title": "Live Sessions Enabled By Default",
-                "applies_to": ["workflow_creation", "live_sessions"],
-                "order": 50,
-            }
-        },
-    )
     log_streaming_enabled: bool = Field(
         True,
         validation_alias=AliasChoices("MOONMIND_LOG_STREAMING_ENABLED"),
         description="Enable artifact-backed live log streaming (Phase 0 boundary).",
-    )
-    live_session_provider: str = Field(
-        "none",
-        validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_PROVIDER"),
-        description="Live session provider implementation (none = disabled).",
-    )
-    live_session_ttl_minutes: int = Field(
-        60,
-        validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_TTL_MINUTES"),
-        description="Default live session lifetime before automatic revocation.",
-        ge=1,
-        le=1440,
-    )
-    live_session_rw_grant_ttl_minutes: int = Field(
-        15,
-        validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES"),
-        description="Default RW reveal grant duration for live sessions.",
-        ge=1,
-        le=240,
-    )
-    live_session_allow_web: bool = Field(
-        False,
-        validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_ALLOW_WEB"),
-        description="Whether live-session web attach URLs are exposed via API responses.",
-    )
-    live_session_max_concurrent_per_worker: int = Field(
-        4,
-        validation_alias=AliasChoices(
-            "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER"
-        ),
-        description="Maximum concurrent live sessions each worker should provision.",
-        ge=1,
-        le=64,
     )
     enable_proposals: bool = Field(
         True,
@@ -1185,7 +1131,6 @@ class WorkflowSettings(BaseSettings):
         "submit_skill",
         "publish_skill",
         "skills_registry_source",
-        "live_session_provider",
         mode="before",
     )
     @classmethod
@@ -1324,16 +1269,6 @@ class WorkflowSettings(BaseSettings):
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"default_publish_mode must be one of: {supported}")
-        return normalized
-
-    @field_validator("live_session_provider", mode="before")
-    @classmethod
-    def _normalize_live_session_provider(cls, value: object) -> str:
-        """Normalize live session provider and reject unknown values."""
-
-        normalized = str(value or "").strip().lower() or "none"
-        if normalized not in {"none"}:
-            raise ValueError("live_session_provider must be one of: none")
         return normalized
 
     @field_validator("github_repository", mode="before")

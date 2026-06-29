@@ -913,7 +913,7 @@ Ongoing or pending work includes:
 
 ### 13.4 Legacy session-based observability
 
-Legacy terminal/session metadata (`AgentRunLiveSession`, `tmate web_ro`, socket paths, `attachRo`, `webRo`) may remain in the database for historical runs created before the MoonMind-native observability model was in place.
+Legacy terminal/session metadata from migration-era runs is historical only. The active managed-run model uses artifact-backed stdout/stderr logs and MoonMind-native log streaming rather than terminal-relay rows or attach URLs.
 
 Migration rules:
 

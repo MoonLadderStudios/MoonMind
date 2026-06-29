@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
-from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
@@ -22,34 +19,17 @@ from moonmind.schemas.workflow_models import (
     CodexPreflightResultModel,
     CodexShardHealthModel,
     CodexShardListResponse,
-    RetryWorkflowMode,
-    RetryWorkflowRunRequest,
-    WorkflowRunModel,
-    WorkflowArtifactListResponse,
-    WorkflowRunCollectionResponse,
-    WorkflowTaskStateListResponse,
 )
-from moonmind.workflows import (
-    WorkflowRepository,
-)
+from moonmind.workflows import get_workflow_repository
 from moonmind.workflows.automation.repositories import WorkflowRepository
 from moonmind.workflows.automation import models
 from moonmind.workflows.automation.preflight import run_codex_preflight_check
 from moonmind.workflows.automation.router import get_codex_shard_router
-from moonmind.workflows.automation.serializers import (
-    serialize_artifact_collection,
-    serialize_run,
-    serialize_task_collection,
-)
 
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
-canonical_router = APIRouter(prefix="/api/workflows", tags=["workflows"])
-legacy_router = APIRouter(
-    prefix="/api/workflows",
-    tags=["workflows"],
-)
+operations_router = APIRouter(prefix="/api/v1/operations/codex", tags=["operations"])
+legacy_router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
 _AFFINITY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
@@ -79,31 +59,6 @@ def _assert_run_access(run: object | None, run_id: UUID, user: User | None) -> o
     if _is_workflow_admin(user) or _run_owned_by_user(run, user):
         return run
     _raise_workflow_not_found(run_id)
-
-def _canonicalize_legacy_path(path: str) -> str:
-    if path.startswith("/api/workflows"):
-        suffix = path[len("/api/workflows") :]
-        return f"/api/workflows{suffix}"
-    return path
-
-async def _mark_legacy_route_usage(request: Request, response: Response) -> None:
-    path = request.url.path
-    if not path.startswith("/api/workflows"):
-        return
-
-    canonical_path = _canonicalize_legacy_path(path)
-    response.headers["Deprecation"] = "true"
-    response.headers["X-MoonMind-Deprecated-Route"] = "/api/workflows"
-    response.headers["X-MoonMind-Canonical-Route"] = canonical_path
-
-    logger.info(
-        "Legacy workflow API route used",
-        extra={
-            "legacy_path": path,
-            "canonical_path": canonical_path,
-            "run_id": request.path_params.get("run_id"),
-        },
-    )
 
 def _ensure_utc_timestamp(timestamp: datetime | None) -> datetime:
     if timestamp is None:
@@ -141,30 +96,26 @@ async def _get_repository(
 ) -> WorkflowRepository:
     return get_workflow_repository(session)
 
-def _serialize_run_model(
-    run,
-    *,
-    include_tasks: bool = True,
-    include_artifacts: bool = True,
-    include_credential_audit: bool = True,
-    task_states: Iterable[models.WorkflowTaskState] | None = None,
-) -> WorkflowRunModel:
-    serialized = serialize_run(
-        run,
-        include_tasks=include_tasks,
-        include_artifacts=include_artifacts,
-        include_credential_audit=include_credential_audit,
-        task_states=task_states,
+def _raise_legacy_workflow_runs_gone() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "code": "legacy_workflow_runs_api_removed",
+            "message": (
+                "The /api/workflows/runs lifecycle API has been removed. "
+                "Use /api/executions for execution lifecycle operations and "
+                "/api/agent-runs for managed-run observability."
+            ),
+            "replacement": {
+                "lifecycle": "/api/executions",
+                "managedRunObservability": "/api/agent-runs",
+            },
+            "jiraIssue": "MM-1022",
+        },
     )
-    return WorkflowRunModel.model_validate(serialized)
 
-@canonical_router.get("/codex/shards", response_model=CodexShardListResponse)
-@legacy_router.get(
-    "/codex/shards",
-    response_model=CodexShardListResponse,
-    deprecated=True,
-    dependencies=[Depends(_mark_legacy_route_usage)],
-)
+
+@operations_router.get("/shards", response_model=CodexShardListResponse)
 async def list_codex_shards(
     repo: WorkflowRepository = Depends(_get_repository),
     _user: User = Depends(get_current_user()),
@@ -193,15 +144,9 @@ async def list_codex_shards(
     ]
     return CodexShardListResponse(shards=shards)
 
-@canonical_router.post(
-    "/runs/{run_id}/codex/preflight",
+@operations_router.post(
+    "/preflight/{run_id}",
     response_model=CodexPreflightResultModel,
-)
-@legacy_router.post(
-    "/runs/{run_id}/codex/preflight",
-    response_model=CodexPreflightResultModel,
-    deprecated=True,
-    dependencies=[Depends(_mark_legacy_route_usage)],
 )
 async def trigger_codex_preflight(
     run_id: UUID,
@@ -318,221 +263,76 @@ async def trigger_codex_preflight(
         message=preflight_message,
     )
 
-@canonical_router.get("/runs", response_model=WorkflowRunCollectionResponse)
-@legacy_router.get(
-    "/runs",
-    response_model=WorkflowRunCollectionResponse,
-    deprecated=True,
-    dependencies=[Depends(_mark_legacy_route_usage)],
-)
-async def list_workflow_runs(
-    *,
-    status: Optional[str] = Query(None, alias="status"),
-    feature_key: Optional[str] = Query(None, alias="featureKey"),
-    created_by: Optional[UUID] = Query(None, alias="createdBy"),
-    limit: int = Query(25, ge=1, le=100),
-    cursor: Optional[str] = Query(None, alias="cursor"),
-    include_tasks: bool = Query(False, alias="includeTasks"),
-    repo: WorkflowRepository = Depends(_get_repository),
-    _user: User = Depends(get_current_user()),
-) -> WorkflowRunCollectionResponse:
-    """Return workflow runs filtered by query parameters."""
+@legacy_router.get("/runs")
+async def legacy_list_workflow_runs_gone() -> None:
+    _raise_legacy_workflow_runs_gone()
 
-    status_enum = None
-    if status is not None:
-        try:
-            status_enum = models.WorkflowRunStatus(status)
-        except ValueError as exc:  # pragma: no cover - FastAPI should validate enum
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail={"code": "invalid_status", "message": str(exc)},
-            ) from exc
 
-    if _is_workflow_admin(_user):
-        effective_created_by = created_by
-    else:
-        if created_by is not None and created_by != _user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "code": "workflow_forbidden",
-                    "message": "Cannot list workflow runs for another user.",
-                },
-            )
-        effective_created_by = _user.id
+@legacy_router.get("/runs/{run_id}")
+async def legacy_get_workflow_run_gone(run_id: UUID) -> None:
+    _raise_legacy_workflow_runs_gone()
 
-    try:
-        paginated_runs = await repo.list_runs(
-            status=status_enum,
-            feature_key=feature_key,
-            created_by=effective_created_by,
-            cursor=cursor,
-            limit=limit,
-            with_relations=False,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "code": "invalid_cursor",
-                "message": "Invalid cursor token",
-            },
-        ) from exc
 
-    items_source = (
-        paginated_runs.items
-        if hasattr(paginated_runs, "items")
-        else list(paginated_runs)
-    )
-    task_state_map = await repo.list_task_states_for_runs(
-        run.id for run in items_source
-    )
-    items = [
-        _serialize_run_model(
-            run,
-            include_tasks=include_tasks,
-            include_artifacts=False,
-            include_credential_audit=False,
-            task_states=task_state_map.get(run.id, []),
-        )
-        for run in items_source
-    ]
-    return WorkflowRunCollectionResponse(
-        items=items,
-        nextCursor=getattr(paginated_runs, "next_cursor", None),
+@legacy_router.get("/runs/{run_id}/tasks")
+async def legacy_list_workflow_run_tasks_gone(run_id: UUID) -> None:
+    _raise_legacy_workflow_runs_gone()
+
+
+@legacy_router.get("/runs/{run_id}/artifacts")
+async def legacy_list_workflow_run_artifacts_gone(run_id: UUID) -> None:
+    _raise_legacy_workflow_runs_gone()
+
+
+@legacy_router.get("/runs/{run_id}/artifacts/{artifact_id}")
+async def legacy_get_workflow_run_artifact_gone(run_id: UUID, artifact_id: UUID) -> None:
+    _raise_legacy_workflow_runs_gone()
+
+
+@legacy_router.get("/runs/{run_id}/artifacts/{artifact_id}/download")
+async def legacy_download_workflow_run_artifact_gone(
+    run_id: UUID, artifact_id: UUID
+) -> None:
+    _raise_legacy_workflow_runs_gone()
+
+
+@legacy_router.post("/runs/{run_id}/retry")
+async def legacy_retry_workflow_run_gone(run_id: UUID) -> None:
+    _raise_legacy_workflow_runs_gone()
+
+
+@legacy_router.get("/codex/shards")
+async def legacy_list_codex_shards_gone() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "code": "legacy_codex_operations_route_removed",
+            "message": (
+                "Codex shard health moved out of the legacy workflow namespace. "
+                "Use /api/v1/operations/codex/shards."
+            ),
+            "replacement": "/api/v1/operations/codex/shards",
+            "jiraIssue": "MM-1022",
+        },
     )
 
-@canonical_router.get("/runs/{run_id}", response_model=WorkflowRunModel)
-@legacy_router.get(
-    "/runs/{run_id}",
-    response_model=WorkflowRunModel,
-    deprecated=True,
-    dependencies=[Depends(_mark_legacy_route_usage)],
-)
-async def get_workflow_run(
-    run_id: UUID,
-    include_tasks: bool = Query(True, alias="includeTasks"),
-    include_artifacts: bool = Query(True, alias="includeArtifacts"),
-    include_credential_audit: bool = Query(True, alias="includeCredentialAudit"),
-    repo: WorkflowRepository = Depends(_get_repository),
-    _user: User = Depends(get_current_user()),
-) -> WorkflowRunModel:
-    """Retrieve a single workflow run with related metadata."""
 
-    run = _assert_run_access(
-        await repo.get_run(run_id, with_relations=True),
-        run_id,
-        _user,
+@legacy_router.post("/runs/{run_id}/codex/preflight")
+async def legacy_trigger_codex_preflight_gone(run_id: UUID) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "code": "legacy_codex_operations_route_removed",
+            "message": (
+                "Codex preflight moved out of the legacy workflow namespace. "
+                "Use /api/v1/operations/codex/preflight/{run_id}."
+            ),
+            "replacement": f"/api/v1/operations/codex/preflight/{run_id}",
+            "jiraIssue": "MM-1022",
+        },
     )
 
-    return _serialize_run_model(
-        run,
-        include_tasks=include_tasks,
-        include_artifacts=include_artifacts,
-        include_credential_audit=include_credential_audit,
-    )
 
-@canonical_router.get(
-    "/runs/{run_id}/tasks", response_model=WorkflowTaskStateListResponse
-)
-@legacy_router.get(
-    "/runs/{run_id}/tasks",
-    response_model=WorkflowTaskStateListResponse,
-    deprecated=True,
-    dependencies=[Depends(_mark_legacy_route_usage)],
-)
-async def list_workflow_run_tasks(
-    run_id: UUID,
-    repo: WorkflowRepository = Depends(_get_repository),
-    _user: User = Depends(get_current_user()),
-) -> WorkflowTaskStateListResponse:
-    """Return ordered task states for the specified workflow run."""
-
-    _assert_run_access(await repo.get_run(run_id, with_relations=False), run_id, _user)
-
-    try:
-        states = await repo.list_task_states(run_id, require_run=True)
-    except LookupError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "workflow_not_found",
-                "message": str(exc),
-            },
-        ) from exc
-
-    payload = serialize_task_collection(run_id, states)
-    return WorkflowTaskStateListResponse.model_validate(payload)
-
-@canonical_router.get(
-    "/runs/{run_id}/artifacts", response_model=WorkflowArtifactListResponse
-)
-@legacy_router.get(
-    "/runs/{run_id}/artifacts",
-    response_model=WorkflowArtifactListResponse,
-    deprecated=True,
-    dependencies=[Depends(_mark_legacy_route_usage)],
-)
-async def list_workflow_run_artifacts(
-    run_id: UUID,
-    repo: WorkflowRepository = Depends(_get_repository),
-    _user: User = Depends(get_current_user()),
-) -> WorkflowArtifactListResponse:
-    """Return artifact metadata for the specified workflow run."""
-
-    _assert_run_access(await repo.get_run(run_id), run_id, _user)
-
-    artifacts = await repo.list_artifacts(run_id)
-    payload = serialize_artifact_collection(run_id, artifacts)
-    return WorkflowArtifactListResponse.model_validate(payload)
-
-@canonical_router.post(
-    "/runs/{run_id}/retry",
-    response_model=WorkflowRunModel,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-@legacy_router.post(
-    "/runs/{run_id}/retry",
-    response_model=WorkflowRunModel,
-    status_code=status.HTTP_202_ACCEPTED,
-    deprecated=True,
-    dependencies=[Depends(_mark_legacy_route_usage)],
-)
-async def retry_workflow_run(
-    run_id: UUID,
-    payload: RetryWorkflowRunRequest | None = None,
-    repo: WorkflowRepository = Depends(_get_repository),
-    _user: User = Depends(get_current_user()),
-) -> WorkflowRunModel:
-    """Retry a failed workflow run starting from the failed stage."""
-
-    request = payload or RetryWorkflowRunRequest()
-    notes = request.notes
-    mode = request.mode or RetryWorkflowMode.RESUME_FAILED_TASK
-
-    _assert_run_access(await repo.get_run(run_id, with_relations=False), run_id, _user)
-
-    try:
-        triggered = await retry_workflow_run(run_id, notes=notes, mode=mode)
-    except WorkflowRetryError as exc:
-        status_code_value = (
-            status.HTTP_404_NOT_FOUND
-            if exc.code == "workflow_not_found"
-            else status.HTTP_409_CONFLICT
-        )
-        raise HTTPException(
-            status_code=status_code_value,
-            detail={
-                "code": exc.code,
-                "message": str(exc),
-                "runId": str(exc.run_id),
-            },
-        ) from exc
-
-    refreshed = await repo.get_run(triggered.run_id, with_relations=True)
-    run = refreshed or triggered.run
-    return _serialize_run_model(run)
-
-router.include_router(canonical_router)
+router.include_router(operations_router)
+router.include_router(legacy_router)
 
 __all__ = ["router"]

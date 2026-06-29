@@ -197,7 +197,7 @@ def _route_handlers(
         )
 
     page.route(
-        f"{base_url}/api/queue/workers/runtime-capabilities", _mock_runtime_capabilities
+        f"{base_url}/api/workers/runtime-capabilities", _mock_runtime_capabilities
     )
     page.route(f"{base_url}/api/workflows/skills", _mock_skills)
     page.route(f"{base_url}/api/system/worker-pause", _mock_worker_pause)

@@ -5,7 +5,7 @@ Owners: MoonMind Platform
 Last updated: 2026-04-08
 
 **Replaces or substantially rewrites:**
-- `docs/Temporal/LiveWorkflowManagement.md`
+- `docs/tmp/historical/LiveWorkflowManagement.md`
 - `specs/084-live-log-tailing/spec.md`
 
 **Related:**
@@ -897,7 +897,7 @@ Requirements:
 
 ## 13.3 Legacy live-session model and deprecation rule
 
-The persisted `AgentRunLiveSession` row and terminal-relay metadata are **legacy compatibility only** for historical runs created before the MoonMind-native observability model existed.
+Terminal-relay metadata is **historical compatibility only** for runs created before the MoonMind-native observability model existed. It is not part of the active managed-run data model.
 
 Deprecation rules:
 - managed-run observability for new runs must not depend on `attachRo`, `webRo`, socket paths, or terminal-relay metadata

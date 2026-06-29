@@ -25,7 +25,7 @@ from moonmind.workflows import get_automation_repository
 from moonmind.workflows.automation import models
 from moonmind.workflows.automation.repositories import AutomationRepository
 
-router = APIRouter(prefix="/api/workflows", tags=["Automation"])
+router = APIRouter(prefix="/api/v1/operations/automation", tags=["Automation"])
 
 async def _get_repository(
     session: AsyncSession = Depends(get_async_session),

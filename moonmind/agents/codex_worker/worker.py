@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from os import environ
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, MutableMapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, MutableMapping, NoReturn, Sequence
 from uuid import UUID
 
 import httpx
@@ -1400,37 +1400,7 @@ class QueueApiClient:
         allowed_types: Sequence[str] | None = None,
         worker_capabilities: Sequence[str] | None = None,
     ) -> QueueClaimResult:
-        payload: dict[str, Any] = {
-            "workerId": worker_id,
-            "leaseSeconds": lease_seconds,
-        }
-        if allowed_types:
-            payload["allowedTypes"] = list(allowed_types)
-        if worker_capabilities:
-            payload["workerCapabilities"] = list(worker_capabilities)
-        data = await self._post_json("/api/queue/jobs/claim", json=payload)
-        job_data = data.get("job")
-        job = None
-        if job_data:
-            attempt = self._parse_positive_int_field(
-                node=job_data,
-                field_name="attempt",
-                default=1,
-            )
-            max_attempts = self._parse_positive_int_field(
-                node=job_data,
-                field_name="maxAttempts",
-                default=3,
-            )
-            job = ClaimedJob(
-                id=UUID(str(job_data["id"])),
-                type=str(job_data["type"]),
-                payload=dict(job_data.get("payload") or {}),
-                attempt=attempt,
-                max_attempts=max_attempts,
-            )
-        system = self._parse_system_metadata(data.get("system"))
-        return QueueClaimResult(job=job, system=system)
+        self._raise_queue_lifecycle_removed()
 
     async def heartbeat(
         self,
@@ -1439,12 +1409,7 @@ class QueueApiClient:
         worker_id: str,
         lease_seconds: int,
     ) -> QueueHeartbeatResult:
-        data = await self._post_json(
-            f"/api/queue/jobs/{job_id}/heartbeat",
-            json={"workerId": worker_id, "leaseSeconds": lease_seconds},
-        )
-        system = self._parse_system_metadata(data.get("system"))
-        return QueueHeartbeatResult(job=data, system=system)
+        self._raise_queue_lifecycle_removed()
 
     async def set_runtime_state(
         self,
@@ -1455,12 +1420,7 @@ class QueueApiClient:
     ) -> dict[str, Any]:
         """Persist runtime checkpoint state for a running worker-owned job."""
 
-        payload: dict[str, Any] = {"workerId": worker_id}
-        payload["runtimeState"] = runtime_state
-        return await self._post_json(
-            f"/api/queue/jobs/{job_id}/runtime-state",
-            json=payload,
-        )
+        self._raise_queue_lifecycle_removed()
 
     async def ack_cancel(
         self,
@@ -1473,21 +1433,7 @@ class QueueApiClient:
         finish_outcome_reason: str | None = None,
         finish_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"workerId": worker_id}
-        if message:
-            payload["message"] = message
-        if finish_outcome_code:
-            payload["finishOutcomeCode"] = finish_outcome_code
-        if finish_outcome_stage:
-            payload["finishOutcomeStage"] = finish_outcome_stage
-        if finish_outcome_reason:
-            payload["finishOutcomeReason"] = finish_outcome_reason
-        if finish_summary:
-            payload["finishSummary"] = finish_summary
-        return await self._post_json(
-            f"/api/queue/jobs/{job_id}/cancel/ack",
-            json=payload,
-        )
+        self._raise_queue_lifecycle_removed()
 
     async def complete_job(
         self,
@@ -1500,18 +1446,7 @@ class QueueApiClient:
         finish_outcome_reason: str | None = None,
         finish_summary: dict[str, Any] | None = None,
     ) -> None:
-        payload = {"workerId": worker_id}
-        if result_summary:
-            payload["resultSummary"] = result_summary
-        if finish_outcome_code:
-            payload["finishOutcomeCode"] = finish_outcome_code
-        if finish_outcome_stage:
-            payload["finishOutcomeStage"] = finish_outcome_stage
-        if finish_outcome_reason:
-            payload["finishOutcomeReason"] = finish_outcome_reason
-        if finish_summary:
-            payload["finishSummary"] = finish_summary
-        await self._post_json(f"/api/queue/jobs/{job_id}/complete", json=payload)
+        self._raise_queue_lifecycle_removed()
 
     async def fail_job(
         self,
@@ -1525,23 +1460,7 @@ class QueueApiClient:
         finish_outcome_reason: str | None = None,
         finish_summary: dict[str, Any] | None = None,
     ) -> None:
-        payload: dict[str, Any] = {
-            "workerId": worker_id,
-            "errorMessage": error_message,
-            "retryable": retryable,
-        }
-        if finish_outcome_code:
-            payload["finishOutcomeCode"] = finish_outcome_code
-        if finish_outcome_stage:
-            payload["finishOutcomeStage"] = finish_outcome_stage
-        if finish_outcome_reason:
-            payload["finishOutcomeReason"] = finish_outcome_reason
-        if finish_summary:
-            payload["finishSummary"] = finish_summary
-        await self._post_json(
-            f"/api/queue/jobs/{job_id}/fail",
-            json=payload,
-        )
+        self._raise_queue_lifecycle_removed()
 
     async def append_event(
         self,
@@ -1552,14 +1471,7 @@ class QueueApiClient:
         message: str,
         payload: dict[str, Any] | None = None,
     ) -> None:
-        body: dict[str, Any] = {
-            "workerId": worker_id,
-            "level": level,
-            "message": message,
-        }
-        if payload is not None:
-            body["payload"] = payload
-        await self._post_json(f"/api/queue/jobs/{job_id}/events", json=body)
+        self._raise_queue_lifecycle_removed()
 
     @staticmethod
     def _parse_system_metadata(node: Any) -> QueueSystemStatus:
@@ -1621,37 +1533,7 @@ class QueueApiClient:
         worker_id: str,
         artifact: ArtifactUpload,
     ) -> None:
-        if not artifact.path.exists():
-            raise QueueClientError(f"artifact file does not exist: {artifact.path}")
-
-        content_type = artifact.content_type or "application/octet-stream"
-        data: dict[str, str] = {
-            "name": artifact.name,
-            "workerId": worker_id,
-        }
-        if artifact.content_type:
-            data["contentType"] = artifact.content_type
-
-        digest = artifact.digest or self._sha256_file(artifact.path)
-        if digest:
-            data["digest"] = digest
-
-        with artifact.path.open("rb") as handle:
-            files = {
-                "file": (artifact.path.name, handle, content_type),
-            }
-            try:
-                response = await self._client.post(
-                    f"/api/queue/jobs/{job_id}/artifacts/upload",
-                    data=data,
-                    files=files,
-                    headers=self._request_headers,
-                )
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
-                raise QueueClientError(
-                    f"artifact upload failed for job {job_id}: {exc}"
-                ) from exc
+        self._raise_queue_lifecycle_removed()
 
     async def download_artifact(self, *, artifact_id: str) -> bytes:
         path = f"/api/artifacts/{artifact_id}/download"
@@ -1687,8 +1569,15 @@ class QueueApiClient:
         """Publish worker runtime capabilities to queue metadata."""
 
         await self._post_json(
-            "/api/queue/workers/tokens/capabilities",
+            "/api/workers/runtime-capabilities",
             json={"runtimeCapabilities": runtime_capabilities},
+        )
+
+    @staticmethod
+    def _raise_queue_lifecycle_removed() -> NoReturn:
+        raise QueueClientError(
+            "Legacy queue lifecycle worker APIs were removed by MM-1022. "
+            "Submit and observe work through the Temporal-backed execution API."
         )
 
     @staticmethod
