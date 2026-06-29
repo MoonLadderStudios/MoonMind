@@ -1174,19 +1174,17 @@ describe('Workflows Entrypoint', () => {
         document.querySelectorAll(
           '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
         ),
-      ).toHaveLength(6);
+      ).toHaveLength(2);
     });
 
     const activePills = document.querySelectorAll<HTMLElement>(
       '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
     );
-    expect(activePills).toHaveLength(6);
-    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'planning')).toHaveLength(2);
+    expect(activePills).toHaveLength(2);
     expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'executing')).toHaveLength(2);
-    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'finalizing')).toHaveLength(2);
     for (const pill of activePills) {
       const label = pill.dataset.state;
-      if (label !== 'planning' && label !== 'executing' && label !== 'finalizing') {
+      if (label !== 'executing') {
         throw new Error(`Unexpected active status pill state: ${label}`);
       }
       expect(pill.dataset.state).toBe(label);
@@ -1208,11 +1206,27 @@ describe('Workflows Entrypoint', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1035');
+
+    const planningPills = screen.getAllByText('planning');
+    expect(planningPills.length).toBeGreaterThan(0);
+    for (const pill of planningPills) {
+      expect(pill.closest('span')?.dataset.effect).toBeUndefined();
+      expect(pill.closest('span')?.className).toContain('status-planning');
+    }
+
+    const finalizingPills = screen.getAllByText('finalizing');
+    expect(finalizingPills.length).toBeGreaterThan(0);
+    for (const pill of finalizingPills) {
+      expect(pill.closest('span')?.dataset.effect).toBeUndefined();
+      expect(pill.closest('span')?.className).toContain('status-finalizing');
+    }
 
     const waitingPills = screen.getAllByText('AWAITING DEP');
     expect(waitingPills.length).toBeGreaterThan(0);
     for (const pill of waitingPills) {
       expect(pill.closest('span')?.dataset.effect).toBeUndefined();
+      expect(pill.closest('span')?.className).toContain('status-awaiting-dependencies');
     }
 
     const nonExecutingStatusPills = Array.from(
@@ -1223,6 +1237,7 @@ describe('Workflows Entrypoint', () => {
     expect(awaitingPills.length).toBeGreaterThan(0);
     for (const pill of awaitingPills) {
       expect(pill.dataset.effect).toBeUndefined();
+      expect(pill.className).toContain('status-awaiting-external');
     }
 
   });
@@ -1478,6 +1493,8 @@ describe('Workflows Entrypoint', () => {
     const pillList = screen.getByLabelText('Selected status filters');
     expect(pillList.textContent).toContain('completed');
     expect(pillList.textContent).toContain('failed');
+    expect(pillList.querySelector('.status-completed')).toBeTruthy();
+    expect(pillList.querySelector('.status-failed')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove completed' }));
     expect(pillList.textContent).not.toContain('completed');
@@ -1491,6 +1508,41 @@ describe('Workflows Entrypoint', () => {
       );
     });
   }, 10000);
+
+  it('renders selected status filters with the shared execution status pill colors', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    openFilterDrawer();
+    const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
+
+    for (const value of [
+      'scheduled',
+      'awaiting_slot',
+      'waiting_on_dependencies',
+      'awaiting_external',
+      'initializing',
+      'planning',
+      'finalizing',
+      'canceled',
+      'no_commit',
+    ]) {
+      fireEvent.change(statusFilter, { target: { value } });
+    }
+
+    const pillList = screen.getByLabelText('Selected status filters');
+    expect(pillList.querySelector('.status-scheduled')).toBeTruthy();
+    expect(pillList.querySelector('.status-awaiting-slot')).toBeTruthy();
+    expect(pillList.querySelector('.status-awaiting-dependencies')).toBeTruthy();
+    expect(pillList.querySelector('.status-awaiting-external')).toBeTruthy();
+    expect(pillList.querySelector('.status-initializing')).toBeTruthy();
+    expect(pillList.querySelector('.status-planning')).toBeTruthy();
+    expect(pillList.querySelector('.status-finalizing')).toBeTruthy();
+    expect(pillList.querySelector('.status-canceled')).toBeTruthy();
+    expect(pillList.querySelector('.status-no-commit')).toBeTruthy();
+    expect(pillList.querySelector('[data-effect="shimmer-sweep"]')).toBeNull();
+  });
 
   it('stages status changes until Apply and discards them on cancel, Escape, or outside click', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
