@@ -33,14 +33,12 @@ contract, not an authorization grant or informational label.
 Caller (batch script / UI / API client)
   │
   ▼
-POST /api/queue/jobs   { type: "task", payload: { ... } }
+POST /api/executions   { workflowType, title, initialParameters, ... }
   │
-  │  routing logic in agent_queue.py
-  │  checks settings.temporal_dashboard.submit_enabled
-  │  target == "temporal"
+  │  execution router validates the request and Temporal submission policy
   │
   ▼
-_create_execution_from_task_request()       ← executions.py
+TemporalExecutionService.create_execution()  ← service.py
   │
   │  extracts initial_parameters from payload:
   │    requestType, repository, requiredCapabilities,
@@ -261,7 +259,7 @@ Serialized payload form (legacy accepted): `{ id, skill: { name }, inputs: {...}
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| **Job submission** → Temporal routing | ✅ Implemented | `POST /api/queue/jobs` with `target=temporal` |
+| **Execution submission** → Temporal routing | ✅ Implemented | `POST /api/executions` |
 | **`TemporalExecutionService.create_execution`** | ✅ Implemented | Creates DB record + starts workflow |
 | **`MoonMind.UserWorkflow` workflow definition** | ✅ Implemented | Full lifecycle with signals/updates |
 | **Planning stage** (`plan.generate`) | ✅ Implemented | Activity + planner callback |
@@ -292,10 +290,7 @@ canonical open backlog is maintained in
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                           API Service                                     │
-│  POST /api/queue/jobs ──► _create_execution_from_task_request()           │
-│                              │                                            │
-│                              ▼                                            │
-│                     TemporalExecutionService                              │
+│  POST /api/executions ──► TemporalExecutionService                        │
 │                        .create_execution()                                │
 │                              │                                            │
 │                    ┌─────────┴──────────┐                                 │

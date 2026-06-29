@@ -243,7 +243,7 @@ def _worker_pause_sources() -> dict[str, str]:
     return {
         "get": "/api/system/worker-pause",
         "post": "/api/system/worker-pause",
-        "shardHealth": "/api/workflows/codex/shards",
+        "shardHealth": "/api/v1/operations/codex/shards",
     }
 
 def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:

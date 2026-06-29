@@ -12,7 +12,7 @@ This document outlines **Workflow Cancellation** in MoonMind so that:
 * Workflow Executions can be cancelled while **running natively as Temporal Workflows** (via Temporal Cancellation Requests).
 * Cancellation is exposed through:
   * **MoonMind dashboard** (thin dashboard over REST)
-  * **REST API endpoint(s)** (under `/api/queue`)
+  * **REST API endpoint(s)** (under `/api/executions`)
   * **MCP tool call** (under `/mcp/tools/call`)
 
 ---
@@ -25,7 +25,7 @@ This document outlines **Workflow Cancellation** in MoonMind so that:
 2. **Running cancellation**: user requests cancellation for a running workflow → API sends a Temporal Cancellation Request, workflow detects request, stops execution gracefully, and job transitions to `cancelled`.
 3. **Unified surfaces**: UI + REST + MCP all map to the **same API service methods**.
 4. **Auditability**: cancellation actions are visible in workflow history and UI events.
-5. **Resource lease cleanup**: cancellation must release shared resources (provider-profile slots, live sessions) so they are not orphaned.
+5. **Resource lease cleanup**: cancellation must release shared resources (provider-profile slots) so they are not orphaned.
 
 ### Non-Goals
 
@@ -37,9 +37,9 @@ This document outlines **Workflow Cancellation** in MoonMind so that:
 
 MoonMind Workflow runs are durably orchestrated by Temporal Workflows (e.g., `MoonMind.UserWorkflow`). The cancellation flow mirrors standard Temporal patterns.
 
-* The MoonMind dashboard issues a cancel command to the Control Plane API (`POST /api/queue/jobs/{job_id}/cancel`).
-* If the Workflow Execution is purely queued in the database and hasn't started a workflow, the API marks it `cancelled` in Postgres directly.
-* If a Temporal Workflow Execution `MoonMind.UserWorkflow` is currently active for this run, the API sends a standard **Temporal Cancellation Request** to the workflow via the Temporal Client.
+* The MoonMind dashboard issues a cancel command to the Control Plane API (`POST /api/executions/{workflowId}/cancel`).
+* If a Temporal Workflow Execution `MoonMind.UserWorkflow` is active, the API sends a standard **Temporal Cancellation Request** to the workflow via the Temporal Client.
+* Legacy queue lifecycle routes are not an active cancellation surface.
 
 ### 3.1 Temporal Workflow Graceful Cancellation
 
@@ -55,16 +55,15 @@ MoonMind Workflow runs are durably orchestrated by Temporal Workflows (e.g., `Mo
 
 ### Request cancellation (user action)
 
-`POST /api/queue/jobs/{job_id}/cancel`
+`POST /api/executions/{workflowId}/cancel`
 
 * Auth: `get_current_user()`
 * Body: `{ "reason"?: string }`
 * Behavior:
-  * If the job is in Postgres `queued`: transition to `cancelled` immediately.
   * If a Temporal Workflow is running: Signal/Cancel the Temporal execution.
   * If the job is already terminal: idempotent no-op or 409 state conflict.
 
-Response: updated `JobModel` with `status: cancelled` or `status: cancelling` (if waiting for Temporal tear-down).
+Response: execution status with `status: cancelled` or `status: cancelling` (if waiting for Temporal tear-down).
 
 ---
 
