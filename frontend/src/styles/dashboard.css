@@ -5049,6 +5049,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   overflow-wrap: anywhere;
 }
 
+#queue-dependency-list li {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+#queue-dependency-list li > span:first-child {
+  flex: 1 1 auto;
+}
+
 :is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button {
   width: 1.85rem;
   height: 1.85rem;
