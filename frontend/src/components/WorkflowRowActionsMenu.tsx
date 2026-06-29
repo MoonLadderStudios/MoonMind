@@ -59,10 +59,6 @@ const RowActionsExecutionSchema = z
 type RowActionsExecution = z.infer<typeof RowActionsExecutionSchema>;
 type RowActionDialogKind =
   | 'rename'
-  | 'resume-from-failed-step'
-  | 'cancel'
-  | 'force-cancel'
-  | 'reject'
   | 'send-message';
 
 const KEBAB_ICON = (
@@ -192,16 +188,14 @@ export function WorkflowRowActionsMenu({
     mutationFn: async ({
       action = 'cancel',
       graceful = true,
-      reason,
     }: {
       action?: 'cancel' | 'reject';
       graceful?: boolean;
-      reason?: string;
     }) => {
       const response = await fetch(`${apiBase}/executions/${encodeURIComponent(workflowId)}/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ action, graceful, ...(reason ? { reason } : {}) }),
+        body: JSON.stringify({ action, graceful }),
       });
       if (!response.ok) {
         const text = await response.text();
@@ -352,7 +346,7 @@ export function WorkflowRowActionsMenu({
         },
         onResumeFromFailedStep: () => {
           setActionError(null);
-          setActiveDialog('resume-from-failed-step');
+          failedStepResumeMutation.mutate();
         },
         onRecoverFromSelectedStep: () => {},
         onPause: () => {
@@ -369,15 +363,15 @@ export function WorkflowRowActionsMenu({
         },
         onReject: () => {
           setActionError(null);
-          setActiveDialog('reject');
+          cancelMutation.mutate({ action: 'reject', graceful: true });
         },
         onCancel: () => {
           setActionError(null);
-          setActiveDialog('cancel');
+          cancelMutation.mutate({ action: 'cancel', graceful: true });
         },
         onForceCancel: () => {
           setActionError(null);
-          setActiveDialog('force-cancel');
+          cancelMutation.mutate({ action: 'cancel', graceful: false });
         },
         onSendMessage: () => {
           setActionError(null);
@@ -442,31 +436,6 @@ export function WorkflowRowActionsMenu({
       case 'rename':
         updateMutation.mutate({ updateName: 'SetTitle', title: value }, closeOnSuccess);
         break;
-      case 'resume-from-failed-step':
-        failedStepResumeMutation.mutate(undefined, closeOnSuccess);
-        break;
-      case 'cancel':
-        cancelMutation.mutate(
-          { action: 'cancel', graceful: true, ...(value ? { reason: value } : {}) },
-          closeOnSuccess,
-        );
-        break;
-      case 'force-cancel':
-        cancelMutation.mutate(
-          {
-            action: 'cancel',
-            graceful: false,
-            reason: value || 'Force canceled by operator from the dashboard.',
-          },
-          closeOnSuccess,
-        );
-        break;
-      case 'reject':
-        cancelMutation.mutate(
-          { action: 'reject', graceful: true, reason: value || 'Rejected by operator.' },
-          closeOnSuccess,
-        );
-        break;
       case 'send-message':
         signalMutation.mutate(
           { signalName: 'SendMessage', payload: { message: value } },
@@ -504,74 +473,6 @@ export function WorkflowRowActionsMenu({
         confirmPending={updateMutation.isPending}
         disabledReason={disabledReason('canSetTitle')}
         error={activeDialog === 'rename' ? actionError : null}
-        onCancel={closeDialog}
-        onConfirm={confirmDialog}
-      />
-      <DashboardActionDialog
-        open={activeDialog === 'resume-from-failed-step'}
-        title="Resume from failed step"
-        subject={subject}
-        compactId={workflowId}
-        consequence="Resume from the failed step using the original workflow input snapshot."
-        confirmLabel={failedStepResumeMutation.isPending ? 'Resuming' : 'Resume workflow'}
-        confirmPending={failedStepResumeMutation.isPending}
-        disabledReason={disabledReason('canResumeFromFailedStep')}
-        error={activeDialog === 'resume-from-failed-step' ? actionError : null}
-        onCancel={closeDialog}
-        onConfirm={confirmDialog}
-      />
-      <DashboardActionDialog
-        open={activeDialog === 'cancel'}
-        title="Cancel workflow"
-        subject={subject}
-        compactId={workflowId}
-        consequence="Request a graceful workflow cancellation. Running work may stop at the next cancellation boundary."
-        valueLabel="Reason"
-        valuePlaceholder="Optional operator reason"
-        valueMultiline
-        confirmLabel={cancelMutation.isPending ? 'Cancelling' : 'Cancel workflow'}
-        confirmPending={cancelMutation.isPending}
-        danger
-        disabledReason={disabledReason('canCancel')}
-        error={activeDialog === 'cancel' ? actionError : null}
-        onCancel={closeDialog}
-        onConfirm={confirmDialog}
-      />
-      <DashboardActionDialog
-        open={activeDialog === 'force-cancel'}
-        title="Force cancel workflow"
-        subject={subject}
-        compactId={workflowId}
-        consequence="Terminate the Temporal workflow immediately. This is a high-risk operator action and may skip graceful cleanup."
-        valueLabel="Reason"
-        valuePlaceholder="Force canceled by operator from the dashboard."
-        valueMultiline
-        confirmLabel={cancelMutation.isPending ? 'Force cancelling' : 'Force cancel workflow'}
-        confirmPending={cancelMutation.isPending}
-        danger
-        destructive
-        confirmationText="FORCE CANCEL"
-        disabledReason={disabledReason('canCancel')}
-        error={activeDialog === 'force-cancel' ? actionError : null}
-        onCancel={closeDialog}
-        onConfirm={confirmDialog}
-      />
-      <DashboardActionDialog
-        open={activeDialog === 'reject'}
-        title="Reject workflow"
-        subject={subject}
-        compactId={workflowId}
-        consequence="Reject the workflow and record an operator rejection outcome."
-        valueLabel="Reason"
-        valuePlaceholder="Rejected by operator."
-        valueMultiline
-        confirmLabel={cancelMutation.isPending ? 'Rejecting' : 'Reject workflow'}
-        confirmPending={cancelMutation.isPending}
-        danger
-        destructive
-        confirmationText="REJECT"
-        disabledReason={disabledReason('canReject')}
-        error={activeDialog === 'reject' ? actionError : null}
         onCancel={closeDialog}
         onConfirm={confirmDialog}
       />

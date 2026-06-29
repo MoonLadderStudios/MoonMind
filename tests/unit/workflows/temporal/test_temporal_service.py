@@ -4890,6 +4890,45 @@ async def test_forced_cancel_marks_failed_with_terminated_close_status(
         assert terminated.memo["summary"] == "forced_termination: ops kill"
 
 @pytest.mark.asyncio
+async def test_forced_cancel_without_reason_uses_force_specific_audit_summary(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        terminated = await service.cancel_execution(
+            workflow_id=created.workflow_id,
+            reason=None,
+            graceful=False,
+        )
+
+        assert terminated.state is MoonMindWorkflowState.FAILED
+        assert terminated.close_status is TemporalExecutionCloseStatus.TERMINATED
+        assert terminated.memo["summary"] == (
+            "forced_termination: Force canceled by operator."
+        )
+        assert terminated.memo["intervention_audit"][-1]["summary"] == (
+            "Force canceled by operator."
+        )
+        mock_client_adapter.terminate_workflow.assert_called_once_with(
+            created.workflow_id,
+            reason="Force canceled by operator.",
+        )
+
+@pytest.mark.asyncio
 async def test_request_rerun_can_override_inputs_and_parameters(
     tmp_path, mock_client_adapter
 ):

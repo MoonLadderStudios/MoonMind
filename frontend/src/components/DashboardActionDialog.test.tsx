@@ -48,30 +48,29 @@ describe('DashboardActionDialog', () => {
     render(
       <DashboardActionDialog
         open
-        title="Force cancel workflow"
-        subject="Workflow title"
-        compactId="wf-1"
-        consequence="Force cancel this workflow."
-        valueLabel="Reason"
-        confirmLabel="Force cancel workflow"
+        title="Delete schedule"
+        subject="Nightly maintenance"
+        compactId="schedule-1"
+        consequence="Delete this recurring schedule."
+        confirmLabel="Delete schedule"
         destructive
-        confirmationText="FORCE CANCEL"
+        confirmationText="DELETE"
         onCancel={vi.fn()}
         onConfirm={onConfirm}
       />,
     );
 
-    const dialog = screen.getByRole('dialog', { name: 'Force cancel workflow' });
-    const closeButton = screen.getByRole('button', { name: 'Close Force cancel workflow' });
-    const confirmButton = screen.getByRole('button', { name: 'Force cancel workflow' }) as HTMLButtonElement;
+    const dialog = screen.getByRole('dialog', { name: 'Delete schedule' });
+    const closeButton = screen.getByRole('button', { name: 'Close Delete schedule' });
+    const confirmButton = screen.getByRole('button', { name: 'Delete schedule' }) as HTMLButtonElement;
     expect(confirmButton.disabled).toBe(true);
 
     closeButton.focus();
     fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
 
-    fireEvent.change(screen.getByLabelText('Type FORCE CANCEL to confirm'), {
-      target: { value: 'FORCE CANCEL' },
+    fireEvent.change(screen.getByLabelText('Type DELETE to confirm'), {
+      target: { value: 'DELETE' },
     });
     expect(confirmButton.disabled).toBe(false);
     confirmButton.focus();
@@ -86,18 +85,18 @@ describe('DashboardActionDialog', () => {
     render(
       <DashboardActionDialog
         open
-        title="Cancel workflow"
-        subject="Workflow title"
-        compactId="wf-1"
-        consequence="Cancel this workflow."
-        confirmLabel="Cancelling"
+        title="Archive report"
+        subject="Daily report"
+        compactId="report-1"
+        consequence="Archive this report."
+        confirmLabel="Archiving"
         confirmPending
         onCancel={vi.fn()}
         onConfirm={onConfirm}
       />,
     );
 
-    const confirmButton = screen.getByRole('button', { name: 'Cancelling' }) as HTMLButtonElement;
+    const confirmButton = screen.getByRole('button', { name: 'Archiving' }) as HTMLButtonElement;
     expect(confirmButton.disabled).toBe(true);
     expect(confirmButton.getAttribute('aria-busy')).toBe('true');
 

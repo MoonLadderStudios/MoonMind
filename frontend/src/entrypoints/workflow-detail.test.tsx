@@ -357,12 +357,6 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.click(screen.getByRole('button', { name }));
   }
 
-  function typeWorkflowConfirmation(text: string) {
-    fireEvent.change(screen.getByLabelText(`Type ${text} to confirm`), {
-      target: { value: text },
-    });
-  }
-
   function mockWorkflowDetailSubrouteFetch() {
     const mockExecution = {
       taskId: 'test-123',
@@ -3574,7 +3568,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(menu).queryByRole('menuitem', { name: 'Remediate' })).toBeNull();
   });
 
-  it('routes menu selections through existing handlers and preserves destructive confirmations', async () => {
+  it('routes menu selections through direct lifecycle handlers', async () => {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -3640,10 +3634,27 @@ describe('Workflow Detail Entrypoint', () => {
 
     menu = await openWorkflowActionsMenu('Cancel');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Cancel' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(
-      fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/cancel') && init?.method === 'POST'),
-    ).toBe(false);
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/cancel',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ action: 'cancel', graceful: true }),
+        }),
+      );
+    });
+
+    menu = await openWorkflowActionsMenu('Force cancel');
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Force cancel' }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/cancel',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ action: 'cancel', graceful: false }),
+        }),
+      );
+    });
   });
 
   it('dismisses the Workflow actions menu without side effects and supports keyboard selection', async () => {
@@ -4186,7 +4197,7 @@ describe('Workflow Detail Entrypoint', () => {
     const resumeButton = within(menu).getByRole('menuitem', { name: 'Resume from failed step' });
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
     fireEvent.click(resumeButton);
-    confirmWorkflowDialog('Resume workflow');
+    expect(screen.queryByRole('dialog', { name: 'Resume from failed step' })).toBeNull();
 
     await waitFor(() => {
       expect(calls.some((call) => call.url.includes('/recover-from-failed-step'))).toBe(true);
@@ -4323,7 +4334,7 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBe(true);
     const menu = await openWorkflowActionsMenu('Recover from selected step');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Recover from selected step' }));
-    confirmWorkflowDialog('Recover workflow');
+    expect(screen.queryByRole('dialog', { name: 'Recover from selected step' })).toBeNull();
 
     await waitFor(() => {
       expect(calls.some((call) => call.url.includes('/recover-from-selected-step'))).toBe(true);
@@ -7015,8 +7026,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     menu = await openWorkflowActionsMenu('Reject');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Reject' }));
-    typeWorkflowConfirmation('REJECT');
-    confirmWorkflowDialog('Reject workflow');
+    expect(screen.queryByRole('dialog')).toBeNull();
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -7026,7 +7036,6 @@ describe('Workflow Detail Entrypoint', () => {
           body: JSON.stringify({
             action: 'reject',
             graceful: true,
-            reason: 'Rejected by operator.',
           }),
         }),
       );

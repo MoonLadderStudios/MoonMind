@@ -136,7 +136,7 @@ describe('WorkflowRowActionsMenu', () => {
     });
   });
 
-  it('bypasses dependencies directly without opening a confirmation dialog', async () => {
+  it('bypasses dependencies directly without opening a dialog', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/executions/wf-123?source=temporal') {
@@ -210,38 +210,33 @@ describe('WorkflowRowActionsMenu', () => {
     expect(screen.getByRole('status').className).toContain('ok');
   });
 
-  it('opens a cancel dialog and posts to the cancel endpoint after confirmation', async () => {
+  it('posts a graceful cancel request directly from the row menu', async () => {
     renderMenu();
     fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
     await waitForActionAvailability();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Cancel' }));
-    expect(screen.getByRole('dialog', { name: 'Cancel workflow' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel workflow' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
 
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(
         ([url]) => String(url) === '/api/executions/wf-123/cancel',
       );
       expect(cancelCall).toBeTruthy();
-      expect(JSON.parse(String((cancelCall?.[1] as RequestInit).body))).toMatchObject({
+      const body = JSON.parse(String((cancelCall?.[1] as RequestInit).body));
+      expect(body).toMatchObject({
         action: 'cancel',
         graceful: true,
       });
+      expect(body).not.toHaveProperty('reason');
     });
   });
 
-  it('requires typed confirmation before posting a forced cancel request', async () => {
+  it('posts a forced cancel request directly from the row menu', async () => {
     renderMenu();
     fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
     await waitForActionAvailability();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Force cancel' }));
-    const confirmButton = screen.getByRole('button', { name: 'Force cancel workflow' }) as HTMLButtonElement;
-    expect(confirmButton.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText('Type FORCE CANCEL to confirm'), {
-      target: { value: 'FORCE CANCEL' },
-    });
-    expect(confirmButton.disabled).toBe(false);
-    fireEvent.click(confirmButton);
+    expect(screen.queryByRole('dialog')).toBeNull();
 
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(([url, init]) => {
@@ -250,11 +245,12 @@ describe('WorkflowRowActionsMenu', () => {
         return body.graceful === false;
       });
       expect(cancelCall).toBeTruthy();
-      expect(JSON.parse(String((cancelCall?.[1] as RequestInit).body))).toMatchObject({
+      const body = JSON.parse(String((cancelCall?.[1] as RequestInit).body));
+      expect(body).toMatchObject({
         action: 'cancel',
         graceful: false,
-        reason: 'Force canceled by operator from the dashboard.',
       });
+      expect(body).not.toHaveProperty('reason');
     });
   });
 });

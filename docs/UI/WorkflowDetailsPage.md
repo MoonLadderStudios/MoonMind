@@ -268,15 +268,7 @@ Rerun behavior:
 - Links the new run back to the original Workflow Execution as a rerun.
 - Leaves the original failed Workflow unchanged.
 
-Optional confirmation copy:
-
-```text
-Rerun workflow?
-
-This will run the workflow again with the exact same steps, choices, and settings.
-
-[Cancel] [Rerun workflow]
-```
+Rerun executes directly from the capability-gated action control without collecting extra operator input.
 
 After a successful rerun request, the user is taken to the new Workflow Execution details page or shown a success toast with a link to the new run.
 
@@ -314,15 +306,7 @@ Resume behavior:
 - Starts new execution work at the failed step.
 - Leaves the original failed Workflow unchanged.
 
-Optional confirmation copy:
-
-```text
-Resume from failed step?
-
-MoonMind will reuse the completed work before the failed step and retry the failed step. The original failed run will remain unchanged.
-
-[Cancel] [Resume]
-```
+Resume executes directly from the capability-gated action control without collecting extra operator input.
 
 After a successful Resume request, the user is taken to the resumed Workflow Execution details page or shown a success toast with a link to the resumed run.
 
@@ -371,7 +355,7 @@ Possible menu items:
 - Archive workflow, if supported
 - Delete workflow, if supported
 
-Destructive actions are visually separated and require confirmation.
+Destructive Workflow lifecycle actions are visually separated, clearly labeled, and capability-gated by the backend.
 
 ## Action visibility by status
 
@@ -807,9 +791,9 @@ Required accessibility behavior:
 - All buttons have clear accessible names.
 - Status is exposed to assistive technology.
 - Failure messages are announced when they load.
-- Toasts and confirmation dialogs use accessible live regions.
-- Confirmation dialogs trap focus while open.
-- Focus returns to the triggering action after a dialog is closed.
+- Toasts and action result messages use accessible live regions.
+- Text-entry dialogs, where an action inherently requires text input, trap focus while open.
+- Focus returns to the triggering action after a text-entry dialog is closed.
 - Copy actions provide accessible success feedback.
 
 Button accessible names:
@@ -863,21 +847,6 @@ Resume
 You are editing a failed workflow. Your changes will create a new run. The original failed run will remain unchanged.
 ```
 
-### Rerun confirmation
-
-```text
-Rerun workflow?
-
-This will run the workflow again with the exact same steps, choices, and settings.
-```
-
-Confirmation actions:
-
-```text
-Cancel
-Rerun workflow
-```
-
 ### Rerun success toast
 
 ```text
@@ -888,21 +857,6 @@ Toast action:
 
 ```text
 View new run
-```
-
-### Resume confirmation
-
-```text
-Resume from failed step?
-
-MoonMind will reuse the completed work before the failed step and retry the failed step. The original failed run will remain unchanged.
-```
-
-Confirmation actions:
-
-```text
-Cancel
-Resume
 ```
 
 ### Resume success toast
@@ -1051,26 +1005,24 @@ When the user clicks **Edit Workflow** on a failed Workflow:
 
 When the user clicks **Rerun** on a failed Workflow:
 
-1. The user confirms the rerun, if confirmation is enabled.
-2. The system creates a new run using the original submission draft.
-3. The new run preserves the original steps, choices, instructions, inputs, and advanced settings.
-4. The original failed execution is not modified.
-5. The user receives a success toast or is routed to the new run.
-6. The new run is linked to the original execution as a rerun.
+1. The system creates a new run using the original submission draft.
+2. The new run preserves the original steps, choices, instructions, inputs, and advanced settings.
+3. The original failed execution is not modified.
+4. The user receives a success toast or is routed to the new run.
+5. The new run is linked to the original execution as a rerun.
 
 ### Clicking Resume on a failed Workflow
 
 When the user clicks **Resume** on a failed Workflow:
 
-1. The user confirms Resume, if confirmation is enabled.
-2. The backend creates a linked follow-up execution using the original Workflow input snapshot unchanged.
-3. The backend pins the source by `workflowId` and `runId`.
-4. The backend restores completed prior work from durable step output refs and workspace, branch, commit, or equivalent checkpoints.
-5. The new execution marks prior completed steps as preserved from the source run.
-6. The new execution starts newly executed work at the last failed step.
-7. The original failed execution is not modified.
-8. The user receives a success toast or is routed to the resumed run.
-9. The new run is linked to the original execution as `Recovered from failed step`.
+1. The backend creates a linked follow-up execution using the original Workflow input snapshot unchanged.
+2. The backend pins the source by `workflowId` and `runId`.
+3. The backend restores completed prior work from durable step output refs and workspace, branch, commit, or equivalent checkpoints.
+4. The new execution marks prior completed steps as preserved from the source run.
+5. The new execution starts newly executed work at the last failed step.
+6. The original failed execution is not modified.
+7. The user receives a success toast or is routed to the resumed run.
+8. The new run is linked to the original execution as `Recovered from failed step`.
 
 ## Non-goals
 
@@ -1080,7 +1032,7 @@ The Workflow Details page does not hide valid failed-Workflow actions merely bec
 
 The Workflow Details page does not reconstruct edit-form state from display-only labels when a canonical submission draft is available.
 
-The Workflow Details page does not allow destructive actions without confirmation.
+The Workflow Details page does not collect extra operator input before invoking Workflow lifecycle actions.
 
 The Workflow Details page does not allow Workflow input editing as part of failed-step **Resume**. Editing instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies belongs to **Edit Workflow**.
 
