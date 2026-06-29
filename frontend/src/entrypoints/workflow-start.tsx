@@ -591,15 +591,16 @@ interface PresetSummary {
   title: string;
   description: string;
   presetDigest?: string | null;
-}
-
-interface PresetDetail extends PresetSummary {
   inputs?: PresetInputDefinition[];
   inputSchema?: Record<string, unknown>;
   uiSchema?: Record<string, unknown>;
   defaults?: Record<string, unknown>;
   requiredCapabilities?: string[];
   capabilities?: string[];
+}
+
+interface PresetDetail extends PresetSummary {
+  annotations?: Record<string, unknown>;
 }
 
 interface SkillCapabilityDetail {
@@ -946,6 +947,45 @@ function compactSourceFromPresetProvenance(
   if (path.length > 0) compact.includePath = path;
   if (originalStepId) compact.originalStepId = originalStepId;
   return Object.keys(compact).length > 1 ? compact : undefined;
+}
+
+function presetDetailFromCatalogItem(preset: TemplateOption): PresetDetail | null {
+  const hasDetailContract =
+    Object.prototype.hasOwnProperty.call(preset, "inputs") ||
+    Object.prototype.hasOwnProperty.call(preset, "inputSchema") ||
+    Object.prototype.hasOwnProperty.call(preset, "uiSchema") ||
+    Object.prototype.hasOwnProperty.call(preset, "defaults") ||
+    Object.prototype.hasOwnProperty.call(preset, "requiredCapabilities") ||
+    Object.prototype.hasOwnProperty.call(preset, "capabilities");
+  if (!hasDetailContract) {
+    return null;
+  }
+  return {
+    ...preset,
+    inputs: Array.isArray(preset.inputs) ? preset.inputs : [],
+    inputSchema:
+      preset.inputSchema &&
+      typeof preset.inputSchema === "object" &&
+      !Array.isArray(preset.inputSchema)
+        ? preset.inputSchema
+        : {},
+    uiSchema:
+      preset.uiSchema &&
+      typeof preset.uiSchema === "object" &&
+      !Array.isArray(preset.uiSchema)
+        ? preset.uiSchema
+        : {},
+    defaults:
+      preset.defaults &&
+      typeof preset.defaults === "object" &&
+      !Array.isArray(preset.defaults)
+        ? preset.defaults
+        : {},
+    requiredCapabilities: Array.isArray(preset.requiredCapabilities)
+      ? preset.requiredCapabilities
+      : [],
+    capabilities: Array.isArray(preset.capabilities) ? preset.capabilities : [],
+  };
 }
 
 function cloneJsonRecord(value: Record<string, unknown>): Record<string, unknown> {
@@ -7153,7 +7193,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     presetKey: string,
   ) {
     const preset = templateItems.find((item) => item.key === presetKey);
-    updateStepPreset(localId, presetKey);
+    const catalogDetail = preset ? presetDetailFromCatalogItem(preset) : null;
+    updateStepPreset(localId, presetKey, catalogDetail);
     if (!preset) {
       return;
     }
@@ -7162,23 +7203,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       isSelfManagedPublishSkill(preset.slug)
     ) {
       setPublishMode("none");
-    }
-    updateStep(localId, { presetMessage: "Loading preset options..." });
-    try {
-      const detail = await loadPresetDetail(preset);
-      updateStepPresetIfCurrent(localId, presetKey, {
-        presetDetail: detail,
-        presetMessage: null,
-      });
-    } catch (error) {
-      const failure =
-        error instanceof Error
-          ? error
-          : new Error("Failed to load preset options.");
-      updateStepPresetIfCurrent(localId, presetKey, {
-        presetDetail: null,
-        presetMessage: `Failed to load preset options: ${failure.message}`,
-      });
     }
   }
 

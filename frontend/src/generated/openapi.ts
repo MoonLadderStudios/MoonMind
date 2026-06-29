@@ -6769,11 +6769,6 @@ export interface components {
             recentAppliedAt?: string | null;
             /** Requiredcapabilities */
             requiredCapabilities?: string[];
-            /**
-             * Releasestatus
-             * @default draft
-             */
-            releaseStatus: string;
             /** Inputs */
             inputs?: components["schemas"]["PresetInputSchema"][];
             /** Inputschema */
@@ -6788,6 +6783,11 @@ export interface components {
             defaults?: {
                 [key: string]: unknown;
             };
+            /**
+             * Releasestatus
+             * @default draft
+             */
+            releaseStatus: string;
             /** Steps */
             steps?: components["schemas"]["PresetStepBlueprintSchema"][];
             /** Annotations */
@@ -6966,6 +6966,20 @@ export interface components {
             recentAppliedAt?: string | null;
             /** Requiredcapabilities */
             requiredCapabilities?: string[];
+            /** Inputs */
+            inputs?: components["schemas"]["PresetInputSchema"][];
+            /** Inputschema */
+            inputSchema?: {
+                [key: string]: unknown;
+            };
+            /** Uischema */
+            uiSchema?: {
+                [key: string]: unknown;
+            };
+            /** Defaults */
+            defaults?: {
+                [key: string]: unknown;
+            };
             /**
              * Releasestatus
              * @default draft

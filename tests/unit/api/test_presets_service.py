@@ -1678,6 +1678,9 @@ async def test_list_templates_with_favorites_and_recents(tmp_path):
     assert listed[0]["slug"] == "second-template"
     assert listed[0]["isFavorite"] is True
     assert listed[0]["recentAppliedAt"] is not None
+    assert listed[0]["inputSchema"] == {"type": "object", "properties": {}}
+    assert "steps" not in listed[0]
+    assert "annotations" not in listed[0]
 
 async def test_save_from_workflow_marks_favorite_and_recent(tmp_path):
     user_id = uuid4()
