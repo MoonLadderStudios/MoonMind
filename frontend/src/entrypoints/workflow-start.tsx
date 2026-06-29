@@ -949,7 +949,17 @@ function compactSourceFromPresetProvenance(
   return Object.keys(compact).length > 1 ? compact : undefined;
 }
 
-function presetDetailFromCatalogItem(preset: TemplateOption): PresetDetail {
+function presetDetailFromCatalogItem(preset: TemplateOption): PresetDetail | null {
+  const hasDetailContract =
+    Object.prototype.hasOwnProperty.call(preset, "inputs") ||
+    Object.prototype.hasOwnProperty.call(preset, "inputSchema") ||
+    Object.prototype.hasOwnProperty.call(preset, "uiSchema") ||
+    Object.prototype.hasOwnProperty.call(preset, "defaults") ||
+    Object.prototype.hasOwnProperty.call(preset, "requiredCapabilities") ||
+    Object.prototype.hasOwnProperty.call(preset, "capabilities");
+  if (!hasDetailContract) {
+    return null;
+  }
   return {
     ...preset,
     inputs: Array.isArray(preset.inputs) ? preset.inputs : [],

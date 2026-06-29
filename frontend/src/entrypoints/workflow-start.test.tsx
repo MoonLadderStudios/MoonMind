@@ -8309,6 +8309,14 @@ describe.skip("Task Create Entrypoint", () => {
                 description: "First preset.",
                 latestVersion: "1",
                 version: "1",
+                inputs: [
+                  {
+                    name: "preset_a_input",
+                    label: "Preset A Input",
+                    type: "text",
+                    required: true,
+                  },
+                ],
               },
               {
                 slug: "preset-b",
@@ -8317,6 +8325,14 @@ describe.skip("Task Create Entrypoint", () => {
                 description: "Second preset.",
                 latestVersion: "1",
                 version: "1",
+                inputs: [
+                  {
+                    name: "preset_b_input",
+                    label: "Preset B Input",
+                    type: "text",
+                    required: true,
+                  },
+                ],
               },
             ],
           }),
@@ -8331,7 +8347,9 @@ describe.skip("Task Create Entrypoint", () => {
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(2);
     });
@@ -8354,6 +8372,102 @@ describe.skip("Task Create Entrypoint", () => {
         String(url).startsWith("/api/presets/preset-b?scope=global"),
       ),
     ).toBe(false);
+  });
+
+  it("loads preset detail before expanding summary-only catalog rows", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/presets?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "summary-preset",
+                scope: "global",
+                title: "Summary Preset",
+                description: "Summary-only catalog row.",
+                latestVersion: "1",
+                version: "1",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/presets/summary-preset?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "summary-preset",
+            scope: "global",
+            title: "Summary Preset",
+            description: "Loaded detail.",
+            latestVersion: "1",
+            version: "1",
+            inputSchema: {
+              type: "object",
+              required: ["feature_request"],
+              properties: {
+                feature_request: {
+                  type: "string",
+                  title: "Feature Request",
+                },
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/presets/summary-preset:expand?scope=global")) {
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          inputs?: Record<string, unknown>;
+        };
+        expect(body.inputs?.feature_request).toBe("Build summary fallback.");
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:summary-preset:1:01",
+                title: "Generated",
+                instructions: "Generated from detail.",
+              },
+            ],
+            appliedTemplate: {
+              slug: "summary-preset",
+              version: "1",
+            },
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::summary-preset" },
+    });
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Build summary fallback." },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+
+    expect(await screen.findByDisplayValue("Generated from detail.")).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).startsWith("/api/presets/summary-preset?scope=global"),
+      ),
+    ).toBe(true);
   });
 
   it("expands a step preset by replacing the selected preset step with editable generated steps", async () => {
