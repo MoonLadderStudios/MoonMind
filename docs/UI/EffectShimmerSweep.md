@@ -161,7 +161,7 @@ layers:
     keyframes: mm-status-pill-shimmer
     shape: two layered soft-edged linear gradients
     travel: top-left-to-bottom-right visual sweep using inverse background-position endpoints
-    angle_deg: -18
+    angle_deg: -24
     blend_mode:
       preferred: plus-lighter
       fallback: screen
@@ -217,11 +217,12 @@ motion:
 
   path:
     start_x_pct: 135
-    start_y_pct: 160
+    start_y_pct: 128
     end_x_pct: -135
-    end_y_pct: -160
+    end_y_pct: -128
     y_behavior: diagonal_travel
-    angle_deg: -18
+    horizontal_bias: horizontal travel delta (270%) exceeds vertical travel delta (256%)
+    angle_deg: -24
     keyframes: mm-status-pill-shimmer
 
   band:
@@ -525,7 +526,7 @@ tone:
 ```yaml
 effect_tokens:
   --mm-executing-sweep-cycle-duration: 2600ms
-  --mm-executing-sweep-angle: -18deg
+  --mm-executing-sweep-angle: -24deg
   --mm-executing-sweep-band-width: 24%
   --mm-executing-sweep-band-height: 180%
   --mm-executing-sweep-halo-width-multiplier: 10
@@ -533,9 +534,9 @@ effect_tokens:
   --mm-executing-sweep-core-opacity: 0.34
   --mm-executing-sweep-halo-opacity: 0.14
   --mm-executing-sweep-start-x: 135%
-  --mm-executing-sweep-start-y: 160%
+  --mm-executing-sweep-start-y: 128%
   --mm-executing-sweep-end-x: -135%
-  --mm-executing-sweep-end-y: -160%
+  --mm-executing-sweep-end-y: -128%
   --mm-executing-sweep-layer-offset-x: -12%
   --mm-executing-sweep-layer-offset-y: -10%
   --mm-executing-border-glint-outset: 1px
