@@ -3,7 +3,7 @@
 Status: **Target Architecture**
 Owners: MoonMind Engineering
 Last Updated: 2026-06-29
-Related: `docs/UI/WorkflowConsoleArchitecture.md`, `docs/UI/TypeScriptSystem.md`, `docs/UI/DashboardDesignSystem.md`, `docs/UI/WorkflowWorkspaceSidebar.md`, `docs/ManagedAgents/LiveLogs.md`, `docs/Temporal/VisibilityAndUiQueryModel.md`
+Related: `docs/UI/WorkflowConsoleArchitecture.md`, `docs/UI/TypeScriptSystem.md`, `docs/UI/DashboardDesignSystem.md`, `docs/UI/WorkflowWorkspaceSidebar.md`, `docs/Observability/LiveLogs.md`, `docs/Temporal/VisibilityAndUiQueryModel.md`
 
 **Implementation tracking:** rollout checklists, Jira work breakdowns, and tactical migration notes belong in Jira, `docs/tmp/`, or gitignored handoffs. This document defines the durable target architecture.
 
