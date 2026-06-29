@@ -219,11 +219,12 @@ function DashboardLiveUpdateProvider({
   return <>{children}</>;
 }
 
-function DashboardNavigation() {
+function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
   const [open, setOpen] = useState(false);
   const location = useLocation();
   const isWorkflowDetail =
     location.pathname.startsWith('/workflows/') && location.pathname !== '/workflows/new';
+  const buildId = typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim() ? uiInfo.buildId : null;
 
   useEffect(() => {
     setOpen(false);
@@ -282,6 +283,14 @@ function DashboardNavigation() {
           </NavLink>
         </nav>
       </div>
+
+      {buildId ? (
+        <div className="masthead-title-meta">
+          <div className="version-badge" title="MoonMind image version">
+            <span className="version-badge-value">v{buildId}</span>
+          </div>
+        </div>
+      ) : null}
     </header>
   );
 }
@@ -311,7 +320,7 @@ function AppShell({
         </section>
 
         <div className="dashboard-shell-full">
-          <DashboardNavigation />
+          <DashboardNavigation uiInfo={uiInfo} />
         </div>
 
         <div

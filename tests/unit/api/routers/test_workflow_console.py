@@ -249,17 +249,18 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["dashboardConfig"]["initialPath"] == "/workflows/new"
     assert payload["app"] == "moonmind"
     assert payload["apiBase"] == "/api"
     assert payload["features"]["workflowLiveUpdates"] is True
     assert payload["endpoints"]["workflows"] == "/api/executions"
+    assert payload["endpoints"]["workflowUpdatesStream"] == "/api/workflows/updates/stream"
     assert payload["workerPause"] == {
         "get": "/api/system/worker-pause",
         "post": "/api/system/worker-pause",
         "shardHealth": "/api/v1/operations/codex/shards",
     }
     assert isinstance(payload["settingsPermissions"], list)
+    assert "initialPath" not in payload["dashboardConfig"]
 
     retired = client.get("/api/dashboard/config?currentPath=/workflows/new")
     assert retired.status_code == 404
@@ -288,7 +289,7 @@ def test_index_health_route_uses_index_health_boot_payload(client: TestClient) -
     assert response.status_code == 200
     boot_payload = _extract_boot_payload(response.text)
     assert boot_payload["page"] == "dashboard"
-    assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
+    assert "initialData" not in boot_payload
 
 def test_dashboard_logo_asset_exists() -> None:
     asset_path = Path("api_service/static/workflow_console/moonmindlogo.webp")
@@ -333,7 +334,7 @@ def test_oauth_terminal_route_uses_terminal_boot_payload(client: TestClient) -> 
     boot_payload = _extract_boot_payload(response.text)
     assert boot_payload["page"] == "dashboard"
     assert "sessionId" not in json.dumps(boot_payload)
-    assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
+    assert "initialData" not in boot_payload
 
 def test_removed_task_routes_do_not_redirect_or_render_console(client: TestClient) -> None:
     for path in (
@@ -384,16 +385,9 @@ def test_react_shell_wraps_navigation_in_centered_masthead_slot(
     response = client.get("/workflows")
 
     assert response.status_code == 200
-    assert '<div class="masthead-nav">' in response.text
-    assert response.text.index('<div class="masthead-nav">') < response.text.index(
-        'id="dashboard-nav"'
-    )
-
-    title_meta_marker = '<div class="masthead-title-meta">'
-    if title_meta_marker in response.text:
-        assert response.text.index('id="dashboard-nav"') < response.text.index(
-            title_meta_marker
-        )
+    assert 'id="dashboard-app-root"' in response.text
+    assert 'class="masthead-nav"' not in response.text
+    assert 'id="dashboard-nav"' not in response.text
 
 def test_trailing_slash_alias_routes_return_404_not_detail_page(client: TestClient) -> None:
     """Trailing-slash variants /workflows/new/ and /workflows/ must not render a detail shell."""
@@ -453,18 +447,15 @@ def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
     for path in (
         "/workflows",
         "/settings",
-    ):
-        response = client.get(path)
-        assert response.status_code == 200
-        assert '"dataWidePanel":true' in response.text
-    for path in (
         "/manifests",
         "/workflows/mm:workflow-123",
         "/workflows/mm:workflow-123/steps",
     ):
         response = client.get(path)
         assert response.status_code == 200
-        assert '"dataWidePanel":false' in response.text
+        boot_payload = _extract_boot_payload(response.text)
+        assert boot_payload["page"] == "dashboard"
+        assert "initialData" not in boot_payload
 
 
 def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> None:
@@ -515,7 +506,7 @@ def test_react_shell_renders_build_metadata_with_accurate_labels(
 
     assert response.status_code == 200
     assert response.json()["buildId"] == "20260408.1703"
-    assert '<span class="version-badge-value">v20260408.1703</span>' in response.text
+    assert "version-badge-value" not in response.text
     assert "MoonMind</span>" not in response.text
     assert 'title="Codex CLI version"' not in response.text
 
@@ -528,9 +519,9 @@ def test_react_shell_places_operator_metadata_in_title_row(
         response = client.get("/workflows")
 
     assert response.status_code == 200
-    assert 'class="masthead-title-meta"' in response.text
-    assert 'title="MoonMind image version"' in response.text
-    assert "v20260408.1703" in response.text
+    assert 'class="masthead-title-meta"' not in response.text
+    assert 'title="MoonMind image version"' not in response.text
+    assert "v20260408.1703" not in response.text
     assert 'class="masthead-meta"' not in response.text
 
 def test_react_shell_hides_title_row_metadata_when_build_id_is_not_configured(

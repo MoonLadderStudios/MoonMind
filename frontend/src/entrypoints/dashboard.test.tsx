@@ -165,6 +165,7 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
     endpoints: {
       workflows: '/api/executions',
       workflowUpdatesPoll: '/api/executions',
+      workflowUpdatesStream: '/api/workflows/updates/stream',
     },
     dashboardConfig: {
       initialPath: '/workflows/new',
@@ -246,6 +247,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
+    expect(screen.getByText('vtest-build')).toBeTruthy();
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
     await waitFor(() => {
@@ -263,7 +265,7 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/proposals'))).toBe(false);
   });
 
-  it('shows a styled configuration error for invalid page boot data (MM-960)', async () => {
+  it('normalizes stale boot layout data from the client route table (MM-960)', async () => {
     window.history.replaceState({}, '', '/workflows');
     renderWithClient(
       <DashboardApp
@@ -275,10 +277,9 @@ describe('Dashboard shared entry', () => {
       />,
     );
 
-    expect(await screen.findByText('Dashboard configuration error')).toBeTruthy();
-    expect(screen.getByRole('alert')).toBeTruthy();
-    // The invalid page is not rendered.
-    expect(screen.queryByText('Workflow list route loaded')).toBeNull();
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    expect(document.querySelector('.panel--data-wide')).toBeTruthy();
+    expect(screen.queryByText('Dashboard configuration error')).toBeNull();
   });
 
   it('recovers from a failed lazy page import when the user retries (MM-960)', async () => {
@@ -1366,24 +1367,27 @@ describe('Dashboard shared entry', () => {
   });
 
   it('renders an explicit error state for unknown pages', async () => {
+    window.history.replaceState({}, '', '/not-a-page');
     renderWithClient(
-      <DashboardApp payload={{ page: 'not-a-page', apiBase: '/api' }} />,
+      <DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />,
     );
 
     expect(await screen.findByText(/Unknown dashboard page:/i)).toBeTruthy();
-    expect(screen.getByText('not-a-page')).toBeTruthy();
+    expect(screen.getByText('/not-a-page')).toBeTruthy();
   });
 
   it('treats inherited object keys as unsupported pages', async () => {
+    window.history.replaceState({}, '', '/toString');
     renderWithClient(
-      <DashboardApp payload={{ page: 'toString', apiBase: '/api' }} />,
+      <DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />,
     );
 
     expect(await screen.findByText(/Unknown dashboard page:/i)).toBeTruthy();
-    expect(screen.getByText('toString')).toBeTruthy();
+    expect(screen.getByText('/toString')).toBeTruthy();
   });
 
   it('renders the OAuth terminal page and attaches through the session bridge', async () => {
+    window.history.replaceState({}, '', '/oauth-terminal');
     const sentFrames: string[] = [];
     const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     const clipboardMock = { writeText: vi.fn() };
@@ -1458,7 +1462,7 @@ describe('Dashboard shared entry', () => {
       renderWithClient(
         <DashboardApp
           payload={{
-            page: 'oauth-terminal',
+            page: 'dashboard',
             apiBase: '/api',
             initialData: { sessionId: 'oas_terminal_ui' },
           }}
@@ -1522,6 +1526,7 @@ describe('Dashboard shared entry', () => {
   });
 
   it('waits for OAuth terminal readiness before requesting an attach token', async () => {
+    window.history.replaceState({}, '', '/oauth-terminal');
     const sentFrames: string[] = [];
     const attachCalls: string[] = [];
     const sessionStatuses = [
@@ -1598,7 +1603,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(
       <DashboardApp
         payload={{
-          page: 'oauth-terminal',
+          page: 'dashboard',
           apiBase: '/api',
           initialData: { sessionId: 'oas_terminal_wait' },
         }}
@@ -1627,6 +1632,7 @@ describe('Dashboard shared entry', () => {
   });
 
   it('attaches the OAuth terminal when a Claude session reaches awaiting user', async () => {
+    window.history.replaceState({}, '', '/oauth-terminal');
     const sentFrames: string[] = [];
     const attachCalls: string[] = [];
     const websocketUrls: string[] = [];
@@ -1712,7 +1718,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(
       <DashboardApp
         payload={{
-          page: 'oauth-terminal',
+          page: 'dashboard',
           apiBase: '/api',
           initialData: { sessionId: 'oas_claude_wait' },
         }}
