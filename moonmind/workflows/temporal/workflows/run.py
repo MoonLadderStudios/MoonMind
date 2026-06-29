@@ -6133,7 +6133,11 @@ class MoonMindRunWorkflow:
         self,
         parameters: Mapping[str, Any],
     ) -> str | None:
-        task_payload = self._mapping_value(parameters, "task") or {}
+        task_payload = (
+            self._mapping_value(parameters, "workflow")
+            or self._mapping_value(parameters, "task")
+            or {}
+        )
         task_runtime_payload = (
             self._mapping_value(task_payload, "runtime")
             if isinstance(task_payload, Mapping)
@@ -6160,7 +6164,11 @@ class MoonMindRunWorkflow:
         )
         if direct:
             return direct
-        task_payload = self._mapping_value(parameters, "task") or {}
+        task_payload = (
+            self._mapping_value(parameters, "workflow")
+            or self._mapping_value(parameters, "task")
+            or {}
+        )
         if not isinstance(task_payload, Mapping):
             return None
         tool_payload = self._mapping_value(task_payload, "tool") or {}
@@ -14331,10 +14339,10 @@ class MoonMindRunWorkflow:
         title_tokens = tokenize_title(self._title)
         if title_tokens:
             # mm_title is a KeywordList of the title's word tokens. Temporal SQL
-            # visibility supports neither LIKE nor substring matching, and the
-            # custom-Keyword budget (10) is full, so operators word-match titles
-            # via KeywordList membership (`mm_title = "word"`). Keep tokenization
-            # identical to the executions list endpoint (see title_search).
+            # visibility supports neither LIKE nor substring matching, so
+            # operators word-match titles via KeywordList membership
+            # (`mm_title = "word"`). Keep tokenization identical to the
+            # executions list endpoint (see title_search).
             pairs.append(
                 SearchAttributePair(
                     SearchAttributeKey.for_keyword_list("mm_title"),
@@ -14354,6 +14362,20 @@ class MoonMindRunWorkflow:
                 SearchAttributePair(
                     SearchAttributeKey.for_keyword("mm_integration"),
                     integration_label,
+                )
+            )
+        if self._target_runtime:
+            pairs.append(
+                SearchAttributePair(
+                    SearchAttributeKey.for_keyword("mm_target_runtime"),
+                    self._target_runtime,
+                )
+            )
+        if self._target_skill:
+            pairs.append(
+                SearchAttributePair(
+                    SearchAttributeKey.for_keyword("mm_target_skill"),
+                    self._target_skill,
                 )
             )
         if self._scheduled_for:

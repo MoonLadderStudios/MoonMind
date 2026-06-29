@@ -3,7 +3,7 @@
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: **Implemented** (runtime live; contract hardening in progress)
-Last updated: 2026-06-29
+Last updated: 2026-04-09
 Related:
 - [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
@@ -371,24 +371,6 @@ metadata:
 * `metadata.hitRateLimit = true` if any attempt hit a provider rate limit
 * `metadata.exhaustedRateLimitRetries = true` if backoff retries were exhausted
 * `metadata.attempts[]` may contain bounded attempt summaries, not raw logs
-
-### 4.4.1 Managed skill outcome markers
-
-Managed runtimes may emit a compact `skill_outcome.json` file in the current
-turn's artifact spool to make tool-like skill outcomes explicit to the runtime
-adapter. This file is local runtime evidence, not a Temporal payload; stale files
-from prior turns must be ignored.
-
-Supported schema version 1 statuses:
-
-* `no_op` declares an intentional no-op and may complete an otherwise empty
-  managed turn with `metadata.disposition = "no_op"`.
-* `failed` declares that the skill failed even if the agent later produced
-  assistant text. The adapter must return a failed `AgentRunResult`, preserving
-  the marker's `failureClass` when present and defaulting to `execution_error`.
-
-Malformed, unsupported, or stale markers must not upgrade a failed or empty
-managed turn to success.
 
 ## 4.5 Idempotency requirements
 

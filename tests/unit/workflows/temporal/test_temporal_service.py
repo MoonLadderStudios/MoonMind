@@ -42,6 +42,8 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionService,
     TemporalExecutionValidationError,
     _get_managed_session_store_root,
+    _visibility_runtime_from_parameters,
+    _visibility_skill_from_parameters,
 )
 from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
 from moonmind.schemas.temporal_models import (
@@ -109,6 +111,13 @@ def _write_mm730_cutover_files(tmp_path):
         encoding="utf-8",
     )
     return release_notes, cutover_record
+
+
+def test_visibility_helpers_ignore_empty_parameters() -> None:
+    assert _visibility_runtime_from_parameters(None) is None
+    assert _visibility_runtime_from_parameters({}) is None
+    assert _visibility_skill_from_parameters(None) is None
+    assert _visibility_skill_from_parameters({}) is None
 
 @pytest.fixture
 def mock_client_adapter():
@@ -268,6 +277,58 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
         source = await session.get(TemporalExecutionCanonicalRecord, record.workflow_id)
         assert source is not None
         assert source.run_id == record.run_id
+
+
+@pytest.mark.asyncio
+async def test_create_execution_writes_runtime_and_primary_skill_search_attributes(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Skill run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "instructions": "Resolve the issue.",
+                    "tool": {"type": "skill", "name": "pr-resolver"},
+                },
+            },
+            idempotency_key=None,
+        )
+
+        assert record.search_attributes["mm_target_runtime"] == "codex_cli"
+        assert record.search_attributes["mm_target_skill"] == "pr-resolver"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_omits_blank_runtime_and_skill_search_attributes(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="No target run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "targetRuntime": " ",
+                "targetSkill": "",
+                "workflow": {"instructions": "Resolve the issue."},
+            },
+            idempotency_key=None,
+        )
+
+        assert "mm_target_runtime" not in record.search_attributes
+        assert "mm_target_skill" not in record.search_attributes
 
 
 @pytest.mark.asyncio

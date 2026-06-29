@@ -295,6 +295,10 @@ Rules:
 6. The table may hide optional columns by default to preserve width, but optional columns must not reintroduce ordinary access to system workflow browsing.
 7. The mobile filter sheet must expose the same filterable Workflow columns as desktop, including Progress after Progress filtering is implemented.
 8. The table must not expose raw Temporal Visibility query syntax to ordinary users.
+9. Runtime and Target skill filters are backed by `mm_target_runtime` and the
+   singular primary `mm_target_skill` only when those Search Attributes are
+   registered. During migration, missing attributes produce degraded facets or
+   empty filtered results rather than a page-level 503.
 
 ### 7.1 Admin diagnostics escape hatch
 

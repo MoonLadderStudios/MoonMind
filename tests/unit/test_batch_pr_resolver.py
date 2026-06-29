@@ -106,8 +106,7 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["title"] == "feature/example"
     assert task["publish"]["mode"] == "none"
     assert git["startingBranch"] == "feature/example"
-    assert git["branch"] == "feature/example"
-    assert "targetBranch" not in git
+    assert git["targetBranch"] == "feature/example"
 
 def test_build_queue_request_adds_batch_scoped_idempotency_key() -> None:
     module = _load_module()
@@ -841,8 +840,8 @@ def test_write_run_artifacts_emits_no_op_when_zero_queued_no_errors(tmp_path: Pa
     assert outcome["evidence"]["requested"] == 3
     assert outcome["evidence"]["skipped"][0]["pr"] == 1
 
-def test_write_run_artifacts_emits_failed_outcome_when_errors_present(tmp_path: Path) -> None:
-    """A run that hit submission errors must declare a failed skill outcome."""
+def test_write_run_artifacts_skips_no_op_when_errors_present(tmp_path: Path) -> None:
+    """A run that hit submission errors must NOT declare itself a no-op."""
     module = _load_module()
     write = module["_write_run_artifacts"]
 
@@ -861,12 +860,7 @@ def test_write_run_artifacts_emits_failed_outcome_when_errors_present(tmp_path: 
     write(tmp_path, payload)
 
     assert (tmp_path / "batch_pr_resolver_result.json").exists()
-    outcome = json.loads((tmp_path / "skill_outcome.json").read_text())
-    assert outcome["status"] == "failed"
-    assert outcome["reason"] == "child_workflow_submission_failed"
-    assert outcome["failureClass"] == "execution_error"
-    assert outcome["evidence"]["created"] == 0
-    assert outcome["evidence"]["errors"] == payload["errors"]
+    assert not (tmp_path / "skill_outcome.json").exists()
 
 def test_write_run_artifacts_skips_no_op_when_executions_queued(tmp_path: Path) -> None:
     """When real work was queued, no skill_outcome.json is written."""

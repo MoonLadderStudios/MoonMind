@@ -81,7 +81,7 @@ python3 .agents/skills/batch-dependabot-resolver/bin/batch_dependabot_resolver.p
 
 4. For each matched PR, submit a `pr-resolver` task with the canonical `batch-pr-resolver`
    payload (`repository`, `task.inputs = { repo, pr, branch, mergeMethod, maxIterations }`,
-   `task.git.startingBranch/branch`, `task.skill.name = pr-resolver`,
+   `task.git.startingBranch/targetBranch`, `task.skill.name = pr-resolver`,
    `task.publish.mode = none`, inherited runtime) and a stable idempotency key:
    `batch-dependabot-resolver:{repo}:pr:{number}:head:{headSha}`. Submit via
    `POST /api/executions` (`MOONMIND_URL` must point at the MoonMind API).
@@ -90,8 +90,7 @@ python3 .agents/skills/batch-dependabot-resolver/bin/batch_dependabot_resolver.p
    session artifact spool when available, otherwise the configured `--artifacts-dir`) listing
    discovered PRs, matched count, queued / would-queue resolver workflows, skipped PRs with
    reasons, and submission errors. A deliberate zero-match run also writes
-   `skill_outcome.json` with `status: "no_op"`. A run with submission errors writes
-   `skill_outcome.json` with `status: "failed"` and returns non-zero.
+   `skill_outcome.json` with `status: "no_op"`.
 
 6. Print a short summary to stdout (`matched`, `queued`, `would_queue`, `skipped`, `errors`).
 

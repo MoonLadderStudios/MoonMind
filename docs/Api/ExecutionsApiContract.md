@@ -277,6 +277,14 @@ Optional bounded keys may include values such as:
 
 - `mm_repo`
 - `mm_integration`
+- `mm_target_runtime`
+- `mm_target_skill`
+
+`mm_target_runtime` and `mm_target_skill` are authoritative filter/facet fields
+only after the Temporal namespace reports them registered as `Keyword` Search
+Attributes. Before registration, requests that depend on those fields degrade
+without issuing invalid Temporal Visibility queries. Unknown values are omitted
+rather than serialized as blank strings.
 
 #### Memo
 
@@ -430,6 +438,8 @@ Example:
 | `entry` | string | no | none | Filter by `mm_entry` |
 | `repo` | string | no | none | Optional repo-scoped filter |
 | `integration` | string | no | none | Optional integration filter |
+| `targetRuntime` / `targetRuntimeIn` | string | no | none | Filter by canonical `mm_target_runtime` when registered |
+| `targetSkillIn` | string | no | none | Filter by primary `mm_target_skill` when registered |
 | `pageSize` | integer | no | `50` | Must be between `1` and `200` |
 | `nextPageToken` | string | no | none | Opaque pagination token |
 
@@ -438,6 +448,9 @@ Example:
 - `workflowType` filters on the root workflow type.
 - `state` filters on MoonMind domain state.
 - `ownerType`, `entry`, `repo`, and `integration` are supported exact-match filters.
+- Runtime and skill filters use `mm_target_runtime` and the singular primary
+  `mm_target_skill` Search Attribute only when the registry capability check
+  succeeds.
 - `ownerId` is optional for admins.
 - Non-admin callers are implicitly scoped to themselves when `ownerId` is omitted.
 

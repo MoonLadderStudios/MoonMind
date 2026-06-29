@@ -24,6 +24,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Res
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from temporalio.api.enums.v1 import IndexedValueType
+from temporalio.api.operatorservice.v1 import ListSearchAttributesRequest
 from temporalio.client import Client
 from temporalio.service import RPCError
 
@@ -242,6 +244,21 @@ _EXECUTION_FACET_ATTRS = {
     "repository": "mm_repo",
     "integration": "mm_integration",
 }
+_OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES = {
+    "mm_target_runtime": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+    "mm_target_skill": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+}
+_OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES_CACHE_TTL_SECONDS = 300.0
+_optional_temporal_search_attributes_cache: dict[
+    tuple[str, int], tuple[float, frozenset[str]]
+] = {}
+_EXECUTION_FILTER_ATTR_BY_ALIAS = {
+    "targetRuntime": "mm_target_runtime",
+    "targetRuntimeIn": "mm_target_runtime",
+    "targetRuntimeNotIn": "mm_target_runtime",
+    "targetSkillIn": "mm_target_skill",
+    "targetSkillNotIn": "mm_target_skill",
+}
 _EXECUTION_FACET_FILTER_ALIASES = {
     "status": frozenset({"state", "stateIn", "stateNotIn"}),
     "targetRuntime": frozenset(
@@ -278,6 +295,94 @@ _PROGRESS_SIGNAL_VALUES = frozenset(
         "has_canceled_steps",
     }
 )
+
+
+def _registered_search_attribute_map(response: object) -> dict[str, Any]:
+    for attr_name in (
+        "custom_attributes",
+        "custom_search_attributes",
+        "search_attributes",
+    ):
+        attrs = getattr(response, attr_name, None)
+        if isinstance(attrs, Mapping):
+            return dict(attrs)
+    return {}
+
+
+def _search_attribute_type_value(raw: object) -> int | None:
+    if raw is None:
+        return None
+    if isinstance(raw, int):
+        return raw
+    metadata_type = getattr(raw, "type", None)
+    if isinstance(metadata_type, int):
+        return metadata_type
+    indexed_value_type = getattr(raw, "indexed_value_type", None)
+    if isinstance(indexed_value_type, int):
+        return indexed_value_type
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized == "keyword":
+            return int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD)
+    return None
+
+
+async def _detect_optional_temporal_search_attributes(
+    client: Client,
+) -> frozenset[str]:
+    namespace = getattr(client, "namespace", "default")
+    operator_service = getattr(client, "operator_service", None)
+    if operator_service is None:
+        logger.info("Temporal Search Attribute registry check unavailable: no operator service")
+        return frozenset()
+
+    cache_key = (namespace, id(operator_service))
+    now = asyncio.get_running_loop().time()
+    cached = _optional_temporal_search_attributes_cache.get(cache_key)
+    if (
+        cached is not None
+        and now - cached[0] < _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES_CACHE_TTL_SECONDS
+    ):
+        return cached[1]
+
+    try:
+        response = await operator_service.list_search_attributes(
+            ListSearchAttributesRequest(namespace=namespace)
+        )
+    except Exception as exc:
+        logger.info("Temporal Search Attribute registry check unavailable: %s", exc)
+        if cached is not None:
+            return cached[1]
+        return frozenset()
+
+    attrs = _registered_search_attribute_map(response)
+    usable: set[str] = set()
+    for name, expected_type in _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES.items():
+        if _search_attribute_type_value(attrs.get(name)) == int(expected_type):
+            usable.add(name)
+        elif name in attrs:
+            logger.error(
+                "Temporal Search Attribute %s has unexpected type; expected Keyword.",
+                name,
+            )
+    logger.info(
+        "Temporal optional Search Attributes usable: %s",
+        ", ".join(sorted(usable)) or "none",
+    )
+    result = frozenset(usable)
+    _optional_temporal_search_attributes_cache[cache_key] = (now, result)
+    return result
+
+
+def _requested_unavailable_filter_aliases(
+    request: Request,
+    usable_search_attributes: frozenset[str],
+) -> frozenset[str]:
+    unavailable: set[str] = set()
+    for alias, attr_name in _EXECUTION_FILTER_ATTR_BY_ALIAS.items():
+        if alias in request.query_params and attr_name not in usable_search_attributes:
+            unavailable.add(alias)
+    return frozenset(unavailable)
 _PROGRESS_FILTER_ALIASES = frozenset(
     {
         "progressPctFrom",
@@ -1123,20 +1228,27 @@ def _build_temporal_execution_query(
     sort_dir: str | None = None,
     exclude_aliases: frozenset[str] = frozenset(),
     include_order: bool = False,
+    usable_search_attributes: frozenset[str] | None = None,
 ) -> tuple[str, str]:
     query_parts: list[str] = []
+    usable_attrs = usable_search_attributes or frozenset()
 
     def excluded(alias: str) -> bool:
         return alias in exclude_aliases
+
+    def attr_available(attr_name: str) -> bool:
+        return attr_name not in _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES or attr_name in usable_attrs
 
     state_in_values = [] if excluded("stateIn") else _raw_query_values(request, "stateIn", state_in)
     state_not_in_values = [] if excluded("stateNotIn") else _raw_query_values(request, "stateNotIn", state_not_in)
     repo_in_values = [] if excluded("repoIn") else _raw_query_values(request, "repoIn", repo_in)
     repo_not_in_values = [] if excluded("repoNotIn") else _raw_query_values(request, "repoNotIn", repo_not_in)
-    target_runtime_in_values = [] if excluded("targetRuntimeIn") else _raw_query_values(request, "targetRuntimeIn", target_runtime_in)
-    target_runtime_not_in_values = [] if excluded("targetRuntimeNotIn") else _raw_query_values(request, "targetRuntimeNotIn", target_runtime_not_in)
-    target_skill_in_values = [] if excluded("targetSkillIn") else _raw_query_values(request, "targetSkillIn", target_skill_in)
-    target_skill_not_in_values = [] if excluded("targetSkillNotIn") else _raw_query_values(request, "targetSkillNotIn", target_skill_not_in)
+    target_runtime_available = attr_available("mm_target_runtime")
+    target_skill_available = attr_available("mm_target_skill")
+    target_runtime_in_values = [] if excluded("targetRuntimeIn") or not target_runtime_available else _raw_query_values(request, "targetRuntimeIn", target_runtime_in)
+    target_runtime_not_in_values = [] if excluded("targetRuntimeNotIn") or not target_runtime_available else _raw_query_values(request, "targetRuntimeNotIn", target_runtime_not_in)
+    target_skill_in_values = [] if excluded("targetSkillIn") or not target_skill_available else _raw_query_values(request, "targetSkillIn", target_skill_in)
+    target_skill_not_in_values = [] if excluded("targetSkillNotIn") or not target_skill_available else _raw_query_values(request, "targetSkillNotIn", target_skill_not_in)
 
     _validate_non_contradictory_values("stateIn", state_in_values, "stateNotIn", state_not_in_values)
     _validate_non_contradictory_values("repoIn", repo_in_values, "repoNotIn", repo_not_in_values)
@@ -1199,19 +1311,21 @@ def _build_temporal_execution_query(
         )
     if integration and not excluded("integration"):
         query_parts.append(f'mm_integration="{_escape_temporal_value(integration)}"')
-    _append_exact_or_multi_temporal_filter(
-        query_parts,
-        "mm_target_runtime",
-        exact=None if excluded("targetRuntime") else target_runtime,
-        include=target_runtime_in_values,
-        exclude=target_runtime_not_in_values,
-    )
-    _append_exact_or_multi_temporal_filter(
-        query_parts,
-        "mm_target_skill",
-        include=target_skill_in_values,
-        exclude=target_skill_not_in_values,
-    )
+    if target_runtime_available:
+        _append_exact_or_multi_temporal_filter(
+            query_parts,
+            "mm_target_runtime",
+            exact=None if excluded("targetRuntime") else target_runtime,
+            include=target_runtime_in_values,
+            exclude=target_runtime_not_in_values,
+        )
+    if target_skill_available:
+        _append_exact_or_multi_temporal_filter(
+            query_parts,
+            "mm_target_skill",
+            include=target_skill_in_values,
+            exclude=target_skill_not_in_values,
+        )
     if not excluded("workflowId"):
         _append_exact_or_multi_temporal_filter(
             query_parts,
@@ -1271,6 +1385,8 @@ def _build_temporal_execution_query(
             raise TemporalExecutionValidationError(
                 "sort must be one of: " + ", ".join(sorted(_EXECUTION_SORT_FIELDS)) + "."
             )
+        if sort_attr in _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES and sort_attr not in usable_attrs:
+            return count_query, list_query
         direction = str(sort_dir or "desc").strip().lower()
         if direction not in {"asc", "desc"}:
             raise TemporalExecutionValidationError("sortDir must be one of: asc, desc.")
@@ -9162,6 +9278,7 @@ async def list_executions(
         owner_type=owner_type,
         owner_id=owner_id,
     )
+    usable_search_attributes: frozenset[str] = frozenset()
 
     if source == "temporal":
         try:
@@ -9171,6 +9288,26 @@ async def list_executions(
             )
 
             client = temporal_client
+            usable_search_attributes = await _detect_optional_temporal_search_attributes(client)
+            unavailable_filter_aliases = _requested_unavailable_filter_aliases(
+                request,
+                usable_search_attributes,
+            )
+            if unavailable_filter_aliases:
+                logger.info(
+                    "Skipping Temporal execution list query because filters require "
+                    "unregistered Search Attributes: %s",
+                    ", ".join(sorted(unavailable_filter_aliases)),
+                )
+                return ExecutionListResponse(
+                    items=[],
+                    nextPageToken=None,
+                    count=0,
+                    countMode="exact",
+                    staleState=False,
+                    degradedCount=False,
+                    refreshedAt=datetime.now(UTC),
+                )
             count_query, list_query = _build_temporal_execution_query(
                 request=request,
                 workflow_type=workflow_type,
@@ -9204,6 +9341,7 @@ async def list_executions(
                 sort=sort,
                 sort_dir=sort_dir,
                 include_order=True,
+                usable_search_attributes=usable_search_attributes,
             )
 
             import base64
@@ -9525,6 +9663,7 @@ async def get_execution_metrics(
         owner_type=owner_type,
         owner_id=owner_id,
     )
+    usable_search_attributes: frozenset[str] = frozenset()
 
     def build_query(
         *,
@@ -9589,11 +9728,30 @@ async def get_execution_metrics(
             sort="closedAt",
             sort_dir="desc",
             include_order=include_order,
+            usable_search_attributes=usable_search_attributes,
         )
         return list_query if include_order else count_query
 
     try:
         client = temporal_client
+        usable_search_attributes = await _detect_optional_temporal_search_attributes(client)
+        unavailable_filter_aliases = _requested_unavailable_filter_aliases(
+            request,
+            usable_search_attributes,
+        )
+        if unavailable_filter_aliases:
+            return ExecutionMetricsResponse(
+                totalRuns=0,
+                runningRuns=0,
+                completedRuns=0,
+                failedRuns=0,
+                canceledRuns=0,
+                terminalRuns=0,
+                successRate=None,
+                sampleSize=0,
+                countMode="exact",
+                refreshedAt=datetime.now(UTC),
+            )
 
         async def count_matching_workflows(query: str | None) -> int:
             if query is None:
@@ -9768,6 +9926,36 @@ async def list_execution_facets(
             raise TemporalExecutionValidationError(
                 "facet must be one of: " + ", ".join(sorted(_EXECUTION_FACET_ATTRS)) + "."
             )
+        if facet != "status" and next_page_token:
+            _decode_execution_facet_page_token(next_page_token)
+        usable_search_attributes = await _detect_optional_temporal_search_attributes(temporal_client)
+        if (
+            facet_attr in _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES
+            and facet_attr not in usable_search_attributes
+        ):
+            return ExecutionFacetResponse(
+                facet=facet,
+                items=[],
+                blankCount=None,
+                truncated=False,
+                nextPageToken=None,
+                countMode="estimated_or_unknown",
+                source="current_page_fallback",
+            )
+        unavailable_filter_aliases = _requested_unavailable_filter_aliases(
+            request,
+            usable_search_attributes,
+        )
+        if unavailable_filter_aliases:
+            return ExecutionFacetResponse(
+                facet=facet,
+                items=[],
+                blankCount=None,
+                truncated=False,
+                nextPageToken=None,
+                countMode="estimated_or_unknown",
+                source="current_page_fallback",
+            )
         search_value = _normalize_text_filter(search, alias="search")
         base_query, _ = _build_temporal_execution_query(
             request=request,
@@ -9800,6 +9988,7 @@ async def list_execution_facets(
             owner_type=effective_owner_type,
             owner_id=effective_owner,
             exclude_aliases=_EXECUTION_FACET_FILTER_ALIASES.get(facet, frozenset()),
+            usable_search_attributes=usable_search_attributes,
         )
         client = temporal_client
 

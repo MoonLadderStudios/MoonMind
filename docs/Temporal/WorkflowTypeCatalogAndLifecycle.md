@@ -216,6 +216,13 @@ Use only when product filtering requires them:
 
 - `mm_repo` (keyword)
 - `mm_integration` (keyword)
+- `mm_target_runtime` (keyword): canonical runtime ID, omitted when unknown
+- `mm_target_skill` (keyword): singular primary skill identifier, omitted when unknown
+
+Runtime and primary skill attributes must be registered before API filters or
+facets query them. Existing closed executions without these values remain
+blank/unknown; open executions may repair them through bounded workflow-owned
+Search Attribute updates when canonical values are available.
 
 ### Required Memo fields
 
