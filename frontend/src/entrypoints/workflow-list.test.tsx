@@ -504,7 +504,7 @@ describe('Workflows Entrypoint', () => {
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    await screen.findByText('Visible progress');
+    expect((await screen.findAllByText('Visible progress')).length).toBeGreaterThan(0);
 
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
