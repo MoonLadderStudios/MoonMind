@@ -131,9 +131,11 @@ async def test_recovery_step_execution_manifest_carries_lineage_without_large_pa
         "sourcePlanDigest": "sha256:source-plan",
         "failedStepId": "implement",
         "failedStepExecution": 2,
-        "recoveryCheckpointRef": "artifact://resume/checkpoint",
+        "recoveryCheckpointRef": "artifact://workspace/before-implement",
+        "failedRunRecoveryManifestRef": "artifact://resume/manifest",
         "recoveryWorkspace": {
             "checkpointRef": "artifact://workspace/before-implement",
+            "workspacePolicy": "start_from_last_passed_commit",
         },
         "preservedSteps": [],
     }
@@ -179,6 +181,9 @@ async def test_recovery_step_execution_manifest_carries_lineage_without_large_pa
     assert manifest["lineage"]["lineageExecutionOrdinal"] == 3
     assert manifest["recoverySource"]["sourceWorkflowId"] == "wf-source"
     assert manifest["recoverySource"]["sourceRunId"] == "run-source"
+    assert manifest["recoverySource"]["failedRunRecoveryManifestRef"] == (
+        "artifact://resume/manifest"
+    )
     assert manifest["recoverySource"]["preservedSteps"] == []
     assert manifest["workspace"]["policy"] == "start_from_last_passed_commit"
     assert manifest["workspace"]["checkpointRef"] == (

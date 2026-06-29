@@ -46,6 +46,7 @@ from moonmind.workflows.temporal.service import (
 from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
 from moonmind.schemas.temporal_models import (
     CreateExecutionRequest,
+    FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
     RecoveryCheckpointModel,
     has_user_workflow_plan_source,
 )
@@ -2857,8 +2858,64 @@ def _valid_recovery_checkpoint_payload(
             }
         ],
         "preparedArtifactRefs": ["artifact://prepared"],
-        "recoveryWorkspace": {"branch": "feature", "commit": "abc123"},
+        "recoveryWorkspace": {
+            "branch": "feature",
+            "commit": "abc123",
+            "checkpointRef": "artifact://checkpoint/source",
+        },
     }
+
+
+def _valid_failed_run_recovery_manifest_payload(
+    *,
+    workflow_id: str,
+    run_id: str,
+    checkpoint_ref: str = "artifact://checkpoint/source",
+    failed_step_id: str = "implement",
+    failed_execution_ordinal: int = 1,
+) -> dict[str, object]:
+    return {
+        "schemaVersion": "v1",
+        "contentType": FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
+        "workflowId": workflow_id,
+        "runId": run_id,
+        "failedLogicalStepId": failed_step_id,
+        "failedExecutionOrdinal": failed_execution_ordinal,
+        "checkpointRefs": [
+            {
+                "category": "checkpoint",
+                "status": "available",
+                "artifactRef": checkpoint_ref,
+                "boundary": "before_recovery_restoration",
+            }
+        ],
+        "validation": {
+            "result": "valid",
+            "checkpointRef": checkpoint_ref,
+            "boundary": "before_recovery_restoration",
+        },
+        "sideEffectDispositions": [],
+        "resumeAllowed": True,
+        "recoveryEligibility": {
+            "eligible": True,
+            "defaultAction": "resume_from_checkpoint",
+            "requiredBoundary": "before_recovery_restoration",
+            "checkpointRef": checkpoint_ref,
+            "sourceWorkflowId": workflow_id,
+            "sourceRunId": run_id,
+            "operatorGuidance": "resume",
+            "evidence": [
+                {
+                    "category": "checkpoint",
+                    "status": "available",
+                    "artifactRef": checkpoint_ref,
+                    "boundary": "before_recovery_restoration",
+                }
+            ],
+        },
+        "createdAt": "2026-06-13T12:00:00+00:00",
+    }
+
 
 def test_recovery_checkpoint_model_requires_plan_identity() -> None:
     with pytest.raises(ValidationError, match="plan identity"):
@@ -3017,6 +3074,11 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
                 run_id=created.run_id,
                 snapshot_ref="artifact://snapshot/source",
             ),
+            failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+            failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                workflow_id=created.workflow_id,
+                run_id=created.run_id,
+            ),
         )
 
         resumed = await service.describe_execution(result["execution"]["workflowId"])
@@ -3031,6 +3093,7 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
         assert resumed.parameters["recoverySource"]["recoveryWorkspace"] == {
             "branch": "feature",
             "commit": "abc123",
+            "checkpointRef": "artifact://checkpoint/source",
         }
         assert resumed.parameters["recoverySource"]["preservedSteps"][0][
             "logicalStepId"
@@ -3058,6 +3121,7 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
             ],
             "dependencySignatures": {},
             "workspacePolicy": "restore_pre_execution",
+            "failedRunRecoveryManifestRef": "artifact://recovery/manifest",
         }
         assert "agentRunId" not in resumed.parameters
 
@@ -3100,6 +3164,11 @@ async def test_failed_step_recovery_accepts_legacy_checkpoint_memo_key(
                 workflow_id=created.workflow_id,
                 run_id=created.run_id,
                 snapshot_ref="artifact://snapshot/source",
+            ),
+            failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+            failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                workflow_id=created.workflow_id,
+                run_id=created.run_id,
             ),
         )
 
@@ -3170,6 +3239,11 @@ async def test_selected_step_recovery_starts_from_preserved_step(
             recovery_checkpoint_ref=None,
             idempotency_key="recover-selected",
             checkpoint_payload=checkpoint_payload,
+            failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+            failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                workflow_id=created.workflow_id,
+                run_id=created.run_id,
+            ),
             selected_start_step_id="design",
         )
 
@@ -3228,6 +3302,11 @@ async def test_selected_step_recovery_rejects_step_without_checkpoint_evidence(
                     run_id=created.run_id,
                     snapshot_ref="artifact://snapshot/source",
                 ),
+                failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+                failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
+                ),
                 selected_start_step_id="missing-step",
             )
 
@@ -3285,6 +3364,11 @@ async def test_selected_step_recovery_rejects_step_after_failed_step(
                 recovery_checkpoint_ref=None,
                 idempotency_key="recover-selected",
                 checkpoint_payload=checkpoint_payload,
+                failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+                failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
+                ),
                 selected_start_step_id="notify",
             )
 
@@ -3371,6 +3455,11 @@ async def test_failed_step_recovery_invalid_evidence_does_not_create_execution(
                 recovery_checkpoint_ref=None,
                 idempotency_key="recover-1",
                 checkpoint_payload=invalid_payload,
+                failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+                failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
+                ),
             )
 
         create_execution.assert_not_awaited()
@@ -3417,6 +3506,11 @@ async def test_failed_step_recovery_rejects_noncanonical_checkpoint_ref(
                     run_id=created.run_id,
                     snapshot_ref="artifact://snapshot/source",
                 ),
+                failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+                failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
+                ),
             )
 
 
@@ -3456,6 +3550,11 @@ async def test_failed_step_recovery_rejects_checkpoint_run_mismatch(
                     workflow_id=created.workflow_id,
                     run_id="stale-run-id",
                     snapshot_ref="artifact://snapshot/source",
+                ),
+                failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+                failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
                 ),
             )
 
@@ -3500,6 +3599,11 @@ async def test_failed_step_recovery_rejects_checkpoint_plan_mismatch(
                 recovery_checkpoint_ref=None,
                 idempotency_key="recover-1",
                 checkpoint_payload=payload,
+                failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+                failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
+                ),
             )
 
 
@@ -3543,6 +3647,11 @@ async def test_failed_step_recovery_rejects_checkpoint_plan_digest_mismatch(
                     workflow_id=created.workflow_id,
                     run_id=created.run_id,
                     snapshot_ref="artifact://snapshot/source",
+                ),
+                failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+                failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
                 ),
             )
 

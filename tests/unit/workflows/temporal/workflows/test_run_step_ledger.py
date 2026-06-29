@@ -2573,7 +2573,7 @@ async def test_run_skips_no_capture_ephemeral_checkpoint_for_pre_emit_histories(
 
 
 @pytest.mark.asyncio
-async def test_run_no_capture_ephemeral_checkpoint_reuses_previous_retry_ref_for_replay(
+async def test_run_no_capture_ephemeral_checkpoint_skips_previous_retry_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -2612,8 +2612,7 @@ async def test_run_no_capture_ephemeral_checkpoint_reuses_previous_retry_ref_for
         **_kwargs: Any,
     ) -> dict[str, Any]:
         captured.append({"activity": activity, "payload": payload})
-        assert activity == "step_checkpoint.create"
-        return _checkpoint_create_result(payload)
+        raise AssertionError(f"unexpected activity: {activity}")
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
 
@@ -2623,14 +2622,12 @@ async def test_run_no_capture_ephemeral_checkpoint_reuses_previous_retry_ref_for
         updated_at=now,
     )
 
-    assert result == "artifact://checkpoint/before_execution"
-    assert captured[0]["payload"]["workspace"]["workspaceRef"] == (
-        "artifact://checkpoint/after_prepare"
-    )
+    assert result is None
+    assert captured == []
 
 
 @pytest.mark.asyncio
-async def test_run_emits_no_capture_ephemeral_checkpoint_when_emit_patch_enabled(
+async def test_run_skips_no_capture_ephemeral_checkpoint_when_emit_patch_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -2666,8 +2663,7 @@ async def test_run_emits_no_capture_ephemeral_checkpoint_when_emit_patch_enabled
         **_kwargs: Any,
     ) -> dict[str, Any]:
         captured.append({"activity": activity, "payload": payload})
-        assert activity == "step_checkpoint.create"
-        return _checkpoint_create_result(payload)
+        raise AssertionError(f"unexpected activity: {activity}")
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
 
@@ -2677,13 +2673,8 @@ async def test_run_emits_no_capture_ephemeral_checkpoint_when_emit_patch_enabled
         updated_at=now,
     )
 
-    assert result == "artifact://checkpoint/after_prepare"
-    assert [call["activity"] for call in captured] == ["step_checkpoint.create"]
-    assert captured[0]["payload"]["workspace"] == {
-        "kind": "ephemeral_workspace_ref",
-        "workspaceRef": "temporal://wf-run-1/run-1/implement/after_prepare",
-        "createdAt": "2026-04-07T12:00:00+00:00",
-    }
+    assert result is None
+    assert captured == []
 
 
 @pytest.mark.asyncio
@@ -2751,7 +2742,7 @@ async def test_run_skips_captured_ephemeral_checkpoint_for_pre_emit_histories(
 
 
 @pytest.mark.asyncio
-async def test_run_emits_captured_ephemeral_checkpoint_when_emit_patch_enabled(
+async def test_run_skips_captured_ephemeral_checkpoint_when_emit_patch_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -2800,15 +2791,7 @@ async def test_run_emits_captured_ephemeral_checkpoint_when_emit_patch_enabled(
                 },
                 "diagnosticRefs": ["artifact://diagnostic/ephemeral"],
             }
-        assert activity == "step_checkpoint.create"
-        return {
-            "checkpointRef": "artifact://checkpoint/after_execution",
-            "checkpointId": payload["idempotencyKey"],
-            "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
-            "workspaceKind": payload["workspace"]["kind"],
-            "diagnosticRefs": [],
-            "idempotencyKey": payload["idempotencyKey"],
-        }
+        raise AssertionError(f"unexpected activity: {activity}")
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
 
@@ -2818,20 +2801,12 @@ async def test_run_emits_captured_ephemeral_checkpoint_when_emit_patch_enabled(
         updated_at=now,
     )
 
-    assert result == "artifact://checkpoint/after_execution"
-    assert [call["activity"] for call in captured] == [
-        "workspace.capture_checkpoint",
-        "step_checkpoint.create",
-    ]
-    assert captured[1]["payload"]["workspace"]["kind"] == "ephemeral_workspace_ref"
+    assert result is None
+    assert [call["activity"] for call in captured] == ["workspace.capture_checkpoint"]
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["stepCheckpointRef"] == "artifact://checkpoint/after_execution"
-    assert step["refs"]["stepExecutionCheckpointRefs"] == [
-        "artifact://checkpoint/after_execution"
-    ]
-    assert step["refs"]["checkpointRefsByBoundary"] == {
-        "after_execution": "artifact://checkpoint/after_execution"
-    }
+    assert step.get("stepCheckpointRef") is None
+    assert step["refs"]["stepExecutionCheckpointRefs"] == []
+    assert step["refs"]["checkpointRefsByBoundary"] == {}
 
 
 @pytest.mark.asyncio

@@ -71,6 +71,7 @@ def _recovery_source_with_checkpoint_payload() -> dict[str, object]:
         "failedStepId": "implement",
         "failedStepExecution": 2,
         "recoveryCheckpointRef": "artifact-checkpoint",
+        "failedRunRecoveryManifestRef": "artifact-manifest",
         "recoveryWorkspace": {
             "checkpointRef": "artifact-checkpoint",
             "targetWorkspaceRef": "workspace-target",
