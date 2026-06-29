@@ -248,6 +248,10 @@ _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES = {
     "mm_target_runtime": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
     "mm_target_skill": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
 }
+_OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES_CACHE_TTL_SECONDS = 300.0
+_optional_temporal_search_attributes_cache: dict[
+    tuple[str, int], tuple[float, frozenset[str]]
+] = {}
 _EXECUTION_FILTER_ATTR_BY_ALIAS = {
     "targetRuntime": "mm_target_runtime",
     "targetRuntimeIn": "mm_target_runtime",
@@ -326,12 +330,29 @@ def _search_attribute_type_value(raw: object) -> int | None:
 async def _detect_optional_temporal_search_attributes(
     client: Client,
 ) -> frozenset[str]:
+    namespace = getattr(client, "namespace", "default")
+    operator_service = getattr(client, "operator_service", None)
+    if operator_service is None:
+        logger.info("Temporal Search Attribute registry check unavailable: no operator service")
+        return frozenset()
+
+    cache_key = (namespace, id(operator_service))
+    now = asyncio.get_running_loop().time()
+    cached = _optional_temporal_search_attributes_cache.get(cache_key)
+    if (
+        cached is not None
+        and now - cached[0] < _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES_CACHE_TTL_SECONDS
+    ):
+        return cached[1]
+
     try:
-        response = await client.operator_service.list_search_attributes(
-            ListSearchAttributesRequest(namespace=getattr(client, "namespace", "default"))
+        response = await operator_service.list_search_attributes(
+            ListSearchAttributesRequest(namespace=namespace)
         )
     except Exception as exc:
         logger.info("Temporal Search Attribute registry check unavailable: %s", exc)
+        if cached is not None:
+            return cached[1]
         return frozenset()
 
     attrs = _registered_search_attribute_map(response)
@@ -348,7 +369,9 @@ async def _detect_optional_temporal_search_attributes(
         "Temporal optional Search Attributes usable: %s",
         ", ".join(sorted(usable)) or "none",
     )
-    return frozenset(usable)
+    result = frozenset(usable)
+    _optional_temporal_search_attributes_cache[cache_key] = (now, result)
+    return result
 
 
 def _requested_unavailable_filter_aliases(

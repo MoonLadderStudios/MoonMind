@@ -42,6 +42,8 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionService,
     TemporalExecutionValidationError,
     _get_managed_session_store_root,
+    _visibility_runtime_from_parameters,
+    _visibility_skill_from_parameters,
 )
 from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
 from moonmind.schemas.temporal_models import (
@@ -109,6 +111,13 @@ def _write_mm730_cutover_files(tmp_path):
         encoding="utf-8",
     )
     return release_notes, cutover_record
+
+
+def test_visibility_helpers_ignore_empty_parameters() -> None:
+    assert _visibility_runtime_from_parameters(None) is None
+    assert _visibility_runtime_from_parameters({}) is None
+    assert _visibility_skill_from_parameters(None) is None
+    assert _visibility_skill_from_parameters({}) is None
 
 @pytest.fixture
 def mock_client_adapter():

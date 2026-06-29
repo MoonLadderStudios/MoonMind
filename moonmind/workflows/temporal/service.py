@@ -115,7 +115,11 @@ def _workflow_payload(parameters: Mapping[str, Any]) -> Mapping[str, Any]:
     return _mapping_payload(parameters.get("task"))
 
 
-def _visibility_runtime_from_parameters(parameters: Mapping[str, Any]) -> str | None:
+def _visibility_runtime_from_parameters(
+    parameters: Mapping[str, Any] | None,
+) -> str | None:
+    if not parameters:
+        return None
     task_payload = _workflow_payload(parameters)
     task_runtime = _mapping_payload(task_payload.get("runtime"))
     runtime_payload = _mapping_payload(parameters.get("runtime"))
@@ -129,7 +133,9 @@ def _visibility_runtime_from_parameters(parameters: Mapping[str, Any]) -> str | 
     )
 
 
-def _visibility_skill_from_parameters(parameters: Mapping[str, Any]) -> str | None:
+def _visibility_skill_from_parameters(parameters: Mapping[str, Any] | None) -> str | None:
+    if not parameters:
+        return None
     task_payload = _workflow_payload(parameters)
     tool_payload = _mapping_payload(task_payload.get("tool"))
     skill_payload = _mapping_payload(task_payload.get("skill"))
