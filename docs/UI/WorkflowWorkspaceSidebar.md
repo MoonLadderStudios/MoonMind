@@ -1,138 +1,306 @@
 # Workflow Workspace Sidebar
 
-Status: Proposed desired-state contract
+Status: Proposed SPA desired-state contract
 Owners: MoonMind Engineering
-Last updated: 2026-06-28
-Canonical for: desktop workflow workspace layout, workflow sidebar navigation, list-to-detail transitions, sidebar collapse/expand controls, and mobile workflow list/detail behavior
+Last updated: 2026-06-29
+Canonical for: desktop workflow workspace layout, SPA list-to-detail transitions, workflow sidebar navigation, sidebar collapse/expand controls, and mobile workflow list/detail behavior
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs. This document defines the product and UI contract for the workspace/sidebar behavior that connects the Workflows list and Workflow Details page.
+**Implementation tracking:** Rollout notes, task breakdowns, and local-only handoffs belong under `docs/tmp/`, Jira, or gitignored implementation notes. This document defines the durable product and UI contract for the workspace/sidebar behavior that unifies the Workflows list and Workflow Details surfaces.
 
-**Implementation note:** MM-997 wires the desktop detail presentation through `WorkflowWorkspaceShell` behind the dashboard runtime config flag `features.temporalDashboard.workspaceShellEnabled`, which defaults to enabled. Setting the flag to `false` restores standalone desktop detail rendering without changing mobile behavior.
+**SPA architecture note:** This design assumes the MoonMind dashboard is a persistent single-page application. Internal workflow navigation changes the client route and visible workspace state without reloading the document, remounting the dashboard shell, or asking FastAPI for a route-specific HTML page. FastAPI still serves direct deep links to the SPA shell and still owns APIs, auth, and authorization.
+
+**Supersedes earlier detail-owned shell posture:** Any implementation that mounts the workflow sidebar only inside the standalone workflow detail page is a transitional shape, not the target. The target is a parent Workflows workspace route that owns both the full list surface and the selected-detail workspace. That parent ownership is what prevents the sidebar/detail UI from being trapped inside a centered detail-page container with excessive left margin.
 
 ---
 
 ## 1. Purpose
 
-This document defines the desired desktop workflow workspace behavior for MoonMind.
+MoonMind should make desktop workflow browsing feel like one continuous workspace.
 
-On desktop, selecting a workflow from the Workflows page should minimize the workflow list into a compact left-hand sidebar and render the existing Workflow Details page in the center of the page. The sidebar remains available for switching to another workflow without returning to the full-width table.
+In the default desktop state, `/workflows` shows the full Workflows list with the table, filters, toolbar, pagination, and list-level scanning affordances. When a user clicks a workflow title, the same workspace should transition in place: the list compresses into a compact sidebar pinned to the far left of the dashboard content area, and the selected Workflow Details surface loads into the space that opens to the right. The browser URL changes to the canonical workflow detail URL, but the SPA shell does not reload.
 
-On mobile, the split workspace is not used. Tapping a workflow card opens the standalone Workflow Details page.
+When the user chooses to expand the workflow list back to full screen, the selected detail view closes. The route returns to `/workflows`, the full list occupies the workspace again, and no hidden selected detail remains active in the UI.
+
+On mobile, the split workspace is not used. Mobile keeps the straightforward card-list-to-standalone-detail model, also through SPA navigation when already inside the dashboard.
 
 This document amends the existing UI contracts without replacing them:
 
-- `docs/UI/WorkflowsListPage.md` remains canonical for the full Workflows list, filters, table, pagination, and mobile cards.
-- `docs/UI/WorkflowDetailsPage.md` remains canonical for the detail page content and actions.
-- `docs/UI/WorkflowConsoleArchitecture.md` remains canonical for route ownership, API boundaries, and dashboard shell architecture.
+- `docs/UI/DashboardSPAArchitecture.md` is canonical for the persistent SPA shell, client routing authority, route fallback, providers, and same-origin API model.
+- `docs/UI/WorkflowsListPage.md` remains canonical for full Workflows list content, filters, table columns, pagination, and mobile cards.
+- `docs/UI/WorkflowDetailsPage.md` remains canonical for detail content, tabs, actions, evidence sections, logs, artifacts, and recovery flows.
+- `docs/UI/WorkflowConsoleArchitecture.md` remains canonical for API boundaries, workflow concepts, and backend ownership.
 - `docs/UI/DashboardDesignSystem.md` remains canonical for visual language, motion, and component styling rules.
 
 ---
 
 ## 2. Product stance
 
-The desktop workflow workspace should feel similar to a modern conversation/work item console: a compact navigation rail on the left, selected detail in the center, and quick switching between related items.
+The desktop workflow surface should behave like a modern work-item or conversation console: a scan-first list can become a compact navigation rail, the selected item opens in the main pane, and users can switch related workflows without returning to a full table every time.
 
 Core rules:
 
-1. The change is a **presentation mode**, not a new product entity.
-2. `/workflows` remains the full-width workflow list route.
-3. `/workflows/{workflowId}` remains the canonical workflow detail route.
-4. The center content in desktop workspace mode reuses the existing Workflow Details page.
-5. The sidebar is a minimized workflow navigation list, not a full table.
-6. Mobile uses card-to-detail navigation rather than a split workspace.
-7. The browser still calls only MoonMind APIs.
-8. The UI must not create a second detail implementation or a second detail data model.
+1. The workspace is a **presentation and routing composition**, not a new workflow entity.
+2. The Workflows list and Workflow Details page are unified under one SPA workspace parent on desktop.
+3. `/workflows` remains the canonical full-list URL.
+4. `/workflows/{workflowId}` remains the canonical selected-detail URL.
+5. Detail subroutes remain canonical child URLs of the selected workflow.
+6. Selecting a workflow uses client-side routing and data loading, not a document reload.
+7. Expanding the list to full screen exits selected-detail mode and returns to `/workflows`.
+8. The sidebar is a compact projection of the list, not the full workflow table squeezed into a rail.
+9. The UI must not create a second workflow detail implementation or a second detail data model.
+10. The browser still calls only same-origin MoonMind APIs.
 
 ---
 
-## 3. Route and presentation model
+## 3. Desired desktop interaction in one flow
+
+The primary desktop flow is:
+
+1. User lands on `/workflows`.
+2. The full Workflows list renders across the available dashboard content width.
+3. User clicks a workflow title.
+4. The SPA router pushes `/workflows/{workflowId}`.
+5. The dashboard shell stays mounted.
+6. The Workflows workspace parent stays mounted.
+7. The full list surface compresses into a far-left compact workflow sidebar.
+8. The selected detail pane appears to the right of the sidebar.
+9. The detail pane shows its route-level loading state until selected workflow data is ready.
+10. The sidebar remains interactive for switching workflows.
+11. User clicks `Expand workflow list`.
+12. The SPA router pushes or replaces `/workflows` according to the history policy.
+13. The detail pane unmounts and the full Workflows list expands back into the available workspace.
+
+This should feel like resizing and reusing the same workspace, not like leaving the list page and loading a separate detail page.
+
+---
+
+## 4. Route and SPA state model
 
 Routes remain canonical and workflow-oriented:
 
-| Route | Purpose | Desktop presentation | Mobile presentation |
+| Route | Purpose | Desktop SPA presentation | Mobile SPA presentation |
 | --- | --- | --- | --- |
-| `/workflows` | Full workflow list | Full-width table/list with filters, columns, pagination, and cards hidden | Card list |
-| `/workflows/{workflowId}` | Workflow detail | Workflow sidebar plus center detail, unless sidebar is collapsed | Standalone detail page |
-| `/workflows/{workflowId}/steps` | Detail Steps subroute | Same workspace shell, center detail opens Steps | Standalone detail page on Steps |
-| `/workflows/{workflowId}/artifacts` | Detail Artifacts subroute | Same workspace shell, center detail opens Artifacts | Standalone detail page on Artifacts |
-| `/workflows/{workflowId}/runs` | Detail Runs subroute | Same workspace shell, center detail opens Runs | Standalone detail page on Runs |
+| `/workflows` | Full workflow list | Full list fills the Workflows workspace. No selected detail pane is visible. | Card list. |
+| `/workflows/{workflowId}` | Selected workflow detail | Far-left compact workflow sidebar plus selected detail pane. | Standalone detail page. |
+| `/workflows/{workflowId}/steps` | Detail Steps subroute | Same desktop workspace; detail pane opens Steps. | Standalone detail page on Steps. |
+| `/workflows/{workflowId}/artifacts` | Detail Artifacts subroute | Same desktop workspace; detail pane opens Artifacts. | Standalone detail page on Artifacts. |
+| `/workflows/{workflowId}/runs` | Detail Runs subroute | Same desktop workspace; detail pane opens Runs. | Standalone detail page on Runs. |
+| `/workflows/{workflowId}/debug` | Detail Debug subroute when enabled | Same desktop workspace; detail pane opens Debug. | Standalone detail page on Debug when enabled. |
 
 Rules:
 
 1. The selected workflow identity belongs in the path, not in a `selectedWorkflowId` query parameter.
-2. Full list mode and detail mode should be linkable and reloadable.
-3. The sidebar layout is driven by viewport and user sidebar state.
-4. Detail subroutes stay inside the same desktop workspace shell.
-5. Direct visits to `/workflows/{workflowId}` on desktop show the sidebar by default unless a persisted user preference says it was collapsed.
-6. Direct visits to `/workflows/{workflowId}` on mobile show the standalone detail page.
+2. The desktop workspace mode is derived primarily from the route:
+   - `/workflows` means full list mode.
+   - `/workflows/{workflowId}` and detail subroutes mean selected-detail workspace mode.
+3. Sidebar hidden/open preference is UI state. It must not replace route-derived selected workflow state.
+4. Full list mode and detail mode must be linkable, reloadable, and shareable.
+5. Direct visits to workflow detail URLs on desktop render the workspace with the sidebar visible by default unless a user preference intentionally hides it.
+6. Direct visits to workflow detail URLs on mobile render the standalone mobile detail presentation.
+7. Internal workflow navigation uses router-native links or `navigate()`, not `window.location`, full-page `<form>` navigation, or route-specific HTML reloads.
+8. Hard browser navigation is reserved for external URLs, downloads, auth redirects, and non-dashboard resources.
 
 ---
 
-## 4. Desktop workspace states
+## 5. Desktop workspace states
 
-The desktop workflow surface has three primary states:
+The desktop workflow surface has two primary states and one optional focus state.
 
 | State | Route | Layout |
 | --- | --- | --- |
-| Full list | `/workflows` | Full-width workflow list with table columns, filters, toolbar, pagination, and desktop table behavior. |
-| Split detail | `/workflows/{workflowId}` | Compact workflow sidebar on the left; existing Workflow Details page in the center. |
-| Collapsed-sidebar detail | `/workflows/{workflowId}` | Workflow Details page expands horizontally; a small `Open workflow sidebar` control remains available. |
+| Full list | `/workflows` | Full Workflows list across the available dashboard content width. |
+| Selected-detail workspace | `/workflows/{workflowId}` and subroutes | Compact workflow sidebar pinned to the far left; selected Workflow Details content in the main pane. |
+| Detail focus with sidebar hidden | `/workflows/{workflowId}` and subroutes | Optional focus mode. Detail uses the sidebar's width; a small `Open workflow sidebar` control remains available. |
 
-### 4.1 Full list state
+### 5.1 Full list state
 
-The full list state is the existing Workflows List page.
+The full list state is the Workflows List page rendered inside the Workflows workspace parent.
 
 Rules:
 
-1. The page keeps the full desktop table, filter controls, active filter chips, pagination, and list toolbar defined in `docs/UI/WorkflowsListPage.md`.
-2. Clicking a workflow row or title navigates to `/workflows/{workflowId}`.
-3. Navigation should preserve list context so the user can return to the same list state with `Expand to full list` or browser back.
-4. Full list mode must remain useful on wide screens for comparing workflows across columns.
+1. The page keeps the full desktop table, filter controls, active filter chips, toolbar, pagination, and list behavior defined in `docs/UI/WorkflowsListPage.md`.
+2. The list should use the full available dashboard content width. Do not constrain it to the detail-page max-width container.
+3. A workflow title is the primary link to the selected-detail workspace.
+4. The row may also be clickable if the existing list contract allows it, but the title must remain a normal accessible link.
+5. Clicking a workflow title performs a SPA route transition to `/workflows/{workflowId}`.
+6. The full list component should not unmount the entire dashboard shell.
+7. The Workflows workspace parent should preserve list query state, scroll restoration hints, focus return intent, and cached list data where practical.
+8. Full list mode remains optimized for comparing workflows across columns.
 
-### 4.2 Split detail state
+### 5.2 Selected-detail workspace state
 
-In split detail state, the page renders:
+In selected-detail workspace state, the workspace renders:
 
-1. workflow sidebar on the left;
-2. selected Workflow Details page in the center;
+1. a compact workflow sidebar pinned to the far left of the dashboard content area;
+2. the selected Workflow Details surface in the main pane;
 3. any right rail already owned by the Workflow Details page, if available and if width allows.
 
 Rules:
 
-1. The center region uses the same detail component, data contract, and action logic as the standalone Workflow Details page.
-2. Sidebar scrolling and detail scrolling are independent.
-3. The active workflow is highlighted in the sidebar.
-4. Clicking another workflow in the sidebar navigates to that workflow detail route and loads it in the center region.
-5. The detail route should remain stable when the sidebar list refetches or changes.
-6. The selected detail remains usable if the sidebar list fails to load.
+1. The sidebar and detail pane are siblings owned by the Workflows workspace parent.
+2. The sidebar must not be rendered inside the detail page's centered content container.
+3. The detail pane uses the existing Workflow Details component, data contract, action logic, tab model, and evidence sections.
+4. The detail pane may have its own internal readable content width for dense evidence, but the workspace grid itself must not create a large empty margin to the left of the sidebar.
+5. Sidebar scrolling and detail scrolling are independent.
+6. The active workflow is highlighted in the sidebar.
+7. Clicking another workflow in the sidebar uses SPA navigation to load that workflow's detail in the same detail pane.
+8. The detail route remains stable when the sidebar list refetches or filters change.
+9. The selected detail remains usable if the sidebar list fails to load.
+10. The sidebar remains usable if an optional detail subresource fails.
 
-### 4.3 Collapsed-sidebar detail state
+### 5.3 Expanding back to the full list
 
-Collapsed-sidebar detail keeps the current workflow detail route and hides the sidebar.
+`Expand workflow list` exits selected-detail workspace mode.
 
 Rules:
 
-1. Collapsing the sidebar does not navigate away from the selected workflow.
-2. A compact `Open workflow sidebar` control appears near the top-left of the workspace or detail header area.
-3. Reopening the sidebar restores the split detail state.
-4. Collapsed state may persist for the session or user preference, but it must not be encoded as the selected workflow identity.
-5. The detail page should use the newly available width without large horizontal animation.
+1. The control navigates to `/workflows` with preserved list context where possible.
+2. The selected detail pane unmounts and is not visibly retained.
+3. The full Workflows list expands to occupy the workspace.
+4. Cached detail data may remain in TanStack Query, but no hidden selected detail should be considered active UI state.
+5. If the user presses browser Back after expanding, the previous detail route may reopen because it is a normal history entry. That is browser history, not a hidden selected workflow in full list mode.
+6. Focus after expansion lands on the Workflows page title, the previously activated workflow row, or the list container according to the focus restoration policy.
+
+### 5.4 Optional detail focus with sidebar hidden
+
+Hiding the sidebar while staying on a workflow detail route is optional and separate from expanding the list.
+
+Rules:
+
+1. A `Hide workflow sidebar` or equivalent control may hide the sidebar without leaving `/workflows/{workflowId}`.
+2. Hiding the sidebar does not close the selected detail.
+3. A compact `Open workflow sidebar` control remains available.
+4. Reopening the sidebar restores selected-detail workspace state.
+5. This state exists for detail focus only. It must not be confused with `Expand workflow list`.
+6. If this optional state causes product confusion, omit it from the first implementation and keep only full list plus selected-detail workspace.
 
 ---
 
-## 5. Workflow sidebar contract
+## 6. Component and route ownership
+
+The SPA should model Workflows as one parent workspace route with list and detail children.
+
+Representative route tree:
+
+```tsx
+const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <DashboardShell />,
+    children: [
+      {
+        path: 'workflows',
+        element: <WorkflowsWorkspacePage />,
+        children: [
+          { index: true, element: <WorkflowListSurface mode="full" /> },
+          { path: ':workflowId', element: <WorkflowDetailSurface tab="overview" /> },
+          { path: ':workflowId/steps', element: <WorkflowDetailSurface tab="steps" /> },
+          { path: ':workflowId/artifacts', element: <WorkflowDetailSurface tab="artifacts" /> },
+          { path: ':workflowId/runs', element: <WorkflowDetailSurface tab="runs" /> },
+          { path: ':workflowId/debug', element: <WorkflowDetailSurface tab="debug" /> },
+        ],
+      },
+    ],
+  },
+]);
+```
+
+Recommended frontend structure:
+
+```text
+DashboardShell
+└── WorkflowsWorkspacePage
+    ├── WorkflowListSurface
+    │   ├── full-list rendering when route is /workflows
+    │   └── compact-list projection when route has :workflowId
+    ├── WorkflowSidebar
+    └── WorkflowDetailSurface
+        └── existing WorkflowDetailsPage content
+```
+
+Rules:
+
+1. `DashboardShell` owns global app providers, masthead, global navigation, route-level error boundaries, and capability state.
+2. `WorkflowsWorkspacePage` owns desktop workspace composition, route-derived workspace mode, list context, sidebar visibility preference, and split layout.
+3. `WorkflowListSurface` owns full-list table/card rendering and can provide compact row data for the sidebar.
+4. `WorkflowSidebar` owns compact workflow navigation only.
+5. `WorkflowDetailSurface` adapts the existing detail page to the workspace pane and owns detail tabs/subroutes.
+6. The detail page must not own the sidebar as an embedded child of its page container.
+7. The sidebar must not duplicate the Workflow Details primary action bar.
+8. Workflow row actions that mutate executions should remain in existing list/detail action components unless explicitly redesigned for the sidebar.
+9. Client stores may hold transient workspace preferences, but server snapshots remain owned by query hooks and APIs.
+
+---
+
+## 7. URL, history, and list context
+
+The workspace should preserve list context without making detail routing ambiguous.
+
+List context may include:
+
+- shareable filters already supported by the Workflows list;
+- sort state when list sorting is URL-supported;
+- page size;
+- cursor or page hints when safe;
+- scroll restoration and focus return hints in router state or session storage;
+- compatibility/debug/source hints only when still needed.
+
+Rules:
+
+1. The workflow ID remains the path parameter.
+2. List filters and sort belong in URL search parameters only when they are shareable and safe.
+3. Transient scroll position and focus restoration should use router state, session storage, or a small client store rather than bloating the URL.
+4. The UI must not add `selectedWorkflowId` to `/workflows` as the primary selection model.
+5. `Expand workflow list` reconstructs `/workflows` from the preserved list context.
+6. If no list context exists, `Expand workflow list` navigates to plain `/workflows`.
+7. If a preserved pagination cursor is stale, the list should recover to the first page with a visible but non-blocking reset.
+8. Query parameters must not include secrets, raw prompts, full memo/search attributes, or large detail payloads.
+9. Browser refresh of a supported workflow route returns the SPA shell and lets the client route table render the correct state.
+
+---
+
+## 8. Data fetching, cache reuse, and resilience
+
+Desktop workspace detail mode may fetch sidebar list data and selected workflow detail data in parallel. The selected detail must not depend on the sidebar list request succeeding.
+
+Minimum API posture:
+
+1. Sidebar/list context: compact workflow list rows from `GET /api/executions` or the SPA capability endpoint's configured workflow-list endpoint.
+2. Selected detail: detail snapshot from `GET /api/executions/{workflowId}` or the configured detail endpoint.
+3. Detail subresources: steps, artifacts, logs, events, related runs, and debug panels according to the Workflow Details page contract.
+4. Optional live updates: list-level and detail-level streams or compact polling, owned by the persistent SPA shell or workspace.
+
+Rules:
+
+1. The full list and sidebar should share the same compact list-row contract.
+2. The sidebar should reuse the full list query cache when the user entered from `/workflows`.
+3. Selecting a workflow should not discard list data before the sidebar can render.
+4. Detail data loads independently of list data.
+5. Sidebar list failure shows a recoverable sidebar error while leaving the detail pane usable.
+6. Detail failure shows the existing Workflow Details error or not-found state while leaving the sidebar usable when possible.
+7. If the selected workflow is absent from the sidebar result because of filters, pagination, or stale data, show a pinned `Current workflow` row sourced from the selected detail snapshot when available.
+8. Polling or live updates must not steal focus from sidebar or detail interactions.
+9. Sidebar list refetches must preserve the active workflow highlight when the selected workflow still exists.
+10. Sidebar rows must never expose workflows outside the current user's authorization scope.
+11. List, sidebar, and detail queries should use stable query keys so SPA route changes reuse appropriate cached data.
+12. Do not use route-specific HTML boot payloads as the source of workflow list or detail data in the target SPA state.
+
+---
+
+## 9. Workflow sidebar contract
 
 The workflow sidebar is a compact desktop navigation rail derived from the current workflow list context.
 
 Required regions:
 
 1. top utility row;
-2. `Close sidebar` button;
-3. `Expand to full list` button;
+2. `Expand workflow list` button or link;
+3. optional `Hide workflow sidebar` button;
 4. compact workflow rows;
 5. active workflow highlight;
-6. optional loading, empty, and error states;
-7. optional lightweight pagination or `Load more` when needed.
+6. optional pinned `Current workflow` row;
+7. optional loading, empty, and error states;
+8. optional lightweight pagination or `Load more` when needed.
 
 Recommended row contents:
 
@@ -148,52 +316,152 @@ Recommended row contents:
 Rules:
 
 1. The sidebar is not a table and does not show the full column set.
-2. Sidebar rows should prioritize title, status, and recency.
+2. Sidebar rows prioritize title, status, and recency.
 3. The sidebar uses the same authorization and visibility rules as `/workflows`.
 4. The sidebar should use the current list filters and ordering when the user entered from `/workflows`.
 5. If the selected workflow is not present in the current sidebar result window, show a pinned `Current workflow` row above the filtered list.
-6. The pinned row should be visually distinct from normal list rows but must not imply the workflow matches the active filters.
+6. The pinned row is visually distinct from normal list rows but must not imply the workflow matches the active filters.
 7. `aria-current="page"` marks the active workflow row/link.
-8. The sidebar must support keyboard navigation between workflow rows.
+8. Sidebar rows support keyboard navigation as ordinary links, with visible focus states.
 9. Sidebar state must not mutate detail state except by explicit workflow navigation.
+10. The sidebar must be mounted at the workspace grid level so its left edge aligns with the dashboard content area's left edge.
 
 ---
 
-## 6. Sidebar top controls
+## 10. Sidebar and workspace controls
 
-The sidebar top utility row contains two distinct controls.
+The workspace controls must make three different concepts distinct.
 
-| Button | Behavior |
-| --- | --- |
-| `Close sidebar` | Hides the workflow sidebar and lets the detail page use the available width. A small `Open workflow sidebar` control appears in collapsed detail mode. |
-| `Expand to full list` | Navigates to `/workflows` and restores the full-width workflow table/list view with preserved list context where possible. |
+| Control | Route effect | Behavior |
+| --- | --- | --- |
+| `Expand workflow list` | Navigates to `/workflows`. | Closes the selected detail UI and restores the full Workflows list. |
+| `Hide workflow sidebar` | No route change. | Optional focus mode; hides the sidebar while keeping the current detail route active. |
+| `Open workflow sidebar` | No route change. | Restores the sidebar in the current detail route. |
 
 Rules:
 
-1. `Close sidebar` changes only layout state; it does not navigate away from the current workflow detail route.
-2. `Expand to full list` exits detail mode and navigates to the full Workflows list route.
-3. The two controls must not be visually or semantically interchangeable.
-4. Both controls must have visible labels, tooltips, or clear icon affordances plus accessible names.
-5. Keyboard focus after `Close sidebar` moves to the `Open workflow sidebar` control or the first meaningful detail heading.
-6. Keyboard focus after reopening the sidebar moves to the sidebar utility row or active workflow row.
-7. Keyboard focus after `Expand to full list` should land on the Workflows page title or list container.
+1. `Expand workflow list` is the primary way to leave selected-detail workspace mode.
+2. `Expand workflow list` must not be implemented as a width-only change that leaves an invisible selected detail mounted.
+3. `Hide workflow sidebar` must not navigate away from the current workflow detail route.
+4. `Open workflow sidebar` must not change the selected workflow.
+5. The controls must not be visually or semantically interchangeable.
+6. Controls must have visible labels, tooltips, or clear icon affordances plus accessible names.
+7. Keyboard focus after `Hide workflow sidebar` moves to `Open workflow sidebar` or the first meaningful detail heading.
+8. Keyboard focus after reopening the sidebar moves to the sidebar utility row or active workflow row.
+9. Keyboard focus after `Expand workflow list` lands on a meaningful full-list element.
 
 ---
 
-## 7. Mobile behavior
+## 11. Layout and visual design contract
+
+The selected-detail workspace should fit the Dashboard Design System while solving the current spacing problem.
+
+Visual posture:
+
+- desktop-only left rail;
+- far-left sidebar alignment within the dashboard content area;
+- no detail-page max-width wrapper around the entire split workspace;
+- glass control shell where performance allows;
+- matte or satin row interiors for legibility;
+- strong active-row state;
+- restrained hover brightening;
+- compact status treatment;
+- independent scroll containers;
+- clear edge separation between sidebar and detail pane.
+
+Layout rules:
+
+1. Use a top-level workspace grid or flex layout owned by `WorkflowsWorkspacePage`.
+2. In selected-detail workspace mode, the sidebar column starts at the dashboard content area's left edge.
+3. The detail pane starts immediately after the sidebar gutter.
+4. The split workspace must not be horizontally centered inside a narrow detail-page container.
+5. Full list mode uses the same workspace root and expands to one column.
+6. The detail pane may contain nested readable-width sections for logs, evidence, markdown, or dense tables, but those constraints apply inside the pane rather than to the entire workspace.
+7. Recommended initial sidebar width is approximately `280-340px`.
+8. Minimum usable sidebar width is approximately `240px`.
+9. On medium desktop widths, prefer hiding optional sidebar metadata before shrinking titles below readability.
+10. On narrow tablets, prefer the mobile/standalone detail model unless both sidebar and detail remain usable.
+
+---
+
+## 12. Motion and loading behavior
+
+The list-to-detail transition should feel like a workspace morph, not a page reload.
+
+Rules:
+
+1. Selecting a workflow may animate the full list compressing into a sidebar, but the animation must be short and restrained.
+2. Loading the detail should happen in the detail pane, not by blanking the entire dashboard.
+3. The sidebar should appear quickly from existing list data when available.
+4. Do not animate the detail page with large horizontal translations.
+5. `Expand workflow list` may animate the sidebar/full-list expansion, but the selected detail should simply unmount or fade out.
+6. In reduced-motion mode, layout changes snap or use near-instant opacity changes.
+7. Hover and focus effects should brighten or clarify the target rather than darkening it.
+8. Loading states should avoid shimmer when reduced motion is requested.
+
+---
+
+## 13. Accessibility requirements
+
+Rules:
+
+1. Workflow title links in the full list are keyboard reachable and behave as normal links.
+2. Sidebar controls are keyboard reachable.
+3. `Expand workflow list`, `Hide workflow sidebar`, and `Open workflow sidebar` have descriptive accessible names.
+4. Active workflow row/link uses `aria-current="page"`.
+5. Sidebar list has an accessible name such as `Workflow navigation`.
+6. Workflow row links include enough text for screen-reader users to identify the workflow.
+7. The sidebar and detail regions are distinguishable by landmarks or labelled regions.
+8. Collapsing or hiding the sidebar moves focus deterministically.
+9. Reopening the sidebar moves focus deterministically.
+10. Expanding back to the full list lands focus on a meaningful element in the full list.
+11. Color is not the only active, hover, or selected-state indicator.
+12. Mobile users do not encounter hidden desktop-only sidebar controls in the accessibility tree.
+13. Browser Back and Forward update focus and route state without trapping users in stale panes.
+
+---
+
+## 14. Empty, loading, and error states
+
+Sidebar and workspace states:
+
+| State | Behavior |
+| --- | --- |
+| Full list loading | Show the Workflows list loading state in the full workspace. |
+| Detail loading after selection | Keep sidebar/list context visible; show detail-pane loading state. |
+| Sidebar loading with cached list | Render cached rows when safe and indicate refresh if needed. |
+| Sidebar loading without cache | Show compact sidebar skeleton rows or `Loading workflows...`. |
+| Empty sidebar list | Show `No workflows match the current list filters.` and keep `Expand workflow list` available. |
+| Selected workflow outside filters | Show pinned `Current workflow` row plus an empty/filtered list message when appropriate. |
+| Sidebar list error | Show recoverable error and retry action; center detail remains usable. |
+| Detail not found | Use existing Workflow Details not-found state; sidebar remains available when it can load. |
+| Expand list with stale context | Return to full list and recover to first page with a non-blocking reset message. |
+
+Rules:
+
+1. Empty sidebar state must not clear active list filters automatically.
+2. Sidebar retry retries only sidebar list data, not the detail page.
+3. Detail retry retries only detail data and relevant subresources.
+4. If both sidebar and detail fail, each region shows its own recovery path.
+5. Expanding back to the full list should remain available even when detail loading or detail error occurs.
+
+---
+
+## 15. Mobile behavior
 
 Mobile does not use the desktop split workspace.
 
 Rules:
 
 1. `/workflows` renders the mobile workflow card list.
-2. Tapping a workflow card title or `View details` action opens `/workflows/{workflowId}` as a standalone detail page.
+2. Tapping a workflow card title or `View details` action navigates to `/workflows/{workflowId}` through SPA routing when already inside the dashboard.
 3. The workflow sidebar is not shown on mobile.
-4. `Close sidebar`, `Open workflow sidebar`, and `Expand to full list` sidebar controls are not shown on mobile.
+4. Desktop-only workspace controls are not shown on mobile.
 5. Mobile detail pages keep a normal `Back to workflows` or breadcrumb affordance.
 6. Browser back should return users to the prior card-list position when possible.
 7. Mobile filtering remains the responsibility of the mobile filter sheet or equivalent list filter surface.
 8. Mobile users must not need the desktop sidebar to switch workflows; they return to the card list to choose another workflow.
+9. Direct mobile refresh of `/workflows/{workflowId}` should still render the detail route through the SPA shell.
 
 Breakpoint guidance:
 
@@ -205,222 +473,134 @@ Breakpoint guidance:
 
 ---
 
-## 8. URL and list context state
-
-The workspace should preserve list context without making detail routing ambiguous.
-
-List context may include:
-
-- active column/filter drawer state that is already URL-safe;
-- page size;
-- pagination cursor when safe;
-- sort state when the list design supports URL-persisted sort;
-- debug/source hints only when needed by compatibility code.
+## 16. Security and privacy
 
 Rules:
 
-1. The workflow ID remains the path parameter.
-2. The detail route may carry list-context query parameters only when those parameters already belong to list state or compatibility state.
-3. The UI must not add `selectedWorkflowId` to `/workflows` as the primary selection model.
-4. `Expand to full list` reconstructs `/workflows` from the preserved list context.
-5. If no list context exists, `Expand to full list` navigates to plain `/workflows`.
-6. If a preserved pagination cursor is stale, the list should recover to the first page with a visible but non-blocking reset.
-
----
-
-## 9. Data fetching and resilience
-
-Desktop workspace detail mode may fetch sidebar list context and selected workflow detail data in parallel.
-
-Minimum fetches:
-
-1. Sidebar list context: `GET /api/executions` using preserved list filters where available.
-2. Selected detail: `GET /api/executions/{workflowId}`.
-3. Existing detail subresources such as steps, artifacts, logs, events, and related runs according to the Workflow Details page contract.
-
-Rules:
-
-1. Detail data must not depend on sidebar list success.
-2. Sidebar list failure shows a recoverable sidebar error while leaving the detail page usable.
-3. Detail failure shows the existing Workflow Details page error or not-found state.
-4. If the selected workflow is absent from the sidebar list response but detail succeeds, show a pinned `Current workflow` row.
-5. Polling or live updates must not steal focus from sidebar or detail interactions.
-6. Sidebar list refetches must preserve the active workflow highlight when the selected workflow still exists.
-7. Sidebar rows must never expose workflows outside the current user's authorization scope.
-
----
-
-## 10. Component boundaries
-
-Recommended frontend structure:
-
-```text
-WorkflowWorkspaceShell
-├── WorkflowSidebar
-│   ├── WorkflowSidebarControls
-│   └── WorkflowSidebarList
-└── WorkflowDetailPage
-```
-
-Rules:
-
-1. `WorkflowWorkspaceShell` owns responsive layout and sidebar open/collapsed state.
-2. `WorkflowSidebar` owns compact list navigation only.
-3. `WorkflowDetailPage` continues to own detail header, actions, evidence sections, logs, artifacts, related runs, and detail subroutes.
-4. Workflow row actions that mutate executions should remain with existing list/detail action components unless explicitly redesigned for the sidebar.
-5. The sidebar must not duplicate the primary action bar from the Workflow Details page.
-6. The sidebar must not independently infer capabilities or next actions beyond compact list summaries returned by the list model.
-
----
-
-## 11. Visual design contract
-
-The sidebar should fit the Dashboard Design System.
-
-Visual posture:
-
-- desktop-only left rail;
-- glass control shell where performance allows;
-- matte or satin row interiors for legibility;
-- strong active-row state;
-- restrained hover brightening;
-- compact status treatment;
-- independent scroll container;
-- clear edge separation from the center detail content.
-
-Rules:
-
-1. Dense detail evidence remains matte and readable.
-2. The sidebar may use glass styling because it is an elevated navigation/control surface.
-3. Do not use large refraction or liquid effects on the scrollable row list if it reduces readability or performance.
-4. Active workflow state must be visible without relying on color alone.
-5. The sidebar should have enough width for readable workflow titles, but it should not consume table-like horizontal space.
-6. Recommended initial desktop width is approximately `280-340px`, with final values controlled by CSS tokens and responsive testing.
-7. Avoid nested chrome: the sidebar should feel like one coherent rail, not a stack of unrelated cards.
-
----
-
-## 12. Motion and reduced motion
-
-Sidebar transitions should be restrained.
-
-Rules:
-
-1. Opening and closing the sidebar may use a short width/opacity transition in the standard dashboard timing range.
-2. Do not animate the detail page with large horizontal translations.
-3. In reduced-motion mode, sidebar open/close should snap or use near-instant opacity changes.
-4. Hover and focus effects should brighten or clarify the target rather than darkening it.
-5. Loading states should avoid shimmer if reduced motion is requested.
-
----
-
-## 13. Accessibility requirements
-
-Rules:
-
-1. Sidebar controls are keyboard reachable.
-2. `Close sidebar`, `Open workflow sidebar`, and `Expand to full list` have descriptive accessible names.
-3. Active workflow row/link uses `aria-current="page"`.
-4. Sidebar list has an accessible name such as `Workflow navigation`.
-5. Workflow row links include enough text for screen-reader users to identify the workflow.
-6. Collapsing the sidebar moves focus deterministically.
-7. Reopening the sidebar moves focus deterministically.
-8. `Expand to full list` lands focus on a meaningful element in the full list page.
-9. The sidebar and detail regions should be distinguishable by landmarks or labelled regions.
-10. Color is not the only active, hover, or selected-state indicator.
-11. Mobile users do not encounter hidden desktop-only sidebar controls in the accessibility tree.
-
----
-
-## 14. Empty, loading, and error states
-
-Sidebar states:
-
-| State | Behavior |
-| --- | --- |
-| Loading | Show compact sidebar skeleton rows or `Loading workflows...`. |
-| Empty list | Show `No workflows match the current list filters.` and keep `Expand to full list` available. |
-| Selected workflow outside filters | Show pinned `Current workflow` row plus an empty/filtered list message when appropriate. |
-| Sidebar list error | Show recoverable error and retry action; center detail remains usable. |
-| Detail not found | Use existing Workflow Details not-found state; sidebar remains available when it can load. |
-
-Rules:
-
-1. Empty sidebar state must not clear active list filters automatically.
-2. Sidebar retry should retry only sidebar list data, not forcibly reload the detail page.
-3. If both sidebar and detail fail, each region should show its own appropriate recovery path.
-
----
-
-## 15. Security and privacy
-
-Rules:
-
-1. The sidebar calls only MoonMind APIs.
+1. The workspace calls only same-origin MoonMind APIs.
 2. Sidebar rows are subject to the same authorization and owner scoping as `/workflows`.
 3. Filter params must not widen workflow visibility.
 4. Sidebar labels, titles, repository values, runtime labels, and status text render as text, never trusted HTML.
-5. URL state must not include secrets.
+5. URL state must not include secrets, raw prompts, full memo/search attributes, presigned URLs, or detail payloads.
 6. Direct detail access remains backend-authorized even when the workflow is not visible in the current sidebar list.
+7. SPA fallback must not capture API, auth, health, static, artifact, webhook, OpenAPI, or other non-dashboard routes.
+8. Client-side route guards are presentation guards only; backend authorization remains required.
 
 ---
 
-## 16. Testing contract
+## 17. Testing contract
 
 Implementation should add or preserve tests for these behaviors:
 
 1. Desktop `/workflows` renders the full-width workflow list with table columns.
-2. Desktop clicking a workflow row navigates to `/workflows/{workflowId}`.
-3. Desktop `/workflows/{workflowId}` renders the workflow sidebar and existing detail page content.
-4. Desktop detail subroutes render inside the workspace shell.
-5. The active workflow is highlighted in the sidebar.
-6. The active sidebar item exposes `aria-current="page"`.
-7. Clicking another sidebar workflow loads that workflow in the center detail region.
-8. `Close sidebar` hides the sidebar without changing the workflow route.
-9. `Open workflow sidebar` restores the sidebar after it has been closed.
-10. `Expand to full list` navigates back to `/workflows`.
-11. `Expand to full list` preserves list query state where possible.
-12. If the selected workflow is outside the current sidebar result window, a pinned current-workflow row appears.
-13. Sidebar list failure does not prevent selected detail content from rendering.
-14. Detail failure does not erase a successfully loaded sidebar.
-15. Mobile `/workflows` renders cards rather than the desktop sidebar layout.
-16. Mobile tapping a card opens standalone `/workflows/{workflowId}` detail.
-17. Sidebar controls are absent from mobile rendering and from the mobile accessibility tree.
-18. Keyboard focus returns to the correct control after sidebar close and reopen.
-19. Reduced-motion settings disable large sidebar transition effects.
-20. Unauthorized workflows never appear in sidebar rows, counts, pinned rows, or fallback states.
+2. Desktop workflow title links point to canonical detail URLs.
+3. Clicking a workflow title uses SPA routing and does not reload the document.
+4. `DashboardShell` and `QueryClientProvider` remain mounted across `/workflows` to `/workflows/{workflowId}` transitions.
+5. Desktop selecting a workflow renders the compact sidebar at the far left of the dashboard content area.
+6. Desktop selecting a workflow renders existing Workflow Details content in the main pane.
+7. The split workspace is not wrapped in the detail page's centered max-width container.
+8. Detail loading appears in the detail pane while sidebar/list context remains visible.
+9. Detail subroutes render inside the same workspace.
+10. The active workflow is highlighted in the sidebar.
+11. The active sidebar item exposes `aria-current="page"`.
+12. Clicking another sidebar workflow loads that workflow in the same detail pane through SPA routing.
+13. `Expand workflow list` navigates to `/workflows`.
+14. `Expand workflow list` unmounts or closes the selected detail UI.
+15. `Expand workflow list` preserves list query state where possible.
+16. `Hide workflow sidebar`, if implemented, hides the sidebar without changing the workflow route.
+17. `Open workflow sidebar`, if implemented, restores the sidebar without changing the workflow route.
+18. If the selected workflow is outside the current sidebar result window, a pinned current-workflow row appears.
+19. Sidebar list failure does not prevent selected detail content from rendering.
+20. Detail failure does not erase a successfully loaded sidebar.
+21. Mobile `/workflows` renders cards rather than the desktop sidebar layout.
+22. Mobile tapping a card opens standalone `/workflows/{workflowId}` detail.
+23. Desktop-only sidebar controls are absent from mobile rendering and from the mobile accessibility tree.
+24. Keyboard focus returns to the correct control or region after sidebar hide, reopen, and list expansion.
+25. Reduced-motion settings disable large sidebar/list transition effects.
+26. Unauthorized workflows never appear in sidebar rows, counts, pinned rows, or fallback states.
+27. Direct refresh of `/workflows/{workflowId}` returns the SPA shell and renders the selected detail route.
+28. API paths and non-dashboard routes do not fall back to the SPA shell.
 
 ---
 
-## 17. Non-goals
+## 18. Non-goals
 
 This design does not require:
 
-1. replacing the canonical `/workflows/{workflowId}` detail route;
+1. replacing canonical workflow URLs;
 2. implementing workflow detail as an embedded modal;
 3. duplicating the Workflow Details page component;
-4. showing all workflow table columns in the sidebar;
-5. adding a mobile split view;
-6. exposing system workflow browsing through the sidebar;
-7. direct browser calls to Temporal, GitHub, Jira, object storage, or runtime providers;
-8. implementing draggable/resizable sidebars in the first version;
-9. adding raw Temporal query syntax to sidebar navigation;
-10. moving Workflow Details primary actions into the sidebar.
+4. duplicating detail data in a client store;
+5. showing all workflow table columns in the sidebar;
+6. adding a mobile split view;
+7. exposing system workflow browsing through the sidebar;
+8. direct browser calls to Temporal, GitHub, Jira, object storage, model providers, runtime providers, or artifact stores;
+9. implementing draggable/resizable sidebars in the first version;
+10. adding raw Temporal query syntax to sidebar navigation;
+11. moving Workflow Details primary actions into the sidebar;
+12. making the full list unusable as a comparison table;
+13. preserving an invisible selected detail while the UI claims to be in full-list mode.
 
 ---
 
-## 18. Desired implementation sequence
+## 19. Fundamental risks and design answers
 
-Recommended sequence:
+There is no fundamental product blocker in the desired desktop interaction, but the implementation can go wrong if these seams are not explicit.
 
-1. Add the desktop `WorkflowWorkspaceShell` around detail routes behind a feature flag if needed.
-2. Reuse existing list query parsing to preserve list context from `/workflows`.
-3. Add `WorkflowSidebar` with read-only compact workflow navigation.
-4. Render existing `WorkflowDetailPage` in the center region.
-5. Add `Close sidebar`, `Open workflow sidebar`, and `Expand to full list` controls.
-6. Add pinned current-workflow behavior when the selected workflow is outside the sidebar list.
-7. Add desktop tests for route transitions, sidebar collapse/expand, active workflow state, and list-context restoration.
-8. Verify mobile still uses card-to-standalone-detail navigation.
-9. Remove the feature flag after desktop and mobile acceptance tests pass.
+### 19.1 Route change is still useful
 
-Final desired state: desktop Workflows feels like a compact workflow workspace where users can scan, select, inspect, and switch workflows quickly, while mobile remains a straightforward card-list-to-detail experience.
+The dream does not require avoiding URL changes. It requires avoiding document reloads and disjoint page shells. Keeping `/workflows/{workflowId}` in the address bar is important for deep links, refresh, browser history, and shareability.
+
+Design answer: use SPA routing for the transition and keep the workflow ID in the path.
+
+### 19.2 Parent ownership is required
+
+If the sidebar is mounted by the detail page, the implementation tends to inherit detail-page layout constraints. That is the likely cause of sidebars appearing inside a central container with a large empty left margin.
+
+Design answer: `WorkflowsWorkspacePage` owns the grid and places the sidebar and detail pane as siblings.
+
+### 19.3 Full list and sidebar are not identical surfaces
+
+A full workflow table cannot simply be squeezed into a left rail. The sidebar needs a compact projection.
+
+Design answer: share list query context and row identity, but render a sidebar-specific row layout.
+
+### 19.4 Expanding the list must clear visible selection
+
+If expanding the list only widens the sidebar while retaining an invisible detail selection, users can end up with ambiguous state.
+
+Design answer: expanding navigates to `/workflows` and unmounts the selected detail UI. Query caches may remain, but selected detail is no longer active UI state.
+
+### 19.5 List context is best-effort
+
+Filters, sorting, and page size can be preserved. Exact scroll position, stale cursors, and virtualized row windows are more fragile.
+
+Design answer: preserve shareable context in URL parameters, transient restoration hints in router/client state, and recover gracefully when stale.
+
+### 19.6 Mobile should not inherit desktop complexity
+
+Trying to force the split workspace onto mobile would degrade both list scanning and detail reading.
+
+Design answer: keep mobile card list to standalone detail.
+
+---
+
+## 20. Desired implementation sequence
+
+Recommended sequence for the SPA target:
+
+1. Introduce `WorkflowsWorkspacePage` as the parent route for `/workflows` and workflow detail subroutes.
+2. Move desktop workspace layout ownership out of detail-only entrypoints or page containers.
+3. Ensure FastAPI serves the SPA shell for supported workflow deep links and never for API/non-dashboard routes.
+4. Route workflow title clicks through router-native links.
+5. Preserve list query context and query cache when transitioning from full list to selected-detail workspace.
+6. Render the compact `WorkflowSidebar` from the shared list-row contract.
+7. Render existing `WorkflowDetailsPage` content in the workspace detail pane.
+8. Add `Expand workflow list` and make it navigate to `/workflows` while closing the visible detail.
+9. Add optional sidebar hide/open controls only after the core list-to-detail-to-list flow is correct.
+10. Add pinned current-workflow behavior when selected detail is outside the sidebar list.
+11. Remove or invert any transitional detail-owned `WorkflowWorkspaceShell` once the parent workspace route is in place.
+12. Add tests for SPA navigation, shell persistence, layout placement, detail close-on-expand, direct deep links, mobile fallback, and API fallback exclusions.
+13. Remove any feature flag after desktop and mobile acceptance tests pass.
+
+Final desired state: desktop Workflows feels like one continuous SPA workspace where users can scan, select, inspect, switch, and return to the full list without a document reload, while mobile remains a straightforward card-list-to-detail experience.
