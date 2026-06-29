@@ -1227,6 +1227,69 @@ def test_runtime_failed_skill_outcome_overrides_assistant_text(
     assert response.metadata["reason"] == "child_workflow_submission_failed"
     assert "disposition" not in response.metadata
 
+def test_runtime_failed_skill_outcome_overrides_status_refresh_assistant_text(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        omit_turns_on_initial_reads=2,
+        assistant_text="all done",
+        thread_status_type="running",
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.0,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "running"
+    _spool_skill_outcome_path(request).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "failed",
+                "reason": "child_workflow_submission_failed",
+                "failureClass": "execution_error",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+
+    assert handle.status == "failed"
+    assert handle.session_state.active_turn_id is None
+    assert handle.metadata["lastTurnStatus"] == "failed"
+    assert handle.metadata["failureClass"] == "execution_error"
+    assert handle.metadata["lastTurnError"] == "child_workflow_submission_failed"
+    assert "lastAssistantText" not in handle.metadata
+
 def test_runtime_no_op_signal_ignored_when_schema_version_wrong(
     tmp_path: Path,
 ) -> None:

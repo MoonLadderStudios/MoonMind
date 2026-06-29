@@ -2510,21 +2510,27 @@ class CodexManagedSessionRuntime:
                 vendor_thread_id=state.vendor_thread_id,
             )
             assistant_text = completed_turn_inspection.assistant_text
-        if status == "completed" and not assistant_text:
-            empty_outcome = self._completed_turn_without_assistant_outcome(
-                state=state,
-                thread_payload=thread_payload,
-                vendor_turn_id=active_turn_id,
-                rollout_scan=(
-                    completed_turn_inspection.rollout_scan
-                    if completed_turn_inspection is not None
-                    else None
-                ),
+            disposition = None
+            skill_outcome = self._read_skill_outcome(
+                turn_started_at=state.last_control_at
             )
-            status = empty_outcome.status
-            error_text = empty_outcome.error_text
-            failure_class = empty_outcome.failure_class
-            disposition = empty_outcome.disposition
+            failed_outcome = self._failed_skill_outcome_terminal(skill_outcome)
+            if failed_outcome is not None:
+                status = failed_outcome.status
+                error_text = failed_outcome.error_text
+                failure_class = failed_outcome.failure_class
+                assistant_text = ""
+            elif not assistant_text:
+                empty_outcome = self._completed_turn_without_assistant_outcome(
+                    state=state,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=active_turn_id,
+                    rollout_scan=completed_turn_inspection.rollout_scan,
+                )
+                status = empty_outcome.status
+                error_text = empty_outcome.error_text
+                failure_class = empty_outcome.failure_class
+                disposition = empty_outcome.disposition
         else:
             disposition = None
         self._finalize_turn(
