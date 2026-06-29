@@ -5022,6 +5022,8 @@ export interface components {
             dependents?: components["schemas"]["ExecutionDependencySummaryModel"][];
             /** Startedat */
             startedAt?: string | null;
+            /** Queuedat */
+            queuedAt?: string | null;
             /**
              * Updatedat
              * Format: date-time

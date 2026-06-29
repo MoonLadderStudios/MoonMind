@@ -3259,6 +3259,7 @@ class ExecutionModel(BaseModel):
         default_factory=list, alias="dependents"
     )
     started_at: datetime | None = Field(None, alias="startedAt")
+    queued_at: datetime | None = Field(None, alias="queuedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")
     detail_href: str = Field(..., alias="detailHref")

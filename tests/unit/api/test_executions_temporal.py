@@ -803,6 +803,90 @@ def test_list_executions_source_temporal_orders_immediate_runs_by_updated_at(
     assert items[0]["scheduledFor"] is None
     assert items[1]["scheduledFor"] is None
 
+
+def test_list_executions_source_temporal_issue_2807_buckets_updated_at_then_queued_order(
+    client,
+) -> None:
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    async def _memo():
+        return {}
+
+    def _datetime_bytes(value: datetime) -> bytes:
+        return f'"{value.isoformat().replace("+00:00", "Z")}"'.encode("utf-8")
+
+    def _workflow(
+        workflow_id: str,
+        *,
+        created_at: datetime,
+        updated_at: datetime,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=workflow_id,
+            run_id=f"run-{workflow_id}",
+            namespace="moonmind",
+            workflow_type="MoonMind.UserWorkflow",
+            status=1,
+            memo=_memo,
+            search_attributes={
+                "mm_state": b'"awaiting_slot"',
+                "mm_entry": b'["user_workflow"]',
+                "mm_updated_at": _datetime_bytes(updated_at),
+            },
+            start_time=created_at,
+            execution_time=None,
+            close_time=None,
+        )
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = [
+            _workflow(
+                "mm:wf-older-queued-slightly-newer-update",
+                created_at=datetime(2026, 4, 15, 9, 0, tzinfo=UTC),
+                updated_at=datetime(2026, 4, 15, 12, 0, 45, tzinfo=UTC),
+            ),
+            _workflow(
+                "mm:wf-newer-queued-same-update-bucket",
+                created_at=datetime(2026, 4, 15, 10, 0, tzinfo=UTC),
+                updated_at=datetime(2026, 4, 15, 12, 0, 5, tzinfo=UTC),
+            ),
+            _workflow(
+                "mm:wf-meaningfully-newer-update",
+                created_at=datetime(2026, 4, 15, 8, 0, tzinfo=UTC),
+                updated_at=datetime(2026, 4, 15, 12, 2, 0, tzinfo=UTC),
+            ),
+        ]
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = lambda **kwargs: mock_iterator
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=3))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "workflowType": "MoonMind.UserWorkflow"},
+        )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [item["workflowId"] for item in items] == [
+        "mm:wf-meaningfully-newer-update",
+        "mm:wf-newer-queued-same-update-bucket",
+        "mm:wf-older-queued-slightly-newer-update",
+    ]
+    assert items[1]["queuedAt"] == "2026-04-15T10:00:00Z"
+    assert items[2]["queuedAt"] == "2026-04-15T09:00:00Z"
+
 def test_describe_execution_source_temporal_syncs_projection(client) -> None:
     test_client, service, user, _mock_session = client
 

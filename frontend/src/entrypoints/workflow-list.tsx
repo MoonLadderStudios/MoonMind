@@ -73,6 +73,7 @@ const TASK_WORKFLOW_TYPE = 'MoonMind.UserWorkflow';
 const TASK_ENTRY = 'user_workflow';
 
 const TIMESTAMP_SORT_FIELDS = new Set(['updatedAt', 'scheduledFor', 'createdAt', 'closedAt']);
+const UPDATED_AT_SORT_BUCKET_MS = 60_000;
 type FilterField =
   | 'workflowId'
   | 'status'
@@ -199,6 +200,7 @@ const ExecutionRowSchema = z
     scheduledFor: z.string().nullable().optional(),
     closedAt: z.string().nullable().optional(),
     createdAt: z.string(),
+    queuedAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
     entry: z.string().optional(),
     dependsOn: z.array(z.string()).optional(),
@@ -364,6 +366,10 @@ function rowUpdatedAt(row: ExecutionRow): string | null | undefined {
   return row.updatedAt || row.closedAt || row.scheduledFor || row.createdAt;
 }
 
+function rowQueuedAt(row: ExecutionRow): string {
+  return row.queuedAt || row.createdAt;
+}
+
 const RELATIVE_TIME_UNITS: Array<[string, number]> = [
   ['y', 31536000],
   ['mo', 2592000],
@@ -411,6 +417,14 @@ function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'
       };
       leftVal = Date.parse(getTimestamp(left) || '') || 0;
       rightVal = Date.parse(getTimestamp(right) || '') || 0;
+      if (field === 'updatedAt') {
+        const leftBucket = Math.floor(leftVal / UPDATED_AT_SORT_BUCKET_MS);
+        const rightBucket = Math.floor(rightVal / UPDATED_AT_SORT_BUCKET_MS);
+        if (leftBucket !== rightBucket) return dir * (leftBucket - rightBucket);
+        const leftQueued = Date.parse(rowQueuedAt(left) || '') || 0;
+        const rightQueued = Date.parse(rowQueuedAt(right) || '') || 0;
+        if (leftQueued !== rightQueued) return dir * (leftQueued - rightQueued);
+      }
       if (leftVal !== rightVal) return dir * (leftVal - rightVal);
     } else if (field === 'status') {
       const leftStatus = (left.rawState || left.state || '').toLowerCase();

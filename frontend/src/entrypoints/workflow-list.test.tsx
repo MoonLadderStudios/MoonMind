@@ -252,6 +252,64 @@ describe('Workflows Entrypoint', () => {
     }
   });
 
+  it('keeps issue #2807 updated-time jitter inside a bucket ordered by newest queued workflow', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            workflowId: 'mm:older-queued-slightly-newer-update',
+            source: 'temporal',
+            title: 'Older queued, slightly newer update',
+            status: 'queued',
+            state: 'awaiting_slot',
+            rawState: 'awaiting_slot',
+            createdAt: '2026-03-28T09:00:00Z',
+            queuedAt: '2026-03-28T09:00:00Z',
+            updatedAt: '2026-03-28T12:00:45Z',
+          },
+          {
+            workflowId: 'mm:newer-queued-same-update-bucket',
+            source: 'temporal',
+            title: 'Newer queued, same update bucket',
+            status: 'queued',
+            state: 'awaiting_slot',
+            rawState: 'awaiting_slot',
+            createdAt: '2026-03-28T10:00:00Z',
+            queuedAt: '2026-03-28T10:00:00Z',
+            updatedAt: '2026-03-28T12:00:05Z',
+          },
+          {
+            workflowId: 'mm:meaningfully-newer-update',
+            source: 'temporal',
+            title: 'Meaningfully newer update',
+            status: 'queued',
+            state: 'awaiting_slot',
+            rawState: 'awaiting_slot',
+            createdAt: '2026-03-28T08:00:00Z',
+            queuedAt: '2026-03-28T08:00:00Z',
+            updatedAt: '2026-03-28T12:02:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Meaningfully newer update');
+
+    const table = document.querySelector('.queue-table-wrapper table') as HTMLTableElement;
+    const titles = Array.from(table.querySelectorAll('tbody .workflow-list-row-title')).map(
+      (element) => element.textContent,
+    );
+
+    expect(titles).toEqual([
+      'Meaningfully newer update',
+      'Newer queued, same update bucket',
+      'Older queued, slightly newer update',
+    ]);
+  });
+
   it('preserves allowlisted list context on workflow detail links and keeps browser back target intact (MM-998, MM-975)', async () => {
     window.history.pushState(
       {},
