@@ -295,8 +295,8 @@ third-party Skills.
 
 ## Schema Subset For Generated Skill Fields
 
-The first implementation should support the same practical JSON Schema subset
-used for preset inputs:
+MoonMind should support the same practical JSON Schema subset used for preset
+inputs:
 
 | Schema signal | Default field |
 | --- | --- |
@@ -439,7 +439,7 @@ Desired draft shape:
 
 Legacy payloads may still contain `args` or `selectedSkillArgs`. New authoring
 surfaces should write `inputs`. Readers should map legacy values into `inputs`
-during migration.
+when loading older drafts or API payloads.
 
 ---
 
@@ -647,9 +647,8 @@ Suggested artifact metadata keys:
 }
 ```
 
-A future optimization may add denormalized columns to
-`agent_skill_definitions`, but the first implementation can keep schema metadata
-content-addressed with the artifact.
+Schema metadata may remain content-addressed with the artifact unless denormalized
+columns on `agent_skill_definitions` are later required for query performance.
 
 ### Built-in, Repo, And Local Skills
 
@@ -664,9 +663,9 @@ For file-backed Skills:
 
 ## Shared Code Placement
 
-The preset implementation currently contains useful capability-contract behavior
-inside preset service code. The desired direction is to extract generic pieces
-into shared modules.
+Generic capability-contract behavior belongs in shared modules rather than
+preset-specific service code. Presets and Skills should consume the same
+normalization, validation, widget-hint, and diagnostics contracts.
 
 Suggested modules:
 
@@ -708,9 +707,9 @@ Rules:
 9. Sanitize markdown descriptions before rendering.
 10. Keep backend validation authoritative.
 
-Remote `$ref` support should be out of scope for the initial implementation. A
-future implementation may support internal, pinned schema refs after adding
-artifact integrity checks and allowlist policy.
+Remote `$ref` support is not part of the default desired state. A future design
+may allow internal, pinned schema refs after adding artifact integrity checks and
+allowlist policy.
 
 ---
 
@@ -776,45 +775,31 @@ the Create page a practical stale-draft UX.
 
 ---
 
-## Migration Plan
+## Target-State Implementation Constraints
 
-1. **Extract shared input contract normalization**
-   - Move preset contract normalization into a shared capability module.
-   - Keep preset API responses unchanged.
+The canonical design does not prescribe build sequencing. Any implementation of
+Skill input schema UI generation should satisfy these target-state constraints:
 
-2. **Add Skill frontmatter input contract parsing**
-   - Reuse the existing safe frontmatter parsing path.
-   - Extract `inputSchema`, `uiSchema`, and `defaults`.
-   - Store deployment Skill contract metadata with the content artifact.
-
-3. **Expose Skill contracts in catalog APIs**
-   - Add `inputSchema`, `uiSchema`, `defaults`, `contractDigest`, and diagnostics
-     to Skill catalog details.
-   - Use empty schemas for Skills without structured inputs.
-
-4. **Wire Skill steps to the shared Create page renderer**
-   - The Skill step editor should pass the Skill contract to the same renderer
-     used by presets.
-   - Persist values under `step.skill.inputs`.
-
-5. **Add backend Skill input validation**
-   - Validate on draft submit and workflow start.
-   - Return field-addressable errors.
-
-6. **Add compatibility mapping**
-   - Read legacy `args`, `selectedSkillArgs`, or older Skill-step payload fields.
-   - Write only the new `inputs` shape from updated surfaces.
-
-7. **Add tests**
-   - Parser tests for frontmatter casing, no schema, invalid schema, secret-like
-     defaults, and semantic hints.
-   - Catalog tests for deployment, built-in, repo, and local Skill sources.
-   - UI renderer tests that a Skill contract and a Preset contract produce the
-     same field model for equivalent schemas.
-   - Backend validation tests for required fields, defaults, enum, object fields,
-     and field-addressable errors.
-   - Regression tests proving a `SKILL.md` without `inputSchema` remains
-     selectable.
+- Generic input contract normalization belongs in a shared capability layer that
+  both Presets and Skills consume.
+- Preset catalog responses must remain API-compatible while moving to the shared
+  contract behavior.
+- Skill frontmatter parsing should act as a source adapter that emits the shared
+  `inputSchema`, `uiSchema`, and `defaults` contract.
+- Deployment-stored Skills should persist extracted contract metadata with the
+  content artifact and content evidence.
+- Skill catalog details should expose the same normalized contract shape as
+  preset catalog details, including empty schemas for Skills without structured
+  inputs.
+- Skill steps should render through the same Create page schema-form renderer as
+  preset steps and persist collected values under `step.skill.inputs`.
+- Backend Skill input validation should be shared, authoritative, and
+  field-addressable under `steps[n].skill.inputs`.
+- Legacy Skill-step payload readers should accept older argument fields and
+  normalize them to `inputs`; updated authoring surfaces should emit `inputs`.
+- Conformance coverage should prove equivalent field generation for equivalent
+  Skill and Preset schemas and should prove schema-less `SKILL.md` files remain
+  selectable.
 
 ---
 
@@ -838,4 +823,5 @@ the Create page a practical stale-draft UX.
   input.
 - Drafts preserve entered values when a Skill input contract changes and
   revalidate against the current or pinned contract.
-- Preset input rendering continues to work after the shared contract extraction.
+- Preset input rendering continues to use the same normalized contract and
+  remains API-compatible.
