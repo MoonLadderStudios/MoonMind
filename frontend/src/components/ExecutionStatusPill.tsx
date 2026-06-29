@@ -33,9 +33,15 @@ function visibleStatusLabel(status: string | null | undefined): string {
   return formatStatusLabel(status);
 }
 
-export function ExecutionStatusPill({ status }: { status: string | null | undefined }) {
+export function ExecutionStatusPill({
+  status,
+  enableMotion = true,
+}: {
+  status: string | null | undefined;
+  enableMotion?: boolean;
+}) {
   const label = visibleStatusLabel(status);
-  const pillProps = executionStatusPillProps(status);
+  const pillProps = executionStatusPillProps(status, { enableMotion });
   const hasShimmerSweep = pillProps['data-effect'] === 'shimmer-sweep';
   const glyphs = useMemo(() => splitGraphemes(label), [label]);
 

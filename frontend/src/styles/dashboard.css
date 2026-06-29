@@ -2710,16 +2710,19 @@ tr[data-proposal-id].proposal-consuming td {
   letter-spacing: 0.03em;
 }
 
-.status-queued {
-  color: rgb(var(--mm-warn));
-  background: rgb(var(--mm-warn) / 0.14);
-  border-color: rgb(var(--mm-warn) / 0.55);
-}
-
-.status-running {
+.status-running,
+.status-running.is-executing {
   color: rgb(var(--mm-accent-2));
   background: rgb(var(--mm-accent-2) / 0.14);
   border-color: rgb(var(--mm-accent-2) / 0.55);
+}
+
+.status-queued,
+.status-scheduled,
+.status-awaiting-slot {
+  color: rgb(var(--mm-status-queued, 130 72 246));
+  background: rgb(var(--mm-status-queued, 130 72 246) / 0.14);
+  border-color: rgb(var(--mm-status-queued, 130 72 246) / 0.62);
 }
 
 .status-awaiting_action {
@@ -2728,10 +2731,25 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(var(--mm-accent) / 0.55);
 }
 
-.status-waiting {
-  color: rgb(var(--mm-warning-ink, var(--mm-warn)));
-  background: rgb(var(--mm-warn) / 0.18);
-  border-color: rgb(var(--mm-warn) / 0.7);
+.status-waiting,
+.status-awaiting-dependencies,
+.status-awaiting-external {
+  color: rgb(var(--mm-status-waiting, 236 72 153));
+  background: rgb(var(--mm-status-waiting, 236 72 153) / 0.14);
+  border-color: rgb(var(--mm-status-waiting, 236 72 153) / 0.62);
+}
+
+.status-initializing,
+.status-planning {
+  color: rgb(var(--mm-status-setup, 99 102 241));
+  background: rgb(var(--mm-status-setup, 99 102 241) / 0.14);
+  border-color: rgb(var(--mm-status-setup, 99 102 241) / 0.62);
+}
+
+.status-finalizing {
+  color: rgb(var(--mm-status-finalizing, 100 116 139));
+  background: rgb(var(--mm-status-finalizing, 100 116 139) / 0.14);
+  border-color: rgb(var(--mm-status-finalizing, 100 116 139) / 0.62);
 }
 
 .status-succeeded,
@@ -2747,11 +2765,16 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(26 153 123 / 0.62);
 }
 
-.status-failed,
-.status-cancelled {
+.status-failed {
   color: rgb(var(--mm-danger));
   background: rgb(var(--mm-danger) / 0.14);
   border-color: rgb(var(--mm-danger) / 0.55);
+}
+
+.status-canceled {
+  color: rgb(var(--mm-status-canceled, 249 115 22));
+  background: rgb(var(--mm-status-canceled, 249 115 22) / 0.14);
+  border-color: rgb(var(--mm-status-canceled, 249 115 22) / 0.62);
 }
 
 .status-neutral {
@@ -2761,8 +2784,7 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .status-running[data-effect="shimmer-sweep"],
-.status-running.is-executing,
-.status-running.is-planning {
+.status-running.is-executing {
   position: relative;
   overflow: hidden;
   isolation: isolate;
@@ -2771,10 +2793,8 @@ tr[data-proposal-id].proposal-consuming td {
 
 .status-running[data-effect="shimmer-sweep"]::before,
 .status-running.is-executing::before,
-.status-running.is-planning::before,
 .status-running[data-effect="shimmer-sweep"]::after,
-.status-running.is-executing::after,
-.status-running.is-planning::after {
+.status-running.is-executing::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -2792,15 +2812,13 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .status-running[data-effect="shimmer-sweep"]::before,
-.status-running.is-executing::before,
-.status-running.is-planning::before {
+.status-running.is-executing::before {
   z-index: 1;
   opacity: 0.62;
 }
 
 .status-running[data-effect="shimmer-sweep"]::after,
-.status-running.is-executing::after,
-.status-running.is-planning::after {
+.status-running.is-executing::after {
   z-index: 2;
   inset: calc(-1 * var(--mm-executing-border-glint-outset));
   border-radius: inherit;
@@ -2819,10 +2837,8 @@ tr[data-proposal-id].proposal-consuming td {
 @supports not (mix-blend-mode: plus-lighter) {
   .status-running[data-effect="shimmer-sweep"]::before,
   .status-running.is-executing::before,
-  .status-running.is-planning::before,
   .status-running[data-effect="shimmer-sweep"]::after,
-  .status-running.is-executing::after,
-  .status-running.is-planning::after {
+  .status-running.is-executing::after {
     mix-blend-mode: screen;
   }
 }
@@ -2857,14 +2873,12 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
-.status-running.is-executing .status-letter-wave,
-.status-running.is-planning .status-letter-wave {
+.status-running.is-executing .status-letter-wave {
   color: inherit;
 }
 
 .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
-.status-running.is-executing .status-letter-wave::after,
-.status-running.is-planning .status-letter-wave::after {
+.status-running.is-executing .status-letter-wave::after {
   content: attr(data-label);
   position: absolute;
   inset: 0;
@@ -2888,14 +2902,12 @@ tr[data-proposal-id].proposal-consuming td {
 
 @supports not ((background-clip: text) or (-webkit-background-clip: text)) {
   .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
-  .status-running.is-executing .status-letter-wave::after,
-  .status-running.is-planning .status-letter-wave::after {
+  .status-running.is-executing .status-letter-wave::after {
     content: none;
   }
 
   .status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
-  .status-running.is-executing .status-letter-wave__glyph,
-  .status-running.is-planning .status-letter-wave__glyph {
+  .status-running.is-executing .status-letter-wave__glyph {
     animation-name: mm-executing-letter-brighten;
     animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms));
     animation-timing-function: linear;
@@ -2929,8 +2941,7 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
-.status-running.is-executing .status-letter-wave__glyph,
-.status-running.is-planning .status-letter-wave__glyph {
+.status-running.is-executing .status-letter-wave__glyph {
   animation: none;
 }
 
@@ -2959,8 +2970,7 @@ tr[data-proposal-id].proposal-consuming td {
 
 @media (prefers-reduced-motion: reduce) {
   .status-running[data-effect="shimmer-sweep"],
-  .status-running.is-executing,
-  .status-running.is-planning {
+  .status-running.is-executing {
     background-image: var(--mm-executing-moving-light-gradient);
     background-repeat: no-repeat;
     background-position:
@@ -2971,13 +2981,10 @@ tr[data-proposal-id].proposal-consuming td {
 
   .status-running[data-effect="shimmer-sweep"]::before,
   .status-running.is-executing::before,
-  .status-running.is-planning::before,
   .status-running[data-effect="shimmer-sweep"]::after,
   .status-running.is-executing::after,
-  .status-running.is-planning::after,
   .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
-  .status-running.is-executing .status-letter-wave::after,
-  .status-running.is-planning .status-letter-wave::after {
+  .status-running.is-executing .status-letter-wave::after {
     animation: none;
   }
 
@@ -2988,42 +2995,35 @@ tr[data-proposal-id].proposal-consuming td {
   }
 
   .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
-  .status-running.is-executing .status-letter-wave,
-  .status-running.is-planning .status-letter-wave {
+  .status-running.is-executing .status-letter-wave {
     text-shadow: none;
   }
 
   .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
-  .status-running.is-executing .status-letter-wave::after,
-  .status-running.is-planning .status-letter-wave::after {
+  .status-running.is-executing .status-letter-wave::after {
     content: none;
   }
 }
 
 @media (forced-colors: active) {
   .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
-  .status-running.is-executing .status-letter-wave,
-  .status-running.is-planning .status-letter-wave {
+  .status-running.is-executing .status-letter-wave {
     color: ButtonText;
     background-image: none;
   }
 
   .status-running[data-effect="shimmer-sweep"]::before,
   .status-running.is-executing::before,
-  .status-running.is-planning::before,
   .status-running[data-effect="shimmer-sweep"]::after,
   .status-running.is-executing::after,
-  .status-running.is-planning::after,
   .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
-  .status-running.is-executing .status-letter-wave::after,
-  .status-running.is-planning .status-letter-wave::after {
+  .status-running.is-executing .status-letter-wave::after {
     animation: none;
     content: none;
   }
 
   .status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
-  .status-running.is-executing .status-letter-wave__glyph,
-  .status-running.is-planning .status-letter-wave__glyph {
+  .status-running.is-executing .status-letter-wave__glyph {
     animation: none;
   }
 }

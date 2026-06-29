@@ -2519,7 +2519,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
 
-  it('renders planning detail pills with the shared shimmer selector contract and keeps dependency pills inactive when appropriate', async () => {
+  it('renders planning detail pills with setup coloring and keeps dependency pills inactive when appropriate', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
@@ -2565,21 +2565,19 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await screen.findByText('Planning detail task');
-    const toolbarStatus = document.querySelector<HTMLElement>('.toolbar-identity-row [data-effect="shimmer-sweep"]');
-    expect(toolbarStatus?.dataset.state).toBe('planning');
-    expect(toolbarStatus?.dataset.effect).toBe('shimmer-sweep');
-    expect(toolbarStatus?.className).toContain('is-planning');
-    expect(toolbarStatus?.className).toContain('status-running');
-    expect(toolbarStatus?.dataset.shimmerLabel).toBe('planning');
-    expect(toolbarStatus?.getAttribute('aria-label')).toBe('planning');
-    expect(toolbarStatus?.querySelector('.status-letter-wave')?.getAttribute('aria-hidden')).toBe('true');
-    const glyphs = Array.from(toolbarStatus?.querySelectorAll<HTMLElement>('.status-letter-wave__glyph') || []);
-    expect(glyphs).toHaveLength('planning'.length);
-    expect(glyphs.map((glyph) => glyph.textContent).join('')).toBe('planning');
+    const toolbarStatus = document.querySelector<HTMLElement>('.toolbar-identity-row span.status');
+    expect(toolbarStatus?.dataset.effect).toBeUndefined();
+    expect(toolbarStatus?.className).toContain('status-planning');
+    expect(toolbarStatus?.className).not.toContain('status-running');
+    expect(toolbarStatus?.className).not.toContain('is-planning');
+    expect(toolbarStatus?.dataset.shimmerLabel).toBeUndefined();
+    expect(toolbarStatus?.getAttribute('aria-label')).toBeNull();
+    expect(toolbarStatus?.querySelector('.status-letter-wave')).toBeNull();
     expect(toolbarStatus?.textContent).toBe('planning');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1035');
 
     const waitingPill = await screen.findByText('AWAITING DEP');
     expect(waitingPill.closest('span')?.dataset.effect).toBeUndefined();

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 
@@ -885,6 +885,7 @@ type PillMultiSelectProps = {
   values: string[];
   options: string[];
   formatValue?: (value: string) => string;
+  renderValue?: (value: string) => ReactNode;
   disabled?: boolean;
   ariaLabelAdd: string;
   ariaLabelSelected: string;
@@ -898,6 +899,7 @@ function FilterPillMultiSelect({
   values,
   options,
   formatValue,
+  renderValue,
   disabled,
   ariaLabelAdd,
   ariaLabelSelected,
@@ -919,7 +921,7 @@ function FilterPillMultiSelect({
         ) : (
           values.map((value) => (
             <li key={value} className="workflow-list-pill">
-              <span className="workflow-list-pill-label">{fmt(value)}</span>
+              <span className="workflow-list-pill-label">{renderValue ? renderValue(value) : fmt(value)}</span>
               <button
                 type="button"
                 className="workflow-list-pill-remove"
@@ -1719,6 +1721,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             values={draft.values}
             options={[...TEMPORAL_STATUSES]}
             formatValue={formatStatusLabel}
+            renderValue={(value) => <ExecutionStatusPill status={value} enableMotion={false} />}
             disabled={!listEnabled}
             ariaLabelAdd="Status filter value"
             ariaLabelSelected="Selected status filters"
