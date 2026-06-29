@@ -77,10 +77,13 @@ _TURN_ITEMS_PAGE_LIMIT = 200
 _TURN_ITEMS_MAX_PAGES = 20
 _EMPTY_ROLLOUT_READ_GRACE_SECONDS = 1.0
 _EMPTY_ROLLOUT_READ_RETRY_SECONDS = 0.1
+_MISSING_TURN_VISIBILITY_GRACE_SECONDS = 5.0
+_MISSING_TURN_VISIBILITY_RETRY_SECONDS = 1.0
 _SQLITE_STATE_RUNTIME_FAILURE_MARKERS: tuple[str, ...] = (
     "failed to initialize sqlite state runtime",
     "failed to initialize state runtime",
 )
+_MISSING_TURN_IDLE_EMPTY_ROLLOUT_SUBTYPE = "missing_turn_idle_empty_rollout"
 _SECRET_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"ghp_[A-Za-z0-9_]{20,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
@@ -125,6 +128,11 @@ class _TurnTerminalOutcome:
     error_text: str | None = None
     failure_class: str | None = None
     disposition: str | None = None
+
+@dataclass(frozen=True)
+class _ThreadRecoveryResult:
+    vendor_thread_id: str
+    fallback_started: bool = False
 
 _SKILL_OUTCOME_FILENAME = "skill_outcome.json"
 _SKILL_OUTCOME_SCHEMA_VERSION = 1
@@ -199,7 +207,40 @@ class CodexAppServerRpcClient:
         return list(self._trace)
 
     @staticmethod
-    def _message_summary(message: Mapping[str, Any]) -> dict[str, Any]:
+    def _redact_trace_text(value: Any, *, max_chars: int = 500) -> str:
+        text = str(value or "")
+        for pattern in _SECRET_REDACTION_PATTERNS:
+            text = pattern.sub(
+                lambda match: (
+                    f"{match.group(1)}{match.group(2)}[REDACTED]"
+                    if match.lastindex and match.lastindex >= 2
+                    else "[REDACTED]"
+                ),
+                text,
+            )
+        if len(text) > max_chars:
+            return text[:max_chars] + "...[truncated]"
+        return text
+
+    @classmethod
+    def _trace_error_text(cls, value: Any) -> str | None:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return cls._redact_trace_text(normalized) if normalized else None
+        if isinstance(value, Mapping):
+            for field_name in ("message", "error", "reason", "detail"):
+                recovered = cls._trace_error_text(value.get(field_name))
+                if recovered:
+                    return recovered
+        if isinstance(value, list):
+            for item in value:
+                recovered = cls._trace_error_text(item)
+                if recovered:
+                    return recovered
+        return None
+
+    @classmethod
+    def _message_summary(cls, message: Mapping[str, Any]) -> dict[str, Any]:
         summary: dict[str, Any] = {}
         method = str(message.get("method") or "").strip()
         if method:
@@ -207,14 +248,22 @@ class CodexAppServerRpcClient:
         raw_id = message.get("id")
         if isinstance(raw_id, int):
             summary["id"] = raw_id
-        if "error" in message:
-            summary["hasError"] = True
         result = message.get("result")
         if isinstance(result, Mapping):
             summary["resultKeys"] = sorted(str(key) for key in result.keys())[:12]
         params = message.get("params")
         if isinstance(params, Mapping):
             summary["paramKeys"] = sorted(str(key) for key in params.keys())[:12]
+        if "error" in message:
+            error = message.get("error")
+            summary["hasError"] = True
+            if isinstance(error, Mapping):
+                code = error.get("code")
+                if isinstance(code, (int, float, str)):
+                    summary["errorCode"] = code
+            error_text = cls._trace_error_text(error)
+            if error_text:
+                summary["errorMessage"] = error_text
         return summary
 
     def _ensure_started(self) -> None:
@@ -458,6 +507,9 @@ class CodexManagedSessionRuntime:
         container_id: str,
         app_server_command: Sequence[str] = ("codex", "app-server"),
         turn_completion_timeout_seconds: float = _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS,
+        missing_turn_visibility_grace_seconds: float = (
+            _MISSING_TURN_VISIBILITY_GRACE_SECONDS
+        ),
     ) -> None:
         self._workspace_path = Path(workspace_path)
         self._session_workspace_path = Path(session_workspace_path)
@@ -471,6 +523,10 @@ class CodexManagedSessionRuntime:
         self._container_id = container_id
         self._app_server_command = tuple(app_server_command)
         self._turn_completion_timeout_seconds = turn_completion_timeout_seconds
+        self._missing_turn_visibility_grace_seconds = max(
+            0.0,
+            float(missing_turn_visibility_grace_seconds),
+        )
         self._client: CodexAppServerRpcClient | None = None
 
     @property
@@ -1976,25 +2032,51 @@ class CodexManagedSessionRuntime:
             return turn
         return None
 
+    @classmethod
+    def _is_missing_turn_idle_empty_rollout(
+        cls,
+        *,
+        thread_payload: Mapping[str, Any],
+        rollout_scan: _RolloutTurnScan,
+        vendor_turn_id: str,
+    ) -> bool:
+        if cls._find_turn_payload(
+            thread_payload,
+            vendor_turn_id=vendor_turn_id,
+        ) is not None:
+            return False
+        thread_outcome = cls._terminal_thread_outcome(thread_payload)
+        if thread_outcome is None or thread_outcome.status != "completed":
+            return False
+        return (
+            rollout_scan.entries_scanned == 0
+            and not rollout_scan.references_turn
+            and not rollout_scan.saw_task_complete
+            and not rollout_scan.assistant_text
+            and not rollout_scan.error_text
+        )
+
     def _missing_turn_terminal_outcome(
         self,
         *,
         state: CodexSessionRuntimeState,
         thread_payload: Mapping[str, Any],
         vendor_turn_id: str,
+        rollout_scan: _RolloutTurnScan | None = None,
     ) -> _TurnTerminalOutcome | None:
         thread_outcome = self._terminal_thread_outcome(thread_payload)
         if thread_outcome is not None and thread_outcome.status != "completed":
             return thread_outcome
 
-        vendor_thread_path = self._resolved_rollout_path(
-            state=state,
-            thread_payload=thread_payload,
-        )
-        rollout_scan = self._scan_rollout_for_turn(
-            vendor_thread_path,
-            vendor_turn_id=vendor_turn_id,
-        )
+        if rollout_scan is None:
+            vendor_thread_path = self._resolved_rollout_path(
+                state=state,
+                thread_payload=thread_payload,
+            )
+            rollout_scan = self._scan_rollout_for_turn(
+                vendor_thread_path,
+                vendor_turn_id=vendor_turn_id,
+            )
         rollout_outcome = self._rollout_terminal_outcome_from_scan(
             rollout_scan,
             vendor_turn_id=vendor_turn_id,
@@ -2021,9 +2103,11 @@ class CodexManagedSessionRuntime:
         vendor_thread_id: str,
         vendor_turn_id: str,
         rollout_mirror: _RolloutLiveMirror,
+        thread_started_after_recovery_fallback: bool = False,
     ) -> tuple[Mapping[str, Any], _TurnTerminalOutcome]:
         deadline = time.monotonic() + self._turn_completion_timeout_seconds
         empty_rollout_first_seen_at: float | None = None
+        missing_turn_first_seen_at: float | None = None
         while True:
             try:
                 thread_payload = client.request(
@@ -2067,18 +2151,60 @@ class CodexManagedSessionRuntime:
                 vendor_turn_id=vendor_turn_id,
             )
             if isinstance(turn_payload, Mapping):
+                missing_turn_first_seen_at = None
                 outcome = self._terminal_turn_outcome(turn_payload)
                 if outcome is not None:
                     return thread_payload, outcome
             else:
                 state = self._load_state()
+                vendor_thread_path = self._resolved_rollout_path(
+                    state=state,
+                    thread_payload=thread_payload,
+                )
+                rollout_scan = self._scan_rollout_for_turn(
+                    vendor_thread_path,
+                    vendor_turn_id=vendor_turn_id,
+                    turn_started_at=state.last_control_at,
+                )
+                if (
+                    thread_started_after_recovery_fallback
+                    and self._missing_turn_visibility_grace_seconds > 0
+                    and self._is_missing_turn_idle_empty_rollout(
+                        thread_payload=thread_payload,
+                        rollout_scan=rollout_scan,
+                        vendor_turn_id=vendor_turn_id,
+                    )
+                ):
+                    now = time.monotonic()
+                    if missing_turn_first_seen_at is None:
+                        missing_turn_first_seen_at = now
+                    grace_remaining = (
+                        self._missing_turn_visibility_grace_seconds
+                        - (now - missing_turn_first_seen_at)
+                    )
+                    remaining = deadline - now
+                    if grace_remaining > 0 and remaining > 0:
+                        try:
+                            client.wait_for_notification(
+                                None,
+                                timeout_seconds=min(
+                                    _MISSING_TURN_VISIBILITY_RETRY_SECONDS,
+                                    grace_remaining,
+                                    remaining,
+                                ),
+                            )
+                        except TimeoutError:
+                            pass
+                        continue
                 outcome = self._missing_turn_terminal_outcome(
                     state=state,
                     thread_payload=thread_payload,
                     vendor_turn_id=vendor_turn_id,
+                    rollout_scan=rollout_scan,
                 )
                 if outcome is not None:
                     return thread_payload, outcome
+                missing_turn_first_seen_at = None
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -2130,13 +2256,13 @@ class CodexManagedSessionRuntime:
         normalized = message.lower()
         return "rollout at " in normalized and " is empty" in normalized
 
-    def _recovery_thread(
+    def _recovery_thread_result(
         self,
         *,
         client: CodexAppServerRpcClient,
         state: CodexSessionRuntimeState,
         allow_fallback_start: bool = True,
-    ) -> str:
+    ) -> _ThreadRecoveryResult:
         existing_thread_path = self._existing_thread_path(state.vendor_thread_path)
         discovered_thread_path = None
         if existing_thread_path is None:
@@ -2188,6 +2314,7 @@ class CodexManagedSessionRuntime:
                     {"cwd": str(self._workspace_path)},
                 )
                 thread_payload = started.get("thread")
+                fallback_started = True
                 if not isinstance(thread_payload, Mapping):
                     raise RuntimeError(
                         "codex app-server thread/start did not return a thread"
@@ -2202,7 +2329,23 @@ class CodexManagedSessionRuntime:
         state.vendor_thread_path = self._normalized_thread_path(
             recovered_thread_path or thread_payload.get("path")
         )
-        return vendor_thread_id
+        return _ThreadRecoveryResult(
+            vendor_thread_id=vendor_thread_id,
+            fallback_started=fallback_started,
+        )
+
+    def _recovery_thread(
+        self,
+        *,
+        client: CodexAppServerRpcClient,
+        state: CodexSessionRuntimeState,
+        allow_fallback_start: bool = True,
+    ) -> str:
+        return self._recovery_thread_result(
+            client=client,
+            state=state,
+            allow_fallback_start=allow_fallback_start,
+        ).vendor_thread_id
 
     @classmethod
     def _terminal_turn_outcome(
@@ -2447,7 +2590,8 @@ class CodexManagedSessionRuntime:
     ) -> CodexManagedSessionTurnResponse:
         state = self._validate_locator(request)
         client = self._initialized_app_server_client()
-        vendor_thread_id = self._recovery_thread(client=client, state=state)
+        thread_recovery = self._recovery_thread_result(client=client, state=state)
+        vendor_thread_id = thread_recovery.vendor_thread_id
         rollout_mirror = self._new_rollout_live_mirror(state)
 
         started = client.request(
@@ -2488,6 +2632,9 @@ class CodexManagedSessionRuntime:
                 vendor_thread_id=vendor_thread_id,
                 vendor_turn_id=vendor_turn_id,
                 rollout_mirror=rollout_mirror,
+                thread_started_after_recovery_fallback=(
+                    thread_recovery.fallback_started
+                ),
             )
             status = outcome.status
             error_text = outcome.error_text
@@ -2584,6 +2731,14 @@ class CodexManagedSessionRuntime:
                     )
                 metadata["failureCause"] = EMPTY_ASSISTANT_FAILURE_CAUSE
                 metadata["retryRecommendedAction"] = "clear_session"
+                if self._is_missing_turn_idle_empty_rollout(
+                    thread_payload=thread_payload,
+                    rollout_scan=evidence_rollout_scan,
+                    vendor_turn_id=vendor_turn_id,
+                ):
+                    metadata["failureSubtype"] = (
+                        _MISSING_TURN_IDLE_EMPTY_ROLLOUT_SUBTYPE
+                    )
                 metadata["turnFailureEvidence"] = self._turn_failure_evidence(
                     reason=error_text,
                     state=state,

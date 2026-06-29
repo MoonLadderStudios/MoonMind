@@ -11,6 +11,7 @@ def write_fake_app_server(
     completion_notification_method: str | None = "turn/completed",
     complete_turn_on_read: bool = True,
     omit_turns_on_read: bool = False,
+    omit_turns_on_initial_reads: int = 0,
     omit_turns_when_incomplete: bool = False,
     assistant_text: str = "OK",
     thread_status_type: str = "idle",
@@ -65,6 +66,7 @@ START_THREAD_PATH = __START_THREAD_PATH__
 COMPLETION_NOTIFICATION_METHOD = __COMPLETION_NOTIFICATION_METHOD__
 COMPLETE_TURN_ON_READ = __COMPLETE_TURN_ON_READ__
 OMIT_TURNS_ON_READ = __OMIT_TURNS_ON_READ__
+OMIT_TURNS_ON_INITIAL_READS = __OMIT_TURNS_ON_INITIAL_READS__
 OMIT_TURNS_WHEN_INCOMPLETE = __OMIT_TURNS_WHEN_INCOMPLETE__
 ASSISTANT_TEXT = __ASSISTANT_TEXT__
 THREAD_STATUS_TYPE = __THREAD_STATUS_TYPE__
@@ -296,7 +298,10 @@ __COMPLETION_BLOCK__
             turn_items = [
                 {"type": "agentMessage", "id": "msg-1", "text": ASSISTANT_TEXT, "phase": "final_answer", "memoryCitation": None}
             ]
-        should_omit_turns = OMIT_TURNS_ON_READ and (turn_completed or OMIT_TURNS_WHEN_INCOMPLETE)
+        should_omit_turns = (
+            (OMIT_TURNS_ON_READ or thread_read_attempts <= OMIT_TURNS_ON_INITIAL_READS)
+            and (turn_completed or OMIT_TURNS_WHEN_INCOMPLETE)
+        )
         turns = []
         preview = ""
         if not should_omit_turns:
@@ -375,6 +380,7 @@ __COMPLETION_BLOCK__
             "True" if complete_turn_on_read else "False",
         )
         .replace("__OMIT_TURNS_ON_READ__", "True" if omit_turns_on_read else "False")
+        .replace("__OMIT_TURNS_ON_INITIAL_READS__", repr(omit_turns_on_initial_reads))
         .replace(
             "__OMIT_TURNS_WHEN_INCOMPLETE__",
             "True" if omit_turns_when_incomplete else "False",
