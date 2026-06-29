@@ -8981,6 +8981,391 @@ describe('LiveLogsPanel', () => {
     expect(document.querySelectorAll('[data-chat-block-type="tool"]')).toHaveLength(1);
   });
 
+  it('MM-1032 validates the MM-977 managed-session chat workflow across history, live controls, refresh, fallback, and one-shot suppression', async () => {
+    const payload: BootPayload = {
+      ...sessionTimelinePayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: { actionsEnabled: true },
+            logStreamingEnabled: true,
+            liveLogsSessionTimelineEnabled: true,
+          },
+        },
+      },
+    };
+    const sessionExecution = {
+      ...activeExecution,
+      title: 'MM-1032 managed session validation',
+      targetRuntime: 'codex_cli',
+      agentRunId: 'agent-run-mm-1032',
+    };
+    const oneShotExecution = {
+      ...sessionExecution,
+      title: 'MM-1032 one-shot validation',
+      agentRunId: 'agent-run-mm-1032-one-shot',
+    };
+    const sessionId = 'sess:agent-run-mm-1032:codex_cli';
+    const sessionEvents = [
+      {
+        sequence: 1,
+        timestamp: '2026-04-08T00:00:01Z',
+        stream: 'session',
+        kind: 'user_message_submitted',
+        text: 'Operator asks the managed session to inspect MM-1032.',
+        session_id: sessionId,
+        session_epoch: 1,
+        turn_id: 'turn-mm-1032',
+        metadata: { clientMessageId: 'operator-1' },
+      },
+      {
+        sequence: 2,
+        timestamp: '2026-04-08T00:00:02Z',
+        stream: 'session',
+        kind: 'assistant_message_delta',
+        text: 'Inspecting',
+        session_id: sessionId,
+        session_epoch: 1,
+        turn_id: 'turn-mm-1032',
+        metadata: { responseId: 'response-1' },
+      },
+      {
+        sequence: 3,
+        timestamp: '2026-04-08T00:00:03Z',
+        stream: 'session',
+        kind: 'assistant_message_completed',
+        text: 'Inspecting the durable chat workflow.',
+        session_id: sessionId,
+        session_epoch: 1,
+        turn_id: 'turn-mm-1032',
+        metadata: { responseId: 'response-1' },
+      },
+      {
+        sequence: 4,
+        timestamp: '2026-04-08T00:00:04Z',
+        stream: 'session',
+        kind: 'tool_call_started',
+        text: 'Read workflow detail tests.',
+        session_id: sessionId,
+        session_epoch: 1,
+        turn_id: 'turn-mm-1032',
+        metadata: { toolCallId: 'tool-1', toolName: 'exec_command' },
+      },
+      {
+        sequence: 5,
+        timestamp: '2026-04-08T00:00:05Z',
+        stream: 'session',
+        kind: 'tool_call_output',
+        text: 'workflow-detail.test.tsx contains managed-session coverage.',
+        session_id: sessionId,
+        session_epoch: 1,
+        turn_id: 'turn-mm-1032',
+        metadata: { toolCallId: 'tool-1', toolName: 'exec_command' },
+      },
+      {
+        sequence: 6,
+        timestamp: '2026-04-08T00:00:06Z',
+        stream: 'session',
+        kind: 'tool_call_completed',
+        text: 'Read completed.',
+        session_id: sessionId,
+        session_epoch: 1,
+        turn_id: 'turn-mm-1032',
+        metadata: { toolCallId: 'tool-1', toolName: 'exec_command' },
+      },
+      {
+        sequence: 7,
+        timestamp: '2026-04-08T00:00:07Z',
+        stream: 'session',
+        kind: 'approval_requested',
+        text: 'Approval requested for validation command.',
+        session_id: sessionId,
+        session_epoch: 1,
+        turn_id: 'turn-mm-1032',
+        metadata: { requestId: 'approval-1' },
+      },
+      {
+        sequence: 8,
+        timestamp: '2026-04-08T00:00:08Z',
+        stream: 'session',
+        kind: 'approval_resolved',
+        text: 'Approval resolved for validation command.',
+        session_id: sessionId,
+        session_epoch: 1,
+        turn_id: 'turn-mm-1032',
+        metadata: { requestId: 'approval-1' },
+      },
+      {
+        sequence: 9,
+        timestamp: '2026-04-08T00:00:09Z',
+        stream: 'session',
+        kind: 'turn_completed',
+        text: 'Managed session turn completed.',
+        session_id: sessionId,
+        session_epoch: 1,
+        turn_id: 'turn-mm-1032',
+      },
+      {
+        sequence: 10,
+        timestamp: '2026-04-08T00:00:10Z',
+        stream: 'session',
+        kind: 'session_cleared',
+        text: 'Session cleared by operator before the next turn.',
+        session_id: sessionId,
+        session_epoch: 2,
+        metadata: { controlEventRef: 'art-control', resetBoundaryRef: 'art-reset' },
+      },
+    ];
+    const liveEvent = {
+      sequence: 11,
+      timestamp: '2026-04-08T00:00:11Z',
+      stream: 'session',
+      kind: 'assistant_message',
+      text: 'Live append matches durable replay after refresh.',
+      session_id: sessionId,
+      session_epoch: 2,
+      turn_id: 'turn-mm-1032-live',
+      metadata: { responseId: 'response-live' },
+    };
+    let currentExecution = sessionExecution;
+    let durableEvents = [...sessionEvents];
+    let historyRequests = 0;
+    let useFallbackHistory = false;
+    let resolveFollowUpControl: ((response: Response) => void) | null = null;
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        const isOneShot = currentExecution.agentRunId === 'agent-run-mm-1032-one-shot';
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: !isOneShot,
+              liveStreamStatus: isOneShot ? 'unavailable' : 'available',
+              sessionSnapshot: isOneShot
+                ? null
+                : {
+                    sessionId,
+                    sessionEpoch: 1,
+                    containerId: 'ctr-mm-1032',
+                    threadId: 'thread-mm-1032',
+                    activeTurnId: 'turn-mm-1032',
+                  },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                interruptTurn: false,
+                cancelSession: false,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        historyRequests += 1;
+        if (useFallbackHistory) {
+          return Promise.resolve({ ok: true, json: async () => ({ events: [], truncated: false }) } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: durableEvents,
+            truncated: false,
+            sessionSnapshot: {
+              sessionId,
+              sessionEpoch: 2,
+              containerId: 'ctr-mm-1032',
+              threadId: 'thread-mm-1032',
+              activeTurnId: 'turn-mm-1032-live',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => '--- session ---\nMerged fallback line for MM-1032 durable replay.\n',
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/') && url.includes('/control')) {
+        const action = JSON.parse(String(init?.body || '{}')).action;
+        if (action === 'send_follow_up') {
+          return new Promise((resolve) => {
+            resolveFollowUpControl = resolve;
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            action,
+            projection: {
+              agent_run_id: 'agent-run-mm-1032',
+              session_id: sessionId,
+              session_epoch: action === 'clear_session' ? 2 : 1,
+              grouped_artifacts: [],
+              latest_summary_ref: { artifact_id: 'art-summary' },
+              latest_checkpoint_ref: { artifact_id: 'art-checkpoint' },
+              latest_control_event_ref: { artifact_id: 'art-control' },
+              latest_reset_boundary_ref: action === 'clear_session' ? { artifact_id: 'art-reset' } : null,
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            agent_run_id: 'agent-run-mm-1032',
+            session_id: sessionId,
+            session_epoch: 1,
+            grouped_artifacts: [],
+            latest_summary_ref: { artifact_id: 'art-summary' },
+            latest_checkpoint_ref: { artifact_id: 'art-checkpoint' },
+            latest_control_event_ref: { artifact_id: 'art-control' },
+            latest_reset_boundary_ref: { artifact_id: 'art-reset' },
+          }),
+        } as Response);
+      }
+      if (url.includes('/sessions/')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            agent_run_id: 'agent-run-mm-1032',
+            session_id: sessionId,
+            session_epoch: 1,
+            resources: [],
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => currentExecution } as Response);
+    });
+
+    const rendered = renderWithClient(<WorkflowDetailPage payload={payload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
+      expect(screen.getByText('Operator asks the managed session to inspect MM-1032.')).toBeTruthy();
+      expect(screen.getByText('Inspecting the durable chat workflow.')).toBeTruthy();
+      expect(screen.getByText('exec_command')).toBeTruthy();
+      expect(screen.getByText('workflow-detail.test.tsx contains managed-session coverage.')).toBeTruthy();
+      expect(screen.getByText('Approval requested for validation command.')).toBeTruthy();
+      expect(screen.getByText('Approval resolved for validation command.')).toBeTruthy();
+      expect(screen.getByText('Managed session turn completed.')).toBeTruthy();
+      expect(screen.getByText('Session cleared by operator before the next turn.')).toBeTruthy();
+    });
+    expect(document.querySelectorAll('[data-chat-block-type="user"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-chat-block-type="assistant"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-chat-block-type="tool"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-chat-block-type="approval"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-chat-block-type="status"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-chat-block-type="boundary"]')).toHaveLength(1);
+    fireEvent.click(screen.getByText('Raw Timeline'));
+    await waitFor(() => {
+      expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy();
+      expect(document.querySelector('[data-kind="session_cleared"]')).toBeTruthy();
+    });
+
+    await waitForEventSourceInstance();
+    const es = MockEventSource.instances.at(-1)!;
+    act(() => es.triggerOpen());
+    act(() => es.triggerLogChunk(liveEvent));
+    await waitFor(() => {
+      expect(screen.getAllByText('Live append matches durable replay after refresh.').length).toBeGreaterThan(0);
+    });
+
+    fireEvent.change(await screen.findByLabelText('Follow-up message'), {
+      target: { value: 'Continue with the MM-1032 session.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+    await waitFor(() => {
+      expect(
+        within(screen.getByLabelText('Pending session messages')).getByText(
+          'Continue with the MM-1032 session.',
+        ),
+      ).toBeTruthy();
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/agent-runs/agent-run-mm-1032/artifact-sessions/sess%3Aagent-run-mm-1032%3Acodex_cli/control',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'send_follow_up',
+            message: 'Continue with the MM-1032 session.',
+          }),
+        }),
+      );
+    });
+    act(() => {
+      resolveFollowUpControl?.({
+        ok: true,
+        json: async () => ({
+          action: 'send_follow_up',
+          projection: {
+            agent_run_id: 'agent-run-mm-1032',
+            session_id: sessionId,
+            session_epoch: 1,
+            grouped_artifacts: [],
+            latest_summary_ref: { artifact_id: 'art-summary' },
+            latest_checkpoint_ref: { artifact_id: 'art-checkpoint' },
+            latest_control_event_ref: { artifact_id: 'art-control' },
+            latest_reset_boundary_ref: null,
+          },
+        }),
+      } as Response);
+    });
+    await waitFor(() => expect(screen.queryByText('Operator message · Sending')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Clear / Reset' }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/agent-runs/agent-run-mm-1032/artifact-sessions/sess%3Aagent-run-mm-1032%3Acodex_cli/control',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ action: 'clear_session' }),
+        }),
+      );
+    });
+
+    durableEvents = [...sessionEvents, liveEvent];
+    const historyRequestsBeforeRefresh = historyRequests;
+    rendered.unmount();
+    MockEventSource.reset();
+    renderWithClient(<WorkflowDetailPage payload={payload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+    await waitFor(() => {
+      expect(historyRequests).toBeGreaterThan(historyRequestsBeforeRefresh);
+      expect(screen.getByText('Live append matches durable replay after refresh.')).toBeTruthy();
+      expect(document.querySelectorAll('[data-chat-block-type="assistant"]')).toHaveLength(3);
+    });
+
+    cleanup();
+    useFallbackHistory = true;
+    MockEventSource.reset();
+    renderWithClient(<WorkflowDetailPage payload={payload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+    await waitFor(() => {
+      expect(screen.getByText('Raw history fallback active')).toBeTruthy();
+      expect(screen.getByText(/Merged fallback line for MM-1032 durable replay/)).toBeTruthy();
+    });
+
+    cleanup();
+    useFallbackHistory = false;
+    currentExecution = oneShotExecution;
+    renderWithClient(<WorkflowDetailPage payload={payload} />);
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('/observability-summary'), expect.anything());
+      expect(screen.queryByRole('heading', { name: 'Session Continuity' })).toBeNull();
+      expect(screen.queryByLabelText('Follow-up message')).toBeNull();
+    });
+  });
+
   it('renders inline artifact links for publication and clear-reset timeline rows', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
