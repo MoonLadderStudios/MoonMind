@@ -151,6 +151,17 @@ class DashboardIssueListResponse(BaseModel):
     items: list[DashboardIssueOption] = Field(default_factory=list)
     error: str | None = Field(None)
 
+class DashboardClientConfigResponse(BaseModel):
+    """Client-discoverable dashboard shell config for SPA route transitions."""
+
+    current_path: str = Field(..., alias="currentPath")
+    dashboard_config: dict = Field(..., alias="dashboardConfig")
+    settings_permissions: list[str] = Field(
+        default_factory=list,
+        alias="settingsPermissions",
+    )
+    worker_pause: dict = Field(default_factory=dict, alias="workerPause")
+
 class _ValidatedSkillZip(BaseModel):
     skill_name: str
     description: str
@@ -218,6 +229,22 @@ def _raise_dashboard_route_not_found() -> None:
         status_code=404,
         detail=_DASHBOARD_ROUTE_NOT_FOUND_DETAIL,
     )
+
+def _is_extensionless_dashboard_path(path: str) -> bool:
+    normalized = path.strip("/")
+    if not normalized or "//" in path:
+        return False
+    return all(
+        "." not in segment and segment not in {"", ".", ".."}
+        for segment in normalized.split("/")
+    )
+
+def _worker_pause_sources() -> dict[str, str]:
+    return {
+        "get": "/api/system/worker-pause",
+        "post": "/api/system/worker-pause",
+        "shardHealth": "/api/workflows/codex/shards",
+    }
 
 def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
     """Return auth dependencies so tests can override them consistently."""
@@ -735,11 +762,7 @@ async def task_settings_route(
         "/settings", session=session, user=_user
     )
     initial_data = {
-        "workerPause": {
-            "get": "/api/system/worker-pause",
-            "post": "/api/system/worker-pause",
-            "shardHealth": "/api/workflows/codex/shards",
-        },
+        "workerPause": _worker_pause_sources(),
         "runtimeConfig": runtime_config,
         "settingsPermissions": sorted(settings_permissions_for_user(_user)),
     }
@@ -752,6 +775,18 @@ async def task_settings_route(
         session=session,
         user=_user,
     )
+
+@router.get("/settings/{dashboard_path:path}", response_class=HTMLResponse)
+async def settings_spa_fallback_route(
+    request: Request,
+    dashboard_path: str,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the settings SPA shell for extensionless settings sub-routes."""
+    if not _is_extensionless_dashboard_path(dashboard_path):
+        _raise_dashboard_route_not_found()
+    return await task_settings_route(request, session=session, _user=_user)
 
 @router.get("/oauth-terminal", response_class=HTMLResponse)
 async def oauth_terminal_route(
@@ -803,6 +838,24 @@ async def skills_route(
         request, "skills", "/skills", session=session, user=_user
     )
 
+@router.get("/skills/{dashboard_path:path}", response_class=HTMLResponse)
+async def skills_spa_fallback_route(
+    request: Request,
+    dashboard_path: str,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the skills SPA shell for extensionless skills sub-routes."""
+    if not _is_extensionless_dashboard_path(dashboard_path):
+        _raise_dashboard_route_not_found()
+    return await _render_react_page(
+        request,
+        "skills",
+        f"/skills/{dashboard_path.strip('/')}",
+        session=session,
+        user=_user,
+    )
+
 @router.get("/workflows/{workflow_path:path}", response_class=HTMLResponse)
 async def workflow_console_route(
     request: Request,
@@ -827,6 +880,26 @@ async def workflow_console_route(
         initial_data={"dashboardConfig": dashboard_config},
         session=session,
         user=_user,
+    )
+
+@router.get("/api/dashboard/config", response_model=DashboardClientConfigResponse)
+async def get_dashboard_client_config(
+    current_path: str = Query("/workflows", alias="currentPath"),
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> DashboardClientConfigResponse:
+    """Expose dashboard shell config for persistent SPA clients."""
+    normalized_path = current_path if current_path.startswith("/") else f"/{current_path}"
+    dashboard_config = await resolve_dashboard_runtime_config(
+        normalized_path,
+        session=session,
+        user=_user,
+    )
+    return DashboardClientConfigResponse(
+        currentPath=normalized_path,
+        dashboardConfig=dashboard_config,
+        settingsPermissions=sorted(settings_permissions_for_user(_user)),
+        workerPause=_worker_pause_sources(),
     )
 
 @router.get("/api/workflows/skills", response_model=DashboardSkillListResponse)

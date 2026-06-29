@@ -148,6 +148,7 @@ def test_workflow_console_api_routes_are_workflow_native() -> None:
     assert "/workflows/{workflow_path:path}" in route_paths
     assert "/proposals" not in route_paths
     assert "/proposals/{proposal_id}" not in route_paths
+    assert "/api/dashboard/config" in route_paths
     assert "/api/workflows/skills" in route_paths
     assert "/api/workflows/skills/upload" in route_paths
 
@@ -229,6 +230,35 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
+
+def test_extensionless_dashboard_subroutes_fallback_to_spa_shell(client: TestClient) -> None:
+    for path, expected_page in (
+        ("/settings/operations", "settings"),
+        ("/skills/local", "skills"),
+    ):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "moonmind-ui-boot" in response.text
+        boot_payload = _extract_boot_payload(response.text)
+        assert boot_payload["page"] == expected_page
+
+    response = client.get("/settings/app.js")
+    assert response.status_code == 404
+    assert "moonmind-ui-boot" not in response.text
+
+def test_dashboard_client_config_endpoint_exposes_spa_boundary(client: TestClient) -> None:
+    response = client.get("/api/dashboard/config?currentPath=/workflows/new")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["currentPath"] == "/workflows/new"
+    assert payload["dashboardConfig"]["initialPath"] == "/workflows/new"
+    assert payload["workerPause"] == {
+        "get": "/api/system/worker-pause",
+        "post": "/api/system/worker-pause",
+        "shardHealth": "/api/workflows/codex/shards",
+    }
+    assert isinstance(payload["settingsPermissions"], list)
 
     for path in (
         "/workflows",

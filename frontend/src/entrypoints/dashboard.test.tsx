@@ -14,6 +14,7 @@ import type { Root, Rule } from 'postcss';
 import type { BootPayload } from '../boot/parseBootPayload';
 import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { DashboardApp } from './dashboard-app';
+import { navigateTo } from '../lib/navigation';
 
 function normalizeCssSelector(selector: string): string {
   return selector
@@ -117,6 +118,14 @@ vi.mock('./skills', () => {
   return { default: () => <div>Skills page recovered</div> };
 });
 
+vi.mock('./workflow-list', () => ({
+  default: () => <div>Workflow list route loaded</div>,
+}));
+
+vi.mock('./workflow-start', () => ({
+  default: () => <div>Workflow start route loaded</div>,
+}));
+
 describe('Dashboard shared entry', () => {
   let fetchSpy: MockInstance;
   let dashboardCss: string;
@@ -157,6 +166,8 @@ describe('Dashboard shared entry', () => {
   afterEach(() => {
     fetchSpy.mockRestore();
     window.WebSocket = originalWebSocket;
+    document.querySelectorAll('[data-nav]').forEach((node) => node.remove());
+    window.history.replaceState({}, '', '/');
   });
 
   it('renders dashboard alerts and lazy-loads the requested page component', async () => {
@@ -226,6 +237,41 @@ describe('Dashboard shared entry', () => {
     } finally {
       consoleErrorSpy.mockRestore();
     }
+  });
+
+  it('MM-1029 intercepts dashboard links and changes routes without a document navigation', async () => {
+    window.history.replaceState({}, '', '/workflows/new');
+    document.body.insertAdjacentHTML(
+      'afterbegin',
+      '<a href="/workflows" data-nav>Workflows</a><a href="/workflows/new" data-nav>Start Workflow</a>',
+    );
+
+    renderWithClient(<DashboardApp payload={{ page: 'workflow-start', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    const shellPanel = document.querySelector('.panel');
+    const startLink = document.querySelector<HTMLAnchorElement>('a[href="/workflows/new"]')!;
+    expect(startLink.getAttribute('aria-current')).toBe('page');
+
+    fireEvent.click(document.querySelector<HTMLAnchorElement>('a[href="/workflows"]')!);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    expect(document.querySelector('.panel')).toBe(shellPanel);
+    expect(window.location.pathname).toBe('/workflows');
+    expect(document.querySelector<HTMLAnchorElement>('a[href="/workflows"]')!.getAttribute('aria-current')).toBe('page');
+  });
+
+  it('MM-1029 navigateTo uses the SPA route event for dashboard-internal URLs', async () => {
+    window.history.replaceState({}, '', '/workflows/new');
+    renderWithClient(<DashboardApp payload={{ page: 'workflow-start', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+
+    navigateTo('/workflows?source=temporal');
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    expect(window.location.pathname).toBe('/workflows');
+    expect(window.location.search).toBe('?source=temporal');
   });
 
   it('does not render operational metrics on the workflows home dashboard', async () => {
