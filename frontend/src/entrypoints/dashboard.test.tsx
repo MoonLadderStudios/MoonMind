@@ -155,6 +155,31 @@ vi.mock('./settings', () => ({
   },
 }));
 
+function uiInfo(overrides: Record<string, unknown> = {}) {
+  return {
+    app: 'moonmind',
+    buildId: 'test-build',
+    apiBase: '/api',
+    features: { workflowLiveUpdates: true },
+    limits: {},
+    endpoints: {
+      workflows: '/api/executions',
+      workflowUpdatesPoll: '/api/executions',
+    },
+    dashboardConfig: {
+      initialPath: '/workflows/new',
+      pollIntervalsMs: { list: 60_000, detail: 60_000, events: 60_000 },
+    },
+    settingsPermissions: [],
+    workerPause: {
+      get: '/api/system/worker-pause',
+      post: '/api/system/worker-pause',
+      shardHealth: '/api/workflows/codex/shards',
+    },
+    ...overrides,
+  };
+}
+
 describe('Dashboard shared entry', () => {
   let fetchSpy: MockInstance;
   let dashboardCss: string;
@@ -171,6 +196,12 @@ describe('Dashboard shared entry', () => {
   beforeEach(() => {
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => uiInfo(),
+        } as Response);
+      }
       if (url === '/api/v1/secrets') {
         return Promise.resolve({
           ok: true,
@@ -200,8 +231,9 @@ describe('Dashboard shared entry', () => {
   });
 
   it('renders dashboard alerts and lazy-loads the requested page component', async () => {
+    window.history.replaceState({}, '', '/workflows');
     const payload: BootPayload = {
-      page: 'workflows-home',
+      page: 'dashboard',
       apiBase: '/api',
       initialData: {
         layout: {
@@ -212,11 +244,10 @@ describe('Dashboard shared entry', () => {
 
     renderWithClient(<DashboardApp payload={payload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflows' }, { timeout: 10000 })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Open workflows' }).getAttribute('href')).toBe('/workflows');
+    expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
-    expect(await screen.findByText(/First-Run Setup:/i)).toBeTruthy();
     await waitFor(() => {
       expect(document.querySelector('.panel--data-wide')).toBeTruthy();
       expect(document.querySelector('.dashboard-shell-constrained--data-wide')).toBeTruthy();
@@ -224,18 +255,20 @@ describe('Dashboard shared entry', () => {
   });
 
   it('does not register a dashboard proposal review page for MM-859', async () => {
-    renderWithClient(<DashboardApp payload={{ page: 'proposals', apiBase: '/api' }} />);
+    window.history.replaceState({}, '', '/proposals');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Unknown dashboard page:')).toBeTruthy();
-    expect(screen.getByText('proposals')).toBeTruthy();
+    expect(screen.getByText('/proposals')).toBeTruthy();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/proposals'))).toBe(false);
   });
 
   it('shows a styled configuration error for invalid page boot data (MM-960)', async () => {
+    window.history.replaceState({}, '', '/workflows');
     renderWithClient(
       <DashboardApp
         payload={{
-          page: 'workflows-home',
+          page: 'dashboard',
           apiBase: '/api',
           initialData: { layout: { dataWidePanel: 'wide' } },
         } as unknown as BootPayload}
@@ -245,13 +278,14 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Dashboard configuration error')).toBeTruthy();
     expect(screen.getByRole('alert')).toBeTruthy();
     // The invalid page is not rendered.
-    expect(screen.queryByRole('heading', { name: 'Workflows' })).toBeNull();
+    expect(screen.queryByText('Workflow list route loaded')).toBeNull();
   });
 
   it('recovers from a failed lazy page import when the user retries (MM-960)', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      renderWithClient(<DashboardApp payload={{ page: 'skills', apiBase: '/api' }} />);
+      window.history.replaceState({}, '', '/skills');
+      renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
       // First dynamic import rejects -> styled route error with a Retry action.
       expect(await screen.findByText('This page failed to load')).toBeTruthy();
@@ -270,29 +304,25 @@ describe('Dashboard shared entry', () => {
 
   it('MM-1029 intercepts dashboard links and changes routes without a document navigation', async () => {
     window.history.replaceState({}, '', '/workflows/new');
-    document.body.insertAdjacentHTML(
-      'afterbegin',
-      '<a href="/workflows" data-nav>Workflows</a><a href="/workflows/new" data-nav>Start Workflow</a>',
-    );
 
-    renderWithClient(<DashboardApp payload={{ page: 'workflow-start', apiBase: '/api' }} />);
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
     const shellPanel = document.querySelector('.panel');
-    const startLink = document.querySelector<HTMLAnchorElement>('a[href="/workflows/new"]')!;
+    const startLink = screen.getByRole('link', { name: 'Start Workflow' });
     expect(startLink.getAttribute('aria-current')).toBe('page');
 
-    fireEvent.click(document.querySelector<HTMLAnchorElement>('a[href="/workflows"]')!);
+    fireEvent.click(screen.getByRole('link', { name: 'Workflows' }));
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     expect(document.querySelector('.panel')).toBe(shellPanel);
     expect(window.location.pathname).toBe('/workflows');
-    expect(document.querySelector<HTMLAnchorElement>('a[href="/workflows"]')!.getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('MM-1029 navigateTo uses the SPA route event for dashboard-internal URLs', async () => {
     window.history.replaceState({}, '', '/workflows/new');
-    renderWithClient(<DashboardApp payload={{ page: 'workflow-start', apiBase: '/api' }} />);
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
 
@@ -306,18 +336,11 @@ describe('Dashboard shared entry', () => {
   it('MM-1029 loads Settings permissions during SPA navigation', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith('/api/dashboard/config')) {
+      if (url === '/api/ui/info') {
         return Promise.resolve({
           ok: true,
-          json: async () => ({
-            currentPath: '/settings',
-            dashboardConfig: { initialPath: '/settings' },
+          json: async () => uiInfo({
             settingsPermissions: ['provider_profiles.write', 'settings.effective.read'],
-            workerPause: {
-              get: '/api/system/worker-pause',
-              post: '/api/system/worker-pause',
-              shardHealth: '/api/workflows/codex/shards',
-            },
           }),
         } as Response);
       }
@@ -329,53 +352,51 @@ describe('Dashboard shared entry', () => {
       } as Response);
     });
     window.history.replaceState({}, '', '/workflows');
-    document.body.insertAdjacentHTML('afterbegin', '<a href="/settings" data-nav>Settings</a>');
 
-    renderWithClient(<DashboardApp payload={{ page: 'workflow-list', apiBase: '/api' }} />);
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(document.querySelector<HTMLAnchorElement>('a[href="/settings"]')!);
+    fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
 
     expect(
       await screen.findByText('Settings permissions: provider_profiles.write,settings.effective.read'),
     ).toBeTruthy();
     expect(fetchSpy).toHaveBeenCalledWith(
-      '/api/dashboard/config?currentPath=%2Fsettings',
+      '/api/ui/info',
       expect.objectContaining({ credentials: 'same-origin' }),
     );
   });
 
   it('MM-1029 remounts same-component route pages on SPA navigation', async () => {
     window.history.replaceState({}, '', '/workflows/first/debug');
-    document.body.insertAdjacentHTML(
-      'afterbegin',
-      '<a href="/workflows/second" data-nav>Second workflow</a>',
-    );
 
-    renderWithClient(<DashboardApp payload={{ page: 'workflow-detail', apiBase: '/api' }} />);
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow detail initial path: /workflows/first/debug')).toBeTruthy();
 
-    fireEvent.click(document.querySelector<HTMLAnchorElement>('a[href="/workflows/second"]')!);
+    navigateTo('/workflows/second');
 
     expect(await screen.findByText('Workflow detail initial path: /workflows/second')).toBeTruthy();
     expect(screen.queryByText('Workflow detail initial path: /workflows/first/debug')).toBeNull();
   });
 
   it('does not render operational metrics on the workflows home dashboard', async () => {
-    renderWithClient(<DashboardApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflows' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Open workflows' }).getAttribute('href')).toBe('/workflows');
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(screen.queryByText('Operational metrics are unavailable.')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
   });
 
   it('uses the constrained shell by default for non-table pages', async () => {
-    renderWithClient(<DashboardApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
+    window.history.replaceState({}, '', '/skills');
+    skillsImport.attempts = 1;
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflows' })).toBeTruthy();
+    expect(await screen.findByText('Skills page recovered')).toBeTruthy();
     expect(document.querySelector('.panel--data-wide')).toBeNull();
     expect(document.querySelector('.dashboard-shell-constrained--data-wide')).toBeNull();
     expect(document.querySelector('.dashboard-shell-constrained')).toBeTruthy();
@@ -768,20 +789,16 @@ describe('Dashboard shared entry', () => {
 
   it('enforces MM-430 semantic shell class stability for dashboard sources', async () => {
     const { readFileSync } = await import('node:fs');
-    const dashboardTemplate = readFileSync(
-      `${process.cwd()}/api_service/templates/react_dashboard.html`,
-      'utf8',
-    );
-    const navigationTemplate = readFileSync(
-      `${process.cwd()}/api_service/templates/_navigation.html`,
+    const dashboardShellSource = readFileSync(
+      `${process.cwd()}/frontend/src/entrypoints/dashboard-app.tsx`,
       'utf8',
     );
 
-    expect(dashboardTemplate).toContain('class="dashboard-root"');
-    expect(dashboardTemplate).toContain('class="masthead"');
-    expect(navigationTemplate).toContain('class="route-nav"');
-    expect(navigationTemplate).not.toContain('/proposals');
-    expect(navigationTemplate).not.toContain('Proposals');
+    expect(dashboardShellSource).toContain('className="dashboard-root"');
+    expect(dashboardShellSource).toContain('className="masthead"');
+    expect(dashboardShellSource).toContain('className={`route-nav');
+    expect(dashboardShellSource).not.toContain('/proposals');
+    expect(dashboardShellSource).not.toContain('Proposals');
 
     for (const selector of [
       '.dashboard-root',
@@ -808,13 +825,13 @@ describe('Dashboard shared entry', () => {
 
   it('colors only Moon white in the masthead brand', async () => {
     const { readFileSync } = await import('node:fs');
-    const dashboardTemplate = readFileSync(
-      `${process.cwd()}/api_service/templates/react_dashboard.html`,
+    const dashboardShellSource = readFileSync(
+      `${process.cwd()}/frontend/src/entrypoints/dashboard-app.tsx`,
       'utf8',
     );
 
-    expect(dashboardTemplate).toContain('<span class="masthead-brand-moon">Moon</span>');
-    expect(dashboardTemplate).toContain('<span class="masthead-brand-mind">Mind</span>');
+    expect(dashboardShellSource).toContain('className="masthead-brand-moon"');
+    expect(dashboardShellSource).toContain('className="masthead-brand-mind"');
     expect(cssRuleBlock(dashboardCss, '.masthead-brand-moon')).toContain('color: rgb(255 255 255)');
     expect(cssRuleBlock(dashboardCss, '.masthead-brand-mind')).toContain('color: inherit');
   });

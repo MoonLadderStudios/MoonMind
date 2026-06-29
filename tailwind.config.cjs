@@ -2,7 +2,6 @@
 module.exports = {
   content: [
     "./api_service/templates/react_dashboard.html",
-    "./api_service/templates/_navigation.html",
     // Vite/React entrypoints use Tailwind utilities in TSX; source must be scanned
     // directly and dist must stay irrelevant.
     "./frontend/src/**/*.{js,jsx,ts,tsx}",

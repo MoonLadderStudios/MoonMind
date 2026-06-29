@@ -1,5 +1,23 @@
-import { Suspense, lazy, useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
-import { QueryErrorResetBoundary } from '@tanstack/react-query';
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from 'react';
+import {
+  BrowserRouter,
+  Link,
+  Navigate,
+  NavLink,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom';
+import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { validatePageBoot } from '../boot/pageBootSchemas';
@@ -9,19 +27,14 @@ import {
   isDashboardInternalUrl,
   payloadForDashboardRoute,
   resolveDashboardRoute,
-  type DashboardClientRouteConfig,
-  type DashboardRoute,
+  type DashboardPage,
+  type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
-import { DASHBOARD_NAVIGATE_EVENT, navigateTo } from '../lib/navigation';
 import { DashboardAlerts } from './dashboard-alerts';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
 type PageImport = () => Promise<{ default: PageComponent }>;
 
-// Import factories (not memoized lazy components) so a retry can build a fresh
-// `lazy(...)` and re-attempt the dynamic import. A single shared lazy component
-// caches a rejected import (e.g. a transient chunk-load failure) and would
-// replay that rejection on every retry, making the Retry action unrecoverable.
 const PAGE_IMPORTS = {
   'index-health': () => import('./index-health'),
   manifests: () => import('./manifests'),
@@ -33,48 +46,19 @@ const PAGE_IMPORTS = {
   'workflow-detail': () => import('./workflow-detail'),
   'workflows-home': () => import('./workflows-home'),
   'workflow-list': () => import('./workflow-list'),
-} satisfies Record<string, PageImport>;
-
-type SupportedPage = keyof typeof PAGE_IMPORTS;
+} satisfies Record<DashboardPage, PageImport>;
 
 type SharedLayoutConfig = {
   dataWidePanel?: boolean;
 };
 
-function isSupportedPage(page: string): page is SupportedPage {
+function isSupportedPage(page: string): page is DashboardPage {
   return Object.hasOwn(PAGE_IMPORTS, page);
 }
 
 function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
   const raw = payload.initialData as { layout?: SharedLayoutConfig } | undefined;
   return raw?.layout ?? {};
-}
-
-function currentDashboardRoute(payload: BootPayload): DashboardRoute {
-  return {
-    page: payload.page as SupportedPage,
-    dataWidePanel: readSharedLayout(payload).dataWidePanel === true,
-    currentPath: typeof window === 'undefined' ? '/' : window.location.pathname,
-  };
-}
-
-function setActiveNavigation(route: DashboardRoute): void {
-  const links = document.querySelectorAll<HTMLAnchorElement>('[data-nav]');
-  links.forEach((link) => {
-    const href = link.getAttribute('href') ?? '';
-    const url = new URL(href, window.location.origin);
-    const isWorkflowsDetail =
-      url.pathname === '/workflows' &&
-      route.currentPath.startsWith('/workflows/') &&
-      route.currentPath !== '/workflows/new';
-    const active = url.pathname === route.currentPath || isWorkflowsDetail;
-    link.classList.toggle('active', active);
-    if (active) {
-      link.setAttribute('aria-current', 'page');
-    } else {
-      link.removeAttribute('aria-current');
-    }
-  });
 }
 
 function LoadingPage() {
@@ -112,33 +96,7 @@ function ConfigurationErrorPage({ page, message }: { page: string; message: stri
   );
 }
 
-function AppShell({
-  dataWidePanel,
-  children,
-}: {
-  dataWidePanel: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <>
-      <div
-        className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
-      >
-        <DashboardAlerts />
-      </div>
-      <section
-        className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`}
-        aria-live="polite"
-      >
-        {children}
-      </section>
-    </>
-  );
-}
-
-function LazyPageView({ page, payload }: { page: SupportedPage; payload: BootPayload }) {
-  // Bumped on retry to rebuild the lazy component and remount the boundary, so a
-  // failed dynamic import is re-attempted rather than replaying its cached error.
+function LazyPageView({ page, payload }: { page: DashboardPage; payload: BootPayload }) {
   const [reloadKey, setReloadKey] = useState(0);
   const LazyPage = useMemo(() => lazy(PAGE_IMPORTS[page]), [page, reloadKey]);
 
@@ -174,30 +132,230 @@ function PageContent({ payload }: { payload: BootPayload }) {
   return <LazyPageView page={payload.page} payload={payload} />;
 }
 
-export function DashboardApp({ payload }: { payload: BootPayload }) {
-  const [route, setRoute] = useState<DashboardRoute>(() => currentDashboardRoute(payload));
-  const [hasClientNavigated, setHasClientNavigated] = useState(false);
-  const [clientRouteConfig, setClientRouteConfig] = useState<DashboardClientRouteConfig | null>(null);
-  const routedPayload = useMemo(
-    () => (hasClientNavigated ? payloadForDashboardRoute(payload, route, clientRouteConfig) : payload),
-    [clientRouteConfig, hasClientNavigated, payload, route],
-  );
-  const layout = readSharedLayout(routedPayload);
-  const routeKey =
-    typeof window === 'undefined'
-      ? `${route.page}:${route.currentPath}`
-      : `${route.page}:${route.currentPath}${window.location.search}${window.location.hash}`;
+function useDashboardUiInfo() {
+  return useQuery({
+    queryKey: ['dashboard-ui-info'],
+    queryFn: async (): Promise<DashboardUiInfo> => {
+      const response = await fetch('/api/ui/info', { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(`UI info request failed: ${response.status}`);
+      }
+      return (await response.json()) as DashboardUiInfo;
+    },
+    staleTime: 30_000,
+    retry: 1,
+  });
+}
+
+function DashboardLiveUpdateProvider({
+  uiInfo,
+  children,
+}: {
+  uiInfo: DashboardUiInfo | null;
+  children: ReactNode;
+}) {
+  const queryClient = useQueryClient();
+  const streamEndpoint =
+    typeof uiInfo?.endpoints?.workflowUpdatesStream === 'string'
+      ? uiInfo.endpoints.workflowUpdatesStream
+      : null;
+  const pollMs =
+    typeof (uiInfo?.dashboardConfig as { pollIntervalsMs?: { list?: unknown } } | undefined)
+      ?.pollIntervalsMs?.list === 'number'
+      ? ((uiInfo?.dashboardConfig as { pollIntervalsMs: { list: number } }).pollIntervalsMs.list)
+      : 5000;
 
   useEffect(() => {
-    const refreshRoute = () => {
-      const nextRoute = resolveDashboardRoute(window.location.pathname);
-      if (nextRoute) {
-        setHasClientNavigated(true);
-        setClientRouteConfig(null);
-        setRoute(nextRoute);
+    let eventSource: EventSource | null = null;
+    let intervalId: number | null = null;
+
+    const invalidateWorkflowSnapshots = () => {
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      void queryClient.invalidateQueries({ queryKey: ['workflow-list'] });
+      void queryClient.invalidateQueries({ queryKey: ['workflow-detail'] });
+    };
+
+    const start = () => {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
+      if (streamEndpoint && typeof EventSource !== 'undefined') {
+        eventSource = new EventSource(streamEndpoint, { withCredentials: true });
+        eventSource.onmessage = invalidateWorkflowSnapshots;
+        eventSource.onerror = () => {
+          eventSource?.close();
+          eventSource = null;
+          if (intervalId === null) {
+            intervalId = window.setInterval(invalidateWorkflowSnapshots, pollMs);
+          }
+        };
+        return;
+      }
+      intervalId = window.setInterval(invalidateWorkflowSnapshots, pollMs);
+    };
+
+    const stop = () => {
+      eventSource?.close();
+      eventSource = null;
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+        intervalId = null;
       }
     };
 
+    const handleVisibility = () => {
+      stop();
+      start();
+    };
+
+    start();
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      stop();
+    };
+  }, [pollMs, queryClient, streamEndpoint]);
+
+  return <>{children}</>;
+}
+
+function DashboardNavigation() {
+  const [open, setOpen] = useState(false);
+  const location = useLocation();
+  const isWorkflowDetail =
+    location.pathname.startsWith('/workflows/') && location.pathname !== '/workflows/new';
+
+  useEffect(() => {
+    setOpen(false);
+  }, [location.pathname]);
+
+  return (
+    <header className="masthead">
+      <Link className="masthead-brand" to="/workflows" aria-label="MoonMind workflows">
+        <img
+          className="masthead-logo"
+          src="/static/workflow_console/moonmindlogo.webp"
+          alt="MoonMind owl and moon logo"
+          width="256"
+          height="199"
+        />
+        <h1>
+          <span className="masthead-brand-moon">Moon</span>
+          <span className="masthead-brand-mind">Mind</span>
+        </h1>
+      </Link>
+
+      <button
+        className="nav-hamburger"
+        type="button"
+        aria-expanded={open}
+        aria-controls="dashboard-nav"
+        aria-label="Toggle navigation menu"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="nav-hamburger-icon" aria-hidden="true" />
+      </button>
+
+      <div className="masthead-nav">
+        <nav
+          className={`route-nav${open ? ' route-nav--open' : ''}`}
+          id="dashboard-nav"
+          aria-label="MoonMind navigation"
+        >
+          <NavLink
+            to="/workflows"
+            className={({ isActive }) => (isActive || isWorkflowDetail ? 'active' : undefined)}
+          >
+            Workflows
+          </NavLink>
+          <NavLink to="/workflows/new" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+            Start Workflow
+          </NavLink>
+          <NavLink to="/schedules" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+            Schedules
+          </NavLink>
+          <NavLink to="/skills" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+            Skills
+          </NavLink>
+          <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+            Settings
+          </NavLink>
+        </nav>
+      </div>
+    </header>
+  );
+}
+
+function AppShell({
+  dataWidePanel,
+  uiInfo,
+  children,
+}: {
+  dataWidePanel: boolean;
+  uiInfo: DashboardUiInfo | null;
+  children: ReactNode;
+}) {
+  return (
+    <DashboardLiveUpdateProvider uiInfo={uiInfo}>
+      <main className="dashboard-root">
+        <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
+          <p>
+            <span className="worker-pause-label" data-worker-pause-status>
+              Workers: Running
+            </span>
+            <span className="worker-pause-reason" data-worker-pause-reason />
+            <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
+              Manage operations
+            </Link>
+          </p>
+        </section>
+
+        <div className="dashboard-shell-full">
+          <DashboardNavigation />
+        </div>
+
+        <div
+          className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
+        >
+          <DashboardAlerts />
+        </div>
+        <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
+          {children}
+        </section>
+      </main>
+    </DashboardLiveUpdateProvider>
+  );
+}
+
+function RoutedDashboardPage({ payload, uiInfo }: { payload: BootPayload; uiInfo: DashboardUiInfo | null }) {
+  const location = useLocation();
+  const route = resolveDashboardRoute(location.pathname);
+
+  if (!route) {
+    return (
+      <AppShell dataWidePanel={false} uiInfo={uiInfo}>
+        <UnknownPage page={location.pathname} />
+      </AppShell>
+    );
+  }
+
+  const routedPayload = payloadForDashboardRoute(payload, route, uiInfo);
+  const layout = readSharedLayout(routedPayload);
+  const routeKey = `${route.page}:${route.currentPath}${location.search}${location.hash}`;
+
+  return (
+    <AppShell dataWidePanel={layout.dataWidePanel === true} uiInfo={uiInfo}>
+      <PageContent key={routeKey} payload={routedPayload} />
+    </AppShell>
+  );
+}
+
+function DashboardRouter({ payload }: { payload: BootPayload }) {
+  const uiInfoQuery = useDashboardUiInfo();
+  const uiInfo = uiInfoQuery.data ?? null;
+  const navigate = useNavigate();
+
+  useEffect(() => {
     const handleClick = (event: MouseEvent) => {
       if (
         event.defaultPrevented ||
@@ -222,58 +380,48 @@ export function DashboardApp({ payload }: { payload: BootPayload }) {
         return;
       }
       event.preventDefault();
-      navigateTo(`${url.pathname}${url.search}${url.hash}`);
+      navigate(`${url.pathname}${url.search}${url.hash}`);
     };
 
-    window.addEventListener('popstate', refreshRoute);
-    window.addEventListener(DASHBOARD_NAVIGATE_EVENT, refreshRoute);
     document.addEventListener('click', handleClick);
-    return () => {
-      window.removeEventListener('popstate', refreshRoute);
-      window.removeEventListener(DASHBOARD_NAVIGATE_EVENT, refreshRoute);
-      document.removeEventListener('click', handleClick);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!hasClientNavigated) {
-      return;
-    }
-    const controller = new AbortController();
-    const currentPath = route.currentPath;
-
-    fetch(`/api/dashboard/config?currentPath=${encodeURIComponent(currentPath)}`, {
-      credentials: 'same-origin',
-      signal: controller.signal,
-    })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Dashboard config request failed: ${response.status}`);
-        }
-        return response.json() as Promise<DashboardClientRouteConfig>;
-      })
-      .then((config) => {
-        setClientRouteConfig(config);
-      })
-      .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === 'AbortError')) {
-          setClientRouteConfig(null);
-        }
-      });
-
-    return () => {
-      controller.abort();
-    };
-  }, [hasClientNavigated, route.currentPath]);
-
-  useEffect(() => {
-    setActiveNavigation(route);
-  }, [route]);
+    return () => document.removeEventListener('click', handleClick);
+  }, [navigate]);
 
   return (
-    <AppShell dataWidePanel={layout.dataWidePanel === true}>
-      <PageContent key={routeKey} payload={routedPayload} />
-    </AppShell>
+    <Routes>
+      <Route path="/" element={<Navigate to="/workflows" replace />} />
+      <Route path="/workflows" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/workflows/new" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/workflows/:workflowId" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/workflows/:workflowId/steps" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/workflows/:workflowId/artifacts" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/workflows/:workflowId/runs" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/workflows/:workflowId/debug" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/schedules" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/schedules/:definitionId" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/skills/*" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/settings/*" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/manifests" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/manifests/:manifestName" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/oauth-terminal" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/index-health" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route
+        path="*"
+        element={
+          <AppShell dataWidePanel={false} uiInfo={uiInfo}>
+            <UnknownPage page={window.location.pathname} />
+          </AppShell>
+        }
+      />
+    </Routes>
+  );
+}
+
+export function DashboardApp({ payload }: { payload: BootPayload }) {
+  return (
+    <BrowserRouter>
+      <DashboardRouter payload={payload} />
+    </BrowserRouter>
   );
 }
 

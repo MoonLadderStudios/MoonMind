@@ -79,7 +79,6 @@ RUN npm ci --no-fund --no-audit
 COPY frontend/ /build/frontend/
 # Tailwind scans these paths for class usage (see tailwind.config.cjs content[])
 COPY api_service/templates/react_dashboard.html /build/api_service/templates/react_dashboard.html
-COPY api_service/templates/_navigation.html /build/api_service/templates/_navigation.html
 COPY tools/verify_vite_manifest.py /build/tools/verify_vite_manifest.py
 
 # Always rebuild dist from source; do not rely on committed chunks surviving partial copies.

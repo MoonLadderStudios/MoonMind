@@ -2722,7 +2722,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/dashboard/config": {
+    "/api/ui/info": {
         parameters: {
             query?: never;
             header?: never;
@@ -2730,10 +2730,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Dashboard Client Config
-         * @description Expose dashboard shell config for persistent SPA clients.
+         * Get Dashboard Ui Info
+         * @description Expose compact shell capabilities and endpoint discovery for the SPA.
          */
-        get: operations["get_dashboard_client_config_api_dashboard_config_get"];
+        get: operations["get_dashboard_ui_info_api_ui_info_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4215,24 +4215,6 @@ export interface components {
             source: string;
         };
         /**
-         * DashboardClientConfigResponse
-         * @description Client-discoverable dashboard shell config for SPA route transitions.
-         */
-        DashboardClientConfigResponse: {
-            /** Currentpath */
-            currentPath: string;
-            /** Dashboardconfig */
-            dashboardConfig: {
-                [key: string]: unknown;
-            };
-            /** Settingspermissions */
-            settingsPermissions?: string[];
-            /** Workerpause */
-            workerPause?: {
-                [key: string]: unknown;
-            };
-        };
-        /**
          * DashboardIssueListResponse
          * @description Dashboard response containing GitHub issue options for one repository.
          */
@@ -4306,6 +4288,46 @@ export interface components {
              * @description Markdown content of the skill, if requested
              */
             markdown?: string | null;
+        };
+        /**
+         * DashboardUiInfoResponse
+         * @description Compact client-discoverable dashboard shell config for the SPA.
+         */
+        DashboardUiInfoResponse: {
+            /**
+             * App
+             * @default moonmind
+             */
+            app: string;
+            /** Buildid */
+            buildId?: string | null;
+            /**
+             * Apibase
+             * @default /api
+             */
+            apiBase: string;
+            /** Features */
+            features?: {
+                [key: string]: boolean;
+            };
+            /** Limits */
+            limits?: {
+                [key: string]: number;
+            };
+            /** Endpoints */
+            endpoints?: {
+                [key: string]: string;
+            };
+            /** Dashboardconfig */
+            dashboardConfig: {
+                [key: string]: unknown;
+            };
+            /** Settingspermissions */
+            settingsPermissions?: string[];
+            /** Workerpause */
+            workerPause?: {
+                [key: string]: unknown;
+            };
         };
         /** DeploymentCurrentImageModel */
         DeploymentCurrentImageModel: {
@@ -14849,11 +14871,9 @@ export interface operations {
             };
         };
     };
-    get_dashboard_client_config_api_dashboard_config_get: {
+    get_dashboard_ui_info_api_ui_info_get: {
         parameters: {
-            query?: {
-                currentPath?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14866,16 +14886,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DashboardClientConfigResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["DashboardUiInfoResponse"];
                 };
             };
         };

@@ -1,7 +1,5 @@
 import { isDashboardInternalUrl } from './dashboardRoutes';
 
-export const DASHBOARD_NAVIGATE_EVENT = 'moonmind:dashboard-navigate';
-
 export function navigateTo(path: string): void {
   const url = new URL(path, window.location.origin);
   if (!isDashboardInternalUrl(url)) {
@@ -13,5 +11,5 @@ export function navigateTo(path: string): void {
   if (next !== current) {
     window.history.pushState({ moonmindDashboard: true }, '', next);
   }
-  window.dispatchEvent(new CustomEvent(DASHBOARD_NAVIGATE_EVENT, { detail: { path: next } }));
+  window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
 }
