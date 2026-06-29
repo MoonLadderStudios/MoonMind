@@ -338,6 +338,31 @@ def test_runtime_send_turn_returns_terminal_completed_response(
     assert handle.session_state.active_turn_id is None
     assert handle.metadata["lastAssistantText"] == "OK"
 
+
+def test_app_server_rpc_trace_summary_includes_redacted_error_message() -> None:
+    summary = CodexAppServerRpcClient._message_summary(
+        {
+            "id": 6,
+            "error": {
+                "code": -32600,
+                "message": "failed to read rollout with token=supersecret",
+            },
+        }
+    )
+
+    assert summary["hasError"] is True
+    assert summary["errorCode"] == -32600
+    assert summary["errorMessage"] == "failed to read rollout with token=[REDACTED]"
+    assert "supersecret" not in summary["errorMessage"]
+
+
+def test_redaction_preserves_falsy_non_none_values() -> None:
+    assert CodexAppServerRpcClient._redact_trace_text(0) == "0"
+    assert CodexAppServerRpcClient._redact_trace_text(False) == "False"
+    assert CodexManagedSessionRuntime._redact_diagnostic_text(0) == "0"
+    assert CodexManagedSessionRuntime._redact_diagnostic_text(False) == "False"
+
+
 def test_runtime_send_turn_mirrors_rollout_updates_to_stdout_spool(
     tmp_path: Path,
 ) -> None:
@@ -2682,6 +2707,121 @@ def test_runtime_send_turn_drops_stale_vendor_thread_path_when_fallback_starts_n
     )
     assert updated_state["vendorThreadId"] == "vendor-thread-2"
     assert "vendorThreadPath" not in updated_state
+
+
+def test_runtime_send_turn_waits_for_fallback_started_turn_visibility(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "06"
+        / "28"
+        / "rollout-2026-06-28T13-46-25-vendor-thread-2.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True)
+    transcript_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        fail_thread_resume=True,
+        start_thread_id="vendor-thread-2",
+        start_thread_path=str(transcript_path),
+        omit_turns_on_initial_reads=1,
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        missing_turn_visibility_grace_seconds=1.0,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.metadata["assistantText"] == "OK"
+    state_payload = json.loads(
+        (
+            Path(request.session_workspace_path)
+            / ".moonmind-codex-session-state.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert state_payload["vendorThreadId"] == "vendor-thread-2"
+    assert state_payload["lastTurnStatus"] == "completed"
+    stderr_path = Path(request.artifact_spool_path) / "stderr.log"
+    assert not stderr_path.exists() or "turn failed:" not in stderr_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_runtime_send_turn_marks_missing_fallback_turn_subtype_after_grace(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "06"
+        / "28"
+        / "rollout-2026-06-28T13-46-25-vendor-thread-2.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True)
+    transcript_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        fail_thread_resume=True,
+        start_thread_id="vendor-thread-2",
+        start_thread_path=str(transcript_path),
+        omit_turns_on_read=True,
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        missing_turn_visibility_grace_seconds=0.01,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["failureCause"] == "app_server_protocol_empty_turn"
+    assert (
+        response.metadata["failureSubtype"]
+        == "missing_turn_idle_empty_rollout"
+    )
+    evidence = response.metadata["turnFailureEvidence"]
+    assert evidence["threadPayloadSummary"]["turnCount"] == 0
+    assert evidence["rolloutScan"]["entriesScanned"] == 0
 
 
 def test_runtime_send_turn_starts_new_thread_when_rollout_recovery_file_is_empty(
