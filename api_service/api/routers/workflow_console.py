@@ -321,13 +321,8 @@ async def _render_react_page(
     session: AsyncSession | None = None,
     user: User | None = None,
 ) -> HTMLResponse:
-    boot_initial_data = dict(initial_data or {})
-    boot_layout = dict(boot_initial_data.get("layout") or {})
-    boot_layout["dataWidePanel"] = data_wide_panel
-    boot_payload = generate_boot_payload(
-        "dashboard",
-        initial_data={"layout": boot_layout},
-    )
+    _ = (current_path, initial_data, data_wide_panel, session, user)
+    boot_payload = generate_boot_payload("dashboard")
     assets_html = _vite_assets_or_error(page)
     if isinstance(assets_html, HTMLResponse):
         return assets_html
@@ -870,6 +865,7 @@ async def get_dashboard_ui_info(
         session=session,
         user=_user,
     )
+    dashboard_config.pop("initialPath", None)
     system_config = dict(dashboard_config.get("system") or {})
     return DashboardUiInfoResponse(
         buildId=system_config.get("buildId"),
