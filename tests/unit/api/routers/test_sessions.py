@@ -1,6 +1,7 @@
 """Unit tests for MM-1016 /api/sessions compatibility facades.
 
 Source traceability: MM-977 chat-session API naming alignment.
+Implementation traceability: MM-1031 approval elicitation resolution facade.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from typing import Iterator
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.testclient import TestClient
 import pytest
 
@@ -287,7 +288,43 @@ def test_post_session_event_rejects_unknown_type(
     assert "Unsupported session event type" in response.json()["detail"]
 
 
-def test_resolve_elicitation_rejects_unsupported_facade(
+def test_resolve_elicitation_maps_approval_to_existing_control_path(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_session_api(monkeypatch)
+    test_client, _ = client
+    control_response = SimpleNamespace(action="send_follow_up", projection=_projection())
+
+    with patch(
+        "api_service.api.routers.sessions.ManagedSessionStore.load",
+        return_value=_session_record(),
+    ):
+        with patch(
+            "api_service.api.routers.sessions.control_agent_run_artifact_session",
+            new=AsyncMock(return_value=control_response),
+        ) as control:
+            response = test_client.post(
+                "/api/sessions/sess-1/elicitations/el-1/resolve",
+                json={"decision": "approve"},
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["type"] == "elicitation_resolution"
+    assert body["elicitationId"] == "el-1"
+    assert body["decision"] == "approve"
+    assert body["action"] == "send_follow_up"
+    assert body["projection"]["agent_run_id"] == "mm:run-1"
+    control_payload = control.await_args.kwargs["payload"]
+    assert control.await_args.kwargs["agent_run_id"] == "mm:run-1"
+    assert control.await_args.kwargs["session_id"] == "sess:mm:run-1:codex_cli"
+    assert control_payload.action == "send_follow_up"
+    assert control_payload.message == "Approved."
+    assert control_payload.reason == "session_elicitation:el-1:approve"
+
+
+def test_resolve_elicitation_preserves_session_authorization(
     client: tuple[TestClient, AsyncMock],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -298,13 +335,21 @@ def test_resolve_elicitation_rejects_unsupported_facade(
         "api_service.api.routers.sessions.ManagedSessionStore.load",
         return_value=_session_record(),
     ):
-        response = test_client.post(
-            "/api/sessions/sess-1/elicitations/el-1/resolve",
-            json={"decision": "approve"},
-        )
+        with patch(
+            "api_service.api.routers.agent_runs._require_agent_run_access",
+            new=AsyncMock(side_effect=HTTPException(status_code=403, detail="no")),
+        ):
+            with patch(
+                "api_service.api.routers.sessions.control_agent_run_artifact_session",
+                new=AsyncMock(),
+            ) as control:
+                response = test_client.post(
+                    "/api/sessions/sess-1/elicitations/el-1/resolve",
+                    json={"decision": "approve"},
+                )
 
-    assert response.status_code == 501
-    assert "not implemented" in response.json()["detail"]
+    assert response.status_code == 403
+    control.assert_not_awaited()
 
 
 def test_terminal_session_suppresses_elicitation_resolution_capability(
@@ -325,3 +370,53 @@ def test_terminal_session_suppresses_elicitation_resolution_capability(
 
     assert response.status_code == 409
     assert "not available" in response.json()["detail"]
+
+
+def test_resolve_elicitation_rejects_unsupported_capability(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_session_api(monkeypatch)
+    test_client, _ = client
+
+    with patch(
+        "api_service.api.routers.sessions.ManagedSessionStore.load",
+        return_value=_session_record(status="busy", activeTurnId="turn-1"),
+    ):
+        with patch(
+            "api_service.api.routers.sessions.control_agent_run_artifact_session",
+            new=AsyncMock(),
+        ) as control:
+            response = test_client.post(
+                "/api/sessions/sess-1/elicitations/el-1/resolve",
+                json={"decision": "approve"},
+            )
+
+    assert response.status_code == 409
+    assert "not available" in response.json()["detail"]
+    control.assert_not_awaited()
+
+
+def test_resolve_elicitation_rejects_unsupported_decision(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_session_api(monkeypatch)
+    test_client, _ = client
+
+    with patch(
+        "api_service.api.routers.sessions.ManagedSessionStore.load",
+        return_value=_session_record(),
+    ):
+        with patch(
+            "api_service.api.routers.sessions.control_agent_run_artifact_session",
+            new=AsyncMock(),
+        ) as control:
+            response = test_client.post(
+                "/api/sessions/sess-1/elicitations/el-1/resolve",
+                json={"decision": "maybe"},
+            )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "unsupported_elicitation_resolution"
+    control.assert_not_awaited()
