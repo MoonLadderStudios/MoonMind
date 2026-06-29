@@ -6223,14 +6223,30 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     targetRuntime: execution?.targetRuntime,
     agentRunId: resolvedAgentRunId,
   });
+  const agentRunTrackingInitializedRef = useRef(false);
   const previousAgentRunIdRef = useRef(resolvedAgentRunId);
   const [showAgentRunAttachNotice, setShowAgentRunAttachNotice] = useState(false);
 
   useEffect(() => {
+    if (!execution) {
+      return undefined;
+    }
+
+    if (!agentRunTrackingInitializedRef.current) {
+      agentRunTrackingInitializedRef.current = true;
+      previousAgentRunIdRef.current = resolvedAgentRunId;
+      setShowAgentRunAttachNotice(false);
+      return undefined;
+    }
+
     if (!resolvedAgentRunId) {
       previousAgentRunIdRef.current = '';
       setShowAgentRunAttachNotice(false);
       return;
+    }
+
+    if (previousAgentRunIdRef.current === resolvedAgentRunId) {
+      return undefined;
     }
 
     if (!previousAgentRunIdRef.current) {
@@ -6245,7 +6261,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     previousAgentRunIdRef.current = resolvedAgentRunId;
     setShowAgentRunAttachNotice(false);
     return undefined;
-  }, [resolvedAgentRunId]);
+  }, [execution, resolvedAgentRunId]);
 
   const missingAgentRunState = execution && !resolvedAgentRunId ? inferMissingAgentRunState(execution) : null;
 
