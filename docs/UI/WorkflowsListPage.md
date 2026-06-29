@@ -202,11 +202,11 @@ The current desktop table columns are:
 Rules:
 
 1. Header sort buttons sort the current page only until server-authoritative sort is wired through the frontend.
-2. The current default frontend sort is `updatedAt` descending.
-3. Timestamp columns sort by parsed timestamp. `updatedAt` falls back to the best available execution timestamp.
+2. The current default frontend sort is `updatedAt` descending by one-minute stability bucket, then queued order descending (`queuedAt || createdAt`).
+3. Timestamp columns sort by parsed timestamp. `updatedAt` falls back to the best available execution timestamp before bucketing.
 4. Status sorting uses `rawState` or `state` when available.
 5. Non-timestamp string columns sort as lowercase strings.
-6. Ties sort by workflow identifier descending.
+6. Ties after updated bucket and queued order sort by workflow identifier descending.
 7. Each status cell renders an `ExecutionStatusPill` using `rawState || state || status`, followed by compact status supplement text when needed.
 8. Rows blocked on dependencies show dependency text under the status pill, for example `Blocked by 1 prerequisite`.
 9. Rows requiring intervention show `Intervention requested` under the status pill.
