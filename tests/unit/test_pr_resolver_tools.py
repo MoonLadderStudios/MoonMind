@@ -385,6 +385,63 @@ def test_issue_command_comments_are_not_actionable(
     assert summary["actionableCommentIds"] == [2]
     assert summary["nonActionableReasonCounts"]["command_comment"] == 1
 
+def test_standalone_codex_review_trigger_is_not_actionable(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+
+    comments = [
+        {
+            "type": "issue_comment",
+            "id": 1,
+            "user": "human-reviewer",
+            "body": "@codex review",
+        }
+    ]
+
+    summary = summarize_comments(comments, include_bot_review_comments=True)
+    assert summary["hasActionableComments"] is False
+    assert summary["actionableCommentCount"] == 0
+    assert summary["nonActionableReasonCounts"]["command_comment"] == 1
+
+def test_codex_trigger_with_extra_feedback_stays_actionable(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+
+    comments = [
+        {
+            "type": "issue_comment",
+            "id": 1,
+            "user": "human-reviewer",
+            "body": "@codex review\n\nPlease also fix the failing migration test.",
+        }
+    ]
+
+    summary = summarize_comments(comments, include_bot_review_comments=True)
+    assert summary["hasActionableComments"] is True
+    assert summary["actionableCommentCount"] == 1
+    assert summary["actionableCommentIds"] == [1]
+
+def test_normal_human_issue_comment_stays_actionable(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+
+    comments = [
+        {
+            "type": "issue_comment",
+            "id": 1,
+            "user": "human-reviewer",
+            "body": "This still needs a regression test.",
+        }
+    ]
+
+    summary = summarize_comments(comments, include_bot_review_comments=True)
+    assert summary["hasActionableComments"] is True
+    assert summary["actionableCommentCount"] == 1
+    assert summary["actionableCommentIds"] == [1]
+
 def test_resolved_review_threads_are_not_actionable(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -398,6 +455,69 @@ def test_resolved_review_threads_are_not_actionable(
     }
 
     assert is_comment_actionable(comment) is False
+
+def test_outdated_review_threads_are_not_actionable(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    is_comment_actionable = pr_resolve_snapshot_module["_is_comment_actionable"]
+
+    comment = {
+        "type": "review_comment",
+        "user": "human-reviewer",
+        "body": "Please update this logic.",
+        "thread_outdated": True,
+    }
+
+    assert is_comment_actionable(comment) is False
+
+def test_pr_2014_shape_has_no_actionable_comments_and_can_finalize(
+    pr_resolve_snapshot_module: dict[str, Any],
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    comments = [
+        {
+            "type": "review_comment",
+            "id": 10,
+            "user": "gemini-code-assist[bot]",
+            "body": "Please simplify this branch.",
+            "thread_resolved": True,
+        },
+        {
+            "type": "review_comment",
+            "id": 11,
+            "user": "qodo-free-for-open-source-projects[bot]",
+            "body": "This comment belongs to an older diff.",
+            "thread_outdated": True,
+        },
+        {
+            "type": "issue_comment",
+            "id": 12,
+            "user": "human-reviewer",
+            "body": "@codex review",
+        },
+    ]
+
+    comments_summary = summarize_comments(comments, include_bot_review_comments=True)
+    assert comments_summary["hasActionableComments"] is False
+    assert comments_summary["actionableCommentCount"] == 0
+    assert comments_summary["nonActionableReasonCounts"] == {
+        "thread_resolved": 1,
+        "thread_outdated": 1,
+        "command_comment": 1,
+    }
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"},
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": comments_summary,
+        }
+    )
+    assert decision == {"action": "merge_now", "reason": "ci_complete"}
 
 def test_finalize_blocks_when_actionable_comments_exist(
     pr_resolve_finalize_module: dict[str, Any],

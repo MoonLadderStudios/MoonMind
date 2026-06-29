@@ -42,6 +42,11 @@ _COMMAND_COMMENT_PATTERN = re.compile(
     r"^/(review|gemini|qodo|jules|copilot|cc|re[-_ ]?run)\b",
     re.IGNORECASE,
 )
+_MENTION_COMMAND_ONLY_COMMENT_PATTERN = re.compile(
+    r"^@(codex|claude|gemini|jules|qodo|copilot)\s+"
+    r"(review|address\s+that\s+feedback)\.?$",
+    re.IGNORECASE,
+)
 
 def _build_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
@@ -319,7 +324,10 @@ def _classify_comment_actionability(
     if (
         comment_type == "issue_comment"
         and normalized_body
-        and _COMMAND_COMMENT_PATTERN.match(normalized_body)
+        and (
+            _COMMAND_COMMENT_PATTERN.match(normalized_body)
+            or _MENTION_COMMAND_ONLY_COMMENT_PATTERN.match(normalized_body)
+        )
     ):
         return False, "command_comment"
 
