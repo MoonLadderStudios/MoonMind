@@ -824,22 +824,26 @@ describe('Dashboard shared entry', () => {
       dashboardCss,
       '.status-queued, .status-scheduled, .status-awaiting-slot',
     ).join('\n');
-    expect(queueBlock).toContain('color: #8248F6');
-    expect(queueBlock).toContain('rgb(130 72 246 / 0.14)');
+    expect(queueBlock).toContain('color: rgb(var(--mm-status-queued, 130 72 246))');
+    expect(queueBlock).toContain('rgb(var(--mm-status-queued, 130 72 246) / 0.14)');
 
     const waitBlock = cssRuleBlocks(
       dashboardCss,
       '.status-waiting, .status-awaiting-dependencies, .status-awaiting-external',
     ).join('\n');
-    expect(waitBlock).toContain('color: #EC4899');
-    expect(waitBlock).toContain('rgb(236 72 153 / 0.14)');
+    expect(waitBlock).toContain('color: rgb(var(--mm-status-waiting, 236 72 153))');
+    expect(waitBlock).toContain('rgb(var(--mm-status-waiting, 236 72 153) / 0.14)');
 
     const setupBlock = cssRuleBlocks(dashboardCss, '.status-initializing, .status-planning').join('\n');
-    expect(setupBlock).toContain('color: #6366F1');
-    expect(setupBlock).toContain('rgb(99 102 241 / 0.14)');
+    expect(setupBlock).toContain('color: rgb(var(--mm-status-setup, 99 102 241))');
+    expect(setupBlock).toContain('rgb(var(--mm-status-setup, 99 102 241) / 0.14)');
 
-    expect(cssRuleBlock(dashboardCss, '.status-finalizing')).toContain('color: #64748B');
-    expect(cssRuleBlock(dashboardCss, '.status-canceled')).toContain('color: #F97316');
+    expect(cssRuleBlock(dashboardCss, '.status-finalizing')).toContain(
+      'color: rgb(var(--mm-status-finalizing, 100 116 139))',
+    );
+    expect(cssRuleBlock(dashboardCss, '.status-canceled')).toContain(
+      'color: rgb(var(--mm-status-canceled, 249 115 22))',
+    );
     expect(cssRuleBlock(dashboardCss, '.status-no-commit')).toContain('color: #159376');
     expect(cssRuleBlock(dashboardCss, '.status-running, .status-running.is-executing')).toContain(
       'color: rgb(var(--mm-accent-2))',
