@@ -177,7 +177,7 @@ describe('WorkflowRowActionsMenu', () => {
     });
   });
 
-  it('requests a rerun from the row menu without navigating away from the workflow list', async () => {
+  it('requests a rerun from the row menu and shows a floating toast', async () => {
     renderWithClient(
       <WorkflowRowActionsMenu
         workflowId="wf-123"
@@ -204,10 +204,20 @@ describe('WorkflowRowActionsMenu', () => {
     expect(window.location.pathname).toBe('/workflows');
     expect(window.location.search).toBe('?source=temporal');
     expect(
-      await screen.findByText('Rerun was requested and the latest execution view is ready.'),
-    ).toBeTruthy();
-    expect(screen.getByRole('status').className).toContain('notice');
-    expect(screen.getByRole('status').className).toContain('ok');
+      screen.queryByText('Rerun was requested and the latest execution view is ready.'),
+    ).toBeNull();
+    expect(screen.getByText('Rerun requested')).toBeTruthy();
+    expect(screen.getByText('Example workflow has been queued.')).toBeTruthy();
+    const toast = screen.getByText('Rerun requested').closest('.dashboard-toast');
+    expect(toast).toBeTruthy();
+    expect(toast?.classList.contains('dashboard-toast--success')).toBe(true);
+    expect(
+      screen.getByText('Rerun requested').closest('.workflow-row-actions'),
+    ).toBeNull();
+    const action = screen.getByRole('link', { name: 'View workflow' });
+    expect(action.getAttribute('href')).toBe('/workflows/wf-123?source=temporal');
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss Rerun requested' }));
+    expect(screen.queryByText('Rerun requested')).toBeNull();
   });
 
   it('posts a graceful cancel request directly from the row menu', async () => {

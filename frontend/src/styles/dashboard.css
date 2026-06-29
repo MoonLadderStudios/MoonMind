@@ -7744,6 +7744,123 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   color: rgb(var(--mm-danger));
 }
 
+/* DashboardToast ---------------------------------------------------------- */
+
+.dashboard-toast-viewport {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 80;
+  display: flex;
+  width: min(24rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  flex-direction: column;
+  gap: 0.65rem;
+  pointer-events: none;
+}
+
+.dashboard-toast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: start;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 0.65rem;
+  background: rgb(var(--mm-panel) / 0.96);
+  color: rgb(var(--mm-ink));
+  box-shadow: 0 18px 38px -24px rgb(var(--mm-ink) / 0.48);
+  padding: 0.85rem;
+  pointer-events: auto;
+  animation: dashboard-toast-enter 160ms ease-out;
+}
+
+.dashboard-toast--success {
+  border-color: rgb(var(--mm-ok) / 0.45);
+}
+
+.dashboard-toast--error {
+  border-color: rgb(var(--mm-danger) / 0.55);
+}
+
+.dashboard-toast--info {
+  border-color: rgb(var(--mm-accent) / 0.45);
+}
+
+.dashboard-toast__content {
+  min-width: 0;
+}
+
+.dashboard-toast__title {
+  margin: 0;
+  font-weight: 700;
+}
+
+.dashboard-toast__message {
+  margin: 0.35rem 0 0;
+  color: rgb(var(--mm-muted));
+  overflow-wrap: anywhere;
+}
+
+.dashboard-toast__action {
+  display: inline-flex;
+  margin-top: 0.65rem;
+  font-weight: 700;
+  color: rgb(var(--mm-accent));
+  text-decoration: none;
+}
+
+.dashboard-toast__action:hover,
+.dashboard-toast__action:focus-visible {
+  text-decoration: underline;
+}
+
+.dashboard-toast__close {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--mm-muted));
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dashboard-toast__close:hover,
+.dashboard-toast__close:focus-visible {
+  color: rgb(var(--mm-ink));
+  border-color: rgb(var(--mm-accent) / 0.5);
+}
+
+@keyframes dashboard-toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-toast-viewport {
+    right: 0.75rem;
+    left: 0.75rem;
+    bottom: 0.75rem;
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-toast {
+    animation: none;
+  }
+}
+
 /* DashboardErrorDetails ---------------------------------------------------- */
 
 .dashboard-error-details {

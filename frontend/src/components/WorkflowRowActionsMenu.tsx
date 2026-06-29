@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { DashboardActionDialog } from './DashboardActionDialog';
+import { useDashboardToast } from './dashboard';
 import { formatStatusLabel } from '../utils/formatters';
 import {
   taskCompareHref,
@@ -20,6 +21,7 @@ import {
   type WorkflowActionMenuItem,
 } from '../lib/workflowActions';
 import { WorkflowActionsMenu } from './WorkflowActionsMenu';
+import { workflowDetailHref } from '../lib/workflowListContext';
 
 /**
  * Focused projection of the execution detail payload. The row actions menu only
@@ -111,9 +113,9 @@ export function WorkflowRowActionsMenu({
   taskEditingEnabled,
 }: WorkflowRowActionsMenuProps) {
   const queryClient = useQueryClient();
+  const toast = useDashboardToast();
   const [hasOpened, setHasOpened] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [activeDialog, setActiveDialog] = useState<RowActionDialogKind | null>(null);
 
   const detailQuery = useQuery({
@@ -142,7 +144,11 @@ export function WorkflowRowActionsMenu({
 
   const onMutationError = useCallback((error: Error) => {
     setActionError(error.message);
-  }, []);
+    toast.error({
+      title: 'Workflow action failed',
+      message: error.message,
+    });
+  }, [toast]);
 
   const updateMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -289,6 +295,14 @@ export function WorkflowRowActionsMenu({
   const rerunUnavailableReason = actions?.disabledReasons?.canRerun || null;
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
   const actionAvailabilityPending = actionsEnabled && !actions && !detailQuery.isError;
+  const subject = execution?.title?.trim() || workflowId;
+  const currentSearch = useMemo(
+    () =>
+      typeof window === 'undefined'
+        ? new URLSearchParams()
+        : new URLSearchParams(window.location.search),
+    [],
+  );
   const disabledReason = useCallback(
     (key: string): string | null => {
       if (actionAvailabilityPending) return ACTION_AVAILABILITY_PENDING_REASON;
@@ -333,13 +347,19 @@ export function WorkflowRowActionsMenu({
         onCompareRun: () => {},
         onRerun: () => {
           setActionError(null);
-          setActionNotice(null);
           if (busy || !workflowId) return;
           updateMutation.mutate(
             { updateName: 'RequestRerun' },
             {
               onSuccess: () => {
-                setActionNotice('Rerun was requested and the latest execution view is ready.');
+                toast.success({
+                  title: 'Rerun requested',
+                  message: `${subject} has been queued.`,
+                  action: {
+                    label: 'View workflow',
+                    href: workflowDetailHref(workflowId, currentSearch),
+                  },
+                });
               },
             },
           );
@@ -379,7 +399,6 @@ export function WorkflowRowActionsMenu({
         },
         onBypassDependencies: () => {
           setActionError(null);
-          setActionNotice(null);
           signalMutation.mutate(
             {
               signalName: 'BypassDependencies',
@@ -387,7 +406,14 @@ export function WorkflowRowActionsMenu({
             },
             {
               onSuccess: () => {
-                setActionNotice('Dependency wait bypass was requested.');
+                toast.success({
+                  title: 'Dependency wait bypass requested',
+                  message: `${subject} will continue without waiting for dependencies.`,
+                  action: {
+                    label: 'View workflow',
+                    href: workflowDetailHref(workflowId, currentSearch),
+                  },
+                });
               },
             },
           );
@@ -408,6 +434,7 @@ export function WorkflowRowActionsMenu({
     cancelMutation,
     compareHref,
     createRemediationMutation,
+    currentSearch,
     disabledReason,
     editHref,
     editTaskUnavailableReason,
@@ -416,8 +443,10 @@ export function WorkflowRowActionsMenu({
     rerunUnavailableReason,
     signalMutation,
     taskEditingEnabled,
+    toast,
     updateMutation,
     workflowId,
+    subject,
   ]);
 
   const emptyMessage = detailQuery.isLoading
@@ -425,7 +454,6 @@ export function WorkflowRowActionsMenu({
     : detailQuery.isError
       ? 'Unable to load workflow actions.'
       : 'No workflow actions are currently available.';
-  const subject = execution?.title?.trim() || workflowId;
   const closeDialog = () => {
     setActiveDialog(null);
     setActionError(null);
@@ -495,11 +523,6 @@ export function WorkflowRowActionsMenu({
       {actionError ? (
         <p className="workflow-row-actions-error" role="alert">
           {actionError}
-        </p>
-      ) : null}
-      {actionNotice ? (
-        <p className="notice ok" role="status">
-          {actionNotice}
         </p>
       ) : null}
     </div>

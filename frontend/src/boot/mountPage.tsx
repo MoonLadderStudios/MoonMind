@@ -4,6 +4,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { parseBootPayload } from './parseBootPayload';
 import { createDashboardQueryClient } from './queryClient';
 import { DashboardErrorState } from '../components/DashboardErrorState';
+import { DashboardToastProvider } from '../components/dashboard';
 import '@fontsource/ibm-plex-sans/latin-400.css';
 import '@fontsource/ibm-plex-sans/latin-500.css';
 import '@fontsource/ibm-plex-sans/latin-600.css';
@@ -31,7 +32,9 @@ export function mountPage(App: React.ComponentType<{ payload: ReturnType<typeof 
     createRoot(rootElement).render(
       <StrictMode>
         <QueryClientProvider client={queryClient}>
-          <App payload={payload} />
+          <DashboardToastProvider>
+            <App payload={payload} />
+          </DashboardToastProvider>
         </QueryClientProvider>
       </StrictMode>
     );
