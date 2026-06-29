@@ -95,6 +95,23 @@ _SECRET_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     ),
 )
 
+
+def _redact_text(value: Any, *, max_chars: int) -> str:
+    text = str(value) if value is not None else ""
+    for pattern in _SECRET_REDACTION_PATTERNS:
+        text = pattern.sub(
+            lambda match: (
+                f"{match.group(1)}{match.group(2)}[REDACTED]"
+                if match.lastindex and match.lastindex >= 2
+                else "[REDACTED]"
+            ),
+            text,
+        )
+    if len(text) > max_chars:
+        return text[:max_chars] + "...[truncated]"
+    return text
+
+
 @dataclass(frozen=True)
 class _RolloutTurnScan:
     references_turn: bool = False
@@ -208,19 +225,7 @@ class CodexAppServerRpcClient:
 
     @staticmethod
     def _redact_trace_text(value: Any, *, max_chars: int = 500) -> str:
-        text = str(value or "")
-        for pattern in _SECRET_REDACTION_PATTERNS:
-            text = pattern.sub(
-                lambda match: (
-                    f"{match.group(1)}{match.group(2)}[REDACTED]"
-                    if match.lastindex and match.lastindex >= 2
-                    else "[REDACTED]"
-                ),
-                text,
-            )
-        if len(text) > max_chars:
-            return text[:max_chars] + "...[truncated]"
-        return text
+        return _redact_text(value, max_chars=max_chars)
 
     @classmethod
     def _trace_error_text(cls, value: Any) -> str | None:
@@ -871,19 +876,7 @@ class CodexManagedSessionRuntime:
 
     @staticmethod
     def _redact_diagnostic_text(value: Any, *, max_chars: int = _DIAGNOSTIC_TEXT_MAX_CHARS) -> str:
-        text = str(value or "")
-        for pattern in _SECRET_REDACTION_PATTERNS:
-            text = pattern.sub(
-                lambda match: (
-                    f"{match.group(1)}{match.group(2)}[REDACTED]"
-                    if match.lastindex and match.lastindex >= 2
-                    else "[REDACTED]"
-                ),
-                text,
-            )
-        if len(text) > max_chars:
-            return text[:max_chars] + "...[truncated]"
-        return text
+        return _redact_text(value, max_chars=max_chars)
 
     @classmethod
     def _diagnostic_value(cls, value: Any) -> Any:
@@ -2193,9 +2186,10 @@ class CodexManagedSessionRuntime:
                                     remaining,
                                 ),
                             )
+                            continue
                         except TimeoutError:
-                            pass
-                        continue
+                            # Expected during grace-period polling; retry until the deadline.
+                            continue
                 outcome = self._missing_turn_terminal_outcome(
                     state=state,
                     thread_payload=thread_payload,

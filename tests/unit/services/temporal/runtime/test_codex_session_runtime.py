@@ -356,6 +356,13 @@ def test_app_server_rpc_trace_summary_includes_redacted_error_message() -> None:
     assert "supersecret" not in summary["errorMessage"]
 
 
+def test_redaction_preserves_falsy_non_none_values() -> None:
+    assert CodexAppServerRpcClient._redact_trace_text(0) == "0"
+    assert CodexAppServerRpcClient._redact_trace_text(False) == "False"
+    assert CodexManagedSessionRuntime._redact_diagnostic_text(0) == "0"
+    assert CodexManagedSessionRuntime._redact_diagnostic_text(False) == "False"
+
+
 def test_runtime_send_turn_mirrors_rollout_updates_to_stdout_spool(
     tmp_path: Path,
 ) -> None:
