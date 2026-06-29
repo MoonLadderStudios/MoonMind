@@ -231,7 +231,11 @@ def _pr_resolver_next_step(payload: dict[str, Any]) -> str:
     )
 
 
-def _pr_resolver_disposition(payload: dict[str, Any]) -> str:
+def _pr_resolver_disposition(
+    payload: dict[str, Any],
+    *,
+    merge_gate_owned: bool = False,
+) -> str:
     """Return explicit or derived merge-automation disposition for a resolver result."""
 
     final = _pr_resolver_final_payload(payload)
@@ -242,7 +246,10 @@ def _pr_resolver_disposition(payload: dict[str, Any]) -> str:
         final.get("merge_automation_disposition"),
     )
     if explicit:
-        return explicit.lower()
+        normalized = explicit.lower()
+        if normalized == "reenter_gate" and not merge_gate_owned:
+            return ""
+        return normalized
 
     status = _pr_resolver_status(payload)
     reason = _first_stripped_text(
@@ -255,7 +262,10 @@ def _pr_resolver_disposition(payload: dict[str, Any]) -> str:
         return "already_merged" if reason == "already_merged" else "merged"
 
     next_step = _pr_resolver_next_step(payload).lower()
-    if next_step in _PR_RESOLVER_REENTER_NEXT_STEPS or next_step.startswith("run_fix_"):
+    if merge_gate_owned and (
+        next_step in _PR_RESOLVER_REENTER_NEXT_STEPS
+        or next_step.startswith("run_fix_")
+    ):
         return "reenter_gate"
     return ""
 
@@ -465,6 +475,8 @@ LaunchContextBuilderFunc = Callable[..., Awaitable[ManagedProfileLaunchContext |
 
 def _derive_pr_resolver_failure(
     workspace_path: str | None,
+    *,
+    merge_gate_owned: bool = False,
 ) -> tuple[str | None, str | None]:
     """Return failure metadata from pr-resolver artifacts when present."""
     payload = _load_pr_resolver_result(workspace_path)
@@ -478,7 +490,10 @@ def _derive_pr_resolver_failure(
         )
 
     status = _pr_resolver_status(payload)
-    if _pr_resolver_disposition(payload) == "reenter_gate":
+    if (
+        _pr_resolver_disposition(payload, merge_gate_owned=merge_gate_owned)
+        == "reenter_gate"
+    ):
         return None, None
     if status not in _PR_RESOLVER_FAILURE_STATUSES:
         return None, None
@@ -495,7 +510,11 @@ def _derive_pr_resolver_failure(
     )
     return failure_class, "; ".join(summary_parts)
 
-def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
+def _derive_pr_resolver_metadata(
+    workspace_path: str | None,
+    *,
+    merge_gate_owned: bool = False,
+) -> dict[str, Any]:
     """Return compact metadata from pr-resolver artifacts for parent workflows."""
     payload = _load_pr_resolver_result(workspace_path)
     if payload is None:
@@ -504,7 +523,9 @@ def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
     status = _pr_resolver_status(payload)
     reason = str(payload.get("final_reason") or payload.get("reason") or "").strip()
     metadata: dict[str, Any] = {}
-    disposition = _pr_resolver_disposition(payload)
+    disposition = _pr_resolver_disposition(
+        payload, merge_gate_owned=merge_gate_owned
+    )
     if disposition:
         metadata["mergeAutomationDisposition"] = disposition
     final = _pr_resolver_final_payload(payload)
@@ -767,6 +788,7 @@ class ManagedAgentAdapter:
         run_id: str,
         *,
         pr_resolver_expected: bool = False,
+        pr_resolver_merge_gate_owned: bool = False,
     ) -> AgentRunResult:
         """Return result from the run store, falling back to empty if no store.
 
@@ -779,6 +801,9 @@ class ManagedAgentAdapter:
             autonomous/incidental pr-resolver invocations (e.g. the agent
             deciding on its own to run the skill) do not override the
             actual task result.
+        pr_resolver_merge_gate_owned:
+            When ``True``, continuation dispositions such as ``reenter_gate``
+            are preserved for the owning ``MoonMind.MergeAutomation`` workflow.
         """
         if self._run_store is not None:
             record = self._run_store.load(run_id)
@@ -796,10 +821,14 @@ class ManagedAgentAdapter:
                         output_refs.append(ref)
                 summary = record.error_message or f"Completed with status {record.status}"
                 failure_class = record.failure_class
-                metadata = _derive_pr_resolver_metadata(record.workspace_path)
+                metadata = _derive_pr_resolver_metadata(
+                    record.workspace_path,
+                    merge_gate_owned=pr_resolver_merge_gate_owned,
+                )
                 if pr_resolver_expected:
                     derived_failure_class, derived_summary = _derive_pr_resolver_failure(
-                        record.workspace_path
+                        record.workspace_path,
+                        merge_gate_owned=pr_resolver_merge_gate_owned,
                     )
                     resolver_disposition = str(
                         metadata.get("mergeAutomationDisposition") or ""

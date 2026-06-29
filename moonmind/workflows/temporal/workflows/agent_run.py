@@ -145,6 +145,9 @@ MANAGED_SESSION_DEFER_TURN_INSTRUCTIONS_UNTIL_LAUNCH_PATCH_ID = (
 PR_RESOLVER_PAYLOAD_SKILL_DETECTION_PATCH_ID = (
     "agent-run-pr-resolver-payload-skill-detection-v1"
 )
+PR_RESOLVER_MERGE_GATE_OWNERSHIP_PATCH_ID = (
+    "agent-run-pr-resolver-merge-gate-ownership-v1"
+)
 MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID = "agent-run-slot-wait-manager-inspection-v1"
 SLOT_HANDOFF_PATCH_ID = "agent-run-slot-handoff-v1"
 SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
@@ -261,6 +264,24 @@ def _request_selected_skill(
         return None
     tool_name = str(tool.get("name") or tool.get("id") or "").strip()
     return tool_name or None
+
+def _request_pr_resolver_merge_gate_owned(
+    request: AgentExecutionRequest,
+) -> bool:
+    """Return whether a pr-resolver request carries a merge-automation gate owner."""
+
+    parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
+    merge_gate = parameters.get("mergeGate")
+    if not isinstance(merge_gate, Mapping):
+        merge_gate = parameters.get("merge_gate")
+    if not isinstance(merge_gate, Mapping):
+        return False
+    parent_workflow_id = str(
+        merge_gate.get("parentWorkflowId")
+        or merge_gate.get("parent_workflow_id")
+        or ""
+    ).strip()
+    return bool(parent_workflow_id)
 
 def _request_step_ledger_context(
     request: AgentExecutionRequest,
@@ -1473,6 +1494,10 @@ class MoonMindAgentRun:
         )
         if selected_skill == "pr-resolver":
             activity_input["prResolverExpected"] = True
+            if workflow.patched(PR_RESOLVER_MERGE_GATE_OWNERSHIP_PATCH_ID):
+                activity_input["prResolverMergeGateOwned"] = (
+                    _request_pr_resolver_merge_gate_owned(request)
+                )
         return AgentRuntimeFetchResultInput.model_validate(activity_input)
 
     async def _fetch_managed_result(
@@ -1483,6 +1508,25 @@ class MoonMindAgentRun:
         uses_codex_session_adapter: bool,
         use_managed_status_activity: bool,
     ) -> AgentRunResult:
+        def _pr_resolver_fetch_flags() -> tuple[bool, bool]:
+            expected = (
+                _request_selected_skill(
+                    request,
+                    include_payload_contract=workflow.patched(
+                        PR_RESOLVER_PAYLOAD_SKILL_DETECTION_PATCH_ID
+                    ),
+                )
+                == "pr-resolver"
+            )
+            if not expected:
+                return False, False
+            gate_owned = (
+                _request_pr_resolver_merge_gate_owned(request)
+                if workflow.patched(PR_RESOLVER_MERGE_GATE_OWNERSHIP_PATCH_ID)
+                else False
+            )
+            return True, gate_owned
+
         if uses_codex_session_adapter:
             if workflow.patched(MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID):
                 result_payload = await self._execute_routed_activity(
@@ -1496,17 +1540,13 @@ class MoonMindAgentRun:
                     else result_payload
                 )
 
+            pr_resolver_expected, pr_resolver_merge_gate_owned = (
+                _pr_resolver_fetch_flags()
+            )
             return await adapter.fetch_result(
                 self.run_id,
-                pr_resolver_expected=(
-                    _request_selected_skill(
-                        request,
-                        include_payload_contract=workflow.patched(
-                            PR_RESOLVER_PAYLOAD_SKILL_DETECTION_PATCH_ID
-                        ),
-                    )
-                    == "pr-resolver"
-                ),
+                pr_resolver_expected=pr_resolver_expected,
+                pr_resolver_merge_gate_owned=pr_resolver_merge_gate_owned,
             )
 
         if use_managed_status_activity:
@@ -1521,17 +1561,11 @@ class MoonMindAgentRun:
                 else result_payload
             )
 
+        pr_resolver_expected, pr_resolver_merge_gate_owned = _pr_resolver_fetch_flags()
         return await adapter.fetch_result(
             self.run_id,
-            pr_resolver_expected=(
-                _request_selected_skill(
-                    request,
-                    include_payload_contract=workflow.patched(
-                        PR_RESOLVER_PAYLOAD_SKILL_DETECTION_PATCH_ID
-                    ),
-                )
-                == "pr-resolver"
-            ),
+            pr_resolver_expected=pr_resolver_expected,
+            pr_resolver_merge_gate_owned=pr_resolver_merge_gate_owned,
         )
 
     async def _poll_managed_status(

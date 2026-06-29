@@ -8644,6 +8644,11 @@ class TemporalAgentRuntimeActivities:
             if isinstance(request, AgentRuntimeFetchResultInput)
             else False
         )
+        pr_resolver_merge_gate_owned = (
+            request.pr_resolver_merge_gate_owned
+            if isinstance(request, AgentRuntimeFetchResultInput)
+            else False
+        )
 
         adapter = ManagedAgentAdapter(
             profile_fetcher=_unused_profile_fetcher,
@@ -8656,7 +8661,9 @@ class TemporalAgentRuntimeActivities:
         workspace_github_token: str | None = None
         try:
             result = await adapter.fetch_result(
-                run_id, pr_resolver_expected=pr_resolver_expected
+                run_id,
+                pr_resolver_expected=pr_resolver_expected,
+                pr_resolver_merge_gate_owned=pr_resolver_merge_gate_owned,
             )
             record = self._run_store.load(run_id)
             if record is not None:
