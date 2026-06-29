@@ -1,0 +1,908 @@
+{
+  "source": {
+    "title": "Skill Input Schema UI Generation Design",
+    "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+    "referencePath": "docs/Steps/SkillInputSchemaUIGeneration.md",
+    "sourceDocumentClass": "canonical-declarative",
+    "jiraIssueKey": "MM-1047",
+    "originalDesignText": "# Skill Input Schema UI Generation Design\n\nStatus: Desired-state design\nOwners: MoonMind Engineering (Workflow Platform + UI)\nRelated: `docs/Steps/InputSchemaGuidance.md`, `docs/Steps/SkillSystem.md`, `docs/Steps/StepTypes.md`, `docs/Workflows/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`\n\n---\n\n## Purpose\n\nThis document defines the system MoonMind should use to parse optional input\nschemas from Skills and generate Create page UI fields for Skill-step inputs.\n\nThe design intentionally mirrors the preset path already described and partly\nimplemented for schema-driven preset inputs. Skills should not get a separate\nhard-coded form system. A selected Skill should expose the same normalized\ncapability input contract as a selected Preset:\n\n```json\n{\n  \"id\": \"github-issue-implement\",\n  \"kind\": \"skill\",\n  \"label\": \"GitHub Issue Implement\",\n  \"description\": \"Implement a GitHub issue and prepare a pull request.\",\n  \"inputSchema\": {},\n  \"uiSchema\": {},\n  \"defaults\": {}\n}\n```\n\nWhen a Skill has no `inputSchema`, MoonMind must preserve agent-native behavior:\nthe Skill remains selectable, the user may provide natural-language instructions\nand context, and the runtime agent may infer or ask for missing information.\n\n---\n\n## Design Goals\n\n1. Reuse the shared schema-form renderer that presets use.\n2. Parse `inputSchema` / `input_schema` from `SKILL.md` frontmatter and\n   deployment-stored Skill content.\n3. Normalize Skills, Presets, and Tools into one capability input contract shape.\n4. Make Skill input schemas optional and non-blocking for third-party Skill\n   adoption.\n5. Validate Skill-step inputs locally for UX and again in the backend before\n   execution.\n6. Keep `uiSchema` optional, safe, and presentation-only.\n7. Avoid Skill-specific Create page branches such as\n   `if skill.name === \"github-issue-implement\"`.\n8. Preserve deterministic provenance by tying the input contract to Skill content\n   evidence.\n\n---\n\n## Non-Goals\n\n- This design does not make `inputSchema` mandatory for Agent Skills-style\n  `SKILL.md` files.\n- This design does not define a custom React component per Skill.\n- This design does not allow executable code, dynamic expressions, or remote\n  component loading from Skill metadata.\n- This design does not replace the agent runtime's ability to infer, request, or\n  extract missing values from natural-language context.\n- This design does not turn Skills into Tools. A Skill step remains an agentic\n  executable step.\n\n---\n\n## Existing Preset Pattern To Reuse\n\nThe preset system already establishes the target shape:\n\n1. A preset definition may declare `inputSchema`, `uiSchema`, and `defaults`.\n2. The backend normalizes legacy preset input rows and schema annotations into\n   the same catalog contract.\n3. The Create page renders fields from that contract with a generic\n   schema-form renderer.\n4. The backend validates inputs again before apply, reapply, submit-time\n   expansion, or API-created workflows.\n5. Preset-specific forms are forbidden; reusable widgets are allowed.\n\nSkill input parsing should adopt the same pattern with one important difference:\na Skill does not expand into child steps. It remains executable as a Skill step,\nso validated inputs become `step.skill.inputs` rather than preset expansion\ninputs.\n\n---\n\n## Core Contract\n\nEvery selectable Step capability should expose a normalized input contract.\n\n```ts\ntype CapabilityKind = \"tool\" | \"skill\" | \"preset\";\n\ntype CapabilityInputContract = {\n  id: string;\n  kind: CapabilityKind;\n  label: string;\n  description?: string;\n  inputSchema: JsonSchemaObject;\n  uiSchema: Record<string, unknown>;\n  defaults: Record<string, unknown>;\n  contractDigest?: string;\n  contentDigest?: string;\n  source?: CapabilitySourceSummary;\n  diagnostics?: CapabilityInputDiagnostic[];\n};\n```\n\nFor Skills:\n\n```json\n{\n  \"id\": \"pr-resolver\",\n  \"kind\": \"skill\",\n  \"label\": \"PR Resolver\",\n  \"description\": \"Resolve a pull request by diagnosing state and delegating to specialized skills.\",\n  \"inputSchema\": {\n    \"type\": \"object\",\n    \"required\": [\"pr\"],\n    \"properties\": {\n      \"repo\": {\n        \"type\": \"string\",\n        \"title\": \"Repository\",\n        \"description\": \"GitHub repository in owner/name form.\",\n        \"x-moonmind-context-default\": \"repository\"\n      },\n      \"pr\": {\n        \"type\": \"string\",\n        \"title\": \"Pull request\",\n        \"description\": \"PR number, PR URL, or branch name.\"\n      }\n    }\n  },\n  \"uiSchema\": {},\n  \"defaults\": {},\n  \"contentDigest\": \"sha256:...\",\n  \"contractDigest\": \"sha256:...\"\n}\n```\n\nAPI responses should use camelCase (`inputSchema`, `uiSchema`) even when source\nfiles use snake_case (`input_schema`, `ui_schema`). Ingestion may accept both.\n\n---\n\n## Skill Authoring Shape\n\nA Skill may declare an input schema in frontmatter:\n\n```yaml\n---\nname: github-issue-implement\ndescription: Implement a GitHub issue by assessing repository state, completing missing work, and preparing a pull request.\nmetadata:\n  required-capabilities:\n    - git\n    - gh\ninputSchema:\n  type: object\n  required:\n    - github_issue\n  properties:\n    github_issue:\n      type: object\n      title: GitHub issue\n      description: Issue that should seed implementation context.\n      x-moonmind-semantic-type: issue-reference\n      x-moonmind-provider: github\n      required:\n        - repository\n        - number\n      properties:\n        repository:\n          type: string\n          title: Repository\n        number:\n          type: integer\n          title: Issue number\n        title:\n          type: string\n        body:\n          type: string\n        url:\n          type: string\n          format: uri\nuiSchema:\n  github_issue:\n    widget: github.issue-picker\n    dataSource: github.issues\n    searchPlaceholder: Search GitHub issues\n    allowManualIssueEntry: true\ndefaults: {}\n---\n```\n\nThe same Skill remains valid if the frontmatter omits `inputSchema`.\n\n---\n\n## Parsing Sources\n\nMoonMind should parse Skill input contracts from every Skill source that can\nproduce a selectable Skill:\n\n| Source | Parse strategy |\n| --- | --- |\n| Built-in Skills | Parse bundled `SKILL.md` at startup or catalog load. |\n| Deployment-stored Skills | Parse submitted markdown during `AgentSkillsService.update_skill_content`. Store extracted metadata with the content artifact. |\n| Repo checked-in Skills | Parse `.agents/skills/<name>/SKILL.md` during repo Skill discovery when policy allows repo Skills. |\n| Local-only Skills | Parse `.agents/skills/local/<name>/SKILL.md` only when policy allows local Skills. |\n| Future bundled Skill format | Read the manifest field that corresponds to `inputSchema`, then normalize into the same contract. |\n\nParsing should be content-addressed. Given the same Skill content and the same\nplatform parser version, MoonMind should produce the same normalized contract and\ndigest.\n\n---\n\n## Parser Pipeline\n\nIntroduce a shared parser/normalizer module for capability input contracts, for\nexample:\n\n```text\nmoonmind/capabilities/input_contracts.py\n```\n\nThe module should not be preset-specific. It should support:\n\n```text\nparseCapabilityInputContract(raw_metadata, owner) -> CapabilityInputContractParts\nnormalizeCapabilityInputContract(parts, owner, policy) -> CapabilityInputContract\nvalidateCapabilityInputs(contract, values, context) -> ValidationResult\n```\n\nA Skill-specific adapter should feed frontmatter into the shared parser:\n\n```text\nSkill markdown\n  -> safe frontmatter parser\n  -> SkillInputMetadata\n  -> shared CapabilityInputContract normalizer\n  -> Skill catalog response\n  -> shared schema-form renderer\n```\n\nDetailed steps:\n\n1. Read the `SKILL.md` markdown as UTF-8 text.\n2. If the file starts with YAML frontmatter, parse it with a safe YAML loader.\n3. Extract:\n   - `name`\n   - `description`\n   - `metadata.required-skills`\n   - `metadata.required-capabilities`\n   - `inputSchema` or `input_schema`\n   - `uiSchema` or `ui_schema`\n   - `defaults`\n4. Normalize the input contract:\n   - require the root schema to be a JSON object schema when present\n   - preserve field order from `properties`\n   - preserve standard JSON Schema validation keywords\n   - preserve safe `x-moonmind-*` semantic hints\n   - normalize API casing to camelCase\n5. Compute `contractDigest` from the normalized `inputSchema`, `uiSchema`,\n   `defaults`, parser version, and Skill `contentDigest`.\n6. Attach diagnostics for unsupported or ignored fields.\n7. Expose the contract to the Skill catalog and Create page.\n\n---\n\n## Frontmatter Error Policy\n\nSkill schema parsing must not make third-party Skill import brittle.\n\n| Condition | Desired behavior |\n| --- | --- |\n| No frontmatter | Skill is valid; expose empty schema and a fallback instructions UI. |\n| Frontmatter exists but no `inputSchema` | Skill is valid; expose empty schema. |\n| `inputSchema` is not an object | Skill remains selectable; omit generated fields and surface a non-blocking diagnostic unless strict policy is enabled. |\n| `inputSchema` root type is not `object` | Same as invalid schema; root object is required for field generation. |\n| Unsupported JSON Schema keyword | Preserve when safe if the validator can ignore it; otherwise add a diagnostic and degrade to a safe field. |\n| Unknown `x-moonmind-*` hint | Ignore or surface a diagnostic; do not block. |\n| Unknown non-namespaced custom hint | Ignore and warn in authoring/admin surfaces. |\n| Secret-like default value | Reject the default, emit a diagnostic, and require user entry. In strict managed-skill save flows, reject the save. |\n| Malformed YAML | Managed save should fail clearly. Third-party discovery may skip structured metadata and keep the Skill available when policy allows. |\n\nDeployment policy may enable strict managed-skill validation for centrally\npublished Skills, but lenient discovery should remain available for repo and\nthird-party Skills.\n\n---\n\n## Schema Subset For Generated Skill Fields\n\nMoonMind should support the same practical JSON Schema subset used for preset\ninputs:\n\n| Schema signal | Default field |\n| --- | --- |\n| `type: string` | Text input |\n| `type: string`, long description, `format: markdown`, or `x-moonmind-multiline: true` | Textarea / markdown editor |\n| `type: integer` / `number` | Numeric input |\n| `type: boolean` | Checkbox |\n| `enum` | Select |\n| `type: array` with enum items | Multi-select |\n| `format: uri` | URL input |\n| `format: email` | Email input |\n| `format: date` | Date input |\n| `format: date-time` | Date-time input |\n| `x-moonmind-semantic-type: issue-reference` + provider | Provider issue picker when available |\n| `x-moonmind-semantic-type: repository` | Repository picker when available |\n| `x-moonmind-semantic-type: branch` | Branch picker when repository context is available |\n| `x-moonmind-semantic-type: file-reference` | File/artifact picker |\n| Unknown object | JSON/object editor fallback |\n| Unsupported combination | Safe fallback plus actionable diagnostic |\n\n`oneOf` and `anyOf` may be supported incrementally. The safe initial behavior is:\n\n1. render a discriminator/select when every variant has a clear title and object\n   shape;\n2. otherwise use the JSON editor fallback and backend validation.\n\n---\n\n## UI Schema Handling\n\n`uiSchema` is optional presentation metadata. It must not affect backend\nvalidation or execution semantics.\n\nAllowed uses:\n\n- selecting a registered widget when schema signals are ambiguous\n- placeholder and helper copy\n- grouping advanced fields\n- ordering fields\n- enabling safe manual fallback behavior for integration pickers\n\nExample:\n\n```yaml\nuiSchema:\n  github_issue:\n    widget: github.issue-picker\n    dataSource: github.issues\n    searchPlaceholder: Search GitHub issues\n    allowManualIssueEntry: true\n  constraints:\n    widget: textarea\n    advanced: true\n```\n\nDisallowed uses:\n\n- executable expressions\n- scripts\n- arbitrary React component names\n- remote component URLs\n- credentials or secrets\n- validation rules that are absent from `inputSchema`\n\nThe frontend widget registry is the only place that maps widget identifiers to\ncomponents.\n\n---\n\n## Widget Registry\n\nSkill fields should use the same widget registry as preset fields.\n\nInitial widgets:\n\n| Widget | Purpose |\n| --- | --- |\n| `text` | Single-line string input |\n| `textarea` | Multi-line text input |\n| `markdown` | Markdown editor |\n| `number` | Integer/number input |\n| `checkbox` | Boolean input |\n| `select` | Enum or simple `oneOf` selector |\n| `multi-select` | Array of enum values |\n| `json` | Advanced object/array fallback |\n| `jira.issue-picker` | Jira issue search/manual issue entry |\n| `github.issue-picker` | GitHub issue search/manual issue entry |\n| `github.repository-picker` | GitHub repository selection |\n| `github.branch-picker` | Branch selection after repository context is known |\n| `provider.profile-picker` | Provider/runtime profile selection |\n| `model-picker` | Model selection constrained by runtime policy |\n| `file-reference-picker` | Uploaded file or artifact reference selection |\n\nUnknown widgets must degrade safely. If no safe downgrade exists, the renderer\nshould show an unsupported-widget error near the field while preserving entered\nvalues.\n\n---\n\n## Create Page Flow\n\nWhen a user selects `Skill` as the Step Type:\n\n1. The Create page lists Skills from the Skill catalog.\n2. Selecting a Skill fetches or already includes the normalized input contract.\n3. The step editor passes `inputSchema`, `uiSchema`, `defaults`, current draft\n   values, workflow context, and deployment policy into the shared schema-form\n   renderer.\n4. The renderer generates visible fields for required inputs and default-visible\n   optional inputs.\n5. Advanced optional fields may be collapsed but remain discoverable.\n6. Local validation runs on change/blur and before Start Workflow.\n7. The draft stores values under `step.skill.inputs`.\n8. The backend validates the values against the same Skill input contract before\n   creating or starting the workflow.\n9. The runtime receives validated values as part of the Skill-step execution\n   request.\n\nDesired draft shape:\n\n```json\n{\n  \"id\": \"implement-github-issue\",\n  \"title\": \"Implement GitHub issue\",\n  \"type\": \"skill\",\n  \"skill\": {\n    \"name\": \"github-issue-implement\",\n    \"inputContractDigest\": \"sha256:...\",\n    \"inputs\": {\n      \"github_issue\": {\n        \"repository\": \"MoonLadderStudios/MoonMind\",\n        \"number\": 123,\n        \"title\": \"Render Skill input fields from schema\"\n      },\n      \"constraints\": \"Keep the implementation compatible with preset inputs.\"\n    }\n  }\n}\n```\n\nLegacy payloads may still contain `args` or `selectedSkillArgs`. New authoring\nsurfaces should write `inputs`. Readers should map legacy values into `inputs`\nwhen loading older drafts or API payloads.\n\n---\n\n## Fallback UI When No Skill Schema Exists\n\nA Skill without `inputSchema` should not look broken.\n\nThe Create page should show:\n\n1. Skill title and description.\n2. A general instructions field.\n3. Context controls such as repository, branch, Jira/GitHub issue, files, or\n   artifacts when provided by the workflow-level context.\n4. Optional advanced runtime settings allowed by policy.\n5. A non-blocking note that the Skill does not publish structured input fields.\n\nFallback values should be passed to the agent as normal step instructions and\ncontext. The backend should not require structured `skill.inputs` unless the\nselected Skill contract declares required fields.\n\n---\n\n## Defaulting Rules\n\nEffective field values should be resolved in this order:\n\n1. explicit user-entered draft value\n2. server-provided draft value from a prior save\n3. context default requested by a safe hint, such as\n   `x-moonmind-context-default: repository`\n4. `defaults[fieldName]`\n5. JSON Schema `default`\n6. empty field value\n\nDefaults must not contain secrets. Integration widgets may enrich values after\nselection, but the durable value must remain valid against the schema without\nrequiring enrichment fields.\n\nExample:\n\n```yaml\ninputSchema:\n  type: object\n  properties:\n    repository:\n      type: string\n      title: Repository\n      x-moonmind-context-default: repository\n    branch:\n      type: string\n      title: Branch\n      x-moonmind-context-default: branch\ndefaults:\n  branch: main\n```\n\nIf workflow context already contains `branch`, context wins over the static\ndefault. If the user edits the branch, the user value wins.\n\n---\n\n## Backend Validation\n\nSkill input validation should be backend-owned and reusable.\n\nDesired API/service boundary:\n\n```text\nvalidateSkillStepInputs(skill_name, content_digest, inputs, workflow_context)\n  -> {\n       values: normalized_inputs,\n       errors: field_addressable_errors,\n       warnings: diagnostics,\n       contractDigest: \"sha256:...\"\n     }\n```\n\nValidation layers:\n\n1. Resolve the selected Skill and content evidence.\n2. Load the normalized input contract tied to that content evidence.\n3. Apply safe defaults.\n4. Validate shape, required fields, types, enums, formats, and simple constraints.\n5. Run integration-specific reference validation when a field uses a registered\n   integration widget or semantic type.\n6. Return field-addressable errors.\n7. Preserve user-entered values after validation failure.\n\nExample error:\n\n```json\n{\n  \"path\": \"steps[0].skill.inputs.github_issue.number\",\n  \"message\": \"GitHub issue number is required.\",\n  \"code\": \"required\",\n  \"recoverable\": true\n}\n```\n\n`uiSchema` must never be required for validation.\n\n---\n\n## Runtime Handoff\n\nThe runtime should receive validated Skill inputs in a compact, explicit form.\n\nExample agent execution payload fragment:\n\n```json\n{\n  \"skill\": {\n    \"name\": \"github-issue-implement\",\n    \"contentRef\": \"artifact:...\",\n    \"contentDigest\": \"sha256:...\",\n    \"inputContractDigest\": \"sha256:...\",\n    \"inputs\": {\n      \"github_issue\": {\n        \"repository\": \"MoonLadderStudios/MoonMind\",\n        \"number\": 123\n      }\n    }\n  }\n}\n```\n\nThe Skill body remains the source of behavioral instructions. The input contract\nis not a second prompt language; it is the structured configuration layer that\nhelped collect and validate values before launch.\n\nRuntime adapters should not re-parse `SKILL.md` to discover inputs. They should\nconsume the already-resolved Skill snapshot and validated step inputs.\n\n---\n\n## Catalog And API Design\n\nSkill catalog responses should include the normalized contract, or a reference\nthat the Create page can fetch on demand.\n\nList response item:\n\n```json\n{\n  \"id\": \"github-issue-implement\",\n  \"kind\": \"skill\",\n  \"label\": \"GitHub Issue Implement\",\n  \"description\": \"Implement a GitHub issue and prepare a pull request.\",\n  \"source\": {\n    \"kind\": \"deployment\",\n    \"contentDigest\": \"sha256:...\"\n  },\n  \"inputSchema\": {\n    \"type\": \"object\",\n    \"properties\": {}\n  },\n  \"uiSchema\": {},\n  \"defaults\": {},\n  \"contractDigest\": \"sha256:...\",\n  \"diagnostics\": []\n}\n```\n\nFor large schemas, the list endpoint may return:\n\n```json\n{\n  \"id\": \"github-issue-implement\",\n  \"kind\": \"skill\",\n  \"label\": \"GitHub Issue Implement\",\n  \"hasInputSchema\": true,\n  \"inputContractRef\": \"/api/skills/github-issue-implement/input-contract?digest=sha256:...\"\n}\n```\n\nThe detailed endpoint should return the full contract.\n\n---\n\n## Persistence Strategy\n\n### Deployment-stored Skills\n\nWhen `AgentSkillsService.update_skill_content` receives Skill markdown:\n\n1. parse frontmatter once;\n2. extract required Skills and required capabilities as today;\n3. extract the optional input contract;\n4. store normalized input contract metadata on the Skill content artifact;\n5. store diagnostics and contract digest with the artifact metadata.\n\nSuggested artifact metadata keys:\n\n```json\n{\n  \"skill_slug\": \"github-issue-implement\",\n  \"format\": \"markdown\",\n  \"required_skills\": [],\n  \"required_capabilities\": [\"git\", \"gh\"],\n  \"input_schema\": {},\n  \"ui_schema\": {},\n  \"defaults\": {},\n  \"input_contract_digest\": \"sha256:...\",\n  \"input_schema_diagnostics\": []\n}\n```\n\nSchema metadata may remain content-addressed with the artifact unless denormalized\ncolumns on `agent_skill_definitions` are later required for query performance.\n\n### Built-in, Repo, And Local Skills\n\nFor file-backed Skills:\n\n1. parse on catalog discovery;\n2. cache by path, mtime, size, and content digest when practical;\n3. expose diagnostics in admin/developer surfaces;\n4. avoid mutating checked-in Skill files.\n\n---\n\n## Shared Code Placement\n\nGeneric capability-contract behavior belongs in shared modules rather than\npreset-specific service code. Presets and Skills should consume the same\nnormalization, validation, widget-hint, and diagnostics contracts.\n\nSuggested modules:\n\n```text\nmoonmind/capabilities/input_contracts.py\nmoonmind/capabilities/schema_validation.py\nmoonmind/capabilities/widget_hints.py\nmoonmind/services/skill_input_contracts.py\n```\n\nResponsibilities:\n\n| Module | Responsibility |\n| --- | --- |\n| `input_contracts.py` | Normalize `inputSchema`, `uiSchema`, `defaults`, diagnostics, and contract digest. |\n| `schema_validation.py` | Validate submitted values against the supported JSON Schema subset. |\n| `widget_hints.py` | Interpret safe `x-moonmind-*` semantic hints into renderer hints. |\n| `skill_input_contracts.py` | Parse Skill frontmatter and adapt Skill source metadata into the shared contract. |\n| Preset catalog service | Call the shared normalizer instead of owning a preset-only version. |\n| Skill catalog service | Call the Skill adapter and expose the shared contract. |\n| Create page renderer | Consume only the shared contract shape. |\n\n---\n\n## Security And Trust Boundaries\n\nSkill input schemas are untrusted metadata.\n\nRules:\n\n1. Use a safe YAML parser only.\n2. Enforce maximum frontmatter, schema, and defaults sizes.\n3. Reject or redact secret-like defaults.\n4. Never execute schema-provided code.\n5. Never fetch remote schemas or `$ref` URLs by default.\n6. Only allow local, registered widgets.\n7. Treat `uiSchema` as hints, not authority.\n8. Ignore unknown hints unless strict policy requires rejection.\n9. Sanitize markdown descriptions before rendering.\n10. Keep backend validation authoritative.\n\nRemote `$ref` support is not part of the default desired state. A future design\nmay allow internal, pinned schema refs after adding artifact integrity checks and\nallowlist policy.\n\n---\n\n## Diagnostics\n\nA capability input diagnostic should be structured enough for both UI and logs.\n\n```ts\ntype CapabilityInputDiagnostic = {\n  code:\n    | \"invalid_schema\"\n    | \"unsupported_keyword\"\n    | \"unsupported_widget\"\n    | \"secret_like_default\"\n    | \"ignored_hint\"\n    | \"fallback_renderer\";\n  severity: \"info\" | \"warning\" | \"error\";\n  path?: string;\n  message: string;\n  recoverable: boolean;\n};\n```\n\nThe Create page should show only actionable, user-safe messages. Admin/developer\nsurfaces may show full diagnostics.\n\n---\n\n## Observability\n\nAdd counters and traces for:\n\n- Skill input schema parse success/failure\n- Skill input schema omitted\n- generated field count by widget\n- fallback renderer usage\n- unsupported widget references\n- backend validation failures by code\n- schema contract digest mismatch on draft submit\n- strict-policy save rejection\n\nThese metrics should be grouped by Skill source kind and anonymized where\nnecessary. Do not log raw user input values.\n\n---\n\n## Versioning And Draft Staleness\n\nA draft Skill step may be saved with `inputContractDigest`.\n\nOn draft reload or submit:\n\n1. Re-fetch the selected Skill's current contract.\n2. Compare the saved digest with the current digest.\n3. If unchanged, validate normally.\n4. If changed, preserve entered values, re-run validation, and show a notice that\n   the Skill input contract changed.\n5. If the Skill content is pinned by a resolved workflow snapshot, validate\n   against the pinned contract instead of the latest catalog version.\n\nThis mirrors the content-evidence model used by Skill resolution while giving\nthe Create page a practical stale-draft UX.\n\n---\n\n## Target-State Implementation Constraints\n\nThe canonical design does not prescribe build sequencing. Any implementation of\nSkill input schema UI generation should satisfy these target-state constraints:\n\n- Generic input contract normalization belongs in a shared capability layer that\n  both Presets and Skills consume.\n- Preset catalog responses must remain API-compatible while moving to the shared\n  contract behavior.\n- Skill frontmatter parsing should act as a source adapter that emits the shared\n  `inputSchema`, `uiSchema`, and `defaults` contract.\n- Deployment-stored Skills should persist extracted contract metadata with the\n  content artifact and content evidence.\n- Skill catalog details should expose the same normalized contract shape as\n  preset catalog details, including empty schemas for Skills without structured\n  inputs.\n- Skill steps should render through the same Create page schema-form renderer as\n  preset steps and persist collected values under `step.skill.inputs`.\n- Backend Skill input validation should be shared, authoritative, and\n  field-addressable under `steps[n].skill.inputs`.\n- Legacy Skill-step payload readers should accept older argument fields and\n  normalize them to `inputs`; updated authoring surfaces should emit `inputs`.\n- Conformance coverage should prove equivalent field generation for equivalent\n  Skill and Preset schemas and should prove schema-less `SKILL.md` files remain\n  selectable.\n\n---\n\n## Acceptance Criteria\n\n- A Skill with no `inputSchema` remains importable, selectable, and executable\n  through instruction-driven fallback behavior.\n- A Skill with frontmatter `inputSchema` produces generated fields on the Create\n  page using the same schema-form renderer as presets.\n- The Skill catalog exposes `inputSchema`, `uiSchema`, and `defaults` in the same\n  normalized contract shape as presets.\n- Skill-generated fields support at least text, textarea/markdown, number,\n  boolean, select, multi-select, URI/date/date-time, object JSON fallback, and\n  registered issue/repository/branch widgets.\n- Backend validation uses `inputSchema`, not `uiSchema`.\n- Validation errors are field-addressable under `steps[n].skill.inputs`.\n- Skill-specific Create page branches are not required for new structured Skill\n  inputs.\n- Secret-like defaults are rejected or redacted before reaching the UI.\n- Unknown widgets or unsupported schema shapes degrade safely without losing user\n  input.\n- Drafts preserve entered values when a Skill input contract changes and\n  revalidate against the current or pinned contract.\n- Preset input rendering continues to use the same normalized contract and\n  remains API-compatible.\n",
+    "canonicalClaims": [
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C001-purpose",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Purpose"
+        ],
+        "summary": "Parse optional Skill input schemas and generate Create page UI fields through the same normalized contract as presets while preserving agent-native behavior without schemas."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C002-goals",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Design Goals"
+        ],
+        "summary": "Reuse shared schema rendering, parse inputSchema/input_schema, normalize Skills/Presets/Tools, keep schemas optional, validate frontend/backend, keep uiSchema presentation-only, avoid Skill-specific branches, and preserve provenance."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C003-non-goals",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Non-Goals"
+        ],
+        "summary": "Do not make schemas mandatory, create custom React components per Skill, allow executable or remote UI metadata, replace agent inference, or turn Skills into Tools."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C004-preset-pattern",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Existing Preset Pattern To Reuse"
+        ],
+        "summary": "Skills should follow the preset schema/defaults/uiSchema/render/validate pattern, but validated values become step.skill.inputs rather than preset expansion inputs."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C005-core-contract",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Core Contract"
+        ],
+        "summary": "Every selectable capability exposes a normalized CapabilityInputContract with schema, UI hints, defaults, digests, source, and diagnostics; APIs use camelCase while ingestion may accept snake_case."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C006-authoring",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Skill Authoring Shape"
+        ],
+        "summary": "SKILL.md frontmatter may declare inputSchema, uiSchema, defaults, and metadata; Skills remain valid when inputSchema is omitted."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C007-sources",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Parsing Sources"
+        ],
+        "summary": "Contracts are parsed from built-in, deployment-stored, repo, local-only, and future bundled Skill sources when policy allows, using deterministic content-addressed parsing."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C008-parser",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Parser Pipeline"
+        ],
+        "summary": "A shared parser safely reads frontmatter, extracts metadata, normalizes object schemas, preserves safe keywords/hints, computes contractDigest, adds diagnostics, and exposes contracts."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C009-errors",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Frontmatter Error Policy"
+        ],
+        "summary": "Parsing must be non-brittle: missing schemas keep Skills selectable, invalid schemas degrade with diagnostics unless strict policy applies, secret-like defaults are rejected/redacted, and malformed YAML handling depends on source policy."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C010-schema-subset",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Schema Subset For Generated Skill Fields"
+        ],
+        "summary": "Generated fields support the practical preset JSON Schema subset, semantic widgets, JSON fallback, and safe unsupported-shape diagnostics; oneOf/anyOf can be incremental."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C011-ui-schema",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "UI Schema Handling"
+        ],
+        "summary": "uiSchema is optional presentation metadata only and cannot affect backend validation, execution semantics, executable code, remote components, credentials, or absent validation rules."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C012-widgets",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Widget Registry"
+        ],
+        "summary": "Skill fields use the same registered widget set as presets, with safe degradation for unknown widgets."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C013-create-flow",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Create Page Flow"
+        ],
+        "summary": "Skill selection loads the normalized contract, renders fields, validates locally, stores values under step.skill.inputs, backend-validates, and hands values to runtime execution."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C014-fallback",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Fallback UI When No Skill Schema Exists"
+        ],
+        "summary": "Schema-less Skills show title, description, instructions, context controls, allowed runtime settings, and a non-blocking note, then pass fallback values as instructions/context."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C015-defaults",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Defaulting Rules"
+        ],
+        "summary": "Values resolve from explicit user draft, server draft, safe context defaults, defaults[fieldName], JSON Schema default, then empty; defaults must not contain secrets."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C016-backend-validation",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Backend Validation"
+        ],
+        "summary": "Backend validation resolves Skill content evidence, loads the normalized contract, applies safe defaults, validates schema/integration references, returns field-addressable errors, and preserves values."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C017-runtime",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Runtime Handoff"
+        ],
+        "summary": "Runtime receives compact validated Skill inputs with refs and digests; adapters do not re-parse SKILL.md for inputs."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C018-catalog",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Catalog And API Design"
+        ],
+        "summary": "Skill catalog responses expose normalized contracts inline or by inputContractRef, with source evidence, digests, diagnostics, and empty schemas where appropriate."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C019-persistence",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Persistence Strategy"
+        ],
+        "summary": "Deployment-stored Skills persist extracted contract metadata with artifacts; file-backed Skills parse/cache on discovery, expose diagnostics, and avoid mutating checked-in files."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C020-shared-code",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Shared Code Placement"
+        ],
+        "summary": "Shared capability modules own normalization, validation, widget hints, and Skill adapters; preset and Skill services consume them."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C021-security",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Security And Trust Boundaries"
+        ],
+        "summary": "Skill schemas are untrusted metadata requiring safe YAML parsing, size limits, secret handling, no code or remote refs by default, registered widgets, sanitized descriptions, and backend authority."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C022-diagnostics",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Diagnostics; Observability"
+        ],
+        "summary": "Diagnostics are structured and user-safe; metrics/traces cover parse, render, fallback, widget, validation, digest mismatch, and strict-policy events without raw values."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C023-staleness",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Versioning And Draft Staleness"
+        ],
+        "summary": "Drafts save inputContractDigest, compare current/pinned contracts on reload/submit, preserve entered values, revalidate, and show change notices."
+      },
+      {
+        "id": "docs/Steps/SkillInputSchemaUIGeneration.md#C024-acceptance",
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "sections": [
+          "Target-State Implementation Constraints; Acceptance Criteria"
+        ],
+        "summary": "Implementations prove shared normalization, API compatibility, Skill adapter parsing, persisted metadata, catalog exposure, shared renderer, backend validation, legacy normalization, conformance coverage, schema-less usability, safe degradation, draft preservation, and preset compatibility."
+      }
+    ],
+    "coveragePoints": [
+      {
+        "id": "DESIGN-REQ-001",
+        "title": "Unified capability input contract",
+        "type": "requirement",
+        "source_section": "Purpose; Core Contract",
+        "explanation": "One normalized contract shape covers Skills, Presets, and Tools."
+      },
+      {
+        "id": "DESIGN-REQ-002",
+        "title": "Schema-less Skills remain usable",
+        "type": "constraint",
+        "source_section": "Purpose; Fallback UI",
+        "explanation": "Skills without inputSchema remain selectable and executable through instructions/context."
+      },
+      {
+        "id": "DESIGN-REQ-003",
+        "title": "Shared parser/normalizer",
+        "type": "requirement",
+        "source_section": "Parser Pipeline; Shared Code Placement",
+        "explanation": "Shared modules parse and normalize Skill metadata into capability contracts."
+      },
+      {
+        "id": "DESIGN-REQ-004",
+        "title": "Skill source and content evidence",
+        "type": "artifact",
+        "source_section": "Parsing Sources; Persistence Strategy",
+        "explanation": "All eligible Skill sources produce evidence-bound contracts."
+      },
+      {
+        "id": "DESIGN-REQ-005",
+        "title": "Non-brittle error policy",
+        "type": "constraint",
+        "source_section": "Frontmatter Error Policy",
+        "explanation": "Malformed or unsupported optional metadata degrades safely with diagnostics unless strict policy applies."
+      },
+      {
+        "id": "DESIGN-REQ-006",
+        "title": "Schema subset and widgets",
+        "type": "requirement",
+        "source_section": "Schema Subset; Widget Registry",
+        "explanation": "Supported schema signals map to registered reusable widgets and safe fallbacks."
+      },
+      {
+        "id": "DESIGN-REQ-007",
+        "title": "uiSchema presentation boundary",
+        "type": "security",
+        "source_section": "UI Schema Handling",
+        "explanation": "uiSchema is presentation-only and cannot affect validation or execution."
+      },
+      {
+        "id": "DESIGN-REQ-008",
+        "title": "Create page Skill flow",
+        "type": "requirement",
+        "source_section": "Create Page Flow",
+        "explanation": "Skill steps render, validate, and store inputs through the shared authoring flow."
+      },
+      {
+        "id": "DESIGN-REQ-009",
+        "title": "Deterministic defaults",
+        "type": "state-model",
+        "source_section": "Defaulting Rules",
+        "explanation": "Defaults resolve in a fixed order and never carry secrets."
+      },
+      {
+        "id": "DESIGN-REQ-010",
+        "title": "Backend-owned validation",
+        "type": "requirement",
+        "source_section": "Backend Validation",
+        "explanation": "Backend validates against content-bound inputSchema and returns field-addressable errors."
+      },
+      {
+        "id": "DESIGN-REQ-011",
+        "title": "Compact runtime handoff",
+        "type": "integration",
+        "source_section": "Runtime Handoff",
+        "explanation": "Runtime receives refs, digests, and validated inputs without adapter re-parse."
+      },
+      {
+        "id": "DESIGN-REQ-012",
+        "title": "Catalog/API exposure",
+        "type": "integration",
+        "source_section": "Catalog And API Design",
+        "explanation": "Skill catalog exposes normalized contracts or contract refs."
+      },
+      {
+        "id": "DESIGN-REQ-013",
+        "title": "Persistence strategy",
+        "type": "artifact",
+        "source_section": "Persistence Strategy",
+        "explanation": "Deployment artifacts and file-backed discovery carry normalized contract metadata safely."
+      },
+      {
+        "id": "DESIGN-REQ-014",
+        "title": "Security/trust boundaries",
+        "type": "security",
+        "source_section": "Security And Trust Boundaries",
+        "explanation": "Schemas are untrusted; safe parsing, no code/remote refs, registered widgets, and sanitized rendering are required."
+      },
+      {
+        "id": "DESIGN-REQ-015",
+        "title": "Diagnostics/observability",
+        "type": "observability",
+        "source_section": "Diagnostics; Observability",
+        "explanation": "Structured diagnostics and anonymized metrics/traces cover contract parsing/rendering/validation events."
+      },
+      {
+        "id": "DESIGN-REQ-016",
+        "title": "Draft staleness",
+        "type": "state-model",
+        "source_section": "Versioning And Draft Staleness",
+        "explanation": "Drafts compare digests, preserve values, and validate against current or pinned contracts."
+      },
+      {
+        "id": "DESIGN-REQ-017",
+        "title": "Legacy and preset compatibility",
+        "type": "migration",
+        "source_section": "Create Page Flow; Target Constraints",
+        "explanation": "Readers normalize legacy args while authoring writes inputs; preset APIs remain compatible."
+      },
+      {
+        "id": "DESIGN-REQ-018",
+        "title": "Explicit non-goals",
+        "type": "non-goal",
+        "source_section": "Non-Goals",
+        "explanation": "Avoid mandatory schemas, per-Skill custom components, executable metadata, remote UI, lost inference, or Skill/Tool conflation."
+      }
+    ]
+  },
+  "extractedAt": "2026-06-29T23:50:40Z",
+  "outputMode": "jira",
+  "designSummary": "The design defines target-state support for optional structured Skill inputs. MoonMind should parse Skill frontmatter into the same normalized capability input contract used by presets, expose those contracts through catalog APIs with content evidence, render Skill-step fields through the shared Create page schema-form renderer, validate submitted inputs in the backend, hand compact validated inputs to runtime adapters, and enforce untrusted-metadata security, diagnostics, observability, and stale-draft behavior. Skills without inputSchema remain selectable and executable through instruction-driven fallback behavior.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Normalize Skill input contracts through shared capability parsing",
+      "shortName": "skill-input-contracts",
+      "description": "As a workflow authoring platform, MoonMind needs Skill SKILL.md metadata to parse into the same normalized capability input contract shape used by presets.",
+      "sourceReference": {
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "title": "Skill Input Schema UI Generation Design",
+        "sections": [
+          "Purpose",
+          "Design Goals",
+          "Core Contract",
+          "Skill Authoring Shape",
+          "Parser Pipeline",
+          "Shared Code Placement"
+        ],
+        "claimIds": [
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C001-purpose",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C002-goals",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C005-core-contract",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C006-authoring",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C008-parser",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C020-shared-code"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "why": "As a workflow authoring platform, MoonMind needs Skill SKILL.md metadata to parse into the same normalized capability input contract shape used by presets.",
+      "scope": [
+        "Shared capability input contract model and parser/normalizer",
+        "Safe extraction of inputSchema/input_schema, uiSchema/ui_schema, defaults, metadata, diagnostics, and digests",
+        "Root object schema requirement, safe keyword/hint preservation, and camelCase API normalization"
+      ],
+      "outOfScope": [
+        "Rendering Create page fields",
+        "Runtime execution of Skill steps",
+        "Remote schema references or custom React components"
+      ],
+      "independentTest": "Unit tests feed Skill frontmatter and preset-equivalent schemas through the shared normalizer and assert equivalent contracts, deterministic digests, camelCase output, preserved safe hints, and diagnostics.",
+      "acceptanceCriteria": [
+        "SKILL.md with inputSchema/uiSchema/defaults produces a kind=skill CapabilityInputContract with digests, source, and diagnostics.",
+        "input_schema/ui_schema source casing is accepted while API output remains inputSchema/uiSchema.",
+        "Non-object schemas are diagnosed for generated fields without invalidating the Skill itself.",
+        "The same logical Skill and Preset schema normalize to equivalent renderer-facing contract fields."
+      ],
+      "requirements": [
+        "Shared capability input contract model and parser/normalizer",
+        "Safe extraction of inputSchema/input_schema, uiSchema/ui_schema, defaults, metadata, diagnostics, and digests",
+        "Root object schema requirement, safe keyword/hint preservation, and camelCase API normalization"
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "STORY-001 explicitly owns DESIGN-REQ-001."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "STORY-001 explicitly owns DESIGN-REQ-003."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "STORY-001 explicitly owns DESIGN-REQ-018."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Expose Skill input contracts from catalog and persisted Skill evidence",
+      "shortName": "skill-catalog-contracts",
+      "description": "As Create page and API clients, MoonMind needs Skill catalog responses to expose normalized contracts or refs tied to Skill content evidence across deployment-stored and file-backed sources.",
+      "sourceReference": {
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "title": "Skill Input Schema UI Generation Design",
+        "sections": [
+          "Parsing Sources",
+          "Catalog And API Design",
+          "Persistence Strategy",
+          "Target-State Implementation Constraints"
+        ],
+        "claimIds": [
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C007-sources",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C018-catalog",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C019-persistence",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C024-acceptance"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "why": "As Create page and API clients, MoonMind needs Skill catalog responses to expose normalized contracts or refs tied to Skill content evidence across deployment-stored and file-backed sources.",
+      "scope": [
+        "Catalog list/detail contract fields",
+        "Deployment-stored artifact metadata persistence",
+        "File-backed discovery parsing/caching without mutating checked-in Skill files",
+        "Large-schema inputContractRef behavior"
+      ],
+      "outOfScope": [
+        "Create page widget rendering",
+        "Backend submit-time validation internals"
+      ],
+      "independentTest": "Catalog/service tests create deployment-stored and file-backed Skills with and without schemas and assert normalized contract exposure, source evidence, digests, diagnostics, empty schemas, and no checked-in file mutation.",
+      "acceptanceCriteria": [
+        "Catalog responses include inputSchema, uiSchema, defaults, contractDigest, diagnostics, and source/content evidence.",
+        "Large schemas can be exposed through hasInputSchema and inputContractRef with a detailed endpoint.",
+        "AgentSkillsService.update_skill_content stores extracted contract metadata with content artifacts.",
+        "Preset catalog responses remain API-compatible while sharing contract behavior."
+      ],
+      "requirements": [
+        "Catalog list/detail contract fields",
+        "Deployment-stored artifact metadata persistence",
+        "File-backed discovery parsing/caching without mutating checked-in Skill files",
+        "Large-schema inputContractRef behavior"
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "STORY-002 explicitly owns DESIGN-REQ-004."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "STORY-002 explicitly owns DESIGN-REQ-012."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "STORY-002 explicitly owns DESIGN-REQ-013."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "STORY-002 explicitly owns DESIGN-REQ-017."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Render Skill-step inputs on the Create page with schema and fallback flows",
+      "shortName": "skill-create-ui",
+      "description": "As a workflow creator, I need selecting a Skill step to render structured inputs from the normalized contract when present, or a usable instructions/context fallback when no schema exists.",
+      "sourceReference": {
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "title": "Skill Input Schema UI Generation Design",
+        "sections": [
+          "Existing Preset Pattern To Reuse",
+          "Schema Subset For Generated Skill Fields",
+          "UI Schema Handling",
+          "Widget Registry",
+          "Create Page Flow",
+          "Fallback UI When No Skill Schema Exists",
+          "Defaulting Rules",
+          "Acceptance Criteria"
+        ],
+        "claimIds": [
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C004-preset-pattern",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C010-schema-subset",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C011-ui-schema",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C012-widgets",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C013-create-flow",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C014-fallback",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C015-defaults",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C024-acceptance"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "why": "As a workflow creator, I need selecting a Skill step to render structured inputs from the normalized contract when present, or a usable instructions/context fallback when no schema exists.",
+      "scope": [
+        "Skill Step Type selection flow",
+        "Shared schema-form renderer integration",
+        "Supported field/widget mapping and fallbacks",
+        "Local validation and step.skill.inputs draft storage",
+        "Schema-less fallback UI and deterministic defaults"
+      ],
+      "outOfScope": [
+        "Backend authoritative validation internals",
+        "Custom per-Skill React components"
+      ],
+      "independentTest": "Frontend tests render equivalent Skill and Preset schemas through the same schema-form path and assert field parity, default precedence, local validation, unknown-widget fallback preserving values, schema-less fallback, and inputs storage.",
+      "acceptanceCriteria": [
+        "A Skill with inputSchema renders generated fields through the preset-shared schema-form renderer.",
+        "Supported field types and registered integration widgets render correctly with safe fallbacks.",
+        "uiSchema can only select registered presentation hints and cannot create validation semantics.",
+        "A Skill without inputSchema shows instructions/context fallback and remains executable.",
+        "New drafts write step.skill.inputs and older args/selectedSkillArgs load into inputs."
+      ],
+      "requirements": [
+        "Skill Step Type selection flow",
+        "Shared schema-form renderer integration",
+        "Supported field/widget mapping and fallbacks",
+        "Local validation and step.skill.inputs draft storage",
+        "Schema-less fallback UI and deterministic defaults"
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "STORY-003 explicitly owns DESIGN-REQ-002."
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "STORY-003 explicitly owns DESIGN-REQ-006."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "STORY-003 explicitly owns DESIGN-REQ-007."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "STORY-003 explicitly owns DESIGN-REQ-008."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "STORY-003 explicitly owns DESIGN-REQ-009."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "STORY-003 explicitly owns DESIGN-REQ-017."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "STORY-003 explicitly owns DESIGN-REQ-018."
+        }
+      ],
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Validate Skill-step inputs in the backend and hand off compact runtime inputs",
+      "shortName": "skill-input-validation",
+      "description": "As a workflow execution system, MoonMind needs backend-owned Skill input validation and compact runtime payloads tied to resolved Skill content.",
+      "sourceReference": {
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "title": "Skill Input Schema UI Generation Design",
+        "sections": [
+          "Backend Validation",
+          "Runtime Handoff",
+          "Create Page Flow",
+          "Target-State Implementation Constraints",
+          "Acceptance Criteria"
+        ],
+        "claimIds": [
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C013-create-flow",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C016-backend-validation",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C017-runtime",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C024-acceptance"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "why": "As a workflow execution system, MoonMind needs backend-owned Skill input validation and compact runtime payloads tied to resolved Skill content.",
+      "scope": [
+        "validateSkillStepInputs service/API boundary",
+        "Content-evidence-bound contract resolution",
+        "Safe defaults and schema/integration validation",
+        "Field-addressable errors under steps[n].skill.inputs",
+        "Runtime payload with refs, digests, and validated inputs"
+      ],
+      "outOfScope": [
+        "Frontend rendering",
+        "Changing Skill behavioral prompt semantics"
+      ],
+      "independentTest": "Backend and workflow/adapter-boundary tests submit valid, invalid, and legacy Skill-step payloads and assert normalized values, field errors, preserved values, safe defaults, and compact runtime payloads without SKILL.md re-parse.",
+      "acceptanceCriteria": [
+        "Backend validation resolves selected Skill content evidence before loading the input contract.",
+        "Validation uses inputSchema, not uiSchema, and returns field-addressable errors under steps[n].skill.inputs.",
+        "Start/API workflow paths cannot bypass required Skill input validation.",
+        "Runtime receives skill name, contentRef, contentDigest, inputContractDigest, and validated inputs.",
+        "Adapters do not re-parse SKILL.md to discover inputs."
+      ],
+      "requirements": [
+        "validateSkillStepInputs service/API boundary",
+        "Content-evidence-bound contract resolution",
+        "Safe defaults and schema/integration validation",
+        "Field-addressable errors under steps[n].skill.inputs",
+        "Runtime payload with refs, digests, and validated inputs"
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "STORY-004 explicitly owns DESIGN-REQ-010."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "STORY-004 explicitly owns DESIGN-REQ-011."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "STORY-004 explicitly owns DESIGN-REQ-017."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Enforce Skill schema trust boundaries, diagnostics, observability, and stale-draft behavior",
+      "shortName": "skill-schema-guardrails",
+      "description": "As an operator and developer, I need Skill schemas treated as untrusted metadata with clear diagnostics, safe observability, secret handling, and draft staleness behavior.",
+      "sourceReference": {
+        "path": "docs/Steps/SkillInputSchemaUIGeneration.md",
+        "title": "Skill Input Schema UI Generation Design",
+        "sections": [
+          "Frontmatter Error Policy",
+          "Security And Trust Boundaries",
+          "Diagnostics",
+          "Observability",
+          "Versioning And Draft Staleness",
+          "Acceptance Criteria"
+        ],
+        "claimIds": [
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C009-errors",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C021-security",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C022-diagnostics",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C023-staleness",
+          "docs/Steps/SkillInputSchemaUIGeneration.md#C024-acceptance"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016"
+        ]
+      },
+      "why": "As an operator and developer, I need Skill schemas treated as untrusted metadata with clear diagnostics, safe observability, secret handling, and draft staleness behavior.",
+      "scope": [
+        "Safe YAML/frontmatter parsing and size limits",
+        "Secret-like default rejection/redaction",
+        "Remote $ref disabled by default and registered-widget enforcement",
+        "Sanitized descriptions and structured diagnostics",
+        "Metrics/traces without raw values",
+        "Digest comparison, stale contract notice, and pinned contract validation"
+      ],
+      "outOfScope": [
+        "Remote schema ref support",
+        "Custom widget marketplace",
+        "Logging raw user input values"
+      ],
+      "independentTest": "Security, service, and UI tests cover malformed YAML, oversized/invalid schemas, secret defaults, remote refs, unknown hints/widgets, sanitized descriptions, diagnostics visibility, anonymized metrics, digest mismatch, and pinned validation.",
+      "acceptanceCriteria": [
+        "Safe YAML parsing and size limits are enforced.",
+        "Secret-like defaults are rejected or redacted before UI exposure.",
+        "Schema metadata never executes code, fetches remote refs by default, or loads arbitrary components.",
+        "Diagnostics are structured and user-safe.",
+        "Observability records parse/render/validation/fallback/digest events without raw values.",
+        "Draft reload/submit preserves values and revalidates against current or pinned contracts."
+      ],
+      "requirements": [
+        "Safe YAML/frontmatter parsing and size limits",
+        "Secret-like default rejection/redaction",
+        "Remote $ref disabled by default and registered-widget enforcement",
+        "Sanitized descriptions and structured diagnostics",
+        "Metrics/traces without raw values",
+        "Digest comparison, stale contract notice, and pinned contract validation"
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "STORY-005 explicitly owns DESIGN-REQ-005."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "STORY-005 explicitly owns DESIGN-REQ-014."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "STORY-005 explicitly owns DESIGN-REQ-015."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "ownership": "STORY-005 explicitly owns DESIGN-REQ-016."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C001-purpose": [
+      "STORY-001"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C002-goals": [
+      "STORY-001"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C003-non-goals": [
+      "STORY-001",
+      "STORY-003"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C004-preset-pattern": [
+      "STORY-003"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C005-core-contract": [
+      "STORY-001"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C006-authoring": [
+      "STORY-001"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C007-sources": [
+      "STORY-002"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C008-parser": [
+      "STORY-001"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C009-errors": [
+      "STORY-005"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C010-schema-subset": [
+      "STORY-003"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C011-ui-schema": [
+      "STORY-003"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C012-widgets": [
+      "STORY-003"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C013-create-flow": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C014-fallback": [
+      "STORY-003"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C015-defaults": [
+      "STORY-003"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C016-backend-validation": [
+      "STORY-004"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C017-runtime": [
+      "STORY-004"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C018-catalog": [
+      "STORY-002"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C019-persistence": [
+      "STORY-002"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C020-shared-code": [
+      "STORY-001"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C021-security": [
+      "STORY-005"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C022-diagnostics": [
+      "STORY-005"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C023-staleness": [
+      "STORY-005"
+    ],
+    "docs/Steps/SkillInputSchemaUIGeneration.md#C024-acceptance": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-001",
+      "STORY-003"
+    ]
+  },
+  "dependencies": {
+    "STORY-001": [],
+    "STORY-002": [
+      "STORY-001"
+    ],
+    "STORY-003": [
+      "STORY-002"
+    ],
+    "STORY-004": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "STORY-005": [
+      "STORY-001",
+      "STORY-003",
+      "STORY-004"
+    ]
+  },
+  "outOfScope": [
+    "No spec.md files, specs/ directories, implementation plans, tasks, code changes, Jira issue creation, PR creation, or publishing during breakdown.",
+    "No mandatory inputSchema for Skills.",
+    "No executable schema/UI metadata or remote component loading.",
+    "No custom React component per Skill.",
+    "No conversion of Skills into Tools."
+  ]
+}
