@@ -4,6 +4,11 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { BootPayload } from "../boot/parseBootPayload";
 import { renderWithClient } from "../utils/test-utils";
 import { SchedulesPage } from "./schedules";
+import { navigateTo } from "../lib/navigation";
+
+vi.mock("../lib/navigation", () => ({
+  navigateTo: vi.fn(),
+}));
 
 const mockPayload: BootPayload = {
   page: "schedules",
@@ -205,6 +210,7 @@ describe("SchedulesPage", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+    vi.mocked(navigateTo).mockReset();
   });
 
   it("renders streamlined schedule status, target, cadence, and policy columns", async () => {
@@ -434,16 +440,6 @@ describe("SchedulesPage", () => {
         canDelete: true,
       },
     });
-    const detailFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input, init) => {
-      const url = String(input);
-      const method = String(init?.method || "GET").toUpperCase();
-      if (url === "/console/schedules/schedule-alpha" && method === "DELETE") {
-        return new Promise<Response>(() => undefined);
-      }
-      return detailFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
-
     renderWithClient(<SchedulesPage payload={detailPayloadWithDelete} />);
 
     expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
@@ -467,6 +463,9 @@ describe("SchedulesPage", () => {
           && String(init?.method || "GET").toUpperCase() === "DELETE"
         )),
       ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(navigateTo).toHaveBeenCalledWith("/schedules");
     });
   });
 

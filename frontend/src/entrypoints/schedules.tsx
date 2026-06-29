@@ -5,6 +5,7 @@ import { DashboardActionDialog } from '../components/DashboardActionDialog';
 
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
+import { navigateTo } from '../lib/navigation';
 import { formatStatusLabel } from '../utils/formatters';
 
 const ScheduleSchema = z.object({
@@ -696,7 +697,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
       }
     },
     onSuccess: () => {
-      window.location.assign('/schedules');
+      navigateTo('/schedules');
     },
   });
 
