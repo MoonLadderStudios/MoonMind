@@ -3918,6 +3918,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .step-tl-toggle {
   all: unset;
+  box-sizing: border-box;
   display: block;
   width: 100%;
   cursor: pointer;
@@ -6953,6 +6954,23 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   .workflow-workspace-open-sidebar {
     display: none;
   }
+
+  .segmented-nav {
+    overflow-x: auto;
+  }
+
+  .segmented-nav-item {
+    min-width: 5.4rem;
+  }
+
+  .flat-fact-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .flat-fact-grid > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -6966,49 +6984,87 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 }
 
-.td-subroute-nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  padding: 0.35rem;
-  border: 1px solid rgb(var(--mm-border) / 0.46);
-  border-radius: 0.6rem;
-  background: rgb(var(--mm-panel) / 0.62);
-}
-
-/* MM-964: keep the detail tab nav and the debug-visibility toggle on one row. */
 .td-subroute-nav-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.6rem;
+  display: block;
 }
 
-.td-subroute-nav-row .td-subroute-nav {
-  flex: 1 1 auto;
-}
-
-.td-debug-visibility-toggle {
-  flex: 0 0 auto;
-  white-space: nowrap;
-  font-size: 0.82rem;
-}
-
-.td-subroute-nav a {
+.segmented-nav {
+  --segmented-nav-count: 1;
+  --segmented-nav-active-index: 0;
+  position: relative;
   display: inline-flex;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  padding: 0.25rem;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 10px;
+  background: var(--mm-input-well);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    inset 0 -1px 0 rgb(0 0 0 / 0.2);
+  isolation: isolate;
+}
+
+.segmented-nav::before {
+  content: "";
+  position: absolute;
+  top: 0.25rem;
+  bottom: 0.25rem;
+  left: 0.25rem;
+  width: calc((100% - 0.5rem) / var(--segmented-nav-count));
+  border-radius: 8px;
+  background: rgb(var(--mm-accent) / 0.16);
+  box-shadow:
+    0 0 0 1px rgb(var(--mm-accent) / 0.32),
+    inset 0 1px 0 rgb(255 255 255 / 0.16);
+  transform: translateX(calc(var(--segmented-nav-active-index) * 100%));
+  transition: transform 180ms ease;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.segmented-nav-item {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: 1 1 0;
   align-items: center;
-  min-height: 2.1rem;
-  padding: 0.42rem 0.68rem;
-  border-radius: 0.45rem;
+  justify-content: center;
+  gap: 0.4rem;
+  min-width: 0;
+  min-height: 2.15rem;
+  padding: 0.42rem 0.55rem;
+  border-radius: 8px;
   color: rgb(var(--mm-muted) / 0.92);
   text-decoration: none;
+  font-size: 0.86rem;
   font-weight: 650;
+  line-height: 1.1;
+  text-align: center;
+  white-space: nowrap;
 }
 
-.td-subroute-nav a:hover,
-.td-subroute-nav a[aria-current="page"] {
+.segmented-nav-item:hover,
+.segmented-nav-item:focus-visible,
+.segmented-nav-item[aria-current="page"] {
   color: rgb(var(--mm-ink));
-  background: rgb(var(--mm-accent) / 0.12);
+}
+
+.segmented-nav-item:focus-visible {
+  outline: none;
+  box-shadow: var(--mm-control-focus-ring);
+}
+
+.segmented-nav-badge {
+  min-width: 1.35rem;
+  padding: 0.08rem 0.36rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-panel) / 0.72);
+  color: rgb(var(--mm-ink));
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.25;
 }
 
 .td-facts-region {
@@ -7085,13 +7141,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: 1px solid rgb(var(--mm-border) / 0.62);
   border-radius: 0.85rem;
   background: var(--mm-control-shell);
-}
-
-.td-workflow-actions-surface {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: -0.35rem;
-  margin-bottom: 0.6rem;
 }
 
 .td-workflow-actions-menu {
@@ -7246,6 +7295,24 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-radius: 0.45rem;
 }
 
+.td-live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.78rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.td-live-indicator > span {
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-success));
+  box-shadow: 0 0 0 3px rgb(var(--mm-success) / 0.14);
+}
+
 .td-workflow-actions-trigger-icon {
   width: 1.05rem;
   height: 1.05rem;
@@ -7370,23 +7437,24 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .td-group > h4 {
-  font-size: 0.68rem;
-  text-transform: uppercase;
+  font-size: 0.88rem;
+  text-transform: none;
   letter-spacing: 0;
-  color: rgb(var(--mm-accent));
+  color: rgb(var(--mm-ink));
   margin: 0 0 0.5rem;
   font-weight: 700;
 }
 
-.td-group dl {
+.flat-fact-grid {
   margin: 0;
   padding: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   column-gap: 2rem;
+  row-gap: 0.15rem;
 }
 
-.td-group dl > div {
+.flat-fact-grid > div {
   display: grid;
   grid-template-columns: 9rem 1fr;
   gap: 0.75rem;
@@ -7395,22 +7463,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   min-width: 0;
 }
 
-.td-group dl > div + div {
-  border-top: 1px solid rgb(var(--mm-border) / 0.28);
-}
-
-.td-group dl > div:nth-child(2) {
-  border-top: 0;
-}
-
-.td-group dt {
+.flat-fact-grid dt,
+.metric-strip dt {
   font-size: 0.78rem;
   color: rgb(var(--mm-muted));
   font-weight: 500;
   margin: 0;
 }
 
-.td-group dd {
+.flat-fact-grid dd {
   margin: 0;
   font-size: 0.88rem;
   font-weight: 500;
@@ -7418,9 +7479,68 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   min-width: 0;
 }
 
-.td-group dd code {
+.flat-fact-grid dd code {
   font-size: 0.82em;
   color: rgb(var(--mm-ink) / 0.82);
+}
+
+.metric-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.85rem;
+  align-items: center;
+  margin: 0 0 1.25rem;
+  padding: 0;
+  color: rgb(var(--mm-muted));
+}
+
+.metric-strip-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.metric-strip-item + .metric-strip-item::before {
+  content: "·";
+  margin-right: 0.5rem;
+  color: rgb(var(--mm-muted) / 0.65);
+}
+
+.metric-strip dd {
+  margin: 0;
+  color: rgb(var(--mm-ink));
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.td-repository-value,
+.td-repository-value a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  min-width: 0;
+  color: rgb(var(--mm-ink));
+  font-size: 0.9rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.td-repository-value a:hover {
+  color: rgb(var(--mm-accent));
+}
+
+.td-repository-icon {
+  flex: 0 0 auto;
+  width: 1.05rem;
+  height: 1.05rem;
+  color: rgb(var(--mm-muted));
+  fill: currentColor;
+}
+
+.td-repository-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .td-summary-block {
@@ -7430,10 +7550,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .td-summary-block h4 {
-  font-size: 0.68rem;
-  text-transform: uppercase;
+  font-size: 0.88rem;
+  text-transform: none;
   letter-spacing: 0;
-  color: rgb(var(--mm-accent));
+  color: rgb(var(--mm-ink));
   font-weight: 700;
   margin: 0 0 0.4rem;
 }
@@ -7441,7 +7561,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .td-summary-block p {
   margin: 0;
   line-height: 1.55;
-  max-width: 72ch;
+  max-width: 94ch;
 }
 
 .runtime-command-preview {
@@ -7481,7 +7601,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     margin: 0;
   }
 
-  .td-group dl {
+  .flat-fact-grid {
     grid-template-columns: 1fr;
   }
 }

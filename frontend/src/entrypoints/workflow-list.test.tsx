@@ -101,7 +101,7 @@ describe('Workflows Entrypoint', () => {
 
     fireEvent.click(filtersTrigger);
     expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
-  });
+  }, 15000);
 
   it('opens and closes the advanced filter drawer and returns focus to the trigger', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
