@@ -1,0 +1,11 @@
+# Generated from vendor/moonspec/bundle/commands/gemini/moonspec.breakdown.toml; edit MoonSpec repo instead.
+description = "Split a broad design into coverage-checked one-story MoonSpec candidates."
+
+prompt = """
+Use the `moonspec-breakdown` skill to extract independently testable MoonSpec stories from this design.
+
+User input:
+{{args}}
+
+Use MoonSpec skill IDs and command IDs only: `moonspec-*` and `/moonspec.*`.
+"""

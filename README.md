@@ -16,13 +16,14 @@ For now, MoonMind is focused on software engineering use cases.
 1. [Install Docker Desktop](https://docs.docker.com/get-started/get-docker/)
 2. Install git
 3. `git clone https://github.com/MoonLadderStudios/MoonMind.git`
-4. Run `docker compose up -d` to start the service
-5. Open [http://localhost:7000](http://localhost:7000). For combined MoonMind plus Omnigent validation, see [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
-6. In Settings:
+4. `cd MoonMind && git submodule update --init --recursive`
+5. Run `docker compose up -d` to start the service
+6. Open [http://localhost:7000](http://localhost:7000). For combined MoonMind plus Omnigent validation, see [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
+7. In Settings:
     - Add a GitHub personal access token
     - Add an API key or click OAuth to authenticate a provider profile
     - Configure any other secrets or settings you want to adjust for your first workflow
-7. Click Create and submit a workflow!
+8. Click Create and submit a workflow!
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 

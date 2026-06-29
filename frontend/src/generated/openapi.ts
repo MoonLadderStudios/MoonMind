@@ -2261,6 +2261,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Session Resources */
+        get: operations["list_session_resources_api_sessions__session_id__resources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/resources/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Session Resource Files */
+        get: operations["list_session_resource_files_api_sessions__session_id__resources_files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/resources/{artifact_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Session Resource Content */
+        get: operations["get_session_resource_content_api_sessions__session_id__resources__artifact_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/resources/{artifact_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Session Resource */
+        get: operations["download_session_resource_api_sessions__session_id__resources__artifact_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/secrets": {
         parameters: {
             query?: never;
@@ -3352,7 +3420,7 @@ export interface components {
          * @description Phases executed during the workflow automation pipeline.
          * @enum {string}
          */
-        AutomationPhase: "prepare_job" | "start_job_container" | "git_clone" | "speckit_specify" | "speckit_plan" | "speckit_tasks" | "speckit_analyze" | "speckit_implement" | "speckit_specify" | "speckit_plan" | "speckit_tasks" | "speckit_analyze" | "speckit_implement" | "commit_push" | "open_pr" | "cleanup";
+        AutomationPhase: "prepare_job" | "start_job_container" | "git_clone" | "moonspec_specify" | "moonspec_plan" | "moonspec_tasks" | "moonspec_align" | "moonspec_implement" | "moonspec_verify" | "moonspec_doc_reconcile" | "moonspec_orchestrate" | "commit_push" | "open_pr" | "cleanup";
         /**
          * AutomationPhaseState
          * @description Schema describing a single workflow automation phase execution.
@@ -7768,6 +7836,52 @@ export interface components {
             usages?: components["schemas"]["SecretUsageItemResponse"][];
             /** Diagnostics */
             diagnostics?: components["schemas"]["SecretUsageDiagnosticResponse"][];
+        };
+        /**
+         * SessionResourceListResponse
+         * @description Session-scoped read-only resource aliases backed by ArtifactRefs.
+         */
+        SessionResourceListResponse: {
+            /** Agent Run Id */
+            agent_run_id: string;
+            /** Session Id */
+            session_id: string;
+            /** Session Epoch */
+            session_epoch: number;
+            /** Resources */
+            resources?: components["schemas"]["SessionResourceModel"][];
+        };
+        /**
+         * SessionResourceModel
+         * @description Read-only session resource projection over an authorized artifact.
+         */
+        SessionResourceModel: {
+            /** Resource Id */
+            resource_id: string;
+            /** Artifact Id */
+            artifact_id: string;
+            /** Group Key */
+            group_key: string;
+            /** Group Title */
+            group_title: string;
+            /** Label */
+            label?: string | null;
+            /** Content Type */
+            content_type?: string | null;
+            /** Size Bytes */
+            size_bytes?: number | null;
+            status: components["schemas"]["TemporalArtifactStatus"];
+            artifact_ref: components["schemas"]["ArtifactRefModel"];
+            default_read_ref?: components["schemas"]["ArtifactRefModel"] | null;
+            preview_artifact_ref?: components["schemas"]["ArtifactRefModel"] | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+            /** Content Url */
+            content_url: string;
+            /** Download Url */
+            download_url: string;
         };
         /** SettingsPatchRequest */
         SettingsPatchRequest: {
@@ -13977,6 +14091,188 @@ export interface operations {
                         [key: string]: unknown;
                     };
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_session_resources_api_sessions__session_id__resources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResourceListResponse"];
+                };
+            };
+            /** @description You do not have permission to access this session */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session projection not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_session_resource_files_api_sessions__session_id__resources_files_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResourceListResponse"];
+                };
+            };
+            /** @description You do not have permission to access this session */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session projection not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_resource_content_api_sessions__session_id__resources__artifact_id__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description You do not have permission to access this resource */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_session_resource_api_sessions__session_id__resources__artifact_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description You do not have permission to access this resource */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

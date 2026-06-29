@@ -55,6 +55,7 @@ if _ENABLE_TEST_UI_ROUTE:
 
 from api_service.api.routers.workflow_console import router as workflow_console_router
 from api_service.api.routers.agent_runs import router as agent_runs_router
+from api_service.api.routers.agent_runs import sessions_router as session_resources_router
 from api_service.api.routers.sessions import router as sessions_router
 from api_service.api.routers.workflow_proposals import router as workflow_proposals_router
 from api_service.api.routers.presets import (
@@ -92,6 +93,9 @@ logger.info("Starting FastAPI...")
 _PRESET_SEED_DIR = (
     Path(__file__).resolve().parent / "data" / "presets"
 )
+# One-time pre-release seed cleanup for databases that were created before
+# MoonSpec became the canonical bundle identity. Remove after the submodule
+# cutover has run through existing development installations.
 _LEGACY_PRESET_SLUGS_TO_DEACTIVATE = ("speckit-orchestrate",)
 
 def _initialize_embedding_model(app_state, app_settings):
@@ -460,6 +464,7 @@ app.include_router(workflow_proposals_router)
 app.include_router(recurring_workflows_router)
 app.include_router(agent_runs_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
+app.include_router(session_resources_router, prefix="/api")
 app.include_router(workflow_console_router)
 app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)

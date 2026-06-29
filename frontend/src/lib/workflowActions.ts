@@ -62,6 +62,8 @@ export type WorkflowActionMenuBuilderParams = {
   actionsOn: boolean;
   actions: ExecutionActionCapabilities | null | undefined;
   busy: boolean;
+  /** Display-ready reason for temporarily disabled actions while work is pending. */
+  busyDisabledReason?: string;
   taskEditingOn: boolean;
   /** Returns a display-ready disabled reason for a capability key, or null. */
   disabledReason: (key: string) => string | null;
@@ -99,6 +101,7 @@ export function buildWorkflowActionMenuItems(
     actionsOn,
     actions,
     busy,
+    busyDisabledReason = 'action pending',
     taskEditingOn,
     disabledReason,
     editHref,
@@ -115,7 +118,7 @@ export function buildWorkflowActionMenuItems(
 
   if (!actionsOn || !actions) return [];
   const items: WorkflowActionMenuItem[] = [];
-  const pendingActionReason = busy ? 'action pending' : null;
+  const pendingActionReason = busy ? busyDisabledReason : null;
   const addButton = ({
     id,
     label,

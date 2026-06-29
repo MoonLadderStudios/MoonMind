@@ -1,0 +1,11 @@
+# Generated from vendor/moonspec/bundle/commands/gemini/moonspec.plan.toml; edit MoonSpec repo instead.
+description = "Create MoonSpec implementation planning artifacts."
+
+prompt = """
+Use the `moonspec-plan` skill to produce implementation planning artifacts for the active one-story MoonSpec feature.
+
+User input:
+{{args}}
+
+Use MoonSpec skill IDs and command IDs only: `moonspec-*` and `/moonspec.*`.
+"""

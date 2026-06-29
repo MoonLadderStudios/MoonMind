@@ -26,6 +26,7 @@ from moonmind.schemas.agent_runtime_models import (
     RunObservabilityEvent,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
 
 @pytest.fixture
 def test_user() -> User:
@@ -2938,6 +2939,15 @@ def _build_artifact(artifact_id: str, link_type: str, *, label: str) -> tuple[Si
     )
     return artifact, links, False, read_policy
 
+def _app_with_agent_and_session_routers(user: object, artifact_service: AsyncMock) -> FastAPI:
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.include_router(agent_runs_router.sessions_router, prefix="/api")
+    app.dependency_overrides[get_current_user()] = lambda: user
+    app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
+    app.dependency_overrides[agent_runs_router._resolve_principal] = lambda: str(user.id)
+    return app
+
 def test_get_agent_run_artifact_session_projection_returns_grouped_projection(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -3017,6 +3027,260 @@ def test_get_agent_run_artifact_session_projection_reads_durable_state_only(
 
     assert response.status_code == 200
     assert response.json()["session_epoch"] == 2
+
+def test_list_session_resources_returns_authorized_redacted_artifact_projection() -> None:
+    user_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="owner@example.com", is_superuser=False)
+    artifact_service = AsyncMock()
+    app = _app_with_agent_and_session_routers(user, artifact_service)
+    record = _build_session_record()
+    artifact_payloads = {
+        "art_stdout": _build_artifact("art_stdout", "runtime.stdout", label="stdout"),
+        "art_summary": _build_artifact("art_summary", "session.summary", label="summary"),
+    }
+    artifact_payloads["art_summary"][0].metadata_json = {
+        "label": "summary",
+        "filename": "summary.json",
+        "apiToken": "secret-token",
+        "password": "secret-password",
+    }
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == str(user_id)
+        if artifact_id in {"art_stderr", "art_diag", "art_checkpoint", "art_control", "art_reset"}:
+            raise TemporalArtifactAuthorizationError("not authorized")
+        return artifact_payloads[artifact_id]
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+
+    with TestClient(app) as test_client:
+        with patch("api_service.api.routers.agent_runs.ManagedSessionStore.load", return_value=record):
+            with patch(
+                "api_service.api.routers.agent_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(user_id))),
+            ):
+                response = test_client.get(
+                    "/api/sessions/sess:wf-task-1:codex_cli/resources"
+                )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_run_id"] == "wf-task-1"
+    assert body["session_id"] == "sess:wf-task-1:codex_cli"
+    assert [resource["artifact_id"] for resource in body["resources"]] == [
+        "art_stdout",
+        "art_summary",
+    ]
+    summary = body["resources"][1]
+    assert summary["metadata"] == {"label": "summary", "filename": "summary.json"}
+    assert summary["content_url"].endswith("/art_summary/content")
+    assert summary["download_url"].endswith("/art_summary/download")
+    assert "secret-token" not in json.dumps(body)
+    assert "secret-password" not in json.dumps(body)
+
+
+def test_list_session_resources_encodes_advertised_resource_urls() -> None:
+    user_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="owner@example.com", is_superuser=False)
+    artifact_service = AsyncMock()
+    app = _app_with_agent_and_session_routers(user, artifact_service)
+    record = _build_session_record().model_copy(
+        update={"session_id": "sess?foo#bar", "latest_summary_ref": "art?summary#1"}
+    )
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == str(user_id)
+        if artifact_id != "art?summary#1":
+            raise TemporalArtifactAuthorizationError("not authorized")
+        return _build_artifact(artifact_id, "session.summary", label="summary")
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.agent_runs.ManagedSessionStore.load",
+            return_value=record,
+        ):
+            with patch(
+                "api_service.api.routers.agent_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(user_id))),
+            ):
+                response = test_client.get(
+                    f"/api/sessions/{quote('sess?foo#bar', safe='')}/resources"
+                )
+
+    assert response.status_code == 200
+    resources = response.json()["resources"]
+    assert len(resources) == 1
+    assert resources[0]["content_url"] == (
+        "/api/sessions/sess%3Ffoo%23bar/resources/art%3Fsummary%231/content"
+    )
+    assert resources[0]["download_url"] == (
+        "/api/sessions/sess%3Ffoo%23bar/resources/art%3Fsummary%231/download"
+    )
+
+def test_list_session_resource_files_alias_reads_durable_degraded_session() -> None:
+    user_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="owner@example.com", is_superuser=False)
+    artifact_service = AsyncMock()
+    app = _app_with_agent_and_session_routers(user, artifact_service)
+    record = _build_session_record().model_copy(update={"status": "degraded"})
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == str(user_id)
+        return _build_artifact(artifact_id, "session.summary", label=artifact_id)
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+
+    with TestClient(app) as test_client:
+        with patch("api_service.api.routers.agent_runs.ManagedSessionStore.load", return_value=record):
+            with patch(
+                "api_service.api.routers.agent_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(user_id))),
+            ):
+                response = test_client.get(
+                    "/api/sessions/sess:wf-task-1:codex_cli/resources/files"
+                )
+
+    assert response.status_code == 200
+    assert response.json()["session_epoch"] == 2
+    assert len(response.json()["resources"]) == 7
+
+def test_list_session_resources_forbids_cross_owner_access() -> None:
+    owner_id = uuid4()
+    other_id = uuid4()
+    user = SimpleNamespace(id=other_id, email="other@example.com", is_superuser=False)
+    artifact_service = AsyncMock()
+    app = _app_with_agent_and_session_routers(user, artifact_service)
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.agent_runs.ManagedSessionStore.load",
+            return_value=_build_session_record(),
+        ):
+            with patch(
+                "api_service.api.routers.agent_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(owner_id))),
+            ):
+                response = test_client.get(
+                    "/api/sessions/sess:wf-task-1:codex_cli/resources"
+                )
+
+    assert response.status_code == 403
+    artifact_service.get_metadata.assert_not_called()
+
+def test_session_resource_content_requires_artifact_in_session_projection() -> None:
+    user_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="owner@example.com", is_superuser=False)
+    artifact_service = AsyncMock()
+    app = _app_with_agent_and_session_routers(user, artifact_service)
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == str(user_id)
+        return _build_artifact(artifact_id, "session.summary", label=artifact_id)
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.agent_runs.ManagedSessionStore.load",
+            return_value=_build_session_record(),
+        ):
+            with patch(
+                "api_service.api.routers.agent_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(user_id))),
+            ):
+                response = test_client.get(
+                    "/api/sessions/sess:wf-task-1:codex_cli/resources/art_outside/content"
+                )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "session_resource_not_found"
+    artifact_service.read_path.assert_not_called()
+
+def test_session_resource_content_reads_authorized_artifact_with_principal(tmp_path) -> None:
+    user_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="owner@example.com", is_superuser=False)
+    artifact_service = AsyncMock()
+    app = _app_with_agent_and_session_routers(user, artifact_service)
+    artifact_path = tmp_path / "summary.json"
+    artifact_path.write_text('{"summary":"done"}', encoding="utf-8")
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == str(user_id)
+        if artifact_id != "art_summary":
+            raise TemporalArtifactAuthorizationError("not authorized")
+        return _build_artifact(artifact_id, "session.summary", label=artifact_id)
+
+    async def _read_path(*, artifact_id: str, principal: str):
+        assert artifact_id == "art_summary"
+        assert principal == str(user_id)
+        return _build_artifact(artifact_id, "session.summary", label=artifact_id)[0], artifact_path
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+    artifact_service.read_path.side_effect = _read_path
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.agent_runs.ManagedSessionStore.load",
+            return_value=_build_session_record(),
+        ):
+            with patch(
+                "api_service.api.routers.agent_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(user_id))),
+            ):
+                response = test_client.get(
+                    "/api/sessions/sess:wf-task-1:codex_cli/resources/art_summary/content"
+                )
+
+    assert response.status_code == 200
+    assert response.json() == {"summary": "done"}
+    assert response.headers["content-disposition"].startswith("inline;")
+    artifact_service.read_path.assert_awaited_once()
+
+
+def test_session_resource_download_returns_attachment(tmp_path) -> None:
+    user_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="owner@example.com", is_superuser=False)
+    artifact_service = AsyncMock()
+    app = _app_with_agent_and_session_routers(user, artifact_service)
+    artifact_path = tmp_path / "summary.json"
+    artifact_path.write_text('{"summary":"done"}', encoding="utf-8")
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == str(user_id)
+        if artifact_id != "art_summary":
+            raise TemporalArtifactAuthorizationError("not authorized")
+        return _build_artifact(artifact_id, "session.summary", label=artifact_id)
+
+    async def _read_path(*, artifact_id: str, principal: str):
+        assert artifact_id == "art_summary"
+        assert principal == str(user_id)
+        return (
+            _build_artifact(artifact_id, "session.summary", label=artifact_id)[0],
+            artifact_path,
+        )
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+    artifact_service.read_path.side_effect = _read_path
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.agent_runs.ManagedSessionStore.load",
+            return_value=_build_session_record(),
+        ):
+            with patch(
+                "api_service.api.routers.agent_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(user_id))),
+            ):
+                response = test_client.get(
+                    "/api/sessions/sess:wf-task-1:codex_cli/resources/art_summary/download"
+                )
+
+    assert response.status_code == 200
+    assert response.json() == {"summary": "done"}
+    assert response.headers["content-disposition"].startswith("attachment;")
+    artifact_service.read_path.assert_awaited_once()
 
 def test_get_agent_run_artifact_session_projection_returns_404_when_missing(
     client: tuple[TestClient, AsyncMock],

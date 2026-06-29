@@ -112,6 +112,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["sources"]["agentRuns"]["diagnostics"] == "/api/agent-runs/{agentRunId}/diagnostics"
     assert config["sources"]["agentRuns"]["artifactSession"] == "/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}"
     assert config["sources"]["agentRuns"]["artifactSessionControl"] == "/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}/control"
+    assert config["sources"]["agentRuns"]["sessionResources"] == "/api/sessions/{sessionId}/resources"
     assert "proposals" not in config["sources"]
     assert "speckit" not in config["sources"]
     assert "orchestrator" not in config["sources"]

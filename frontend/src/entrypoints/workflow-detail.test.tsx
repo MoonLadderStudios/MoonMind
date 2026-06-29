@@ -177,6 +177,7 @@ describe('Workflow Detail Entrypoint', () => {
             diagnostics: '/api/agent-runs/{agentRunId}/diagnostics',
             artifactSession: '/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}',
             artifactSessionControl: '/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}/control',
+            sessionResources: '/api/sessions/{sessionId}/resources',
           },
         },
       },
@@ -7177,6 +7178,28 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
+      if (url.includes('/sessions/sess%3Awf-task-1%3Acodex_cli/resources')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            agent_run_id: 'wf-task-1',
+            session_id: 'sess:wf-task-1:codex_cli',
+            session_epoch: 2,
+            resources: [
+              {
+                resource_id: 'art-summary',
+                artifact_id: 'art-summary',
+                group_key: 'continuity',
+                group_title: 'Continuity',
+                label: 'summary.json',
+                content_url: '/api/sessions/sess:wf-task-1:codex_cli/resources/art-summary/content',
+                download_url: '/api/sessions/sess:wf-task-1:codex_cli/resources/art-summary/download',
+                metadata: { filename: 'summary.json' },
+              },
+            ],
+          }),
+        } as Response);
+      }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -7201,6 +7224,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('art-checkpoint').length).toBeGreaterThan(0);
       expect(screen.getAllByText('art-control').length).toBeGreaterThan(0);
       expect(screen.getAllByText('art-reset').length).toBeGreaterThan(0);
+      expect(screen.getByText('Resource Evidence')).toBeTruthy();
+      expect(screen.getByText('summary.json')).toBeTruthy();
       expect(screen.getByText('Live Logs')).toBeTruthy();
       expect(screen.getByText('Diagnostics')).toBeTruthy();
     });

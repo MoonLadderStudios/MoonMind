@@ -1,10 +1,12 @@
 ---
 name: moonspec-plan
-description: Generate a Moon Spec implementation plan and design artifacts from a single-story spec. Use when the user asks to run or reproduce `/speckit.plan`, create or update `plan.md`, produce `research.md`, `data-model.md`, `contracts/`, or `quickstart.md`, validate constitution gates, define separate unit and integration test strategies, and perform repo-aware gap analysis before `/speckit.tasks`.
+description: Generate a MoonSpec implementation plan and design artifacts from a single-story spec. Use when the user asks to run or reproduce `/moonspec.plan`, create or update `plan.md`, produce `research.md`, `data-model.md`, `contracts/`, or `quickstart.md`, validate constitution gates, define separate unit and integration test strategies, and perform repo-aware gap analysis before `/moonspec.tasks`.
 metadata:
   required-capabilities:
     - git
 ---
+<!-- Generated from vendor/moonspec/bundle/skills/moonspec-plan/SKILL.md; edit MoonSpec repo instead. -->
+
 
 # MoonSpec Plan
 
@@ -14,11 +16,11 @@ Use this skill after a feature spec exists and the user wants implementation pla
 
 Use this skill when the user wants to:
 
-- Run or reproduce `/speckit.plan`.
+- Run or reproduce `/moonspec.plan`.
 - Create or update a feature `plan.md`.
 - Generate `research.md`, `data-model.md`, `contracts/`, or `quickstart.md`.
 - Resolve technical unknowns before task generation.
-- Define unit and integration testing strategy for a single-story Moon Spec.
+- Define unit and integration testing strategy for a single-story MoonSpec.
 - Determine, from the current repo, whether each in-scope requirement needs code changes, tests only, or no new work.
 
 Do not use this skill to create a spec from a request. Use `moonspec-specify` or `moonspec-breakdown` first.
@@ -74,13 +76,7 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 Run the setup script from the repository root and parse its JSON output:
 
 ```bash
-scripts/bash/setup-plan.sh --json
-```
-
-On PowerShell projects, use:
-
-```powershell
-scripts/powershell/setup-plan.ps1 -Json
+.specify/scripts/bash/setup-plan.sh --json
 ```
 
 Parse:
@@ -153,7 +149,7 @@ Use this table shape:
 | SCN-001        | implemented_unverified | `src/...`, no scenario test | add verification tests first, with implementation contingency if they fail | integration |
 | DESIGN-REQ-004 | implemented_verified   | `src/...`, `tests/...`      | no new implementation        | none beyond final verify |
 
-When a row originates from a stable source claim, include the claim ID in the `ID` cell or in the evidence text so `/speckit.tasks` can map every implementation task back to stable claim provenance. If no stable source claim applies, write `No stable source claim applies: <reason>` in the evidence text.
+When a row originates from a stable source claim, include the claim ID in the `ID` cell or in the evidence text so `/moonspec.tasks` can map every implementation task back to stable claim provenance. If no stable source claim applies, write `No stable source claim applies: <reason>` in the evidence text.
 
 Allowed `Status` values:
 
@@ -250,13 +246,7 @@ Quickstart guidance:
 After Phase 1 artifacts are generated and `plan.md` is updated, run the agent context update script:
 
 ```bash
-scripts/bash/update-agent-context.sh __AGENT__
-```
-
-On PowerShell projects:
-
-```powershell
-scripts/powershell/update-agent-context.ps1 -AgentType __AGENT__
+.specify/scripts/bash/update-agent-context.sh __AGENT__
 ```
 
 Replace `__AGENT__` with the active integration key when known. If unknown, run the script without an agent argument so it updates existing agent files.
@@ -283,7 +273,7 @@ Report:
 - Which items need code changes
 - Which items need tests only
 - Which items are already verified
-- Readiness for `/speckit.tasks`
+- Readiness for `/moonspec.tasks`
 
 ## Post-Plan Hooks
 
@@ -325,5 +315,5 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Prefer verification tests before implementation when behavior appears to already exist, but include fallback implementation work for `implemented_unverified` items when verification fails.
 - Resolve all planning clarifications through `research.md`.
 - Error on gate failures, multiple user stories, or unresolved clarifications.
-- Generate design artifacts only; leave task generation to `/speckit.tasks`.
+- Generate design artifacts only; leave task generation to `/moonspec.tasks`.
 - `tasks.md` should consume `## Requirement Status` when deciding whether to emit implementation tasks, verification-only tasks, or no new work for already-verified items.

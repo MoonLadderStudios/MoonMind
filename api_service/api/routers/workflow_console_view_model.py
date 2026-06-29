@@ -727,6 +727,7 @@ def build_runtime_config(
                 "diagnostics": "/api/agent-runs/{agentRunId}/diagnostics",
                 "artifactSession": "/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}",
                 "artifactSessionControl": "/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}/control",
+                "sessionResources": "/api/sessions/{sessionId}/resources",
             },
             **jira_sources,
             "github": {
