@@ -878,17 +878,21 @@ describe('Dashboard shared entry', () => {
 
     const shimmerBlock = cssRuleBlocks(
       dashboardCss,
-      '.status-running[data-effect="shimmer-sweep"], .status-running.is-executing',
+      '.status[data-effect="shimmer-sweep"], .status-running.is-executing',
     ).join('\n');
-    expect(shimmerBlock).toContain('background-color: rgb(var(--mm-accent-2) / 0.14)');
     expect(shimmerBlock).toContain('overflow: hidden');
     expect(shimmerBlock).toContain('isolation: isolate');
     expect(shimmerBlock).not.toContain('animation-delay:');
+    const runningBackgroundBlock = cssRuleBlocks(
+      dashboardCss,
+      '.status-running[data-effect="shimmer-sweep"], .status-running.is-executing',
+    ).join('\n');
+    expect(runningBackgroundBlock).toContain('background-color: rgb(var(--mm-accent-2) / 0.14)');
 
     const sharedLightMaskBlock = cssRuleBlockMatching(
       dashboardCss,
       (rule) =>
-        rule.selector.includes('status-running') &&
+        rule.selector.includes('status') &&
         rule.selector.includes('shimmer-sweep') &&
         rule.selector.includes('::before') &&
         rule.selector.includes('::after'),
@@ -906,21 +910,21 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).not.toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?52%\s*\{/);
     expect(dashboardCss).toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?0%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),[\s\S]*?100%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-end-x\)\s*var\(--mm-executing-sweep-end-y\),[\s\S]*?background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\),[\s\S]*?calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\);/);
     expect(dashboardCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,
     );
     expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?background-position:\s*50% 50%,[\s\S]*?calc\(50% \+ \(var\(--mm-executing-sweep-layer-offset-x\) \/ 2\)\)\s*calc\(50% \+ \(var\(--mm-executing-sweep-layer-offset-y\) \/ 2\)\);[\s\S]*?background-size:\s*160% var\(--mm-executing-sweep-band-height\),\s*140% var\(--mm-executing-sweep-band-height\);/,
     );
     const shimmerBeforeSelector = cssRuleBlocks(
       dashboardCss,
-      '.status-running[data-effect="shimmer-sweep"]::before, .status-running.is-executing::before',
+      '.status[data-effect="shimmer-sweep"]::before, .status-running.is-executing::before',
     ).join('\n');
     expect(shimmerBeforeSelector).toContain('opacity: 0.62');
     expect(shimmerBeforeSelector).toContain('z-index: 1');
 
     const shimmerAfterBlock = cssRuleBlocks(
       dashboardCss,
-      '.status-running[data-effect="shimmer-sweep"]::after, .status-running.is-executing::after',
+      '.status[data-effect="shimmer-sweep"]::after, .status-running.is-executing::after',
     ).join('\n');
     expect(shimmerAfterBlock).toContain('mask-composite: exclude');
     expect(shimmerAfterBlock).toContain('-webkit-mask-composite: xor');
@@ -948,7 +952,7 @@ describe('Dashboard shared entry', () => {
     const textMaskBlock = cssRuleBlockMatching(
       dashboardCss,
       (rule) =>
-        rule.selector.includes('status-running') &&
+        rule.selector.includes('status') &&
         rule.selector.includes('shimmer-sweep') &&
         rule.selector.includes('.status-letter-wave::after'),
     );
@@ -962,7 +966,7 @@ describe('Dashboard shared entry', () => {
 
     const activeLetterWaveBlock = cssRuleBlocks(
       dashboardCss,
-      '.status-running[data-effect="shimmer-sweep"] .status-letter-wave, .status-running.is-executing .status-letter-wave',
+      '.status[data-effect="shimmer-sweep"] .status-letter-wave, .status-running.is-executing .status-letter-wave',
     ).join('\n');
     expect(activeLetterWaveBlock).toContain('color: inherit');
     expect(activeLetterWaveBlock).not.toContain('color: var(--mm-executing-letter-bright)');
@@ -971,7 +975,7 @@ describe('Dashboard shared entry', () => {
     expect(activeLetterWaveBlock).not.toContain('white 50%');
     const activeGlyphBlock = cssRuleBlocks(
       dashboardCss,
-      '.status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph, .status-running.is-executing .status-letter-wave__glyph',
+      '.status[data-effect="shimmer-sweep"] .status-letter-wave__glyph, .status-running.is-executing .status-letter-wave__glyph',
     ).join('\n');
     expect(activeGlyphBlock).toContain('animation: none');
     expect(activeGlyphBlock).toContain('animation-name: mm-executing-letter-brighten');
@@ -986,10 +990,10 @@ describe('Dashboard shared entry', () => {
       /@keyframes mm-executing-letter-brighten\s*\{[\s\S]*?color:\s*var\(--mm-executing-letter-bright\);[\s\S]*?text-shadow:\s*0 0 10px var\(--mm-executing-letter-halo\);/,
     );
     expect(dashboardCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,\s*\.status-running\.is-executing \.status-letter-wave[\s\S]*?text-shadow: none;/,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status\[data-effect="shimmer-sweep"\] \.status-letter-wave,\s*\.status-running\.is-executing \.status-letter-wave[\s\S]*?text-shadow: none;/,
     );
     expect(dashboardCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\]::before,[\s\S]*?\.status-running\.is-executing \.status-letter-wave::after[\s\S]*?animation: none;/,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status\[data-effect="shimmer-sweep"\]::before,[\s\S]*?\.status-running\.is-executing \.status-letter-wave::after[\s\S]*?animation: none;/,
     );
     expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-letter-wave__glyph\s*\{[\s\S]*?animation:\s*none !important;[\s\S]*?text-shadow:\s*none !important;[\s\S]*?filter:\s*none !important;/,

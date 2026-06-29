@@ -6,7 +6,7 @@ import {
 } from './executionStatusPillClasses';
 
 describe('executionStatusPillProps', () => {
-  it('adds shimmer selector metadata only for active executing status pills', () => {
+  it('adds shimmer selector metadata for active executing and transition status pills', () => {
     expect(executionStatusPillProps('executing')).toMatchObject({
       className: 'status status-running is-executing',
       'data-state': 'executing',
@@ -21,6 +21,15 @@ describe('executionStatusPillProps', () => {
       'data-shimmer-label': 'running',
     });
 
+    for (const key of ['initializing', 'planning', 'finalizing'] as const) {
+      expect(executionStatusPillProps(key)).toMatchObject({
+        className: `status status-${key} is-${key}`,
+        'data-state': key,
+        'data-effect': 'shimmer-sweep',
+        'data-shimmer-label': key,
+      });
+    }
+
     expect(executionStatusPillProps('waiting')).toEqual({
       className: 'status status-waiting',
     });
@@ -33,13 +42,22 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('running', { enableMotion: false })).toEqual({
       className: 'status status-running',
     });
+    expect(executionStatusPillProps('initializing', { enableMotion: false })).toEqual({
+      className: 'status status-initializing',
+    });
+    expect(executionStatusPillProps('planning', { enableMotion: false })).toEqual({
+      className: 'status status-planning',
+    });
+    expect(executionStatusPillProps('finalizing', { enableMotion: false })).toEqual({
+      className: 'status status-finalizing',
+    });
   });
 
   it('keeps the existing class helper output for non-executing states across the MM-491 state matrix', () => {
     expect(executionStatusPillProps('completed')).toEqual({ className: 'status status-completed' });
     expect(executionStatusPillProps('failed')).toEqual({ className: 'status status-failed' });
     expect(executionStatusPillProps('executing').className).toBe('status status-running is-executing');
-    expect(executionStatusPillProps('planning').className).toBe('status status-planning');
+    expect(executionStatusPillProps('planning').className).toBe('status status-planning is-planning');
     expect(executionStatusPillProps('proposals')).toEqual({ className: 'status status-running' });
 
     expect(executionStatusPillProps('waiting_on_dependencies')).toEqual({
@@ -52,7 +70,7 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('canceled')).toEqual({ className: 'status status-canceled' });
   });
 
-  it('maps MM-1035 exact workflow states to their status color classes without shimmer', () => {
+  it('maps MM-1035 exact workflow states to their status color classes and MM-1036 shimmer metadata', () => {
     expect(executionStatusPillProps('scheduled')).toEqual({ className: 'status status-scheduled' });
     expect(executionStatusPillProps('awaiting_slot')).toEqual({ className: 'status status-awaiting-slot' });
     expect(executionStatusPillProps('waiting_on_dependencies')).toEqual({
@@ -61,9 +79,18 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('awaiting_external')).toEqual({
       className: 'status status-awaiting-external',
     });
-    expect(executionStatusPillProps('initializing')).toEqual({ className: 'status status-initializing' });
-    expect(executionStatusPillProps('planning')).toEqual({ className: 'status status-planning' });
-    expect(executionStatusPillProps('finalizing')).toEqual({ className: 'status status-finalizing' });
+    expect(executionStatusPillProps('initializing')).toMatchObject({
+      className: 'status status-initializing is-initializing',
+      'data-effect': 'shimmer-sweep',
+    });
+    expect(executionStatusPillProps('planning')).toMatchObject({
+      className: 'status status-planning is-planning',
+      'data-effect': 'shimmer-sweep',
+    });
+    expect(executionStatusPillProps('finalizing')).toMatchObject({
+      className: 'status status-finalizing is-finalizing',
+      'data-effect': 'shimmer-sweep',
+    });
     expect(executionStatusPillProps('canceled')).toEqual({ className: 'status status-canceled' });
   });
 
@@ -91,5 +118,6 @@ describe('executionStatusPillProps', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-704');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1035');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1036');
   });
 });

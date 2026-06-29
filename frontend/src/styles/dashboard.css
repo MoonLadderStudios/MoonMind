@@ -2783,17 +2783,21 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(var(--mm-border) / 0.75);
 }
 
-.status-running[data-effect="shimmer-sweep"],
+.status[data-effect="shimmer-sweep"],
 .status-running.is-executing {
   position: relative;
   overflow: hidden;
   isolation: isolate;
+}
+
+.status-running[data-effect="shimmer-sweep"],
+.status-running.is-executing {
   background-color: rgb(var(--mm-accent-2) / 0.14);
 }
 
-.status-running[data-effect="shimmer-sweep"]::before,
+.status[data-effect="shimmer-sweep"]::before,
 .status-running.is-executing::before,
-.status-running[data-effect="shimmer-sweep"]::after,
+.status[data-effect="shimmer-sweep"]::after,
 .status-running.is-executing::after {
   content: "";
   position: absolute;
@@ -2811,13 +2815,13 @@ tr[data-proposal-id].proposal-consuming td {
   mix-blend-mode: plus-lighter;
 }
 
-.status-running[data-effect="shimmer-sweep"]::before,
+.status[data-effect="shimmer-sweep"]::before,
 .status-running.is-executing::before {
   z-index: 1;
   opacity: 0.62;
 }
 
-.status-running[data-effect="shimmer-sweep"]::after,
+.status[data-effect="shimmer-sweep"]::after,
 .status-running.is-executing::after {
   z-index: 2;
   inset: calc(-1 * var(--mm-executing-border-glint-outset));
@@ -2835,9 +2839,9 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @supports not (mix-blend-mode: plus-lighter) {
-  .status-running[data-effect="shimmer-sweep"]::before,
+  .status[data-effect="shimmer-sweep"]::before,
   .status-running.is-executing::before,
-  .status-running[data-effect="shimmer-sweep"]::after,
+  .status[data-effect="shimmer-sweep"]::after,
   .status-running.is-executing::after {
     mix-blend-mode: screen;
   }
@@ -2872,12 +2876,12 @@ tr[data-proposal-id].proposal-consuming td {
   white-space: pre;
 }
 
-.status-running[data-effect="shimmer-sweep"] .status-letter-wave,
+.status[data-effect="shimmer-sweep"] .status-letter-wave,
 .status-running.is-executing .status-letter-wave {
   color: inherit;
 }
 
-.status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
+.status[data-effect="shimmer-sweep"] .status-letter-wave::after,
 .status-running.is-executing .status-letter-wave::after {
   content: attr(data-label);
   position: absolute;
@@ -2901,12 +2905,12 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @supports not ((background-clip: text) or (-webkit-background-clip: text)) {
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
+  .status[data-effect="shimmer-sweep"] .status-letter-wave::after,
   .status-running.is-executing .status-letter-wave::after {
     content: none;
   }
 
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
+  .status[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
   .status-running.is-executing .status-letter-wave__glyph {
     animation-name: mm-executing-letter-brighten;
     animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms));
@@ -2940,7 +2944,7 @@ tr[data-proposal-id].proposal-consuming td {
   color: inherit;
 }
 
-.status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
+.status[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
 .status-running.is-executing .status-letter-wave__glyph {
   animation: none;
 }
@@ -2969,7 +2973,7 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status-running[data-effect="shimmer-sweep"],
+  .status[data-effect="shimmer-sweep"],
   .status-running.is-executing {
     background-image: var(--mm-executing-moving-light-gradient);
     background-repeat: no-repeat;
@@ -2979,11 +2983,11 @@ tr[data-proposal-id].proposal-consuming td {
     background-size: 160% var(--mm-executing-sweep-band-height), 140% var(--mm-executing-sweep-band-height);
   }
 
-  .status-running[data-effect="shimmer-sweep"]::before,
+  .status[data-effect="shimmer-sweep"]::before,
   .status-running.is-executing::before,
-  .status-running[data-effect="shimmer-sweep"]::after,
+  .status[data-effect="shimmer-sweep"]::after,
   .status-running.is-executing::after,
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
+  .status[data-effect="shimmer-sweep"] .status-letter-wave::after,
   .status-running.is-executing .status-letter-wave::after {
     animation: none;
   }
@@ -2994,35 +2998,35 @@ tr[data-proposal-id].proposal-consuming td {
     filter: none !important;
   }
 
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
+  .status[data-effect="shimmer-sweep"] .status-letter-wave,
   .status-running.is-executing .status-letter-wave {
     text-shadow: none;
   }
 
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
+  .status[data-effect="shimmer-sweep"] .status-letter-wave::after,
   .status-running.is-executing .status-letter-wave::after {
     content: none;
   }
 }
 
 @media (forced-colors: active) {
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
+  .status[data-effect="shimmer-sweep"] .status-letter-wave,
   .status-running.is-executing .status-letter-wave {
     color: ButtonText;
     background-image: none;
   }
 
-  .status-running[data-effect="shimmer-sweep"]::before,
+  .status[data-effect="shimmer-sweep"]::before,
   .status-running.is-executing::before,
-  .status-running[data-effect="shimmer-sweep"]::after,
+  .status[data-effect="shimmer-sweep"]::after,
   .status-running.is-executing::after,
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
+  .status[data-effect="shimmer-sweep"] .status-letter-wave::after,
   .status-running.is-executing .status-letter-wave::after {
     animation: none;
     content: none;
   }
 
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
+  .status[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
   .status-running.is-executing .status-letter-wave__glyph {
     animation: none;
   }
