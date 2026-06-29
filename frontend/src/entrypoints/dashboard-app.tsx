@@ -1,10 +1,18 @@
-import { Suspense, lazy, useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { QueryErrorResetBoundary } from '@tanstack/react-query';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { validatePageBoot } from '../boot/pageBootSchemas';
 import { DashboardErrorState } from '../components/DashboardErrorState';
 import { DashboardRouteErrorBoundary } from '../components/DashboardRouteErrorBoundary';
+import {
+  isDashboardInternalUrl,
+  payloadForDashboardRoute,
+  resolveDashboardRoute,
+  type DashboardClientRouteConfig,
+  type DashboardRoute,
+} from '../lib/dashboardRoutes';
+import { DASHBOARD_NAVIGATE_EVENT, navigateTo } from '../lib/navigation';
 import { DashboardAlerts } from './dashboard-alerts';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
@@ -40,6 +48,33 @@ function isSupportedPage(page: string): page is SupportedPage {
 function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
   const raw = payload.initialData as { layout?: SharedLayoutConfig } | undefined;
   return raw?.layout ?? {};
+}
+
+function currentDashboardRoute(payload: BootPayload): DashboardRoute {
+  return {
+    page: payload.page as SupportedPage,
+    dataWidePanel: readSharedLayout(payload).dataWidePanel === true,
+    currentPath: typeof window === 'undefined' ? '/' : window.location.pathname,
+  };
+}
+
+function setActiveNavigation(route: DashboardRoute): void {
+  const links = document.querySelectorAll<HTMLAnchorElement>('[data-nav]');
+  links.forEach((link) => {
+    const href = link.getAttribute('href') ?? '';
+    const url = new URL(href, window.location.origin);
+    const isWorkflowsDetail =
+      url.pathname === '/workflows' &&
+      route.currentPath.startsWith('/workflows/') &&
+      route.currentPath !== '/workflows/new';
+    const active = url.pathname === route.currentPath || isWorkflowsDetail;
+    link.classList.toggle('active', active);
+    if (active) {
+      link.setAttribute('aria-current', 'page');
+    } else {
+      link.removeAttribute('aria-current');
+    }
+  });
 }
 
 function LoadingPage() {
@@ -140,11 +175,104 @@ function PageContent({ payload }: { payload: BootPayload }) {
 }
 
 export function DashboardApp({ payload }: { payload: BootPayload }) {
-  const layout = readSharedLayout(payload);
+  const [route, setRoute] = useState<DashboardRoute>(() => currentDashboardRoute(payload));
+  const [hasClientNavigated, setHasClientNavigated] = useState(false);
+  const [clientRouteConfig, setClientRouteConfig] = useState<DashboardClientRouteConfig | null>(null);
+  const routedPayload = useMemo(
+    () => (hasClientNavigated ? payloadForDashboardRoute(payload, route, clientRouteConfig) : payload),
+    [clientRouteConfig, hasClientNavigated, payload, route],
+  );
+  const layout = readSharedLayout(routedPayload);
+  const routeKey =
+    typeof window === 'undefined'
+      ? `${route.page}:${route.currentPath}`
+      : `${route.page}:${route.currentPath}${window.location.search}${window.location.hash}`;
+
+  useEffect(() => {
+    const refreshRoute = () => {
+      const nextRoute = resolveDashboardRoute(window.location.pathname);
+      if (nextRoute) {
+        setHasClientNavigated(true);
+        setClientRouteConfig(null);
+        setRoute(nextRoute);
+      }
+    };
+
+    const handleClick = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const link = target.closest<HTMLAnchorElement>('a[href]');
+      if (!link || link.target || link.hasAttribute('download')) {
+        return;
+      }
+      const url = new URL(link.href, window.location.origin);
+      if (!isDashboardInternalUrl(url)) {
+        return;
+      }
+      event.preventDefault();
+      navigateTo(`${url.pathname}${url.search}${url.hash}`);
+    };
+
+    window.addEventListener('popstate', refreshRoute);
+    window.addEventListener(DASHBOARD_NAVIGATE_EVENT, refreshRoute);
+    document.addEventListener('click', handleClick);
+    return () => {
+      window.removeEventListener('popstate', refreshRoute);
+      window.removeEventListener(DASHBOARD_NAVIGATE_EVENT, refreshRoute);
+      document.removeEventListener('click', handleClick);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasClientNavigated) {
+      return;
+    }
+    const controller = new AbortController();
+    const currentPath = route.currentPath;
+
+    fetch(`/api/dashboard/config?currentPath=${encodeURIComponent(currentPath)}`, {
+      credentials: 'same-origin',
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Dashboard config request failed: ${response.status}`);
+        }
+        return response.json() as Promise<DashboardClientRouteConfig>;
+      })
+      .then((config) => {
+        setClientRouteConfig(config);
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          setClientRouteConfig(null);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [hasClientNavigated, route.currentPath]);
+
+  useEffect(() => {
+    setActiveNavigation(route);
+  }, [route]);
 
   return (
     <AppShell dataWidePanel={layout.dataWidePanel === true}>
-      <PageContent payload={payload} />
+      <PageContent key={routeKey} payload={routedPayload} />
     </AppShell>
   );
 }

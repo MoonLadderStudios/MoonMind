@@ -14,6 +14,7 @@ import type { Root, Rule } from 'postcss';
 import type { BootPayload } from '../boot/parseBootPayload';
 import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { DashboardApp } from './dashboard-app';
+import { navigateTo } from '../lib/navigation';
 
 function normalizeCssSelector(selector: string): string {
   return selector
@@ -117,6 +118,43 @@ vi.mock('./skills', () => {
   return { default: () => <div>Skills page recovered</div> };
 });
 
+vi.mock('./workflow-list', () => ({
+  default: () => <div>Workflow list route loaded</div>,
+}));
+
+const workflowDetailMock = vi.hoisted(() => ({
+  initialPathByNode: new WeakMap<HTMLElement, string>(),
+}));
+
+vi.mock('./workflow-detail', () => {
+  return {
+    default: () => (
+      <div
+        ref={(node) => {
+          if (!node) {
+            return;
+          }
+          if (!workflowDetailMock.initialPathByNode.has(node)) {
+            workflowDetailMock.initialPathByNode.set(node, window.location.pathname);
+          }
+          node.textContent = `Workflow detail initial path: ${workflowDetailMock.initialPathByNode.get(node)}`;
+        }}
+      />
+    ),
+  };
+});
+
+vi.mock('./workflow-start', () => ({
+  default: () => <div>Workflow start route loaded</div>,
+}));
+
+vi.mock('./settings', () => ({
+  default: ({ payload }: { payload: BootPayload }) => {
+    const initialData = payload.initialData as { settingsPermissions?: string[] } | undefined;
+    return <div>Settings permissions: {(initialData?.settingsPermissions ?? []).join(',')}</div>;
+  },
+}));
+
 describe('Dashboard shared entry', () => {
   let fetchSpy: MockInstance;
   let dashboardCss: string;
@@ -157,6 +195,8 @@ describe('Dashboard shared entry', () => {
   afterEach(() => {
     fetchSpy.mockRestore();
     window.WebSocket = originalWebSocket;
+    document.querySelectorAll('[data-nav]').forEach((node) => node.remove());
+    window.history.replaceState({}, '', '/');
   });
 
   it('renders dashboard alerts and lazy-loads the requested page component', async () => {
@@ -226,6 +266,100 @@ describe('Dashboard shared entry', () => {
     } finally {
       consoleErrorSpy.mockRestore();
     }
+  });
+
+  it('MM-1029 intercepts dashboard links and changes routes without a document navigation', async () => {
+    window.history.replaceState({}, '', '/workflows/new');
+    document.body.insertAdjacentHTML(
+      'afterbegin',
+      '<a href="/workflows" data-nav>Workflows</a><a href="/workflows/new" data-nav>Start Workflow</a>',
+    );
+
+    renderWithClient(<DashboardApp payload={{ page: 'workflow-start', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    const shellPanel = document.querySelector('.panel');
+    const startLink = document.querySelector<HTMLAnchorElement>('a[href="/workflows/new"]')!;
+    expect(startLink.getAttribute('aria-current')).toBe('page');
+
+    fireEvent.click(document.querySelector<HTMLAnchorElement>('a[href="/workflows"]')!);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    expect(document.querySelector('.panel')).toBe(shellPanel);
+    expect(window.location.pathname).toBe('/workflows');
+    expect(document.querySelector<HTMLAnchorElement>('a[href="/workflows"]')!.getAttribute('aria-current')).toBe('page');
+  });
+
+  it('MM-1029 navigateTo uses the SPA route event for dashboard-internal URLs', async () => {
+    window.history.replaceState({}, '', '/workflows/new');
+    renderWithClient(<DashboardApp payload={{ page: 'workflow-start', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+
+    navigateTo('/workflows?source=temporal');
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    expect(window.location.pathname).toBe('/workflows');
+    expect(window.location.search).toBe('?source=temporal');
+  });
+
+  it('MM-1029 loads Settings permissions during SPA navigation', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/dashboard/config')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            currentPath: '/settings',
+            dashboardConfig: { initialPath: '/settings' },
+            settingsPermissions: ['provider_profiles.write', 'settings.effective.read'],
+            workerPause: {
+              get: '/api/system/worker-pause',
+              post: '/api/system/worker-pause',
+              shardHealth: '/api/workflows/codex/shards',
+            },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+    window.history.replaceState({}, '', '/workflows');
+    document.body.insertAdjacentHTML('afterbegin', '<a href="/settings" data-nav>Settings</a>');
+
+    renderWithClient(<DashboardApp payload={{ page: 'workflow-list', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(document.querySelector<HTMLAnchorElement>('a[href="/settings"]')!);
+
+    expect(
+      await screen.findByText('Settings permissions: provider_profiles.write,settings.effective.read'),
+    ).toBeTruthy();
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/dashboard/config?currentPath=%2Fsettings',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    );
+  });
+
+  it('MM-1029 remounts same-component route pages on SPA navigation', async () => {
+    window.history.replaceState({}, '', '/workflows/first/debug');
+    document.body.insertAdjacentHTML(
+      'afterbegin',
+      '<a href="/workflows/second" data-nav>Second workflow</a>',
+    );
+
+    renderWithClient(<DashboardApp payload={{ page: 'workflow-detail', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow detail initial path: /workflows/first/debug')).toBeTruthy();
+
+    fireEvent.click(document.querySelector<HTMLAnchorElement>('a[href="/workflows/second"]')!);
+
+    expect(await screen.findByText('Workflow detail initial path: /workflows/second')).toBeTruthy();
+    expect(screen.queryByText('Workflow detail initial path: /workflows/first/debug')).toBeNull();
   });
 
   it('does not render operational metrics on the workflows home dashboard', async () => {
