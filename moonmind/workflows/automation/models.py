@@ -191,17 +191,14 @@ class AutomationPhase(str, enum.Enum):
     PREPARE_JOB = "prepare_job"
     START_JOB_CONTAINER = "start_job_container"
     GIT_CLONE = "git_clone"
-    SPECIFY = "speckit_specify"
-    PLAN = "speckit_plan"
-    TASKS = "speckit_tasks"
-    ANALYZE = "speckit_analyze"
-    IMPLEMENT = "speckit_implement"
-    # Backward-compatible aliases for persisted values and legacy clients.
-    SPECKIT_SPECIFY = SPECIFY
-    SPECKIT_PLAN = PLAN
-    SPECKIT_TASKS = TASKS
-    SPECKIT_ANALYZE = ANALYZE
-    SPECKIT_IMPLEMENT = IMPLEMENT
+    SPECIFY = "moonspec_specify"
+    PLAN = "moonspec_plan"
+    TASKS = "moonspec_tasks"
+    ALIGN = "moonspec_align"
+    IMPLEMENT = "moonspec_implement"
+    VERIFY = "moonspec_verify"
+    DOC_RECONCILE = "moonspec_doc_reconcile"
+    ORCHESTRATE = "moonspec_orchestrate"
     COMMIT_PUSH = "commit_push"
     OPEN_PR = "open_pr"
     CLEANUP = "cleanup"
@@ -397,7 +394,7 @@ class AutomationTaskState(Base):
         used_fallback = metadata.get("usedFallback")
         shadow_mode_requested = metadata.get("shadowModeRequested")
 
-        if selected_skill is None and self.phase.value.startswith("speckit_"):
+        if selected_skill is None and self.phase.value.startswith("moonspec_"):
             selected_skill = "auto"
         if adapter_id is None and selected_skill == "auto":
             adapter_id = None

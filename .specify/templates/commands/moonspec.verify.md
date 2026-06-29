@@ -1,9 +1,10 @@
 ---
 description: Verify the final implementation against the original feature request, specification, plan, tasks, and required tests.
 scripts:
-  sh: scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
-  ps: scripts/powershell/check-prerequisites.ps1 -Json -RequireTasks -IncludeTasks
+  sh: .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
 ---
+<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.verify.md; edit MoonSpec repo instead. -->
+
 
 ## User Input
 
@@ -49,7 +50,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Outline
 
-This command is the final Moon Spec check. It verifies that the completed implementation satisfies the original feature request preserved in `spec.md`, not just the later task list.
+This command is the final MoonSpec check. It verifies that the completed implementation satisfies the original feature request preserved in `spec.md`, not just the later task list.
 
 1. **Setup**: Run `{SCRIPT}` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
 

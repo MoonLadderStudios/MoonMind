@@ -356,6 +356,19 @@ describe('Dashboard shared entry', () => {
     expect(stepTypeFocusBlock).toContain('box-shadow: var(--mm-control-focus-ring)');
   });
 
+  it('MM-1020 keeps Workflow Detail segmented tabs count-aware and step toggles contained', async () => {
+    const segmentedNavBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.segmented-nav' && !rule.parent?.parent
+    ));
+    const segmentedThumbBlock = cssRuleBlock(dashboardCss, '.segmented-nav::before');
+    const stepToggleBlock = cssRuleBlock(dashboardCss, '.step-tl-toggle');
+
+    expect(segmentedNavBlock).toContain('--segmented-nav-count: 1');
+    expect(segmentedThumbBlock).toContain('width: calc((100% - 0.5rem) / var(--segmented-nav-count))');
+    expect(segmentedThumbBlock).toContain('translateX(calc(var(--segmented-nav-active-index) * 100%))');
+    expect(stepToggleBlock).toContain('box-sizing: border-box');
+  });
+
   it('lets Settings use the page canvas without a surrounding shared card', async () => {
     const settingsPanelBlock = cssRuleBlock(dashboardCss, '.panel:has(.settings-page)');
 

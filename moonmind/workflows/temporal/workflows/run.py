@@ -264,6 +264,7 @@ _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _PR_OPTIONAL_TASK_SKILLS = frozenset(
     {"jira-implement", *_PR_OPTIONAL_AGENT_SKILLS}
 )
+_EXTERNAL_INTEGRATION_MONITOR_IDS = frozenset({"codex_cloud", "jules"})
 _PUBLISH_NOT_REQUIRED_STATUSES = frozenset(
     {
         "not_required",
@@ -501,6 +502,9 @@ RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
 RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
+RUN_EMIT_EPHEMERAL_STEP_CHECKPOINTS_PATCH = (
+    "run-emit-ephemeral-step-checkpoints-v1"
+)
 RUN_STEP_EXECUTION_NAMING_PATCH = "run-step-execution-naming-v1"
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
@@ -869,6 +873,7 @@ class MoonMindRunWorkflow:
         self._workflow_type: Optional[str] = None
         self._entry: Optional[str] = None
         self._repo: Optional[str] = None
+        self._integration_label: Optional[str] = None
         self._integration: Optional[str] = None
         self._target_runtime: Optional[str] = None
         self._target_skill: Optional[str] = None
@@ -3937,8 +3942,28 @@ class MoonMindRunWorkflow:
         capture_input = dict(
             self._step_workspace_capture_inputs.get(logical_step_id) or {}
         )
+        emit_ephemeral_checkpoint = workflow.patched(
+            RUN_EMIT_EPHEMERAL_STEP_CHECKPOINTS_PATCH
+        )
         if not capture_input:
-            return None
+            if not emit_ephemeral_checkpoint:
+                return None
+            workspace_ref = (
+                self._step_checkpoint_refs.get(logical_step_id)
+                or self._previous_step_checkpoint_refs.get(logical_step_id)
+                or (
+                    f"temporal://{identity.workflow_id}/{identity.run_id}/"
+                    f"{identity.logical_step_id}/{boundary}"
+                )
+            )
+            return {
+                "workspace": {
+                    "kind": "ephemeral_workspace_ref",
+                    "workspaceRef": workspace_ref,
+                    "createdAt": workflow.now().isoformat(),
+                },
+                "diagnosticRefs": [],
+            }
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "workspace.capture_checkpoint"
@@ -3970,7 +3995,10 @@ class MoonMindRunWorkflow:
         workspace_evidence = result.get("workspace")
         if not isinstance(workspace_evidence, Mapping):
             return None
-        if workspace_evidence.get("kind") == "ephemeral_workspace_ref":
+        if (
+            workspace_evidence.get("kind") == "ephemeral_workspace_ref"
+            and not emit_ephemeral_checkpoint
+        ):
             return None
         return {
             "workspace": dict(workspace_evidence),
@@ -5937,7 +5965,7 @@ class MoonMindRunWorkflow:
             or self._string_from_mapping(ws, "repo")
             or self._string_from_mapping(ws, "repository")
         )
-        self._integration = self._string_from_mapping(parameters, "integration")
+        self._record_integration_from_parameters(parameters)
 
         input_ref = self._optional_string(
             input_payload,
@@ -5971,6 +5999,20 @@ class MoonMindRunWorkflow:
             self._scheduled_for = scheduled_for
 
         return workflow_type, parameters, input_ref, plan_ref, scheduled_for
+
+    def _record_integration_from_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> None:
+        integration = self._string_from_mapping(parameters, "integration")
+        if integration:
+            integration = integration.strip().lower()
+        self._integration_label = integration
+        self._integration = (
+            integration
+            if integration in _EXTERNAL_INTEGRATION_MONITOR_IDS
+            else None
+        )
 
     def _record_remediation_context(
         self,
@@ -14251,11 +14293,12 @@ class MoonMindRunWorkflow:
                     self._repo,
                 )
             )
-        if self._integration:
+        integration_label = self._integration_label or self._integration
+        if integration_label:
             pairs.append(
                 SearchAttributePair(
                     SearchAttributeKey.for_keyword("mm_integration"),
-                    self._integration,
+                    integration_label,
                 )
             )
         if self._scheduled_for:

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Generated from vendor/moonspec/bundle/scripts/bash/validate-implementation-scope.sh; edit MoonSpec repo instead.
 
 set -euo pipefail
 
@@ -10,7 +11,7 @@ usage() {
   cat <<USAGE
 Usage: $0 --check <tasks|diff> --mode <runtime|docs> [--base-ref <ref>]
 
-Validates minimum implementation scope for Spec Kit workflows.
+Validates minimum implementation scope for MoonSpec workflows.
 USAGE
 }
 

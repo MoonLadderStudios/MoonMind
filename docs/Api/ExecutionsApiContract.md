@@ -227,6 +227,7 @@ The current allowed values for `state` are:
 | `memo` | object | yes | Small display-oriented metadata |
 | `artifactRefs` | string[] | yes | Artifact references linked to this execution |
 | `startedAt` | datetime | yes | Initial execution timestamp |
+| `queuedAt` | datetime or `null` | no | Queue-order timestamp used as the stable fallback within small updated-time buckets |
 | `updatedAt` | datetime | yes | Last meaningful lifecycle/progress update |
 | `closedAt` | datetime or `null` | no | Terminal close timestamp |
 
@@ -441,12 +442,13 @@ Example:
 
 ### 10.4 Ordering semantics
 
-The current ordering contract is:
+The current default ordering contract is:
 
-1. `updatedAt` descending
-2. `workflowId` descending as a deterministic tiebreaker
+1. `updatedAt` descending by one-minute stability bucket
+2. queued order descending (`queuedAt`, newest queued first) within the same updated-time bucket
+3. `workflowId` descending as a deterministic tiebreaker
 
-Clients must not assume queue semantics or FIFO ordering.
+Meaningfully newer `updatedAt` values still sort first. Small updated-time differences inside the same bucket do not reorder rows ahead of newer queued executions.
 
 ### 10.5 Pagination semantics
 

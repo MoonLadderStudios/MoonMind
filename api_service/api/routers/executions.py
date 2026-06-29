@@ -231,6 +231,7 @@ _EXECUTION_SORT_FIELDS = {
     "createdAt": "StartTime",
     "closedAt": "CloseTime",
 }
+_EXECUTION_UPDATED_SORT_BUCKET_SECONDS = 60
 _EXECUTION_FACET_ATTRS = {
     "status": "mm_state",
     "targetRuntime": "mm_target_runtime",
@@ -2523,6 +2524,7 @@ def _serialize_execution(
         artifacts_count=len(record.artifact_refs or []),
         scheduled_for=scheduled_for,
         created_at=created_at,
+        queued_at=created_at,
         steps_href=steps_href,
         actions=actions,
         resume=resume_summary,
@@ -3074,6 +3076,21 @@ def _build_recovery_summary(
 
 def _related_run_href(workflow_id: str) -> str:
     return f"/workflows/{quote(workflow_id, safe='')}?source=temporal"
+
+
+def _execution_sort_timestamp(value: datetime | None) -> float:
+    return value.timestamp() if value is not None else 0
+
+
+def _execution_updated_sort_bucket(execution: ExecutionModel) -> int:
+    return int(
+        _execution_sort_timestamp(execution.updated_at)
+        // _EXECUTION_UPDATED_SORT_BUCKET_SECONDS
+    )
+
+
+def _execution_queued_sort_timestamp(execution: ExecutionModel) -> float:
+    return _execution_sort_timestamp(execution.queued_at or execution.created_at)
 
 
 def _build_related_runs(
@@ -8837,7 +8854,8 @@ async def list_executions(
                                 and item.scheduled_for is not None
                                 else float("inf")
                             ),
-                            -(item.updated_at.timestamp() if item.updated_at else 0),
+                            -_execution_updated_sort_bucket(item),
+                            -_execution_queued_sort_timestamp(item),
                             item.workflow_id,
                         )
                     )

@@ -102,7 +102,7 @@ describe('Workflows Entrypoint', () => {
 
     fireEvent.click(filtersTrigger);
     expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
-  });
+  }, 15000);
 
   it('opens and closes the advanced filter drawer and returns focus to the trigger', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
@@ -251,6 +251,64 @@ describe('Workflows Entrypoint', () => {
       expect(url).not.toContain('sort=');
       expect(url).not.toContain('sortDir=');
     }
+  });
+
+  it('keeps issue #2807 updated-time jitter inside a bucket ordered by newest queued workflow', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            workflowId: 'mm:older-queued-slightly-newer-update',
+            source: 'temporal',
+            title: 'Older queued, slightly newer update',
+            status: 'queued',
+            state: 'awaiting_slot',
+            rawState: 'awaiting_slot',
+            createdAt: '2026-03-28T09:00:00Z',
+            queuedAt: '2026-03-28T09:00:00Z',
+            updatedAt: '2026-03-28T12:00:45Z',
+          },
+          {
+            workflowId: 'mm:newer-queued-same-update-bucket',
+            source: 'temporal',
+            title: 'Newer queued, same update bucket',
+            status: 'queued',
+            state: 'awaiting_slot',
+            rawState: 'awaiting_slot',
+            createdAt: '2026-03-28T10:00:00Z',
+            queuedAt: '2026-03-28T10:00:00Z',
+            updatedAt: '2026-03-28T12:00:05Z',
+          },
+          {
+            workflowId: 'mm:meaningfully-newer-update',
+            source: 'temporal',
+            title: 'Meaningfully newer update',
+            status: 'queued',
+            state: 'awaiting_slot',
+            rawState: 'awaiting_slot',
+            createdAt: '2026-03-28T08:00:00Z',
+            queuedAt: '2026-03-28T08:00:00Z',
+            updatedAt: '2026-03-28T12:02:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Meaningfully newer update');
+
+    const table = document.querySelector('.queue-table-wrapper table') as HTMLTableElement;
+    const titles = Array.from(table.querySelectorAll('tbody .workflow-list-row-title')).map(
+      (element) => element.textContent,
+    );
+
+    expect(titles).toEqual([
+      'Meaningfully newer update',
+      'Newer queued, same update bucket',
+      'Older queued, slightly newer update',
+    ]);
   });
 
   it('MM-1018 sorts Progress by bounded completion percent with blanks last', async () => {

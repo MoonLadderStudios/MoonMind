@@ -107,7 +107,7 @@ def build_payload(*, provider: str, issue_ref: str, repository: str, runtime: st
             "publishMode": "pr",
             "mergeAutomation": {"enabled": True},
             "idempotencyKey": build_idempotency_key(provider=provider, issue_ref=issue_ref, repository=repository, runtime=runtime, model=model, effort=effort),
-            "integration": provider,
+            "metadata": {"integration": provider},
             "task": task,
         },
     }

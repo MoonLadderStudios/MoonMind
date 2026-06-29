@@ -64,7 +64,7 @@ def resolve_active_feature_dir(
     active_feature: str | Path | None,
     env: Mapping[str, str] | None = None,
 ) -> str | None:
-    """Resolve a Spec Kit feature override to a validated repo-relative path."""
+    """Resolve a MoonSpec feature override to a validated repo-relative path."""
 
     raw_value = str(active_feature or "").strip()
     if not raw_value and env is not None:

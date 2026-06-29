@@ -33,6 +33,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+          submodules: recursive
 
       - name: Compute changed files
         shell: bash
@@ -74,6 +75,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+          submodules: recursive
       - name: Check docs terminology guardrails
         run: |
           set -euo pipefail
@@ -140,6 +142,28 @@ jobs:
           else
             ./tools/validate_agent_session_deployment_safety.py --base-ref "HEAD~1"
           fi
+
+  moonspec-projection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+          submodules: recursive
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Check MoonSpec submodule projection
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip PyYAML
+          test -f vendor/moonspec/bundle/moonspec.bundle.yaml
+          python3 tools/sync_moonspec_submodule.py --check
 
   api-component:
     needs: select-test-suites
@@ -258,6 +282,7 @@ jobs:
   ci-required:
     needs:
       - select-test-suites
+      - moonspec-projection
       - unit-fast
       - api-component
       - temporal-boundary
@@ -282,6 +307,11 @@ jobs:
 
           if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
             echo "::error::select-test-suites ended with result=${{ needs.select-test-suites.result }}"
+            exit 1
+          fi
+
+          if [[ "${{ needs.moonspec-projection.result }}" != "success" ]]; then
+            echo "::error::moonspec-projection ended with result=${{ needs.moonspec-projection.result }}"
             exit 1
           fi
 

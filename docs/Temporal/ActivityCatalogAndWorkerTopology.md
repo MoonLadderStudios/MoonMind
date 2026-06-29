@@ -389,6 +389,12 @@ Purpose: external provider interaction and delegated agent execution.
 - `integration.openclaw.execute`
 - `integration.omnigent.execute`
 
+Capability labels and execution visibility metadata are not provider activity
+families by themselves. For example, Jira is available as the
+`integration:jira` capability through trusted Jira tool surfaces and
+merge-automation activities, but there is no `integration.jira.start` /
+`integration.jira.status` external monitor family.
+
 ### Jules and Codex Cloud contract pattern
 
 Current canonical pattern:

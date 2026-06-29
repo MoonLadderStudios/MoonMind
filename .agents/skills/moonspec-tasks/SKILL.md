@@ -1,14 +1,16 @@
 ---
 name: moonspec-tasks
-description: Generate a one-story, TDD-first Moon Spec `tasks.md` from `spec.md`, `plan.md`, and design artifacts. Use when the user asks to run or reproduce `/speckit.tasks`, create or update an executable task breakdown, map one Moon Spec story to implementation tasks, require unit and integration tests before code, preserve source-design traceability, or include final `/speckit.verify` work.
+description: Generate a one-story, TDD-first MoonSpec `tasks.md` from `spec.md`, `plan.md`, and design artifacts. Use when the user asks to run or reproduce `/moonspec.tasks`, create or update an executable task breakdown, map one MoonSpec story to implementation tasks, require unit and integration tests before code, preserve source-design traceability, or include final `/moonspec.verify` work.
 metadata:
   required-capabilities:
     - git
 ---
+<!-- Generated from vendor/moonspec/bundle/skills/moonspec-tasks/SKILL.md; edit MoonSpec repo instead. -->
+
 
 # MoonSpec Tasks
 
-Use this skill to generate an executable `tasks.md` for one Moon Spec story.
+Use this skill to generate an executable `tasks.md` for one MoonSpec story.
 
 ## Scope
 
@@ -22,8 +24,8 @@ The generated task list must:
 - Include red-first confirmation tasks.
 - Preserve traceability to the original request or source design preserved in `spec.md`.
 - Carry forward docs-native packet provenance from `spec.md`: source document path, document class, viewpoint, owning surface, stable claim IDs, temporary-adapter role, and source issue traceability such as `MM-933` / `MM-927`.
-- Include final `/speckit.verify` work after implementation and tests pass.
-- Include a final doc-reconciliation task (`moonspec-doc-reconcile`) after `/speckit.verify` when `spec.md` records a canonical source document under `docs/`.
+- Include final `/moonspec.verify` work after implementation and tests pass.
+- Include a final doc-reconciliation task (`moonspec-doc-reconcile`) after `/moonspec.verify` when `spec.md` records a canonical source document under `docs/`.
 
 `tasks.md` is an imperative, temporary execution artifact (see `docs/Workflows/MoonSpecDocumentModel.md`). Never copy its content into canonical `docs/` files.
 
@@ -35,7 +37,7 @@ The generated task list must:
 - Use `templates/tasks-template.md` as the output structure.
 - Use absolute paths in reports.
 
-Stop if `spec.md` is missing, `plan.md` is missing, or the spec contains more than one user story. Tell the user to run `/speckit.breakdown` for broad designs or `/speckit.specify` for a one-story replacement.
+Stop if `spec.md` is missing, `plan.md` is missing, or the spec contains more than one user story. Tell the user to run `/moonspec.breakdown` for broad designs or `/moonspec.specify` for a one-story replacement.
 
 ## Pre-Tasks Hooks
 
@@ -78,13 +80,7 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 Run the prerequisite script from the repository root:
 
 ```bash
-scripts/bash/check-prerequisites.sh --json
-```
-
-On PowerShell projects, use:
-
-```powershell
-scripts/powershell/check-prerequisites.ps1 -Json
+.specify/scripts/bash/check-prerequisites.sh --json
 ```
 
 Parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then derive:
@@ -258,7 +254,7 @@ Include only work that strengthens the completed story without adding hidden sco
 - Additional edge-case coverage.
 - Additional operational integration coverage.
 - Quickstart validation.
-- A final task to run `/speckit.verify` after implementation and tests pass.
+- A final task to run `/moonspec.verify` after implementation and tests pass.
 
 ## Coverage Rules
 
@@ -309,8 +305,8 @@ Before reporting, verify:
 - Every task maps to stable claim IDs or explicitly explains why none apply.
 - `## Requirement Status` rows from `plan.md`, when present, are reflected without forcing unnecessary implementation tasks for `implemented_verified` rows.
 - `implemented_unverified` rows include fallback implementation tasks that are conditional on verification failure.
-- Final `/speckit.verify` task exists.
-- Final `moonspec-doc-reconcile` task exists after `/speckit.verify` when `spec.md` records a canonical source document under `docs/`.
+- Final `/moonspec.verify` task exists.
+- Final `moonspec-doc-reconcile` task exists after `/moonspec.verify` when `spec.md` records a canonical source document under `docs/`.
 
 If validation fails, update `tasks.md` and validate again before reporting.
 
@@ -371,5 +367,5 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Preserve docs-native packet provenance from `spec.md` without treating generated artifacts as authoritative.
 - Consume `plan.md` `## Requirement Status` when present so tasks match planned code, verification-only, conditional fallback, or already-verified work.
 - Use concrete file paths and requirement/scenario/stable claim IDs, or explain why no source claim applies.
-- Include final `/speckit.verify`.
+- Include final `/moonspec.verify`.
 - Do not implement code from this skill.
