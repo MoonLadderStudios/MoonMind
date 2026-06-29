@@ -4281,10 +4281,98 @@ async def test_fetch_result_treats_pr_resolver_reenter_gate_as_continuation(
         started_at=datetime.now(tz=UTC),
     )
 
-    result = await adapter.fetch_result(run_id, pr_resolver_expected=True)
+    result = await adapter.fetch_result(
+        run_id,
+        pr_resolver_expected=True,
+        pr_resolver_merge_gate_owned=True,
+    )
 
     assert result.failure_class is None
     assert result.metadata["mergeAutomationDisposition"] == "reenter_gate"
+
+async def test_fetch_result_reports_standalone_pr_resolver_reentry_as_failure(
+    tmp_path: Path,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "attempts_exhausted",\n'
+            '  "mergeAutomationDisposition": "reenter_gate",\n'
+            '  "final_reason": "ci_failures",\n'
+            '  "next_step": "run_fix_ci_skill"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    run_id = "run-result-pr-standalone-ci"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId=run_id,
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="completed",
+            startedAt=datetime.now(tz=UTC),
+            workspacePath=str(workspace_path),
+        )
+    )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_async_noop,
+        launch_session=_async_noop,
+        session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_async_noop,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_async_noop,
+        publish_remote_artifacts=_async_noop,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    adapter._save_run_state(
+        run_id=run_id,
+        agent_id="codex_cli",
+        locator={
+            "sessionId": "sess:wf-task-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        },
+        active_turn_id=None,
+        result={
+            "summary": "Managed session turn completed.",
+            "metadata": {},
+        },
+        status="completed",
+        started_at=datetime.now(tz=UTC),
+    )
+
+    result = await adapter.fetch_result(run_id, pr_resolver_expected=True)
+
+    assert result.failure_class == "user_error"
+    assert result.summary is not None
+    assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
+    assert "ci_failures" in result.summary
+    assert "next_step=run_fix_ci_skill" in result.summary
+    assert "mergeAutomationDisposition" not in result.metadata
 
 async def test_fetch_result_clears_generic_failed_exit_for_pr_resolver_reentry(
     tmp_path: Path,
@@ -4363,7 +4451,11 @@ async def test_fetch_result_clears_generic_failed_exit_for_pr_resolver_reentry(
         started_at=datetime.now(tz=UTC),
     )
 
-    result = await adapter.fetch_result(run_id, pr_resolver_expected=True)
+    result = await adapter.fetch_result(
+        run_id,
+        pr_resolver_expected=True,
+        pr_resolver_merge_gate_owned=True,
+    )
 
     assert result.failure_class is None
     assert result.summary == "pr-resolver requested merge automation re-entry."

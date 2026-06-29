@@ -162,7 +162,30 @@ async def test_managed_fetch_result_marks_pr_resolver_from_task_tool_contract(
 
     assert isinstance(activity_input, AgentRuntimeFetchResultInput)
     assert activity_input.pr_resolver_expected is True
+    assert activity_input.pr_resolver_merge_gate_owned is True
     assert activity_input.head_branch == "feature/pr-1671"
+
+async def test_managed_fetch_result_marks_standalone_pr_resolver_as_not_gate_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={
+            "publishMode": "none",
+            "metadata": {"moonmind": {"selectedSkill": "pr-resolver"}},
+            "workflow": {
+                "tool": {"type": "skill", "name": "pr-resolver"},
+                "skill": {"name": "pr-resolver"},
+            },
+        },
+        workspace_spec={"branch": "codex/example-pr"},
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert activity_input.pr_resolver_expected is True
+    assert activity_input.pr_resolver_merge_gate_owned is False
 
 async def test_parent_child_state_signal_failure_is_logged_not_raised(
     monkeypatch: pytest.MonkeyPatch,
@@ -1509,9 +1532,11 @@ async def test_agent_run_keeps_legacy_session_fetch_path_when_patch_unset(
             run_id: str,
             *,
             pr_resolver_expected: bool = False,
+            pr_resolver_merge_gate_owned: bool = False,
         ) -> AgentRunResult:
             assert run_id == "managed-session-run-legacy"
             assert pr_resolver_expected is False
+            assert pr_resolver_merge_gate_owned is False
             return AgentRunResult(summary="Legacy managed-session fetch path.")
 
     class _FakeManagerHandle:
@@ -1609,9 +1634,11 @@ async def test_agent_run_keeps_legacy_instruction_preparation_for_pre_patch_hist
             run_id: str,
             *,
             pr_resolver_expected: bool = False,
+            pr_resolver_merge_gate_owned: bool = False,
         ) -> AgentRunResult:
             assert run_id == "managed-session-run-legacy-prepare"
             assert pr_resolver_expected is False
+            assert pr_resolver_merge_gate_owned is False
             return AgentRunResult(summary="Legacy instruction preparation path.")
 
     class _FakeManagerHandle:
@@ -1708,9 +1735,11 @@ async def test_agent_run_preserves_pre_launch_instruction_order_for_pre_defer_hi
             run_id: str,
             *,
             pr_resolver_expected: bool = False,
+            pr_resolver_merge_gate_owned: bool = False,
         ) -> AgentRunResult:
             assert run_id == "managed-session-run-pre-defer"
             assert pr_resolver_expected is False
+            assert pr_resolver_merge_gate_owned is False
             return AgentRunResult(summary="Pre-defer instruction order path.")
 
     class _FakeManagerHandle:

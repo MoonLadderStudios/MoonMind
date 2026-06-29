@@ -1103,6 +1103,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         run_id: str,
         *,
         pr_resolver_expected: bool = False,
+        pr_resolver_merge_gate_owned: bool = False,
     ) -> AgentRunResult:
         state = self._load_run_state(run_id)
         if state is not None:
@@ -1113,9 +1114,17 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     failure_class = result.failure_class
                     summary = str(result.summary or "").strip()
                     metadata = dict(result.metadata)
-                    metadata.update(_derive_pr_resolver_metadata(record.workspace_path))
+                    metadata.update(
+                        _derive_pr_resolver_metadata(
+                            record.workspace_path,
+                            merge_gate_owned=pr_resolver_merge_gate_owned,
+                        )
+                    )
                     derived_failure_class, derived_summary = (
-                        _derive_pr_resolver_failure(record.workspace_path)
+                        _derive_pr_resolver_failure(
+                            record.workspace_path,
+                            merge_gate_owned=pr_resolver_merge_gate_owned,
+                        )
                     )
                     resolver_disposition = str(
                         metadata.get("mergeAutomationDisposition") or ""

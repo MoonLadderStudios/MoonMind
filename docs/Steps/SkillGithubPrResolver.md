@@ -93,9 +93,10 @@ Continuation blockers use `reenter_gate`, not generic failure. This includes
 resolver-owned remediation steps (`run_fix_comments_skill`, `run_fix_ci_skill`,
 `run_fix_merge_conflicts_skill`) and transient finalize-only waits
 (`retry_finalize_after_backoff`, `wait_for_ci_and_retry_finalize`). Managed
-runtime adapters preserve that disposition even when the resolver command exits
-non-zero, so `MoonMind.MergeAutomation` can re-enter the gate instead of failing
-the parent workflow.
+runtime adapters preserve that disposition only when the resolver run carries a
+`mergeGate` owner from `MoonMind.MergeAutomation`. In that gate-owned case, the
+adapter must not turn a non-zero resolver exit such as `attempts_exhausted` into
+an agent failure, because merge automation owns the next gate cycle.
 
 During long waits, especially `ci_running`, the resolver emits concise progress
 lines before sleeping. These lines are part of the operational contract: they keep
@@ -112,7 +113,10 @@ while CI is still running abandons the merge and leaves the PR unresolved.
 A standalone `pr-resolver` run (one not launched by `MoonMind.MergeAutomation`)
 that ends in the continuation state `reenter_gate` has no gate to re-enter, so it
 is not a successful PR resolution; the owning workflow fails such a run terminally
-rather than reporting success. See `docs/Workflows/PrMergeAutomation.md` §13.4.
+rather than reporting success. Managed-runtime adapters suppress ungated
+continuation disposition metadata and surface the resolver's terminal blocker
+summary as a normal failed/blocked PR-resolution result. See
+`docs/Workflows/PrMergeAutomation.md` §13.4.
 
 ---
 

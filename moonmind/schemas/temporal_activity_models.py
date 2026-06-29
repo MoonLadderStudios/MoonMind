@@ -261,6 +261,14 @@ class AgentRuntimeFetchResultInput(AgentRuntimeStatusInput):
         alias="prResolverExpected",
         validation_alias=AliasChoices("prResolverExpected", "pr_resolver_expected"),
     )
+    pr_resolver_merge_gate_owned: bool = Field(
+        default=False,
+        alias="prResolverMergeGateOwned",
+        validation_alias=AliasChoices(
+            "prResolverMergeGateOwned",
+            "pr_resolver_merge_gate_owned",
+        ),
+    )
 
     @model_validator(mode="after")
     def _normalize_fetch(self) -> "AgentRuntimeFetchResultInput":

@@ -542,10 +542,11 @@ older artifacts encode the same intent through a continuation `next_step` such
 as `run_fix_comments_skill`, `run_fix_ci_skill`,
 `run_fix_merge_conflicts_skill`, `retry_finalize_after_backoff`, or
 `wait_for_ci_and_retry_finalize`, the managed-agent adapter returns a successful
-child result carrying `mergeAutomationDisposition = "reenter_gate"`. It MUST NOT
-convert that state into an agent failure merely because the resolver process used
-a non-zero exit code such as `attempts_exhausted`; merge automation owns the next
-gate cycle.
+child result carrying `mergeAutomationDisposition = "reenter_gate"` only when
+the resolver run carries the `mergeGate` owner injected by
+`MoonMind.MergeAutomation`. It MUST NOT convert that gate-owned state into an
+agent failure merely because the resolver process used a non-zero exit code such
+as `attempts_exhausted`; merge automation owns the next gate cycle.
 
 Long resolver waits also remain observable. While polling transient states such
 as `ci_running`, resolver tooling SHOULD emit periodic progress output before
@@ -569,8 +570,10 @@ run that ends with `mergeAutomationDisposition = "reenter_gate"` in that case ha
 workflow MUST NOT report `status: success`. It MUST fail the run terminally with
 an actionable summary directing the operator to re-submit under merge automation
 or finalize manually. This prevents a false-green completion where the PR is left
-open and unmerged. Terminal dispositions (`merged`, `already_merged`) and
-gated continuation runs are unaffected.
+open and unmerged. Managed-runtime adapters suppress ungated continuation
+disposition metadata and surface the resolver's terminal blocker summary as a
+normal failed/blocked PR-resolution result. Terminal dispositions (`merged`,
+`already_merged`) and gated continuation runs are unaffected.
 
 ---
 

@@ -46,6 +46,7 @@ from moonmind.schemas.managed_session_models import (
 )
 from moonmind.schemas.temporal_activity_models import (
     AgentRuntimeCancelInput,
+    AgentRuntimeFetchResultInput,
     AgentRuntimeStatusInput,
 )
 from moonmind.workflows.temporal import client as temporal_client_module
@@ -1345,6 +1346,22 @@ async def test_fetch_result_validates_legacy_dict_to_typed_request(
     )
 
     assert isinstance(result, AgentRunResult)
+
+async def test_fetch_result_input_defaults_merge_gate_ownership_false() -> None:
+    legacy = AgentRuntimeFetchResultInput.model_validate(
+        {"run_id": "typed-fetch-legacy", "pr_resolver_expected": True}
+    )
+    gated = AgentRuntimeFetchResultInput.model_validate(
+        {
+            "runId": "typed-fetch-gated",
+            "prResolverExpected": True,
+            "prResolverMergeGateOwned": True,
+        }
+    )
+
+    assert legacy.pr_resolver_expected is True
+    assert legacy.pr_resolver_merge_gate_owned is False
+    assert gated.pr_resolver_merge_gate_owned is True
 
 async def test_cancel_accepts_typed_request_model() -> None:
     activities = TemporalAgentRuntimeActivities()
@@ -2941,13 +2958,48 @@ async def test_fetch_result_forwards_pr_resolver_expected_flag(tmp_path: Path) -
         )
 
         result = await activities.agent_runtime_fetch_result(
-            {"run_id": "fr-pr", "pr_resolver_expected": True}
+            {
+                "run_id": "fr-pr",
+                "pr_resolver_expected": True,
+                "pr_resolver_merge_gate_owned": True,
+            }
         )
 
         adapter.fetch_result.assert_awaited_once_with(
-            "fr-pr", pr_resolver_expected=True
+            "fr-pr",
+            pr_resolver_expected=True,
+            pr_resolver_merge_gate_owned=True,
         )
         assert result.failure_class == "user_error"
+
+
+async def test_fetch_result_preserves_legacy_pr_resolver_gate_ownership(
+    tmp_path: Path,
+) -> None:
+    """Missing ownership field keeps old scheduled fetch_result payload semantics."""
+    from unittest.mock import patch
+
+    store = _make_store(tmp_path)
+    _save_record(store, run_id="fr-pr-legacy", status="completed")
+
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+        autospec=True,
+    ) as mock_adapter_cls:
+        adapter = mock_adapter_cls.return_value
+        adapter.fetch_result = AsyncMock(return_value=AgentRunResult(summary="ok"))
+
+        result = await activities.agent_runtime_fetch_result(
+            {"run_id": "fr-pr-legacy", "pr_resolver_expected": True}
+        )
+
+        adapter.fetch_result.assert_awaited_once_with(
+            "fr-pr-legacy",
+            pr_resolver_expected=True,
+            pr_resolver_merge_gate_owned=True,
+        )
+        assert result.summary == "ok"
 
 
 async def test_fetch_result_skips_infrastructure_push_for_jules_runtime(
@@ -3354,7 +3406,9 @@ async def test_fetch_result_string_request_defaults_pr_resolver_expected_false(
         result = await activities.agent_runtime_fetch_result("fr-string")
 
         adapter.fetch_result.assert_awaited_once_with(
-            "fr-string", pr_resolver_expected=False
+            "fr-string",
+            pr_resolver_expected=False,
+            pr_resolver_merge_gate_owned=False,
         )
         assert result.summary == "ok"
 
@@ -3619,7 +3673,9 @@ async def test_agent_runtime_fetch_result_temporal_boundary(tmp_path: Path) -> N
                 assert isinstance(result, AgentRunResult)
                 assert result.summary == "ok"
                 instance.fetch_result.assert_awaited_once_with(
-                    "boundary-1", pr_resolver_expected=True
+                    "boundary-1",
+                    pr_resolver_expected=True,
+                    pr_resolver_merge_gate_owned=True,
                 )
 
 @pytest.mark.asyncio
