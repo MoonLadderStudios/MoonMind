@@ -103,6 +103,10 @@ EXCLUDED_DIR_NAMES = {
     "var",
 }
 
+EXCLUDED_RELATIVE_PREFIXES = {
+    ("deploy", "state"),
+}
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -118,6 +122,8 @@ def _is_scanned_file(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     if any(part in EXCLUDED_DIR_NAMES for part in relative.parts):
+        return False
+    if any(relative.parts[: len(prefix)] == prefix for prefix in EXCLUDED_RELATIVE_PREFIXES):
         return False
     if relative.parts[:3] == (".agents", "skills", "local"):
         return False

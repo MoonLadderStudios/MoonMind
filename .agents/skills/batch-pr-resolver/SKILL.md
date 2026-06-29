@@ -69,13 +69,15 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
      - `payload.idempotencyKey`: stable per parent batch run and PR, hash-backed and capped to the execution persistence limit, so rerunning the same batch task does not create duplicate resolver workflows.
      - `payload.repository`: target repo
      - `payload.task.git.startingBranch`: PR head branch
+     - `payload.task.git.branch`: PR head branch
      - `payload.task.publish.mode`: `none`
      - `payload.task.skill.name`: `pr-resolver`
      - `payload.task.inputs`: `{ repo, pr, branch, mergeMethod, maxIterations }`
    - Submit via the internal Temporal execution API (`POST /api/executions`);
      `MOONMIND_URL` must point at the MoonMind API from the managed session.
 4. Write one summary artifact at `batch_pr_resolver_result.json` under the managed session artifact spool path when available, otherwise under the configured `--artifacts-dir`.
-5. Print a short count summary to stdout (`queued`, `skipped`, `errors`).
+5. If submission errors occur, write `skill_outcome.json` with `status: "failed"` and return non-zero so the parent managed run fails instead of being summarized as successful.
+6. Print a short count summary to stdout (`queued`, `skipped`, `errors`).
 
 ## Safety constraints
 
