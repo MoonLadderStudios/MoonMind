@@ -11,6 +11,7 @@ import pytest
 
 from moonmind.omnigent.execute import (
     LocalOmnigentArtifactGateway,
+    OmnigentArtifactError,
     OmnigentContractError,
     OmnigentCaptureBundle,
     OmnigentSessionStillRunningError,
@@ -639,6 +640,82 @@ async def test_run_omnigent_execution_dereferences_instruction_ref_when_prompt_t
 
 
 @pytest.mark.asyncio
+async def test_run_omnigent_execution_preserves_inline_instruction_ref(
+    monkeypatch,
+) -> None:
+    posted_events: list[dict[str, Any]] = []
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            posted_events.append(payload)
+            return {}
+
+        async def stream_events(self, session_id: str):
+            yield {"type": "response.completed"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            return {"status": "completed", "summary": "done"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            instructionRef="Implement the requested change",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(),
+    )
+
+    assert result.failure_class is None
+    text = posted_events[0]["data"]["content"][0]["text"]
+    assert "Implement the requested change" in text
+
+
+@pytest.mark.asyncio
+async def test_local_omnigent_artifact_gateway_rejects_traversal_refs(tmp_path) -> None:
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+
+    with pytest.raises(OmnigentArtifactError, match="escapes artifact root"):
+        await gateway.read_text("artifact://omnigent/../../secret.txt")
+
+    ref = await gateway.write_bytes(
+        request=_request(),
+        name="../session.log",
+        payload=b"evidence",
+        link_type="output.omnigent.session_file",
+    )
+
+    assert ref == "artifact://omnigent/corr-1/segment/session.log"
+    assert (tmp_path / "corr-1" / "segment" / "session.log").read_bytes() == b"evidence"
+    assert not (tmp_path.parent / "session.log").exists()
+
+
+@pytest.mark.asyncio
 async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
     monkeypatch,
 ) -> None:
@@ -1109,6 +1186,84 @@ async def test_run_omnigent_execution_harvests_changed_and_session_files(
     assert result.metadata["changedFilesIndexRef"].startswith("artifact://omnigent/")
     assert result.metadata["sessionFilesIndexRef"].startswith("artifact://omnigent/")
     assert result.metadata["githubPrUrl"] == "https://github.example/org/repo/pull/1"
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_caps_resource_harvest(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    changed_fetches: list[str] = []
+    session_fetches: list[str] = []
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            return {"pending_id": "pending-1"}
+
+        async def stream_events(self, session_id: str):
+            yield {"type": "response.completed"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            return {"status": "completed", "summary": "done"}
+
+        async def list_changed_files(self, session_id: str) -> dict[str, object]:
+            return {"items": [{"path": f"src/file_{index}.py"} for index in range(101)]}
+
+        async def get_workspace_file(self, session_id: str, path: str) -> bytes:
+            changed_fetches.append(path)
+            return b"changed\n"
+
+        async def list_session_files(self, session_id: str) -> dict[str, object]:
+            return {
+                "items": [
+                    {"id": f"file-{index}", "filename": f"session-{index}.log"}
+                    for index in range(101)
+                ]
+            }
+
+        async def get_session_file_content(self, session_id: str, file_id: str) -> bytes:
+            session_fetches.append(file_id)
+            return b"session evidence\n"
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    assert result.failure_class is None
+    assert len(changed_fetches) == 100
+    assert changed_fetches[-1] == "src/file_99.py"
+    assert len(session_fetches) == 100
+    assert session_fetches[-1] == "file-99"
 
 
 @pytest.mark.asyncio

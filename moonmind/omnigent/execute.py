@@ -59,6 +59,7 @@ _NON_TERMINAL_STATUSES = {
     "waiting",
     "idle",
 }
+_MAX_OMNIGENT_HARVEST_ITEMS = 100
 
 _logger = logging.getLogger(__name__)
 
@@ -133,7 +134,7 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
         root: str | Path = "var/artifacts/omnigent",
         readable_refs: dict[str, str] | None = None,
     ) -> None:
-        self._root = Path(root)
+        self._root = Path(root).resolve()
         self._readable_refs = dict(readable_refs or {})
 
     async def write_json(
@@ -181,7 +182,9 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
     ) -> str:
         safe_correlation = _safe_artifact_segment(request.correlation_id)
         safe_name = _safe_artifact_name(name)
-        path = self._root / safe_correlation / safe_name
+        path = (self._root / safe_correlation / safe_name).resolve()
+        if not path.is_relative_to(self._root):
+            raise OmnigentArtifactError("Omnigent artifact path escapes artifact root")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
         digest = hashlib.sha256(payload).hexdigest()
@@ -208,7 +211,11 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
         prefix = "artifact://omnigent/"
         if artifact_ref.startswith(prefix):
             relative = artifact_ref[len(prefix) :]
-            path = self._root / relative
+            path = (self._root / relative).resolve()
+            if not path.is_relative_to(self._root):
+                raise OmnigentArtifactError(
+                    f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
+                )
             if path.is_file():
                 return path.read_text(encoding="utf-8")
         raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
@@ -216,6 +223,8 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
 
 def _safe_artifact_segment(value: object) -> str:
     text = sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip("-")
+    if text in {".", ".."}:
+        return "segment"
     return text[:120] or "run"
 
 
@@ -369,11 +378,14 @@ async def _build_omnigent_first_message(
     artifact_gateway: OmnigentArtifactGateway,
 ) -> dict[str, Any]:
     text = str(prompt.get("text") or "").strip()
-    instruction_ref = str(
-        prompt.get("instructionRef") or request.instruction_ref or ""
-    ).strip()
+    explicit_instruction_ref = str(prompt.get("instructionRef") or "").strip()
+    inline_instruction = str(request.instruction_ref or "").strip()
+    instruction_ref = explicit_instruction_ref or inline_instruction
     if not text and instruction_ref:
-        text = (await artifact_gateway.read_text(instruction_ref)).strip()
+        if explicit_instruction_ref:
+            text = (await artifact_gateway.read_text(instruction_ref)).strip()
+        else:
+            text = inline_instruction
     if not text:
         text = str((request.parameters or {}).get("description") or "").strip()
     if not text:
@@ -668,7 +680,7 @@ async def _harvest_changed_files(
         link_type="output.omnigent.changed_files.index",
     )
     manifest["changedFilesIndexRef"] = index_ref
-    file_items = _resource_items(changed)
+    file_items = _resource_items(changed)[:_MAX_OMNIGENT_HARVEST_ITEMS]
     harvested: list[dict[str, Any]] = []
     for item in file_items:
         path = str(
@@ -732,7 +744,7 @@ async def _harvest_session_files(
     )
     manifest["sessionFilesIndexRef"] = index_ref
     harvested: list[dict[str, Any]] = []
-    for item in _resource_items(files):
+    for item in _resource_items(files)[:_MAX_OMNIGENT_HARVEST_ITEMS]:
         file_id = str(item.get("id") or item.get("file_id") or item.get("fileId") or "").strip()
         filename = str(item.get("filename") or item.get("name") or file_id).strip()
         if not file_id:
@@ -1127,7 +1139,7 @@ async def run_omnigent_execution(
                 create_response = await client.create_session(session_payload)
                 session_id = _session_id(create_response)
                 if run_store is not None:
-                    durable_row = await run_store.attach_session(
+                    await run_store.attach_session(
                         request.idempotency_key,
                         session_id,
                     )
@@ -1246,7 +1258,8 @@ async def run_omnigent_execution(
                         failure_summary="Unable to reconcile first-message posting state",
                         provider_error_code="omnigent_first_message_reconcile_failed",
                     )
-                durable_row = await run_store.mark_posted(request.idempotency_key)
+                if run_store is not None:
+                    await run_store.mark_posted(request.idempotency_key)
                 first_message_posted = True
             if not first_message_posted:
                 stream_queue = asyncio.Queue()
@@ -1259,10 +1272,10 @@ async def run_omnigent_execution(
                 )
                 await asyncio.sleep(0)
                 if run_store is not None:
-                    durable_row = await run_store.mark_posting(request.idempotency_key)
+                    await run_store.mark_posting(request.idempotency_key)
                 first_message_response = await client.post_event(session_id, first_message)
                 if run_store is not None:
-                    durable_row = await run_store.mark_posted(
+                    await run_store.mark_posted(
                         request.idempotency_key,
                         response=first_message_response,
                     )
