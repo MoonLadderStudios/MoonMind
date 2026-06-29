@@ -377,6 +377,7 @@ STATE_PROPOSALS = "proposals"
 STATE_AWAITING_EXTERNAL = "awaiting_external"
 STATE_FINALIZING = "finalizing"
 STATE_COMPLETED = "completed"
+STATE_NO_COMMIT = "no_commit"
 STATE_CANCELED = "canceled"
 STATE_FAILED = "failed"
 CLOSE_STATUS_COMPLETED = "completed"
@@ -5914,10 +5915,13 @@ class MoonMindRunWorkflow:
                 non_retryable=True,
             )
 
+        terminal_state = (
+            STATE_NO_COMMIT if output_status == "no_commit" else STATE_COMPLETED
+        )
         self._close_status = CLOSE_STATUS_COMPLETED
-        self._set_state(STATE_COMPLETED, summary=output_message)
+        self._set_state(terminal_state, summary=output_message)
         await self._record_terminal_state(
-            state=STATE_COMPLETED,
+            state=terminal_state,
             close_status=CLOSE_STATUS_COMPLETED,
             summary=output_message,
         )

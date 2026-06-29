@@ -4299,6 +4299,140 @@ async def test_run_observes_cancel_after_late_stages_before_completion(
     assert states[-1] == ("canceled", "Execution canceled.")
     assert ("completed", "Workflow completed successfully") not in states
 
+
+@pytest.mark.asyncio
+async def test_run_records_no_commit_terminal_state_for_skipped_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    finalizing_calls: list[dict[str, str | None]] = []
+    terminal_calls: list[dict[str, str | None]] = []
+    states: list[tuple[str, str | None]] = []
+
+    def fake_initialize(
+        _self: MoonMindRunWorkflow,
+        _payload: dict[str, Any],
+    ) -> tuple[str, dict[str, Any], str, str, None]:
+        _self._owner_type = "user"
+        _self._owner_id = "owner-1"
+        _self._entry = "run"
+        return (
+            "MoonMind.UserWorkflow",
+            {"publishMode": "none", "repo": "MoonLadderStudios/MoonMind"},
+            "artifact://input/1",
+            "artifact://plan/1",
+            None,
+        )
+
+    async def fake_run_planning_stage(*_args: Any, **_kwargs: Any) -> str:
+        return "artifact://plan/1"
+
+    async def fake_run_execution_stage(
+        self: MoonMindRunWorkflow,
+        *,
+        parameters: dict[str, Any],
+        plan_ref: str | None,
+    ) -> None:
+        self._publish_status = "skipped"
+        self._publish_reason = "No repository changes were produced."
+
+    async def fake_run_finalizing_stage(
+        self: MoonMindRunWorkflow,
+        *,
+        parameters: dict[str, Any],
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        finalizing_calls.append({"status": status, "error": error})
+
+    async def fake_record_terminal_state(
+        self: MoonMindRunWorkflow,
+        *,
+        state: str,
+        close_status: str,
+        summary: str | None,
+        error_category: str | None = None,
+    ) -> None:
+        terminal_calls.append(
+            {
+                "state": state,
+                "close_status": close_status,
+                "summary": summary,
+                "error_category": error_category,
+            }
+        )
+
+    async def fake_noop_async(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    original_set_state = MoonMindRunWorkflow._set_state
+
+    def capture_set_state(
+        self: MoonMindRunWorkflow,
+        state: str,
+        summary: str | None = None,
+    ) -> None:
+        states.append((state, summary))
+        original_set_state(self, state, summary)
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-no-commit",
+            "run_id": "run-no-commit",
+            "task_queue": "mm.workflow",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(MoonMindRunWorkflow, "_initialize_from_payload", fake_initialize)
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_wait_if_paused_at_safe_boundary",
+        fake_noop_async,
+    )
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_run_planning_stage)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_execution_stage", fake_run_execution_stage)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_proposals_stage", fake_noop_async)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_finalizing_stage", fake_run_finalizing_stage)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_record_terminal_state", fake_record_terminal_state)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_set_state", capture_set_state)
+
+    result = await workflow.run({"workflowType": "MoonMind.UserWorkflow"})
+
+    assert result == {
+        "status": "no_commit",
+        "message": "No repository commit was needed.",
+    }
+    assert finalizing_calls == [
+        {"status": "success", "error": "No repository changes were produced."}
+    ]
+    assert terminal_calls == [
+        {
+            "state": "no_commit",
+            "close_status": "completed",
+            "summary": "No repository commit was needed.",
+            "error_category": None,
+        }
+    ]
+    assert states[-1] == ("no_commit", "No repository commit was needed.")
+    assert ("completed", "No repository commit was needed.") not in states
+    assert workflow._close_status == "completed"
+
 def test_publish_completion_requires_pr_url_for_pr_publish_mode() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._publish_status = "published"
