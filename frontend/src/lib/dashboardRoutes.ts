@@ -18,6 +18,12 @@ export type DashboardRoute = {
   currentPath: string;
 };
 
+export type DashboardClientRouteConfig = {
+  dashboardConfig?: unknown;
+  settingsPermissions?: unknown;
+  workerPause?: unknown;
+};
+
 const WORKFLOW_DETAIL_PATH = /^\/workflows\/[A-Za-z0-9][A-Za-z0-9._:{}-]{0,254}(?:\/(?:steps|artifacts|runs|debug))?$/;
 const MANIFEST_DETAIL_PATH = /^\/manifests\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SCHEDULE_DETAIL_PATH = /^\/schedules\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -75,28 +81,52 @@ function baseInitialData(payload: BootPayload): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {};
 }
 
-export function payloadForDashboardRoute(payload: BootPayload, route: DashboardRoute): BootPayload {
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : null;
+}
+
+function stringArrayValue(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+    ? [...value]
+    : null;
+}
+
+export function payloadForDashboardRoute(
+  payload: BootPayload,
+  route: DashboardRoute,
+  clientConfig?: DashboardClientRouteConfig | null,
+): BootPayload {
   const initialData = baseInitialData(payload);
+  const routeDashboardConfig = objectValue(clientConfig?.dashboardConfig);
   const dashboardConfig =
-    initialData.dashboardConfig && typeof initialData.dashboardConfig === 'object'
-      ? { ...(initialData.dashboardConfig as Record<string, unknown>), initialPath: route.currentPath }
+    routeDashboardConfig ??
+    (initialData.dashboardConfig && typeof initialData.dashboardConfig === 'object'
+      ? { ...(initialData.dashboardConfig as Record<string, unknown>) }
+      : null);
+  const nextDashboardConfig = dashboardConfig
+      ? { ...dashboardConfig, initialPath: route.currentPath }
       : { initialPath: route.currentPath };
   const layout =
     initialData.layout && typeof initialData.layout === 'object'
       ? { ...(initialData.layout as Record<string, unknown>) }
       : {};
   layout.dataWidePanel = route.dataWidePanel;
-  initialData.dashboardConfig = dashboardConfig;
+  initialData.dashboardConfig = nextDashboardConfig;
   initialData.layout = layout;
 
   if (route.page === 'settings') {
-    initialData.workerPause = initialData.workerPause ?? {
+    initialData.workerPause = objectValue(clientConfig?.workerPause) ?? initialData.workerPause ?? {
       get: '/api/system/worker-pause',
       post: '/api/system/worker-pause',
       shardHealth: '/api/workflows/codex/shards',
     };
-    initialData.runtimeConfig = initialData.runtimeConfig ?? dashboardConfig;
-    initialData.settingsPermissions = initialData.settingsPermissions ?? [];
+    initialData.runtimeConfig = initialData.runtimeConfig ?? nextDashboardConfig;
+    initialData.settingsPermissions =
+      stringArrayValue(clientConfig?.settingsPermissions) ??
+      stringArrayValue(initialData.settingsPermissions) ??
+      [];
   }
 
   return {

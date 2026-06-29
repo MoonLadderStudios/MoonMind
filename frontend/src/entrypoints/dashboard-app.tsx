@@ -9,6 +9,7 @@ import {
   isDashboardInternalUrl,
   payloadForDashboardRoute,
   resolveDashboardRoute,
+  type DashboardClientRouteConfig,
   type DashboardRoute,
 } from '../lib/dashboardRoutes';
 import { DASHBOARD_NAVIGATE_EVENT, navigateTo } from '../lib/navigation';
@@ -176,17 +177,23 @@ function PageContent({ payload }: { payload: BootPayload }) {
 export function DashboardApp({ payload }: { payload: BootPayload }) {
   const [route, setRoute] = useState<DashboardRoute>(() => currentDashboardRoute(payload));
   const [hasClientNavigated, setHasClientNavigated] = useState(false);
+  const [clientRouteConfig, setClientRouteConfig] = useState<DashboardClientRouteConfig | null>(null);
   const routedPayload = useMemo(
-    () => (hasClientNavigated ? payloadForDashboardRoute(payload, route) : payload),
-    [hasClientNavigated, payload, route],
+    () => (hasClientNavigated ? payloadForDashboardRoute(payload, route, clientRouteConfig) : payload),
+    [clientRouteConfig, hasClientNavigated, payload, route],
   );
   const layout = readSharedLayout(routedPayload);
+  const routeKey =
+    typeof window === 'undefined'
+      ? `${route.page}:${route.currentPath}`
+      : `${route.page}:${route.currentPath}${window.location.search}${window.location.hash}`;
 
   useEffect(() => {
     const refreshRoute = () => {
       const nextRoute = resolveDashboardRoute(window.location.pathname);
       if (nextRoute) {
         setHasClientNavigated(true);
+        setClientRouteConfig(null);
         setRoute(nextRoute);
       }
     };
@@ -229,12 +236,43 @@ export function DashboardApp({ payload }: { payload: BootPayload }) {
   }, []);
 
   useEffect(() => {
+    if (!hasClientNavigated) {
+      return;
+    }
+    const controller = new AbortController();
+    const currentPath = route.currentPath;
+
+    fetch(`/api/dashboard/config?currentPath=${encodeURIComponent(currentPath)}`, {
+      credentials: 'same-origin',
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Dashboard config request failed: ${response.status}`);
+        }
+        return response.json() as Promise<DashboardClientRouteConfig>;
+      })
+      .then((config) => {
+        setClientRouteConfig(config);
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          setClientRouteConfig(null);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [hasClientNavigated, route.currentPath]);
+
+  useEffect(() => {
     setActiveNavigation(route);
   }, [route]);
 
   return (
     <AppShell dataWidePanel={layout.dataWidePanel === true}>
-      <PageContent payload={routedPayload} />
+      <PageContent key={routeKey} payload={routedPayload} />
     </AppShell>
   );
 }
