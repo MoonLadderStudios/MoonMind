@@ -369,9 +369,11 @@ async def _detect_optional_temporal_search_attributes(
         if _search_attribute_type_value(attrs.get(name)) == int(expected_type):
             usable.add(name)
         elif name in attrs:
+            expected_type_name = getattr(expected_type, "name", str(expected_type))
             logger.error(
-                "Temporal Search Attribute %s has unexpected type; expected KeywordList.",
+                "Temporal Search Attribute %s has unexpected type; expected %s.",
                 name,
+                expected_type_name,
             )
     logger.info(
         "Temporal optional Search Attributes usable: %s",
