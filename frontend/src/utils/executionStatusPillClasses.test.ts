@@ -26,6 +26,15 @@ describe('executionStatusPillProps', () => {
     });
   });
 
+  it('can render active status colors without shimmer metadata for passive contexts', () => {
+    expect(executionStatusPillProps('executing', { enableMotion: false })).toEqual({
+      className: 'status status-running',
+    });
+    expect(executionStatusPillProps('running', { enableMotion: false })).toEqual({
+      className: 'status status-running',
+    });
+  });
+
   it('keeps the existing class helper output for non-executing states across the MM-491 state matrix', () => {
     expect(executionStatusPillProps('completed')).toEqual({ className: 'status status-completed' });
     expect(executionStatusPillProps('failed')).toEqual({ className: 'status status-failed' });

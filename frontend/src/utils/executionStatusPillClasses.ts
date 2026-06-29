@@ -24,6 +24,10 @@ export type ExecutionStatusPillProps = Readonly<{
   'data-shimmer-label'?: string;
 }>;
 
+export type ExecutionStatusPillOptions = Readonly<{
+  enableMotion?: boolean;
+}>;
+
 function normalizedExecutionStatusKey(status: string | null | undefined): string {
   return String(status || '')
     .toLowerCase()
@@ -66,11 +70,14 @@ function isShimmerSweepStatusKey(key: string): key is ShimmerSweepStatusKey {
   return SHIMMER_SWEEP_STATUS_KEYS.has(key);
 }
 
-export function executionStatusPillProps(status: string | null | undefined): ExecutionStatusPillProps {
+export function executionStatusPillProps(
+  status: string | null | undefined,
+  options: ExecutionStatusPillOptions = {},
+): ExecutionStatusPillProps {
   const key = normalizedExecutionStatusKey(status);
   const className = executionStatusBaseClasses(key);
 
-  if (isShimmerSweepStatusKey(key)) {
+  if (options.enableMotion !== false && isShimmerSweepStatusKey(key)) {
     return {
       className: `${className} is-${key}`,
       'data-state': key,

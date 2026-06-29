@@ -2720,9 +2720,9 @@ tr[data-proposal-id].proposal-consuming td {
 .status-queued,
 .status-scheduled,
 .status-awaiting-slot {
-  color: #8248F6;
-  background: rgb(130 72 246 / 0.14);
-  border-color: rgb(130 72 246 / 0.62);
+  color: rgb(var(--mm-status-queued, 130 72 246));
+  background: rgb(var(--mm-status-queued, 130 72 246) / 0.14);
+  border-color: rgb(var(--mm-status-queued, 130 72 246) / 0.62);
 }
 
 .status-awaiting_action {
@@ -2734,22 +2734,22 @@ tr[data-proposal-id].proposal-consuming td {
 .status-waiting,
 .status-awaiting-dependencies,
 .status-awaiting-external {
-  color: #EC4899;
-  background: rgb(236 72 153 / 0.14);
-  border-color: rgb(236 72 153 / 0.62);
+  color: rgb(var(--mm-status-waiting, 236 72 153));
+  background: rgb(var(--mm-status-waiting, 236 72 153) / 0.14);
+  border-color: rgb(var(--mm-status-waiting, 236 72 153) / 0.62);
 }
 
 .status-initializing,
 .status-planning {
-  color: #6366F1;
-  background: rgb(99 102 241 / 0.14);
-  border-color: rgb(99 102 241 / 0.62);
+  color: rgb(var(--mm-status-setup, 99 102 241));
+  background: rgb(var(--mm-status-setup, 99 102 241) / 0.14);
+  border-color: rgb(var(--mm-status-setup, 99 102 241) / 0.62);
 }
 
 .status-finalizing {
-  color: #64748B;
-  background: rgb(100 116 139 / 0.14);
-  border-color: rgb(100 116 139 / 0.62);
+  color: rgb(var(--mm-status-finalizing, 100 116 139));
+  background: rgb(var(--mm-status-finalizing, 100 116 139) / 0.14);
+  border-color: rgb(var(--mm-status-finalizing, 100 116 139) / 0.62);
 }
 
 .status-succeeded,
@@ -2772,9 +2772,9 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .status-canceled {
-  color: #F97316;
-  background: rgb(249 115 22 / 0.14);
-  border-color: rgb(249 115 22 / 0.62);
+  color: rgb(var(--mm-status-canceled, 249 115 22));
+  background: rgb(var(--mm-status-canceled, 249 115 22) / 0.14);
+  border-color: rgb(var(--mm-status-canceled, 249 115 22) / 0.62);
 }
 
 .status-neutral {

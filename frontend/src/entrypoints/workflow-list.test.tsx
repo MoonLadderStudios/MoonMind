@@ -1518,6 +1518,8 @@ describe('Workflows Entrypoint', () => {
     const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
 
     for (const value of [
+      'executing',
+      'running',
       'scheduled',
       'awaiting_slot',
       'waiting_on_dependencies',
@@ -1532,6 +1534,7 @@ describe('Workflows Entrypoint', () => {
     }
 
     const pillList = screen.getByLabelText('Selected status filters');
+    expect(pillList.querySelectorAll('.status-running')).toHaveLength(2);
     expect(pillList.querySelector('.status-scheduled')).toBeTruthy();
     expect(pillList.querySelector('.status-awaiting-slot')).toBeTruthy();
     expect(pillList.querySelector('.status-awaiting-dependencies')).toBeTruthy();

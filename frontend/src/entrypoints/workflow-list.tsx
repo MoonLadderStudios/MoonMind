@@ -1721,7 +1721,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             values={draft.values}
             options={[...TEMPORAL_STATUSES]}
             formatValue={formatStatusLabel}
-            renderValue={(value) => <ExecutionStatusPill status={value} />}
+            renderValue={(value) => <ExecutionStatusPill status={value} enableMotion={false} />}
             disabled={!listEnabled}
             ariaLabelAdd="Status filter value"
             ariaLabelSelected="Selected status filters"
