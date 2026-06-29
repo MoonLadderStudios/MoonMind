@@ -54,6 +54,8 @@ def test_build_payload_uses_jira_implement_pr_with_merge_automation() -> None:
     assert request_payload["targetRuntime"] == "codex_cli"
     assert request_payload["publishMode"] == "pr"
     assert request_payload["mergeAutomation"] == {"enabled": True}
+    assert "integration" not in request_payload
+    assert request_payload["metadata"] == {"integration": "jira"}
     assert request_payload["idempotencyKey"] == (
         "jira-implement:MM-770:MoonLadderStudios/MoonMind:codex_cli:"
         "pr-merge-automation-expanded-steps"

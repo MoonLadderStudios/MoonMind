@@ -997,6 +997,42 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
     assert kwargs["page_size"] == 25
     assert kwargs["next_page_token"] == "token-123"
 
+
+def test_create_task_shaped_execution_keeps_integration_as_metadata(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "integration": "jira",
+                "targetRuntime": "codex_cli",
+                "task": {
+                    "title": "Run Jira Implement for MM-770",
+                    "instructions": "Complete Jira issue MM-770.",
+                    "steps": [
+                        {
+                            "id": "step-1",
+                            "title": "Implement",
+                            "instructions": "Implement MM-770.",
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    kwargs = service.create_execution.await_args.kwargs
+    assert kwargs["integration"] == "jira"
+    assert "integration" not in kwargs["initial_parameters"]
+
+
 def test_list_executions_temporal_query_includes_target_runtime_filter() -> None:
     app = FastAPI()
     app.include_router(router)

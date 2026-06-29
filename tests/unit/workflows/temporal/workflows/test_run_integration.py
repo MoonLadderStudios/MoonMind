@@ -168,6 +168,25 @@ def test_run_workflow_skill_context_includes_remediation_policy() -> None:
     }
 
 
+def test_jira_integration_parameter_is_visibility_only() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_integration_from_parameters({"integration": "jira"})
+
+    assert workflow._integration_label == "jira"
+    assert workflow._integration is None
+
+
+def test_jules_integration_parameter_enables_external_monitor() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_integration_from_parameters({"integration": "JULES"})
+
+    assert workflow._integration_label == "jules"
+    assert workflow._integration == "jules"
+    assert workflow._integration_activity_type("start") == "integration.jules.start"
+
+
 @pytest.fixture
 def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     workflow = MoonMindRunWorkflow()
