@@ -477,6 +477,10 @@ class PresetSummarySchema(BaseModel):
     required_capabilities: list[str] = Field(
         default_factory=list, alias="requiredCapabilities"
     )
+    inputs: list[PresetInputSchema] = Field(default_factory=list)
+    input_schema: dict[str, Any] = Field(default_factory=dict, alias="inputSchema")
+    ui_schema: dict[str, Any] = Field(default_factory=dict, alias="uiSchema")
+    defaults: dict[str, Any] = Field(default_factory=dict)
     release_status: str = Field("draft", alias="releaseStatus")
 
 class PresetListResponseSchema(BaseModel):
@@ -489,10 +493,6 @@ class PresetListResponseSchema(BaseModel):
 class PresetResponseSchema(PresetSummarySchema):
     """Detail response model for one preset."""
 
-    inputs: list[PresetInputSchema] = Field(default_factory=list)
-    input_schema: dict[str, Any] = Field(default_factory=dict, alias="inputSchema")
-    ui_schema: dict[str, Any] = Field(default_factory=dict, alias="uiSchema")
-    defaults: dict[str, Any] = Field(default_factory=dict)
     steps: list[PresetStepBlueprintSchema] = Field(default_factory=list)
     annotations: dict[str, Any] = Field(default_factory=dict)
     reviewed_by: Optional[str] = Field(None, alias="reviewedBy")

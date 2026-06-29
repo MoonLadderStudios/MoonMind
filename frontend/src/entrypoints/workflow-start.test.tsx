@@ -7397,6 +7397,14 @@ describe.skip("Task Create Entrypoint", () => {
                 description: "First preset.",
                 latestVersion: "1",
                 version: "1",
+                inputs: [
+                  {
+                    name: "preset_a_input",
+                    label: "Preset A Input",
+                    type: "text",
+                    required: false,
+                  },
+                ],
               },
               {
                 slug: "preset-b",
@@ -7405,6 +7413,14 @@ describe.skip("Task Create Entrypoint", () => {
                 description: "Second preset.",
                 latestVersion: "1",
                 version: "1",
+                inputs: [
+                  {
+                    name: "preset_b_input",
+                    label: "Preset B Input",
+                    type: "text",
+                    required: false,
+                  },
+                ],
               },
             ],
           }),
@@ -8277,30 +8293,8 @@ describe.skip("Task Create Entrypoint", () => {
     expect(secondPreset.value).toBe(secondValue);
   });
 
-  it("ignores stale step preset details after switching presets", async () => {
+  it("renders step preset options from catalog rows without detail requests", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    let resolvePresetA: ((response: Response) => void) | null = null;
-    let resolvePresetB: ((response: Response) => void) | null = null;
-    const detailResponse = (slug: string, label: string) =>
-      ({
-        ok: true,
-        json: async () => ({
-          slug,
-          scope: "global",
-          title: label,
-          description: `${label} detail.`,
-          latestVersion: "1",
-          version: "1",
-          inputs: [
-            {
-              name: `${slug}_input`,
-              label: `${label} Input`,
-              type: "text",
-              required: false,
-            },
-          ],
-        }),
-      }) as Response;
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith("/api/presets?scope=global")) {
@@ -8328,16 +8322,6 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/preset-a?scope=global")) {
-        return new Promise<Response>((resolve) => {
-          resolvePresetA = resolve;
-        });
-      }
-      if (url.startsWith("/api/presets/preset-b?scope=global")) {
-        return new Promise<Response>((resolve) => {
-          resolvePresetB = resolve;
-        });
-      }
       return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
     });
 
@@ -8355,29 +8339,21 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, {
       target: { value: "global::::preset-a" },
     });
-    await waitFor(() => {
-      expect(resolvePresetA).not.toBeNull();
-    });
+    expect(await within(step).findByLabelText("Preset A Input")).toBeTruthy();
+
     fireEvent.change(presetSelect, {
       target: { value: "global::::preset-b" },
     });
     await waitFor(() => {
-      expect(resolvePresetB).not.toBeNull();
-    });
-
-    const resolveB = resolvePresetB as ((response: Response) => void) | null;
-    const resolveA = resolvePresetA as ((response: Response) => void) | null;
-    if (!resolveB || !resolveA) {
-      throw new Error("Preset detail requests were not started.");
-    }
-    resolveB(detailResponse("preset-b", "Preset B"));
-    expect(await within(step).findByLabelText("Preset B Input")).toBeTruthy();
-
-    resolveA(detailResponse("preset-a", "Preset A"));
-    await waitFor(() => {
       expect(within(step).queryByLabelText("Preset A Input")).toBeNull();
       expect(within(step).getByLabelText("Preset B Input")).toBeTruthy();
     });
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).startsWith("/api/presets/preset-a?scope=global") ||
+        String(url).startsWith("/api/presets/preset-b?scope=global"),
+      ),
+    ).toBe(false);
   });
 
   it("expands a step preset by replacing the selected preset step with editable generated steps", async () => {
@@ -14001,13 +13977,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       target: { value: "global::::mm-578-preset" },
     });
     await waitFor(() => {
-      expect(
-        fetchSpy.mock.calls.some(([url]) =>
-          String(url).startsWith(
-            "/api/presets/mm-578-preset?scope=global",
-          ),
-        ),
-      ).toBe(true);
+      expect(within(step).getByLabelText("Jira Issue Key")).toBeTruthy();
     });
   }
 
@@ -14056,6 +14026,14 @@ describe("Task Create MM-578 Preset expansion", () => {
               description: "Expand Preset steps.",
               latestVersion: "1",
               version: "1",
+              inputs: [
+                {
+                  name: "issue_key",
+                  label: "Jira Issue Key",
+                  type: "text",
+                  required: true,
+                },
+              ],
             },
           ],
         }),
@@ -15527,6 +15505,29 @@ describe("Task Create schema-driven capability inputs", () => {
               description: "Schema-driven Jira preset.",
               latestVersion: "1",
               version: "1",
+              inputSchema: {
+                type: "object",
+                required: ["jira_issue"],
+                properties: {
+                  jira_issue: {
+                    type: "object",
+                    title: "Jira issue",
+                    required: ["key"],
+                    properties: {
+                      key: { type: "string", title: "Issue key" },
+                      summary: { type: "string", title: "Summary" },
+                    },
+                  },
+                },
+              },
+              uiSchema: {
+                jira_issue: {
+                  widget: "jira.issue-picker",
+                  allowManualKeyEntry: true,
+                  searchPlaceholder: "Search Jira issues",
+                },
+              },
+              defaults: {},
             },
             {
               slug: "github-schema-preset",
@@ -15535,6 +15536,34 @@ describe("Task Create schema-driven capability inputs", () => {
               description: "Schema-driven GitHub preset.",
               latestVersion: "1",
               version: "1",
+              inputSchema: {
+                type: "object",
+                required: ["github_issue"],
+                properties: {
+                  github_issue: {
+                    type: "object",
+                    title: "GitHub issue",
+                    required: ["repository", "number"],
+                    properties: {
+                      repository: { type: "string", title: "Repository" },
+                      number: { type: "integer", title: "Issue number" },
+                      title: { type: "string" },
+                      body: { type: "string" },
+                      url: { type: "string", format: "uri" },
+                      state: { type: "string" },
+                      labels: { type: "array", items: { type: "string" } },
+                    },
+                  },
+                },
+              },
+              uiSchema: {
+                github_issue: {
+                  widget: "github.issue-picker",
+                  allowManualIssueEntry: true,
+                  searchPlaceholder: "Search GitHub issues",
+                },
+              },
+              defaults: {},
             },
             {
               slug: "generic-schema-preset",
@@ -15543,6 +15572,60 @@ describe("Task Create schema-driven capability inputs", () => {
               description: "Schema-driven generic preset.",
               latestVersion: "1",
               version: "1",
+              inputSchema: {
+                type: "object",
+                required: ["summary", "urgent"],
+                properties: {
+                  summary: { type: "string", title: "Summary" },
+                  urgent: { type: "boolean", title: "Urgent" },
+                  estimate: { type: "number", title: "Estimate" },
+                  priority: {
+                    type: "string",
+                    title: "Priority",
+                    enum: ["low", "high"],
+                  },
+                  labels: {
+                    type: "array",
+                    title: "Labels",
+                    description: "JSON array of labels",
+                    items: { type: "string" },
+                  },
+                  metadata: { type: "object", title: "Metadata" },
+                  assignee_email: {
+                    type: "string",
+                    format: "email",
+                    title: "Assignee email",
+                  },
+                  mode: {
+                    title: "Mode",
+                    oneOf: [
+                      { const: "draft", title: "Draft" },
+                      { const: "submit", title: "Submit" },
+                    ],
+                  },
+                  unsupported_widget: {
+                    type: "string",
+                    title: "Unsupported widget",
+                    "x-moonmind-widget": "external.lookup",
+                  },
+                  unsafe_default: {
+                    type: "string",
+                    title: "Unsafe default",
+                  },
+                },
+              },
+              uiSchema: {},
+              defaults: {
+                summary: "Default summary",
+                urgent: false,
+                estimate: 3,
+                priority: "high",
+                labels: ["schema"],
+                metadata: { source: "fixture" },
+                assignee_email: "team@example.com",
+                mode: "draft",
+                unsafe_default: "token=raw-secret",
+              },
             },
           ],
         }),
@@ -16734,6 +16817,8 @@ describe("Task Create governed Tool authoring", () => {
                 description: "Seed a two-step planning flow.",
                 latestVersion: "1.2.3",
                 version: "1.2.3",
+                requiredCapabilities: ["jira"],
+                inputs: [],
               },
             ],
           }),

@@ -62,8 +62,22 @@ def test_list_templates_success() -> None:
             "isFavorite": False,
             "recentAppliedAt": None,
             "requiredCapabilities": ["codex"],
+            "inputs": [
+                {
+                    "name": "goal",
+                    "label": "Goal",
+                    "type": "text",
+                    "required": True,
+                }
+            ],
+            "inputSchema": {
+                "type": "object",
+                "required": ["goal"],
+                "properties": {"goal": {"type": "string", "title": "Goal"}},
+            },
+            "uiSchema": {},
+            "defaults": {},
             "releaseStatus": "active",
-            "inputs": [],
             "steps": [{"instructions": "do work"}],
             "annotations": {},
             "reviewedBy": None,
@@ -74,7 +88,11 @@ def test_list_templates_success() -> None:
     response = client.get("/api/presets", params={"scope": "global"})
 
     assert response.status_code == 200
-    assert response.json()["items"][0]["slug"] == "example"
+    item = response.json()["items"][0]
+    assert item["slug"] == "example"
+    assert item["inputSchema"]["required"] == ["goal"]
+    assert item["inputs"][0]["name"] == "goal"
+    assert "steps" not in item
 
 def test_list_templates_defaults_to_personal_scope_when_omitted() -> None:
     client, catalog, _ = _build_app()

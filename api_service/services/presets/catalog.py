@@ -1184,12 +1184,13 @@ def _serialize_template(
     template: Preset,
     is_favorite: bool,
     recent_applied_at: datetime | None,
+    include_detail: bool,
 ) -> dict[str, Any]:
     input_schema, ui_schema, defaults = _capability_contract_from_inputs(
         inputs_schema=template.inputs_schema or [],
         annotations=template.annotations or {},
     )
-    return {
+    serialized = {
         "slug": template.slug,
         "scope": template.scope_type.value,
         "scopeRef": template.scope_ref,
@@ -1203,20 +1204,30 @@ def _serialize_template(
         "inputSchema": input_schema,
         "uiSchema": ui_schema,
         "defaults": defaults,
-        "steps": list(template.steps or []),
-        "annotations": dict(template.annotations or {}),
         "requiredCapabilities": _normalize_capabilities(
             list(template.required_capabilities or [])
         ),
         "releaseStatus": template.release_status.value,
-        "reviewedBy": str(template.reviewed_by) if template.reviewed_by else None,
-        "reviewedAt": template.reviewed_at.isoformat() if template.reviewed_at else None,
         "presetDigest": _preset_digest(template),
         "isFavorite": is_favorite,
         "recentAppliedAt": (
             recent_applied_at.astimezone(UTC).isoformat() if recent_applied_at else None
         ),
     }
+    if include_detail:
+        serialized.update(
+            {
+                "steps": list(template.steps or []),
+                "annotations": dict(template.annotations or {}),
+                "reviewedBy": str(template.reviewed_by)
+                if template.reviewed_by
+                else None,
+                "reviewedAt": template.reviewed_at.isoformat()
+                if template.reviewed_at
+                else None,
+            }
+        )
+    return serialized
 
 def load_seed_template_definitions(seed_dir: Path) -> list[dict[str, Any]]:
     """Load seed template definitions from YAML files."""
@@ -1356,6 +1367,7 @@ class PresetCatalogService:
                     template=template,
                     is_favorite=is_favorite,
                     recent_applied_at=recents_map.get(template.id),
+                    include_detail=False,
                 )
             )
         serialized.sort(
@@ -1417,6 +1429,7 @@ class PresetCatalogService:
             template=template,
             is_favorite=is_favorite,
             recent_applied_at=recent_applied_at,
+            include_detail=True,
         )
 
     async def create_template(
@@ -1503,6 +1516,7 @@ class PresetCatalogService:
             template=template,
             is_favorite=False,
             recent_applied_at=None,
+            include_detail=True,
         )
 
     def _validate_inputs_schema(
@@ -2519,6 +2533,7 @@ class PresetCatalogService:
             template=template,
             is_favorite=False,
             recent_applied_at=None,
+            include_detail=True,
         )
 
     async def import_seed_templates(
