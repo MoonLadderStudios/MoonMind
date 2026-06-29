@@ -62,6 +62,30 @@ def test_legacy_workflow_lifecycle_routes_return_gone(
     repo.assert_not_awaited()
 
 
+def test_legacy_workflow_lifecycle_routes_are_gone_in_openapi(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    http_client, _repo = client
+
+    schema = http_client.get("/openapi.json").json()
+
+    for path, method in (
+        ("/api/workflows/runs", "get"),
+        ("/api/workflows/runs/{run_id}", "get"),
+        ("/api/workflows/runs/{run_id}/tasks", "get"),
+        ("/api/workflows/runs/{run_id}/artifacts", "get"),
+        ("/api/workflows/runs/{run_id}/artifacts/{artifact_id}", "get"),
+        (
+            "/api/workflows/runs/{run_id}/artifacts/{artifact_id}/download",
+            "get",
+        ),
+        ("/api/workflows/runs/{run_id}/retry", "post"),
+    ):
+        responses = schema["paths"][path][method]["responses"]
+        assert "410" in responses
+        assert "200" not in responses
+
+
 def test_codex_shards_moved_to_operations_namespace(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

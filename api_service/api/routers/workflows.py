@@ -32,6 +32,10 @@ operations_router = APIRouter(prefix="/api/v1/operations/codex", tags=["operatio
 legacy_router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
 _AFFINITY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_LEGACY_GONE_ROUTE_KWARGS = {
+    "status_code": status.HTTP_410_GONE,
+    "response_description": "Gone",
+}
 
 def _is_workflow_admin(user: User | None) -> bool:
     return bool(user and getattr(user, "is_superuser", False))
@@ -263,39 +267,43 @@ async def trigger_codex_preflight(
         message=preflight_message,
     )
 
-@legacy_router.get("/runs")
+@legacy_router.get("/runs", **_LEGACY_GONE_ROUTE_KWARGS)
 async def legacy_list_workflow_runs_gone() -> None:
     _raise_legacy_workflow_runs_gone()
 
 
-@legacy_router.get("/runs/{run_id}")
+@legacy_router.get("/runs/{run_id}", **_LEGACY_GONE_ROUTE_KWARGS)
 async def legacy_get_workflow_run_gone(run_id: UUID) -> None:
     _raise_legacy_workflow_runs_gone()
 
 
-@legacy_router.get("/runs/{run_id}/tasks")
+@legacy_router.get("/runs/{run_id}/tasks", **_LEGACY_GONE_ROUTE_KWARGS)
 async def legacy_list_workflow_run_tasks_gone(run_id: UUID) -> None:
     _raise_legacy_workflow_runs_gone()
 
 
-@legacy_router.get("/runs/{run_id}/artifacts")
+@legacy_router.get("/runs/{run_id}/artifacts", **_LEGACY_GONE_ROUTE_KWARGS)
 async def legacy_list_workflow_run_artifacts_gone(run_id: UUID) -> None:
     _raise_legacy_workflow_runs_gone()
 
 
-@legacy_router.get("/runs/{run_id}/artifacts/{artifact_id}")
+@legacy_router.get(
+    "/runs/{run_id}/artifacts/{artifact_id}", **_LEGACY_GONE_ROUTE_KWARGS
+)
 async def legacy_get_workflow_run_artifact_gone(run_id: UUID, artifact_id: UUID) -> None:
     _raise_legacy_workflow_runs_gone()
 
 
-@legacy_router.get("/runs/{run_id}/artifacts/{artifact_id}/download")
+@legacy_router.get(
+    "/runs/{run_id}/artifacts/{artifact_id}/download", **_LEGACY_GONE_ROUTE_KWARGS
+)
 async def legacy_download_workflow_run_artifact_gone(
     run_id: UUID, artifact_id: UUID
 ) -> None:
     _raise_legacy_workflow_runs_gone()
 
 
-@legacy_router.post("/runs/{run_id}/retry")
+@legacy_router.post("/runs/{run_id}/retry", **_LEGACY_GONE_ROUTE_KWARGS)
 async def legacy_retry_workflow_run_gone(run_id: UUID) -> None:
     _raise_legacy_workflow_runs_gone()
 
