@@ -341,11 +341,6 @@ async def resolve_session_elicitation(
                 ),
             ) from exc
         raise
-    if record.status in agent_runs_router._MANAGED_SESSION_TERMINAL_STATUSES:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This managed session is not available for elicitation resolution.",
-        )
     control = ArtifactSessionControlRequest(
         action="send_follow_up",
         message=_ELICITATION_DECISION_MESSAGES[decision],
