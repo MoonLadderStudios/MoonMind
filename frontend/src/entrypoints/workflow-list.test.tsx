@@ -384,6 +384,87 @@ describe('Workflows Entrypoint', () => {
     expect(executionListCalls().some(([url]) => String(url).includes('/steps'))).toBe(false);
   });
 
+  it('preserves Progress exclude filters from shared URLs', async () => {
+    window.history.pushState(
+      {},
+      'Progress excludes',
+      '/workflows?progressBucketNotIn=complete&progressSignalNotIn=has_failed_steps&limit=50',
+    );
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-visible',
+            source: 'temporal',
+            title: 'Visible progress',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-03-28T00:00:00Z',
+            progress: {
+              total: 4,
+              succeeded: 1,
+              running: 1,
+              currentStepTitle: 'Implement',
+              updatedAt: '2026-03-28T00:01:00Z',
+            },
+          },
+          {
+            taskId: 'task-complete',
+            source: 'temporal',
+            title: 'Complete progress',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            createdAt: '2026-03-28T00:00:00Z',
+            progress: {
+              total: 4,
+              succeeded: 4,
+              updatedAt: '2026-03-28T00:01:00Z',
+            },
+          },
+          {
+            taskId: 'task-failed',
+            source: 'temporal',
+            title: 'Failed progress',
+            status: 'failed',
+            state: 'failed',
+            rawState: 'failed',
+            createdAt: '2026-03-28T00:00:00Z',
+            progress: {
+              total: 4,
+              succeeded: 1,
+              failed: 1,
+              currentStepTitle: 'Test',
+              updatedAt: '2026-03-28T00:01:00Z',
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findByText('Visible progress');
+
+    await waitFor(() => {
+      expect(lastExecutionListUrl()).toBe(
+        '/api/executions?source=temporal&pageSize=50&progressBucketNotIn=complete&progressSignalNotIn=has_failed_steps',
+      );
+    });
+    expect(window.location.search).toBe(
+      '?progressBucketNotIn=complete&progressSignalNotIn=has_failed_steps&limit=50',
+    );
+    expect(
+      screen.getByRole('button', {
+        name: /Progress filter: not Complete, not Has failed steps/i,
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByText('Complete progress')).toBeNull();
+    expect(screen.queryByText('Failed progress')).toBeNull();
+  });
+
   it('preserves allowlisted list context on workflow detail links and keeps browser back target intact (MM-998, MM-975)', async () => {
     window.history.pushState(
       {},

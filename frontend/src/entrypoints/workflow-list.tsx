@@ -187,7 +187,9 @@ type ProgressFilter = {
   pctFrom?: string;
   pctTo?: string;
   bucketIn: ProgressBucket[];
+  bucketNotIn: ProgressBucket[];
   signalIn: ProgressSignal[];
+  signalNotIn: ProgressSignal[];
   stepTitleContains?: string;
   blank?: 'include' | 'exclude' | '';
 };
@@ -263,7 +265,16 @@ function rowWorkflowId(row: ExecutionRow): string {
 }
 
 function emptyProgressFilter(): ProgressFilter {
-  return { pctFrom: '', pctTo: '', bucketIn: [], signalIn: [], stepTitleContains: '', blank: '' };
+  return {
+    pctFrom: '',
+    pctTo: '',
+    bucketIn: [],
+    bucketNotIn: [],
+    signalIn: [],
+    signalNotIn: [],
+    stepTitleContains: '',
+    blank: '',
+  };
 }
 
 const ExecutionFacetResponseSchema = z.object({
@@ -467,9 +478,17 @@ function rowMatchesProgressFilter(row: ExecutionRow, filter: ProgressFilter): bo
     const bucket = progressBucket(row);
     if (!bucket || !filter.bucketIn.includes(bucket)) return false;
   }
+  if (filter.bucketNotIn.length > 0) {
+    const bucket = progressBucket(row);
+    if (bucket && filter.bucketNotIn.includes(bucket)) return false;
+  }
   if (filter.signalIn.length > 0) {
     const rowSignals = progressSignals(row);
     if (!filter.signalIn.some((signal) => rowSignals.includes(signal))) return false;
+  }
+  if (filter.signalNotIn.length > 0) {
+    const rowSignals = progressSignals(row);
+    if (filter.signalNotIn.some((signal) => rowSignals.includes(signal))) return false;
   }
   const stepNeedle = (filter.stepTitleContains || '').trim().toLowerCase();
   if (stepNeedle) {
@@ -663,6 +682,18 @@ function splitParam(params: URLSearchParams, key: string): string[] {
   return splitParamValues(params.getAll(key));
 }
 
+function progressBucketParams(params: URLSearchParams, key: string): ProgressBucket[] {
+  return splitParam(params, key).filter((value): value is ProgressBucket =>
+    (PROGRESS_BUCKET_OPTIONS as readonly string[]).includes(value),
+  );
+}
+
+function progressSignalParams(params: URLSearchParams, key: string): ProgressSignal[] {
+  return splitParam(params, key).filter((value): value is ProgressSignal =>
+    (PROGRESS_SIGNAL_OPTIONS as readonly string[]).includes(value),
+  );
+}
+
 function validateCanonicalFilterPair(
   params: URLSearchParams,
   includeParam: string,
@@ -735,12 +766,10 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
   filters.progress = {
     pctFrom: params.get('progressPctFrom') || '',
     pctTo: params.get('progressPctTo') || '',
-    bucketIn: splitParam(params, 'progressBucketIn').filter((value): value is ProgressBucket =>
-      (PROGRESS_BUCKET_OPTIONS as readonly string[]).includes(value),
-    ),
-    signalIn: splitParam(params, 'progressSignalIn').filter((value): value is ProgressSignal =>
-      (PROGRESS_SIGNAL_OPTIONS as readonly string[]).includes(value),
-    ),
+    bucketIn: progressBucketParams(params, 'progressBucketIn'),
+    bucketNotIn: progressBucketParams(params, 'progressBucketNotIn'),
+    signalIn: progressSignalParams(params, 'progressSignalIn'),
+    signalNotIn: progressSignalParams(params, 'progressSignalNotIn'),
     stepTitleContains: params.get('progressStepTitleContains') || '',
     blank: (params.get('progressBlank') as ProgressFilter['blank']) || '',
   };
@@ -797,7 +826,9 @@ function appendProgressParams(params: URLSearchParams, filter: ProgressFilter) {
   if (filter.pctFrom?.trim()) params.set('progressPctFrom', filter.pctFrom.trim());
   if (filter.pctTo?.trim()) params.set('progressPctTo', filter.pctTo.trim());
   if (filter.bucketIn.length > 0) params.set('progressBucketIn', filter.bucketIn.join(','));
+  if (filter.bucketNotIn.length > 0) params.set('progressBucketNotIn', filter.bucketNotIn.join(','));
   if (filter.signalIn.length > 0) params.set('progressSignalIn', filter.signalIn.join(','));
+  if (filter.signalNotIn.length > 0) params.set('progressSignalNotIn', filter.signalNotIn.join(','));
   if (filter.stepTitleContains?.trim()) {
     params.set('progressStepTitleContains', filter.stepTitleContains.trim());
   }
@@ -942,8 +973,16 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
     if (progressFilter.bucketIn.length > 0) {
       parts.push(progressFilter.bucketIn.map(formatProgressBucket).join(', '));
     }
+    if (progressFilter.bucketNotIn.length > 0) {
+      const bucketLabels = progressFilter.bucketNotIn.map(formatProgressBucket).join(', ');
+      parts.push(progressFilter.bucketNotIn.length > 1 ? `not (${bucketLabels})` : `not ${bucketLabels}`);
+    }
     if (progressFilter.signalIn.length > 0) {
       parts.push(progressFilter.signalIn.map(formatProgressSignal).join(', '));
+    }
+    if (progressFilter.signalNotIn.length > 0) {
+      const signalLabels = progressFilter.signalNotIn.map(formatProgressSignal).join(', ');
+      parts.push(progressFilter.signalNotIn.length > 1 ? `not (${signalLabels})` : `not ${signalLabels}`);
     }
     if (progressFilter.stepTitleContains?.trim()) {
       parts.push(`step ${progressFilter.stepTitleContains.trim()}`);
