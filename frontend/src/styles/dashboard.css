@@ -4916,7 +4916,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   color: inherit;
   font-size: 0.96rem;
   line-height: 1;
-  cursor: help;
+  cursor: pointer;
 }
 
 .queue-step-capability-chip-lock:hover,

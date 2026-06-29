@@ -16503,11 +16503,14 @@ describe("Task Create governed Tool authoring", () => {
     expect(within(menu).getByText("Capabilities")).toBeTruthy();
     fireEvent.click(within(step).getByRole("menuitem", { name: /^Docker/ }));
 
-    const chip = await within(step).findByText("Docker");
+    const chip = (await within(step).findByText("Docker")).closest(
+      "li",
+    ) as HTMLElement;
     expect(chip).toBeTruthy();
-    expect(
-      within(step).getByText("· docker", { exact: false }),
-    ).toBeTruthy();
+    expect(chip.getAttribute("title")).toBe(
+      "Docker: Allow container builds and Docker operations for this step.",
+    );
+    expect(within(step).queryByText("· docker", { exact: false })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
     await waitFor(() => {
@@ -16757,7 +16760,8 @@ describe("Task Create governed Tool authoring", () => {
     const chip = (await within(step).findByText("Jira")).closest(
       "li",
     ) as HTMLElement;
-    expect(within(chip).getByText("· from preset")).toBeTruthy();
+    expect(chip.getAttribute("title")).toBe("Jira: from preset");
+    expect(within(chip).queryByText("· from preset")).toBeNull();
     expect(
       within(chip).queryByRole("button", {
         name: "Remove Jira capability from Step 1",

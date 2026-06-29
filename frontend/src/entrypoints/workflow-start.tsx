@@ -4960,7 +4960,9 @@ function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
   const explanation = chip.removable ? chip.description : derivedCapabilityExplanation(chip);
   const chipTitle = provenance
     ? `${chip.label}: ${provenance}`
-    : `${chip.label}: ${chip.description}`;
+    : chip.description
+      ? `${chip.label}: ${chip.description}`
+      : chip.label;
   return (
     <li
       className={`queue-step-capability-chip${chip.removable ? "" : " is-derived"}`}
