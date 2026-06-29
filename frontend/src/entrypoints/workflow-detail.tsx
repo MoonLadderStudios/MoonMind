@@ -2334,6 +2334,8 @@ async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLe
 
 const TERMINAL_RUN_STATUSES = new Set([
   'completed',
+  'no_commit',
+  'no_changes',
   'failed',
   'canceled',
   'cancelled',

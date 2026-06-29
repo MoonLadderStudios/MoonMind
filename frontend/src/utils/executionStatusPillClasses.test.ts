@@ -63,6 +63,11 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('canceled')).toEqual({ className: 'status status-cancelled' });
   });
 
+  it('uses the no-commit teal pill class for canonical and legacy no-commit statuses', () => {
+    expect(executionStatusPillProps('no_commit')).toEqual({ className: 'status status-no-commit' });
+    expect(executionStatusPillProps('no_changes')).toEqual({ className: 'status status-no-commit' });
+  });
+
   it('preserves MM-488 traceability for downstream verification', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.jiraIssue).toBe('MM-488');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.designRequirements).toEqual([

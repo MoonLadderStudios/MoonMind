@@ -16,7 +16,7 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from moonmind.publish.service import PublishService
+from moonmind.publish.service import PublishResult, PublishService
 from moonmind.rag.context_pack import ContextPack
 from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
@@ -920,7 +920,7 @@ class CodexExecHandler:
             git_binary=self._git_binary,
             gh_binary=self._gh_binary,
         )
-        return await service.publish(
+        result = await service.publish(
             job_id=job_id,
             instruction=payload.instruction,
             publish_mode=payload.publish_mode,
@@ -930,6 +930,9 @@ class CodexExecHandler:
             run_command=run_command_wrapper,
             repo=payload.repository,
         )
+        if isinstance(result, PublishResult):
+            return result.summary_text()
+        return None
 
     @staticmethod
     def _mask_sensitive_command_args(command: Sequence[str]) -> list[str]:

@@ -87,7 +87,9 @@ async def test_publish_pr_boundary_uses_explicit_credential(monkeypatch, tmp_pat
         repo="owner/repo",
     )
 
-    assert result.endswith("/pull/9")
+    assert result is not None
+    assert result.status == "published"
+    assert result.pr_url == "https://github.com/owner/repo/pull/9"
     assert created["github_token"] == "publish-token"
     assert all(call["command"][:3] != ["gh", "pr", "create"] for call in calls)
 
@@ -114,7 +116,9 @@ async def test_publish_branch_boundary_uses_token_aware_push(monkeypatch, tmp_pa
     )
 
     push_call = next(call for call in calls if call["command"][:2] == ["git", "push"])
-    assert result.startswith("published branch")
+    assert result is not None
+    assert result.status == "published"
+    assert result.branch_name is not None
     assert push_call["env"]["GITHUB_TOKEN"] == "publish-token"
     assert push_call["env"]["GH_TOKEN"] == "publish-token"
     assert push_call["env"]["GIT_TERMINAL_PROMPT"] == "0"

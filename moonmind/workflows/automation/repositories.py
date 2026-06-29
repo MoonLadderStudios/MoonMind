@@ -70,7 +70,10 @@ def _coerce_run_status(
 
     if isinstance(value, models.AutomationRunStatus):
         return value
-    return models.AutomationRunStatus(str(value))
+    raw = str(value)
+    if raw == models.AutomationRunStatus.NO_CHANGES.value:
+        return models.AutomationRunStatus.NO_COMMIT
+    return models.AutomationRunStatus(raw)
 
 def _coerce_artifact_type(
     value: models.WorkflowArtifactType | str,

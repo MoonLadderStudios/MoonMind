@@ -6,8 +6,9 @@ import asyncio
 import contextlib
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Awaitable, Callable, Literal, Protocol
 from uuid import UUID
 
 from moonmind.security.outbound_scan import (
@@ -34,6 +35,30 @@ CommandRunner = Callable[
     ...,
     Awaitable[CommandResult],
 ]
+
+@dataclass(frozen=True)
+class PublishResult:
+    mode: str
+    status: Literal["published", "skipped", "failed"]
+    reason_code: str | None = None
+    reason: str | None = None
+    commit_created: bool = False
+    branch_pushed: bool = False
+    pr_url: str | None = None
+    branch_name: str | None = None
+
+    def summary_text(self) -> str | None:
+        if self.status == "skipped":
+            return self.reason
+        if self.status != "published":
+            return self.reason
+        if self.pr_url:
+            return f"published PR {self.pr_url}"
+        if self.mode == "pr" and self.branch_name:
+            return f"published PR from {self.branch_name}"
+        if self.branch_name:
+            return f"published branch {self.branch_name}"
+        return self.reason
 
 _PUBLISH_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
 _PUBLISH_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
@@ -130,7 +155,7 @@ class PublishService:
         repo_dir: Path,
         run_command: CommandRunner,
         repo: str | None = None,
-    ) -> str | None:
+    ) -> PublishResult | None:
         """Publish the changes to a branch or a pull request.
 
         Args:
@@ -151,7 +176,12 @@ class PublishService:
             check=False,
         )
         if not status.stdout.strip():
-            return "publish skipped: no local changes"
+            return PublishResult(
+                mode=publish_mode,
+                status="skipped",
+                reason_code="no_commit",
+                reason="No repository changes were available to commit or publish.",
+            )
 
         branch_name = f"moonmind-job-{str(job_id)[:8]}"
         await run_command(
@@ -176,6 +206,7 @@ class PublishService:
             cwd=repo_dir,
             redaction_values=(commit_message,),
         )
+        commit_created = True
         await self._scan_git_push_before_publish(
             repo_dir=repo_dir,
             branch_name=branch_name,
@@ -199,9 +230,17 @@ class PublishService:
             env=push_env,
             redaction_values=(token,) if token else (),
         )
+        branch_pushed = True
 
         if publish_mode == "branch":
-            return f"published branch {branch_name}"
+            return PublishResult(
+                mode=publish_mode,
+                status="published",
+                reason=f"published branch {branch_name}",
+                commit_created=commit_created,
+                branch_pushed=branch_pushed,
+                branch_name=branch_name,
+            )
 
         base_branch = publish_base_branch or "main"
         pr_title = self._derive_default_publish_subject(
@@ -231,9 +270,19 @@ class PublishService:
                 summary = getattr(result, "summary", "GitHub create PR failed.")
                 raise RuntimeError(str(summary))
             url = getattr(result, "url", None)
-            if url:
-                return f"published PR {url}"
-            return f"published PR from {branch_name}"
+            return PublishResult(
+                mode=publish_mode,
+                status="published",
+                reason=(
+                    f"published PR {url}"
+                    if url
+                    else f"published PR from {branch_name}"
+                ),
+                commit_created=commit_created,
+                branch_pushed=branch_pushed,
+                pr_url=str(url) if url else None,
+                branch_name=branch_name,
+            )
 
         if resolved_github_credential is None:
             from moonmind.auth.github_credentials import resolve_github_credential
@@ -273,7 +322,14 @@ class PublishService:
                 value for value in (pr_title, pr_body, token) if value
             ),
         )
-        return f"published PR from {branch_name}"
+        return PublishResult(
+            mode=publish_mode,
+            status="published",
+            reason=f"published PR from {branch_name}",
+            commit_created=commit_created,
+            branch_pushed=branch_pushed,
+            branch_name=branch_name,
+        )
 
     async def _scan_git_push_before_publish(
         self,

@@ -81,6 +81,7 @@ from moonmind.workflows.executions.preset_expansion import (
 )
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
+    MoonMindWorkflowState.NO_COMMIT,
     MoonMindWorkflowState.COMPLETED,
     MoonMindWorkflowState.FAILED,
     MoonMindWorkflowState.CANCELED,
@@ -253,6 +254,7 @@ _RUNNING_STATES: set[MoonMindWorkflowState] = {
 TERMINAL_STATE_TO_CLOSE_STATUS: dict[
     MoonMindWorkflowState, TemporalExecutionCloseStatus
 ] = {
+    MoonMindWorkflowState.NO_COMMIT: TemporalExecutionCloseStatus.COMPLETED,
     MoonMindWorkflowState.COMPLETED: TemporalExecutionCloseStatus.COMPLETED,
     MoonMindWorkflowState.FAILED: TemporalExecutionCloseStatus.FAILED,
     MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
@@ -2250,6 +2252,8 @@ class TemporalExecutionService:
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         normalized_state = str(state or "").strip().lower()
         state_by_value = {item.value: item for item in MoonMindWorkflowState}
+        if normalized_state == "no_changes":
+            normalized_state = MoonMindWorkflowState.NO_COMMIT.value
         target_state = state_by_value.get(normalized_state)
         if target_state not in TERMINAL_STATES:
             raise TemporalExecutionValidationError(
@@ -2261,6 +2265,7 @@ class TemporalExecutionService:
         target_close_status = close_status_by_value.get(normalized_close_status)
         if target_close_status is None:
             target_close_status = {
+                MoonMindWorkflowState.NO_COMMIT: TemporalExecutionCloseStatus.COMPLETED,
                 MoonMindWorkflowState.COMPLETED: TemporalExecutionCloseStatus.COMPLETED,
                 MoonMindWorkflowState.FAILED: TemporalExecutionCloseStatus.FAILED,
                 MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
@@ -2343,6 +2348,22 @@ class TemporalExecutionService:
         finish_outcome = normalized_summary.get(
             "finishOutcome"
         ) or normalized_summary.get("finish_outcome")
+        if isinstance(finish_outcome, dict):
+            finish_outcome = dict(finish_outcome)
+            if str(finish_outcome.get("code") or "").strip().upper() == "NO_CHANGES":
+                finish_outcome["code"] = "NO_COMMIT"
+                if str(finish_outcome.get("reason") or "").strip().lower() in {
+                    "publish skipped: no local changes",
+                    "no local changes",
+                }:
+                    finish_outcome["reason"] = "No repository commit was needed."
+                normalized_summary["finishOutcome"] = finish_outcome
+        publish = normalized_summary.get("publish")
+        if isinstance(publish, dict):
+            publish_payload = dict(publish)
+            if str(publish_payload.get("reasonCode") or "").strip() == "no_changes":
+                publish_payload["reasonCode"] = "no_commit"
+            normalized_summary["publish"] = publish_payload
         outcome_code = str(
             finish_outcome_code
             or (
@@ -2352,6 +2373,8 @@ class TemporalExecutionService:
             )
             or ""
         ).strip()
+        if outcome_code.upper() == "NO_CHANGES":
+            outcome_code = "NO_COMMIT"
         record.finish_outcome_code = outcome_code or None
         record.finish_summary_json = normalized_summary
 
@@ -3892,6 +3915,8 @@ class TemporalExecutionService:
 
     def _parse_state(self, raw: str) -> MoonMindWorkflowState:
         try:
+            if str(raw).strip() == "no_changes":
+                return MoonMindWorkflowState.NO_COMMIT
             return MoonMindWorkflowState(raw)
         except ValueError as exc:
             raise TemporalExecutionValidationError(f"Unsupported state: {raw}") from exc

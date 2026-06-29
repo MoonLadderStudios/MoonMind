@@ -2045,12 +2045,15 @@ async def test_run_once_task_routes_through_direct_exec_path(tmp_path: Path) -> 
     assert "logs/publish.log" in queue.uploaded
     assert "publish_result.json" in queue.uploaded
     assert "reports/run_summary.json" in queue.uploaded
-    assert queue.completed_finish_payloads[0]["finishOutcomeCode"] == "NO_CHANGES"
+    assert queue.completed_finish_payloads[0]["finishOutcomeCode"] == "NO_COMMIT"
     assert queue.completed_finish_payloads[0]["finishOutcomeStage"] == "publish"
     finish_summary = queue.completed_finish_payloads[0]["finishSummary"]
     assert isinstance(finish_summary, dict)
-    assert finish_summary["finishOutcome"]["code"] == "NO_CHANGES"
+    assert finish_summary["finishOutcome"]["code"] == "NO_COMMIT"
     assert finish_summary["publish"]["status"] == "skipped"
+    assert finish_summary["publish"]["reasonCode"] == "no_commit"
+    assert finish_summary["publish"]["commitCreated"] is False
+    assert finish_summary["publish"]["branchPushed"] is False
     assert any(event["message"] == "moonmind.task.prepare" for event in queue.events)
     assert any(event["message"] == "moonmind.task.execute" for event in queue.events)
     assert any(event["message"] == "moonmind.task.publish" for event in queue.events)
@@ -9773,10 +9776,14 @@ async def test_run_publish_stage_no_local_changes_does_not_reference_preflight_a
         staged_artifacts=staged_artifacts,
     )
 
-    assert publish_note == "publish skipped: no local changes"
+    assert publish_note == "No repository changes were available to commit or publish."
     publish_payload = json.loads(
         prepared.publish_result_path.read_text(encoding="utf-8")
     )
+    assert publish_payload["status"] == "skipped"
+    assert publish_payload["reasonCode"] == "no_commit"
+    assert publish_payload["commitCreated"] is False
+    assert publish_payload["branchPushed"] is False
     assert publish_payload["verification"]["status"] == "not_required"
     assert "evidenceArtifact" not in publish_payload["verification"]
     assert any(artifact.name == "logs/publish.log" for artifact in staged_artifacts)
