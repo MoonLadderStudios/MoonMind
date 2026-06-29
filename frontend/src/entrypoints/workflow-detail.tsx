@@ -1607,6 +1607,17 @@ const StepLedgerWorkloadSchema = z
   })
   .passthrough();
 
+const StepLedgerTimingSchema = z
+  .object({
+    startedAt: z.string().nullable().optional(),
+    endedAt: z.string().nullable().optional(),
+    durationMs: z.number().nullable().optional(),
+    elapsedMs: z.number().nullable().optional(),
+    serverNow: z.string().nullable().optional(),
+    precision: z.enum(['exact', 'live', 'fallback', 'unavailable']).default('unavailable'),
+  })
+  .passthrough();
+
 const StepLedgerRowSchema = z
   .object({
     logicalStepId: z.string(),
@@ -1619,7 +1630,10 @@ const StepLedgerRowSchema = z
     attentionRequired: z.boolean().optional(),
     executionOrdinal: z.number().default(0),
     startedAt: z.string().nullable().optional(),
+    endedAt: z.string().nullable().optional(),
+    durationMs: z.number().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
+    timing: StepLedgerTimingSchema.default({ precision: 'unavailable' }),
     summary: z.string().nullable().optional(),
     checks: z.array(StepLedgerCheckSchema).default([]),
     refs: StepLedgerRefsSchema,
@@ -2075,9 +2089,76 @@ function formatDurationMs(value: number | null | undefined): string {
     const seconds = value / 1000;
     return `${seconds.toFixed(seconds >= 10 ? 0 : 1)} s`;
   }
-  const minutes = Math.floor(totalSeconds / 60);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
   const remainingSeconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+  }
   return `${minutes}m ${remainingSeconds}s`;
+}
+
+function parseStepTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function stepIsActive(status: string): boolean {
+  const normalized = status.toLowerCase().trim();
+  return normalized === 'running' || normalized === 'reviewing' || normalized === 'awaiting_external';
+}
+
+function stepIsPendingOrReady(status: string): boolean {
+  const normalized = status.toLowerCase().trim();
+  return normalized === 'pending' || normalized === 'ready';
+}
+
+function stepElapsedMs(row: z.infer<typeof StepLedgerRowSchema>): number | null {
+  if (typeof row.timing.elapsedMs === 'number') return row.timing.elapsedMs;
+  if (typeof row.timing.durationMs === 'number') return row.timing.durationMs;
+  if (typeof row.durationMs === 'number') return row.durationMs;
+  const started = parseStepTimestamp(row.timing.startedAt || row.startedAt);
+  const ended = parseStepTimestamp(row.timing.endedAt || row.endedAt);
+  if (started !== null && ended !== null && ended >= started) return ended - started;
+  if (stepIsActive(row.status) && started !== null) return Math.max(0, Date.now() - started);
+  return null;
+}
+
+function stepDurationLabel(row: z.infer<typeof StepLedgerRowSchema>): string {
+  const elapsedMs = stepElapsedMs(row);
+  if (row.preservedFrom) {
+    return elapsedMs === null
+      ? 'Original timing unavailable'
+      : `Original duration: ${formatDurationMs(elapsedMs)}`;
+  }
+  if (stepIsActive(row.status)) {
+    return elapsedMs === null ? 'Timing unavailable' : `${formatDurationMs(elapsedMs)} so far`;
+  }
+  if (stepIsPendingOrReady(row.status) && !row.startedAt && !row.timing.startedAt) {
+    return row.status.toLowerCase().trim() === 'ready' ? 'Ready' : 'Not started';
+  }
+  return elapsedMs === null ? 'Timing unavailable' : formatDurationMs(elapsedMs);
+}
+
+function stepDurationBarPercent(
+  row: z.infer<typeof StepLedgerRowSchema>,
+  longestStepMs: number,
+): number {
+  const elapsedMs = stepElapsedMs(row);
+  if (elapsedMs === null || longestStepMs <= 0) return 0;
+  return Math.max(3, Math.min(100, (elapsedMs / longestStepMs) * 100));
+}
+
+function stepWallClockRange(row: z.infer<typeof StepLedgerRowSchema>): { start: number; end: number } | null {
+  const start = parseStepTimestamp(row.timing.startedAt || row.startedAt);
+  if (start === null) return null;
+  const end =
+    parseStepTimestamp(row.timing.endedAt || row.endedAt)
+    ?? parseStepTimestamp(row.timing.serverNow)
+    ?? (stepIsActive(row.status) ? Date.now() : null);
+  if (end === null || end < start) return null;
+  return { start, end };
 }
 
 function formatDependencyResolution(value: string | null | undefined): string {
@@ -3765,6 +3846,22 @@ function StepMetadataList({
   );
 }
 
+function StepTimingDetails({ row }: { row: z.infer<typeof StepLedgerRowSchema> }) {
+  return (
+    <section className="step-tl-detail-section">
+      <h4>Timing</h4>
+      <ul className="step-detail-list">
+        <li><strong>Started:</strong> {formatWhen(row.timing.startedAt || row.startedAt)}</li>
+        {row.timing.endedAt || row.endedAt ? (
+          <li><strong>Ended:</strong> {formatWhen(row.timing.endedAt || row.endedAt)}</li>
+        ) : null}
+        <li><strong>Elapsed:</strong> <span className="step-duration-numeric">{stepDurationLabel(row)}</span></li>
+        <li><strong>Last update:</strong> {formatWhen(row.updatedAt)}</li>
+      </ul>
+    </section>
+  );
+}
+
 function formatOptionalValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—';
   if (typeof value === 'number') return String(value);
@@ -4000,6 +4097,12 @@ function StepExecutionHistoryRow({
   const runtimeChildRefs = stepRefEntries(execution.runtimeChildRefs);
   const downstreamInvalidated = execution.reason === 'dependency_invalidated';
   const lineage = execution.lineage ?? null;
+  const executionStarted = parseStepTimestamp(execution.startedAt);
+  const executionUpdated = parseStepTimestamp(execution.updatedAt);
+  const executionDuration =
+    executionStarted !== null && executionUpdated !== null && executionUpdated >= executionStarted
+      ? formatDurationMs(executionUpdated - executionStarted)
+      : null;
 
   return (
     <li className="step-execution-history-item">
@@ -4008,6 +4111,9 @@ function StepExecutionHistoryRow({
         <span {...executionStatusPillProps(execution.status)}>
           {formatStatusLabel(execution.status)}
         </span>
+        {executionDuration ? (
+          <span className="step-duration-chip step-duration-numeric">{executionDuration}</span>
+        ) : null}
         <span className="step-execution-reason">{formatStatusLabel(execution.reason)}</span>
         {downstreamInvalidated ? (
           <span
@@ -4192,6 +4298,7 @@ function StepLedgerRowCard({
   runId,
   sourceTemporal,
   historyPollInterval,
+  longestStepMs,
   expanded,
   onToggle,
   isLast,
@@ -4206,6 +4313,7 @@ function StepLedgerRowCard({
   runId: string;
   sourceTemporal: boolean;
   historyPollInterval: number | false;
+  longestStepMs: number;
   expanded: boolean;
   onToggle: () => void;
   isLast: boolean;
@@ -4213,6 +4321,8 @@ function StepLedgerRowCard({
 }) {
   const lastError = formatStepLastError(row.lastError);
   const { icon, cssClass } = stepStatusIcon(row.status);
+  const durationLabel = stepDurationLabel(row);
+  const durationBarPercent = stepDurationBarPercent(row, longestStepMs);
 
   return (
     <article className={`step-tl-row${expanded ? ' step-tl-expanded' : ''}${isLast ? ' step-tl-last' : ''}`}>
@@ -4233,6 +4343,7 @@ function StepLedgerRowCard({
             <span className="step-tl-right">
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
               <span {...executionStatusPillProps(row.status)}>{formatStatusLabel(row.status)}</span>
+              <span className="step-duration-chip step-duration-numeric">{durationLabel}</span>
               {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}
               <StepProvenanceMarker row={row} />
               <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
@@ -4252,6 +4363,11 @@ function StepLedgerRowCard({
             </div>
           ) : null}
           {!expanded ? <StepEvidenceRefs row={row} /> : null}
+          {!expanded ? (
+            <div className="step-duration-bar" aria-label={`Step duration ${durationLabel}`}>
+              <span style={{ width: `${durationBarPercent}%` }} />
+            </div>
+          ) : null}
         </button>
         {expanded ? (
           <div className="step-tl-details">
@@ -4281,6 +4397,7 @@ function StepLedgerRowCard({
                 </ul>
               </section>
             ) : null}
+            <StepTimingDetails row={row} />
             <section className="step-tl-detail-section step-tl-detail-section--logs">
               <h4>Logs & Diagnostics</h4>
               <StepObservabilityGroup
@@ -4313,6 +4430,73 @@ function StepLedgerRowCard({
         ) : null}
       </div>
     </article>
+  );
+}
+
+function StepTimingCallouts({ steps }: { steps: Array<z.infer<typeof StepLedgerRowSchema>> }) {
+  const currentStep = steps.find((row) => stepIsActive(row.status));
+  const longestStep = steps.reduce<z.infer<typeof StepLedgerRowSchema> | null>((winner, row) => {
+    const elapsed = stepElapsedMs(row);
+    if (elapsed === null) return winner;
+    if (!winner) return row;
+    const winnerElapsed = stepElapsedMs(winner);
+    return winnerElapsed === null || elapsed > winnerElapsed ? row : winner;
+  }, null);
+  const completedCount = steps.filter((row) => stepTerminal(row.status)).length;
+
+  return (
+    <MetricStrip
+      items={[
+        {
+          label: 'Current step',
+          value: currentStep
+            ? `${currentStep.title} · ${stepDurationLabel(currentStep)}`
+            : null,
+        },
+        {
+          label: 'Longest step',
+          value: longestStep
+            ? `${longestStep.title} · ${stepDurationLabel(longestStep)}`
+            : null,
+        },
+        {
+          label: 'Completed steps',
+          value: `${completedCount} of ${steps.length}`,
+        },
+      ]}
+    />
+  );
+}
+
+function StepWallClockTimeline({ steps }: { steps: Array<z.infer<typeof StepLedgerRowSchema>> }) {
+  const ranges = steps
+    .map((row) => ({ row, range: stepWallClockRange(row) }))
+    .filter((item): item is { row: z.infer<typeof StepLedgerRowSchema>; range: { start: number; end: number } } => Boolean(item.range));
+  if (ranges.length === 0) {
+    return <p className="small">No started steps have wall-clock timing yet.</p>;
+  }
+  const start = Math.min(...ranges.map((item) => item.range.start));
+  const end = Math.max(...ranges.map((item) => item.range.end));
+  const span = Math.max(1, end - start);
+
+  return (
+    <div className="step-wall-clock-timeline" aria-label="Workflow wall-clock timeline">
+      {ranges.map(({ row, range }) => {
+        const left = ((range.start - start) / span) * 100;
+        const width = Math.max(2, ((range.end - range.start) / span) * 100);
+        return (
+          <div className="step-wall-clock-row" key={row.logicalStepId}>
+            <span className="step-wall-clock-label">{row.title}</span>
+            <span className="step-wall-clock-track" aria-label={`${row.title}: ${stepDurationLabel(row)}`}>
+              <span
+                className={stepIsActive(row.status) ? 'step-wall-clock-bar step-wall-clock-bar-live' : 'step-wall-clock-bar'}
+                style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%` }}
+              />
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -6179,6 +6363,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     }
   });
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
+  const [showStepTimeline, setShowStepTimeline] = useState(false);
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
   const [remediationMode, setRemediationMode] = useState(DEFAULT_REMEDIATION_MODE);
   const [remediationAuthority, setRemediationAuthority] = useState(DEFAULT_REMEDIATION_AUTHORITY);
@@ -7376,6 +7561,16 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                       {stepsQuery.data.steps.length} step{stepsQuery.data.steps.length === 1 ? '' : 's'}
                     </span>
                   ) : null}
+                  {stepsQuery.data && stepsQuery.data.steps.length > 0 ? (
+                    <button
+                      type="button"
+                      className="secondary compact step-wall-clock-toggle"
+                      aria-pressed={showStepTimeline}
+                      onClick={() => setShowStepTimeline((current) => !current)}
+                    >
+                      Timeline view
+                    </button>
+                  ) : null}
                 </span>
               </div>
               {stepsQuery.isLoading ? (
@@ -7384,25 +7579,34 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (
                 <>
+                  <StepTimingCallouts steps={stepsQuery.data.steps} />
+                  {showStepTimeline ? <StepWallClockTimeline steps={stepsQuery.data.steps} /> : null}
                   <div className="step-tl-list">
-                    {stepsQuery.data.steps.map((row, idx) => (
-                      <StepLedgerRowCard
-                        key={row.logicalStepId}
-                        apiBase={payload.apiBase}
-                        logStreamingEnabled={logStreamingEnabled}
-                        sessionTimelineEnabled={sessionTimelineEnabled}
-                        structuredHistoryEnabled={structuredHistoryEnabled}
-                        row={row}
-                        workflowId={workflowId}
-                        runId={latestRunId}
-                        sourceTemporal={sourceTemporal}
-                        historyPollInterval={!isTerminalExecution ? detailPoll : false}
-                        expanded={Boolean(expandedSteps[row.logicalStepId])}
-                        onToggle={() => toggleStep(row.logicalStepId)}
-                        isLast={idx === stepsQuery.data.steps.length - 1}
-                        routes={agentRunRoutes}
-                      />
-                    ))}
+                    {(() => {
+                      const longestStepMs = Math.max(
+                        0,
+                        ...stepsQuery.data.steps.map((row) => stepElapsedMs(row) ?? 0),
+                      );
+                      return stepsQuery.data.steps.map((row, idx) => (
+                        <StepLedgerRowCard
+                          key={row.logicalStepId}
+                          apiBase={payload.apiBase}
+                          logStreamingEnabled={logStreamingEnabled}
+                          sessionTimelineEnabled={sessionTimelineEnabled}
+                          structuredHistoryEnabled={structuredHistoryEnabled}
+                          row={row}
+                          workflowId={workflowId}
+                          runId={latestRunId}
+                          sourceTemporal={sourceTemporal}
+                          historyPollInterval={!isTerminalExecution ? detailPoll : false}
+                          longestStepMs={longestStepMs}
+                          expanded={Boolean(expandedSteps[row.logicalStepId])}
+                          onToggle={() => toggleStep(row.logicalStepId)}
+                          isLast={idx === stepsQuery.data.steps.length - 1}
+                          routes={agentRunRoutes}
+                        />
+                      ));
+                    })()}
                   </div>
                 </>
               ) : (

@@ -1582,6 +1582,110 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('art-plan-checkpoint')).toBeTruthy();
   });
 
+  it('MM-1034 renders step timing chips, bars, callouts, and expanded timing details', async () => {
+    window.history.pushState({}, 'Steps Timing Test', '/workflows/test-123/steps?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Timed task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:03:11Z',
+      actions: {},
+    };
+    const timedSnapshot = {
+      workflowId: 'test-123',
+      runId: '02-run',
+      runScope: 'latest',
+      steps: [
+        {
+          ...latestStepsSnapshot.steps[0],
+          endedAt: '2026-04-09T00:01:43Z',
+          durationMs: 102000,
+          timing: {
+            startedAt: '2026-04-09T00:00:01Z',
+            endedAt: '2026-04-09T00:01:43Z',
+            durationMs: 102000,
+            elapsedMs: 102000,
+            serverNow: '2026-04-09T00:03:11Z',
+            precision: 'exact',
+          },
+        },
+        {
+          ...latestStepsSnapshot.steps[1],
+          timing: {
+            startedAt: '2026-04-09T00:00:03Z',
+            endedAt: null,
+            durationMs: null,
+            elapsedMs: 188000,
+            serverNow: '2026-04-09T00:03:11Z',
+            precision: 'live',
+          },
+        },
+        {
+          ...latestStepsSnapshot.steps[2],
+          timing: {
+            startedAt: null,
+            endedAt: null,
+            durationMs: null,
+            elapsedMs: null,
+            serverNow: '2026-04-09T00:03:11Z',
+            precision: 'unavailable',
+          },
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => timedSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
+    });
+
+    expect(screen.getByText('Current step')).toBeTruthy();
+    expect(screen.getAllByText('Apply patch · 3m 8s so far').length).toBeGreaterThan(0);
+    expect(screen.getByText('Longest step')).toBeTruthy();
+    expect(screen.getByText('1m 42s')).toBeTruthy();
+    expect(screen.getByText('Completed steps')).toBeTruthy();
+    expect(screen.getByText('1 of 3')).toBeTruthy();
+    expect(screen.getByText('Ready')).toBeTruthy();
+    expect(screen.getAllByLabelText(/Step duration/).length).toBe(3);
+    expect(screen.queryByLabelText('Workflow wall-clock timeline')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Timeline view' }));
+    expect(screen.getByLabelText('Workflow wall-clock timeline')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
+
+    expect(await screen.findByRole('heading', { name: 'Timing' })).toBeTruthy();
+    expect(screen.getAllByText('3m 8s so far').length).toBeGreaterThan(0);
+    const timingSection = screen.getByRole('heading', { name: 'Timing' }).closest('section');
+    expect(timingSection).toBeTruthy();
+    expect(within(timingSection as HTMLElement).getByText('Started:')).toBeTruthy();
+    expect(within(timingSection as HTMLElement).getByText('Last update:')).toBeTruthy();
+  });
+
   it('MM-831 renders expanded Step Execution history from the step-executions list endpoint', async () => {
     window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
     const mockExecution = {

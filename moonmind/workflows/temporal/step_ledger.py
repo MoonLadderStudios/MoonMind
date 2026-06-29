@@ -13,6 +13,89 @@ TERMINAL_STEP_STATUSES = {"succeeded", "failed", "skipped", "canceled"}
 READY_DEPENDENCY_STATUSES = {"succeeded", "skipped"}
 _UNSET = object()
 
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _duration_ms(started_at: Any, ended_at: Any) -> int | None:
+    start = _parse_datetime(started_at)
+    end = _parse_datetime(ended_at)
+    if start is None or end is None:
+        return None
+    return max(0, int((end - start).total_seconds() * 1000))
+
+
+def _step_timing(
+    *,
+    started_at: Any,
+    ended_at: Any,
+    duration_ms: int | None,
+    elapsed_ms: int | None,
+    server_now: str | None,
+    precision: str,
+) -> dict[str, Any]:
+    return {
+        "startedAt": started_at,
+        "endedAt": ended_at,
+        "durationMs": duration_ms,
+        "elapsedMs": elapsed_ms,
+        "serverNow": server_now,
+        "precision": precision,
+    }
+
+
+def update_step_timing(
+    row: dict[str, Any],
+    *,
+    server_now: datetime | None = None,
+) -> None:
+    status = str(row.get("status") or "").strip()
+    started_at = row.get("startedAt")
+    ended_at = row.get("endedAt")
+    duration_ms = row.get("durationMs")
+    if not isinstance(duration_ms, int):
+        duration_ms = None
+    elapsed_ms: int | None = duration_ms
+    precision = "unavailable"
+    server_now_iso = server_now.isoformat() if server_now is not None else None
+
+    if status in TERMINAL_STEP_STATUSES:
+        if ended_at is None:
+            ended_at = row.get("updatedAt")
+            precision = "fallback" if started_at else "unavailable"
+        else:
+            precision = "exact" if started_at else "unavailable"
+        if duration_ms is None:
+            duration_ms = _duration_ms(started_at, ended_at)
+        elapsed_ms = duration_ms
+    elif status in ACTIVE_STEP_STATUSES:
+        precision = "live" if started_at and server_now is not None else "unavailable"
+        if started_at and server_now is not None:
+            elapsed_ms = _duration_ms(started_at, server_now)
+    elif status in {"pending", "ready"}:
+        precision = "unavailable"
+
+    if status in TERMINAL_STEP_STATUSES:
+        row["endedAt"] = ended_at
+        row["durationMs"] = duration_ms
+
+    row["timing"] = _step_timing(
+        started_at=started_at,
+        ended_at=ended_at,
+        duration_ms=duration_ms,
+        elapsed_ms=elapsed_ms,
+        server_now=server_now_iso,
+        precision=precision,
+    )
+
 def default_step_refs() -> dict[str, Any]:
     return {
         "childWorkflowId": None,
@@ -151,7 +234,10 @@ def _mark_step_requires_revalidation(
     row.pop("preservedFrom", None)
     row.pop("recoveryPreservation", None)
     row.pop("stateCheckpointRef", None)
+    row["endedAt"] = None
+    row["durationMs"] = None
     row["updatedAt"] = updated_at.isoformat()
+    update_step_timing(row)
 
 
 def dependency_input_signatures(
@@ -397,31 +483,33 @@ def build_initial_step_rows(
             .strip()
         )
         depends_on = list(dependency_map.get(node_id) or [])
-        rows.append(
-            {
-                "logicalStepId": node_id,
-                "order": order,
-                "title": title,
-                "tool": {
-                    "type": str(tool.get("type") or tool.get("kind") or "skill"),
-                    "name": str(tool.get("name") or tool.get("id") or ""),
-                },
-                "dependsOn": depends_on,
-                "status": "ready" if not depends_on else "pending",
-                "waitingReason": None,
-                "attentionRequired": False,
-                "attempt": 0,
-                "executionOrdinal": 0,
-                "startedAt": None,
-                "updatedAt": updated_at_iso,
-                "summary": None,
-                "checks": [],
-                "refs": default_step_refs(),
-                "artifacts": default_step_artifacts(),
-                "workload": default_step_workload(),
-                "lastError": None,
-            }
-        )
+        row = {
+            "logicalStepId": node_id,
+            "order": order,
+            "title": title,
+            "tool": {
+                "type": str(tool.get("type") or tool.get("kind") or "skill"),
+                "name": str(tool.get("name") or tool.get("id") or ""),
+            },
+            "dependsOn": depends_on,
+            "status": "ready" if not depends_on else "pending",
+            "waitingReason": None,
+            "attentionRequired": False,
+            "attempt": 0,
+            "executionOrdinal": 0,
+            "startedAt": None,
+            "endedAt": None,
+            "durationMs": None,
+            "updatedAt": updated_at_iso,
+            "summary": None,
+            "checks": [],
+            "refs": default_step_refs(),
+            "artifacts": default_step_artifacts(),
+            "workload": default_step_workload(),
+            "lastError": None,
+        }
+        update_step_timing(row)
+        rows.append(row)
     return rows
 
 def build_step_ledger_snapshot(
@@ -536,6 +624,11 @@ def materialize_preserved_steps(
         if isinstance(dependency_inputs, Mapping):
             row["dependencyInputs"] = deepcopy(dict(dependency_inputs))
         row["updatedAt"] = updated_at.isoformat()
+        if row.get("endedAt") is None:
+            row["endedAt"] = row["updatedAt"]
+        if row.get("durationMs") is None:
+            row["durationMs"] = _duration_ms(row.get("startedAt"), row.get("endedAt"))
+        update_step_timing(row)
 
 
 def mark_step_checkpoint_evidence(
@@ -747,6 +840,8 @@ def update_step_row(
             row["executionOrdinal"] = int(row["attempt"])
         if set_started_at:
             row["startedAt"] = updated_at.isoformat()
+            row["endedAt"] = None
+            row["durationMs"] = None
         if summary is not _UNSET:
             row["summary"] = summary
         if waiting_reason is not _UNSET:
@@ -787,7 +882,13 @@ def update_step_row(
         if status in TERMINAL_STEP_STATUSES:
             row["waitingReason"] = None
             row["attentionRequired"] = False
+            row["endedAt"] = updated_at.isoformat()
+            row["durationMs"] = _duration_ms(row.get("startedAt"), row.get("endedAt"))
+        elif status in {"pending", "ready"}:
+            row["endedAt"] = None
+            row["durationMs"] = None
         row["updatedAt"] = updated_at.isoformat()
+        update_step_timing(row)
         return row
     raise KeyError(f"Unknown logical step id: {logical_step_id}")
 
@@ -840,4 +941,7 @@ def refresh_ready_steps(rows: list[dict[str, Any]], *, updated_at: datetime) -> 
             statuses.get(dep_id) in READY_DEPENDENCY_STATUSES for dep_id in dependencies
         ):
             row["status"] = "ready"
+            row["endedAt"] = None
+            row["durationMs"] = None
             row["updatedAt"] = updated_at.isoformat()
+            update_step_timing(row)

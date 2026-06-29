@@ -155,6 +155,16 @@ Representative response:
       "attentionRequired": false,
       "attempt": 1,
       "startedAt": "2026-04-04T18:10:00Z",
+      "endedAt": null,
+      "durationMs": null,
+      "timing": {
+        "startedAt": "2026-04-04T18:10:00Z",
+        "endedAt": null,
+        "durationMs": null,
+        "elapsedMs": 75000,
+        "serverNow": "2026-04-04T18:11:15Z",
+        "precision": "live"
+      },
       "updatedAt": "2026-04-04T18:11:15Z",
       "summary": "Executing tests in sandbox",
       "checks": [],
@@ -197,6 +207,9 @@ Required fields:
 | `attentionRequired` | Whether the step currently needs operator action |
 | `attempt` | Current attempt number for the run-scoped logical step |
 | `startedAt` | Timestamp for the current attempt start |
+| `endedAt` | Timestamp for the current attempt end when exact or available by fallback |
+| `durationMs` | Exact duration for terminal current attempts when available |
+| `timing` | Operator-facing logical step timing object |
 | `updatedAt` | Last meaningful user-visible mutation for the step |
 | `summary` | Short bounded operator summary |
 | `checks[]` | Structured review/check verdicts from §9 |
@@ -213,6 +226,30 @@ Rules:
 - `lastError` is a summary only; large error details belong in artifacts
 - `preservedFrom` must be present when a row is reused from a source run during failed-step recovery
 - preserved rows must not be counted as freshly executed work in the resumed run
+
+### 7.1 Step timing contract
+
+Each step row exposes first-class logical step timing so operators do not need to infer duration from `startedAt` and `updatedAt`.
+
+```ts
+type StepTiming = {
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number | null;
+  elapsedMs: number | null;
+  serverNow: string | null;
+  precision: "exact" | "live" | "fallback" | "unavailable";
+};
+```
+
+Rules:
+
+- terminal step rows use exact `endedAt - startedAt` timing when `endedAt` is known
+- active step rows expose `elapsedMs` as of `serverNow` and use `precision: "live"`
+- pending rows with no start time are displayed as not started; ready rows are displayed as ready
+- when a terminal row has no explicit `endedAt`, the API may use `updatedAt` as a legacy fallback and must mark `precision: "fallback"`
+- preserved rows display original timing and remain provenance, not freshly executed work in the resumed run
+- workload duration remains runner/workload metadata; it is not the user-facing logical step duration
 
 If a step exhausts retries because of model-provider rate limits, the current
 step row must include a bounded operator-facing summary such as:

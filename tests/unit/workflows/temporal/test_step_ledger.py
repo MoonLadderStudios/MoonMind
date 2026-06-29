@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.step_ledger import (
     mark_step_checkpoint_evidence,
     upsert_step_check,
     update_step_row,
+    update_step_timing,
 )
 
 def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
@@ -55,6 +56,64 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     assert rows[0]["refs"]["latestStepExecutionCheckpointRef"] is None
     assert rows[0]["refs"]["stepExecutionCheckpointRefs"] == []
     assert rows[0]["refs"]["checkpointRefsByBoundary"] == {}
+    assert rows[0]["timing"] == {
+        "startedAt": None,
+        "endedAt": None,
+        "durationMs": None,
+        "elapsedMs": None,
+        "serverNow": None,
+        "precision": "unavailable",
+    }
+
+
+def test_step_timing_tracks_live_and_exact_attempt_duration() -> None:
+    started_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "run-tests",
+                "tool": {"type": "skill", "name": "repo.test"},
+                "inputs": {"title": "Run tests"},
+            }
+        ],
+        dependency_map={"run-tests": []},
+        updated_at=started_at,
+    )
+
+    row = update_step_row(
+        rows,
+        "run-tests",
+        updated_at=started_at,
+        status="running",
+        increment_attempt=True,
+        set_started_at=True,
+    )
+    update_step_timing(row, server_now=datetime(2026, 4, 7, 12, 0, 5, tzinfo=UTC))
+
+    assert row["timing"]["precision"] == "live"
+    assert row["timing"]["elapsedMs"] == 5000
+    assert row["timing"]["durationMs"] is None
+
+    completed = update_step_row(
+        rows,
+        "run-tests",
+        updated_at=datetime(2026, 4, 7, 12, 1, 18, tzinfo=UTC),
+        status="succeeded",
+    )
+
+    assert completed["endedAt"] == "2026-04-07T12:01:18+00:00"
+    assert completed["durationMs"] == 78000
+    assert completed["timing"] == {
+        "startedAt": "2026-04-07T12:00:00+00:00",
+        "endedAt": "2026-04-07T12:01:18+00:00",
+        "durationMs": 78000,
+        "elapsedMs": 78000,
+        "serverNow": None,
+        "precision": "exact",
+    }
+
+    parsed = StepLedgerRowModel.model_validate(completed)
+    assert parsed.timing.duration_ms == 78000
 
 
 def test_step_ledger_refs_track_latest_and_historical_step_execution_manifests() -> None:
@@ -127,6 +186,8 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
             "attempt": 0,
             "executionOrdinal": 0,
             "startedAt": None,
+            "endedAt": None,
+            "durationMs": None,
             "updatedAt": updated_at.isoformat(),
             "summary": None,
             "checks": [],
@@ -153,6 +214,14 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
             },
             "workload": None,
             "lastError": None,
+            "timing": {
+                "startedAt": None,
+                "endedAt": None,
+                "durationMs": None,
+                "elapsedMs": None,
+                "serverNow": None,
+                "precision": "unavailable",
+            },
         }
     ]
 

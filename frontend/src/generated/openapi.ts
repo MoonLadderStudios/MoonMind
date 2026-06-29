@@ -8546,11 +8546,16 @@ export interface components {
             executionOrdinal: number;
             /** Startedat */
             startedAt?: string | null;
+            /** Endedat */
+            endedAt?: string | null;
+            /** Durationms */
+            durationMs?: number | null;
             /**
              * Updatedat
              * Format: date-time
              */
             updatedAt: string;
+            timing?: components["schemas"]["StepLedgerTimingModel"];
             /** Summary */
             summary?: string | null;
             /** Checks */
@@ -8588,6 +8593,28 @@ export interface components {
             preparedArtifactRefs?: string[];
             /** Steps */
             steps?: components["schemas"]["StepLedgerRowModel"][];
+        };
+        /**
+         * StepLedgerTimingModel
+         * @description Logical step timing exposed for operator-facing duration displays.
+         */
+        StepLedgerTimingModel: {
+            /** Startedat */
+            startedAt?: string | null;
+            /** Endedat */
+            endedAt?: string | null;
+            /** Durationms */
+            durationMs?: number | null;
+            /** Elapsedms */
+            elapsedMs?: number | null;
+            /** Servernow */
+            serverNow?: string | null;
+            /**
+             * Precision
+             * @default unavailable
+             * @enum {string}
+             */
+            precision: "exact" | "live" | "fallback" | "unavailable";
         };
         /**
          * StepLedgerWorkloadModel

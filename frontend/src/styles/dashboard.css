@@ -3972,6 +3972,41 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   color: rgb(var(--mm-muted));
 }
 
+.step-duration-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.45rem;
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  border: 1px solid rgb(var(--mm-border) / 0.55);
+  background: rgb(var(--mm-ink) / 0.035);
+  color: rgb(var(--mm-ink));
+  font-size: 0.72rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.step-duration-numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+.step-duration-bar {
+  position: relative;
+  overflow: hidden;
+  height: 0.22rem;
+  margin-top: 0.45rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-border) / 0.32);
+}
+
+.step-duration-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgb(var(--mm-accent-2) / 0.72);
+  transition: width 0.2s ease;
+}
+
 .step-tl-chevron {
   display: inline-flex;
   font-size: 1.05rem;
@@ -4261,6 +4296,55 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .step-tl-count {
   padding-left: 0.3rem;
   border-left: 1px solid rgb(var(--mm-border) / 0.5);
+}
+
+.step-wall-clock-toggle {
+  min-height: 1.8rem;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.75rem;
+}
+
+.step-wall-clock-timeline {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgb(var(--mm-border) / 0.55);
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-panel) / 0.52);
+}
+
+.step-wall-clock-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 14rem) minmax(10rem, 1fr);
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.step-wall-clock-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgb(var(--mm-muted));
+  font-size: 0.78rem;
+}
+
+.step-wall-clock-track {
+  position: relative;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-border) / 0.32);
+}
+
+.step-wall-clock-bar {
+  position: absolute;
+  inset-block: 0;
+  border-radius: inherit;
+  background: rgb(var(--mm-ok) / 0.68);
+}
+
+.step-wall-clock-bar-live {
+  background: rgb(var(--mm-accent-2) / 0.74);
 }
 
 .live-logs-panel {

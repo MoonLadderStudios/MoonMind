@@ -87,6 +87,33 @@ The page contains the following major regions:
 
 Desktop layout uses a main content column and an optional right rail. Mobile layout stacks all sections vertically while preserving the header and primary actions near the top of the page.
 
+## Step Timing
+
+The Workflow Steps section displays logical step duration as a first-class row attribute.
+
+Collapsed step rows show:
+
+- the status badge
+- the current/latest execution ordinal when greater than one
+- preserved provenance when applicable
+- a duration chip
+- a subtle duration bar relative to the longest visible step
+
+Duration copy follows the step state:
+
+- terminal step: exact duration such as `1m 42s`
+- active step (`running`, `reviewing`, `awaiting_external`): live elapsed duration such as `3m 11s so far`
+- `pending`: `Not started`
+- `ready`: `Ready`
+- missing timing: `Timing unavailable`
+- preserved row: `Original duration: 2m 14s` or `Original timing unavailable`
+
+The expanded step row includes a **Timing** section above Logs & Diagnostics with Started, Ended when available, Elapsed, and Last update. Workload duration remains in the Workload section and is treated as runner metadata, not the logical step duration.
+
+The top of the Steps section includes timing callouts for the active step, longest visible step, and completed-step count.
+
+The optional **Timeline view** toggle reveals a secondary wall-clock timeline for started steps. It is not the default duration display.
+
 ## Header
 
 The header is always present.

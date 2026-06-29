@@ -107,7 +107,10 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
-from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
+from moonmind.workflows.temporal.step_ledger import (
+    build_initial_step_rows,
+    update_step_timing,
+)
 from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
@@ -4364,6 +4367,33 @@ async def _enrich_step_ledger_agent_run_refs(payload: Any) -> Any:
     return enriched_payload
 
 
+def _with_step_timing(payload: Any) -> Any:
+    if not isinstance(payload, Mapping):
+        return payload
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return payload
+
+    server_now = datetime.now(UTC)
+    enriched_steps: list[Any] = []
+    changed = False
+    for step in steps:
+        if not isinstance(step, Mapping):
+            enriched_steps.append(step)
+            continue
+        row = dict(step)
+        before = row.get("timing")
+        update_step_timing(row, server_now=server_now)
+        changed = changed or row.get("timing") != before
+        enriched_steps.append(row)
+
+    if not changed:
+        return payload
+    enriched_payload = dict(payload)
+    enriched_payload["steps"] = enriched_steps
+    return enriched_payload
+
+
 def _fallback_step_tool_payload(step: Mapping[str, Any]) -> dict[str, str]:
     step_type = str(step.get("type") or "").strip()
     tool = step.get("tool") if isinstance(step.get("tool"), Mapping) else None
@@ -4521,6 +4551,7 @@ def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | 
                 waiting_reason or getattr(record, "attention_required", False)
             )
             row["summary"] = summary or row.get("summary")
+            update_step_timing(row, server_now=updated_at)
             break
 
     snapshot = {
@@ -4634,7 +4665,9 @@ async def _load_execution_step_ledger(
             },
         ) from exc
 
-    enriched_payload = await _enrich_step_ledger_agent_run_refs(payload)
+    enriched_payload = _with_step_timing(
+        await _enrich_step_ledger_agent_run_refs(payload)
+    )
 
     try:
         return StepLedgerSnapshotModel.model_validate(enriched_payload)
