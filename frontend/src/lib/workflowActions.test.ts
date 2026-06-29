@@ -10,7 +10,6 @@ import {
 
 function noopHandlers(): WorkflowActionHandlers {
   return {
-    onRename: vi.fn(),
     onEditTask: vi.fn(),
     onCompareRun: vi.fn(),
     onRerun: vi.fn(),
@@ -22,7 +21,6 @@ function noopHandlers(): WorkflowActionHandlers {
     onReject: vi.fn(),
     onCancel: vi.fn(),
     onForceCancel: vi.fn(),
-    onSendMessage: vi.fn(),
     onBypassDependencies: vi.fn(),
     onCreateRemediation: vi.fn(),
   };
@@ -64,13 +62,11 @@ describe('buildWorkflowActionMenuItems', () => {
     const items = buildWorkflowActionMenuItems(
       buildParams({
         actions: {
-          canSetTitle: true,
           canPause: true,
           canResume: true,
           canApprove: true,
           canReject: true,
           canCancel: true,
-          canSendMessage: true,
           canBypassDependencies: true,
         },
         canCreateRemediation: true,
@@ -81,12 +77,10 @@ describe('buildWorkflowActionMenuItems', () => {
       'cancel',
       'force-cancel',
       'create-remediation-task',
-      'rename',
       'pause',
       'resume',
       'approve',
       'reject',
-      'send-message',
     ]);
     expect(items.find((item) => item.id === 'reject')?.danger).toBe(true);
     expect(items.find((item) => item.id === 'cancel')?.danger).toBe(true);

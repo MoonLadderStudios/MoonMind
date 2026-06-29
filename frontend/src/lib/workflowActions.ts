@@ -41,7 +41,6 @@ export type WorkflowActionMenuItem = {
 };
 
 export type WorkflowActionHandlers = {
-  onRename: () => void;
   onEditTask: () => void;
   onCompareRun: () => void;
   onRerun: () => void;
@@ -53,7 +52,6 @@ export type WorkflowActionHandlers = {
   onReject: () => void;
   onCancel: () => void;
   onForceCancel: () => void;
-  onSendMessage: () => void;
   onBypassDependencies: () => void;
   onCreateRemediation: () => void;
 };
@@ -254,13 +252,6 @@ export function buildWorkflowActionMenuItems(
     }
   }
   // Remaining, less commonly used actions follow.
-  addButton({
-    id: 'rename',
-    label: 'Rename',
-    available: Boolean(actions.canSetTitle),
-    disabledReason: disabledReason('canSetTitle'),
-    onSelect: handlers.onRename,
-  });
   if (taskEditingOn) {
     addLink({
       id: 'compare-run',
@@ -299,13 +290,6 @@ export function buildWorkflowActionMenuItems(
     disabledReason: disabledReason('canReject'),
     danger: true,
     onSelect: handlers.onReject,
-  });
-  addButton({
-    id: 'send-message',
-    label: 'Send Message',
-    available: Boolean(actions.canSendMessage),
-    disabledReason: disabledReason('canSendMessage'),
-    onSelect: handlers.onSendMessage,
   });
   return items;
 }

@@ -349,16 +349,6 @@ describe('Workflow Detail Entrypoint', () => {
     return screen.getByRole('menu', { name: 'Workflow actions' });
   }
 
-  function confirmWorkflowDialog(name: string) {
-    fireEvent.click(screen.getByRole('button', { name }));
-  }
-
-  function typeWorkflowConfirmation(text: string) {
-    fireEvent.change(screen.getByLabelText(`Type ${text} to confirm`), {
-      target: { value: text },
-    });
-  }
-
   function mockWorkflowDetailSubrouteFetch() {
     const mockExecution = {
       taskId: 'test-123',
@@ -3470,7 +3460,6 @@ describe('Workflow Detail Entrypoint', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     const menu = screen.getByRole('menu', { name: 'Workflow actions' });
     for (const label of [
-      'Rename',
       'Edit',
       'Compare run',
       'Rerun',
@@ -3481,12 +3470,13 @@ describe('Workflow Detail Entrypoint', () => {
       'Approve',
       'Reject',
       'Cancel',
-      'Send Message',
       'Bypass Dependencies',
       'Remediate',
     ]) {
       expect(within(menu).getByRole('menuitem', { name: label })).toBeTruthy();
     }
+    expect(within(menu).queryByRole('menuitem', { name: 'Rename' })).toBeNull();
+    expect(within(menu).queryByRole('menuitem', { name: 'Send Message' })).toBeNull();
   });
 
   it('hides the Remediate action off the Artifacts surface where its controls are unavailable', async () => {
@@ -3552,7 +3542,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(menu).queryByRole('menuitem', { name: 'Remediate' })).toBeNull();
   });
 
-  it('routes menu selections through existing handlers and preserves destructive confirmations', async () => {
+  it('routes menu selections through existing handlers without confirmation pop-ups', async () => {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -3588,24 +3578,13 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Workflow actions' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
-    fireEvent.change(screen.getByLabelText('Workflow title'), {
-      target: { value: 'Updated title' },
-    });
-    confirmWorkflowDialog('Rename workflow');
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/executions/test-123/update',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({ updateName: 'SetTitle', title: 'Updated title' }),
-        }),
-      );
-    });
+    let menu = await openWorkflowActionsMenu();
+    expect(within(menu).queryByRole('menuitem', { name: 'Rename' })).toBeNull();
+    expect(within(menu).queryByRole('menuitem', { name: 'Send Message' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Rename workflow' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Send operator message' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow actions' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Pause' }));
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Pause' }));
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/executions/test-123/signal',
@@ -3618,10 +3597,16 @@ describe('Workflow Detail Entrypoint', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Workflow actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Cancel' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(
-      fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/cancel') && init?.method === 'POST'),
-    ).toBe(false);
+    expect(screen.queryByRole('dialog', { name: 'Cancel workflow' })).toBeNull();
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/cancel',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ action: 'cancel', graceful: true }),
+        }),
+      );
+    });
   });
 
   it('dismisses the Workflow actions menu without side effects and supports keyboard selection', async () => {
@@ -3900,11 +3885,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     let menu = await openWorkflowActionsMenu();
     expect(within(menu).getByRole('menuitem', { name: 'Rerun' })).toBeTruthy();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Rename' }));
-    fireEvent.change(screen.getByLabelText('Workflow title'), {
-      target: { value: 'Renamed task' },
-    });
-    confirmWorkflowDialog('Rename workflow');
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Rerun' }));
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.some(([input]) => String(input).includes('/update'))).toBe(true);
@@ -4161,7 +4142,7 @@ describe('Workflow Detail Entrypoint', () => {
     const resumeButton = within(menu).getByRole('menuitem', { name: 'Resume from failed step' });
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
     fireEvent.click(resumeButton);
-    confirmWorkflowDialog('Resume workflow');
+    expect(screen.queryByRole('dialog', { name: 'Resume from failed step' })).toBeNull();
 
     await waitFor(() => {
       expect(calls.some((call) => call.url.includes('/recover-from-failed-step'))).toBe(true);
@@ -4298,7 +4279,7 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBe(true);
     const menu = await openWorkflowActionsMenu();
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Recover from selected step' }));
-    confirmWorkflowDialog('Recover workflow');
+    expect(screen.queryByRole('dialog', { name: 'Recover from selected step' })).toBeNull();
 
     await waitFor(() => {
       expect(calls.some((call) => call.url.includes('/recover-from-selected-step'))).toBe(true);
@@ -6969,29 +6950,11 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     let menu = await openWorkflowActionsMenu();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Send Message' }));
-    fireEvent.change(screen.getByLabelText('Message'), {
-      target: { value: 'Please use Provider Profiles.' },
-    });
-    confirmWorkflowDialog('Send message');
+    expect(within(menu).queryByRole('menuitem', { name: 'Send Message' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Send operator message' })).toBeNull();
 
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/executions/test-123/signal',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({
-            signalName: 'SendMessage',
-            payload: { message: 'Please use Provider Profiles.' },
-          }),
-        }),
-      );
-    });
-
-    menu = await openWorkflowActionsMenu();
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Reject' }));
-    typeWorkflowConfirmation('REJECT');
-    confirmWorkflowDialog('Reject workflow');
+    expect(screen.queryByRole('dialog', { name: 'Reject workflow' })).toBeNull();
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(

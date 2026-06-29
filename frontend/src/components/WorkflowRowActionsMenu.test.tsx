@@ -210,13 +210,12 @@ describe('WorkflowRowActionsMenu', () => {
     expect(screen.getByRole('status').className).toContain('ok');
   });
 
-  it('opens a cancel dialog and posts to the cancel endpoint after confirmation', async () => {
+  it('posts a cancel request directly from the row action menu', async () => {
     renderMenu();
     fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
     await waitForActionAvailability();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Cancel' }));
-    expect(screen.getByRole('dialog', { name: 'Cancel workflow' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel workflow' }));
+    expect(screen.queryByRole('dialog', { name: 'Cancel workflow' })).toBeNull();
 
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(
@@ -230,18 +229,12 @@ describe('WorkflowRowActionsMenu', () => {
     });
   });
 
-  it('requires typed confirmation before posting a forced cancel request', async () => {
+  it('posts a force cancel request directly from the row action menu', async () => {
     renderMenu();
     fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
     await waitForActionAvailability();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Force cancel' }));
-    const confirmButton = screen.getByRole('button', { name: 'Force cancel workflow' }) as HTMLButtonElement;
-    expect(confirmButton.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText('Type FORCE CANCEL to confirm'), {
-      target: { value: 'FORCE CANCEL' },
-    });
-    expect(confirmButton.disabled).toBe(false);
-    fireEvent.click(confirmButton);
+    expect(screen.queryByRole('dialog', { name: 'Force cancel workflow' })).toBeNull();
 
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(([url, init]) => {
@@ -256,5 +249,38 @@ describe('WorkflowRowActionsMenu', () => {
         reason: 'Force canceled by operator from the dashboard.',
       });
     });
+  });
+
+  it('omits dialog-backed rename and message actions from the row action menu', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...detailResponse,
+            actions: { canSetTitle: true, canSendMessage: true },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.filter(
+          ([url]) => String(url) === '/api/executions/wf-123?source=temporal',
+        ),
+      ).not.toHaveLength(0);
+      expect(screen.getByText('No workflow actions are currently available.')).toBeTruthy();
+      expect(screen.queryByText('Checking availability…')).toBeNull();
+    });
+
+    expect(screen.queryByRole('menuitem', { name: 'Rename' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Send Message' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Rename workflow' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Send operator message' })).toBeNull();
   });
 });
