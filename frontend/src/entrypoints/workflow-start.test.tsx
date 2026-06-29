@@ -16624,7 +16624,8 @@ describe("Task Create governed Tool authoring", () => {
     const derivedChip = (
       await within(step).findByText("GitHub CLI / PRs")
     ).closest("li") as HTMLElement;
-    expect(within(derivedChip).getByText("· from publish mode")).toBeTruthy();
+    expect(within(derivedChip).queryByText("· from publish mode")).toBeNull();
+    expect(derivedChip.getAttribute("title")).toContain("from publish mode");
     fireEvent.focus(
       within(derivedChip).getByRole("button", {
         name: "GitHub CLI / PRs capability provenance",

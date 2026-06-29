@@ -4957,11 +4957,14 @@ function derivedCapabilityExplanation(chip: StepCapabilityChip): string {
 function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
   const [showExplanation, setShowExplanation] = useState(false);
   const provenance = capabilityChipProvenanceLabel(chip);
-  const detailText = chip.removable ? chip.token : provenance || chip.token;
   const explanation = chip.removable ? chip.description : derivedCapabilityExplanation(chip);
+  const chipTitle = provenance
+    ? `${chip.label}: ${provenance}`
+    : `${chip.label}: ${chip.description}`;
   return (
     <li
       className={`queue-step-capability-chip${chip.removable ? "" : " is-derived"}`}
+      title={chipTitle}
       onClick={
         chip.removable
           ? undefined
@@ -4972,7 +4975,6 @@ function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
         {chip.icon}
       </span>
       <span className="queue-step-capability-chip-label">{chip.label}</span>
-      <span className="queue-step-capability-chip-detail">{`· ${detailText}`}</span>
       {chip.removable ? (
         <button
           type="button"
