@@ -104,10 +104,5 @@ async def test_oauth_terminal_shell_route_renders_boot_payload(
     assert "moonmind-ui-boot" in response.text
 
     boot_payload = _extract_boot_payload(response.text)
-    assert boot_payload["page"] == "oauth-terminal"
-    assert boot_payload["initialData"]["sessionId"] == "oas_integration_shell"
-    assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
-    assert (
-        boot_payload["initialData"]["dashboardConfig"]["initialPath"]
-        == "/oauth-terminal"
-    )
+    assert boot_payload == {"page": "dashboard", "apiBase": "/api"}
+    assert "oas_integration_shell" not in response.text

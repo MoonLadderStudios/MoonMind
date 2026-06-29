@@ -6,7 +6,6 @@ import json
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import unquote
 from uuid import uuid4
 
 import pytest
@@ -104,26 +103,24 @@ async def async_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
 
 
 @pytest.mark.parametrize(
-    ("path", "expected_page"),
+    "path",
     (
-        ("/workflows", "workflow-list"),
-        ("/workflows/new", "workflow-start"),
-        ("/workflows/mm:workflow-123", "workflow-detail"),
+        "/workflows",
+        "/workflows/new",
+        "/workflows/mm:workflow-123",
         (
             "/workflows/mm%3A5cd204e5-4f32-484a-a2ed-2222b214961c%3A"
-            "%7B%7B.ScheduleTime%7D%7D-2026-06-27T13%3A00%3A00Z",
-            "workflow-detail",
+            "%7B%7B.ScheduleTime%7D%7D-2026-06-27T13%3A00%3A00Z"
         ),
-        ("/workflows/mm:workflow-123/steps", "workflow-detail"),
-        ("/workflows/mm:workflow-123/artifacts", "workflow-detail"),
-        ("/workflows/mm:workflow-123/runs", "workflow-detail"),
-        ("/workflows/mm:workflow-123/debug", "workflow-detail"),
+        "/workflows/mm:workflow-123/steps",
+        "/workflows/mm:workflow-123/artifacts",
+        "/workflows/mm:workflow-123/runs",
+        "/workflows/mm:workflow-123/debug",
     ),
 )
 async def test_supported_workflow_routes_render_console_shell(
     async_client: AsyncClient,
     path: str,
-    expected_page: str,
 ) -> None:
     response = await async_client.get(path, follow_redirects=False)
 
@@ -132,10 +129,52 @@ async def test_supported_workflow_routes_render_console_shell(
     assert "/static/workflow_console/dist/assets/" in response.text
 
     boot_payload = _extract_boot_payload(response.text)
-    assert boot_payload["page"] == expected_page
-    assert boot_payload["initialData"]["dashboardConfig"]["initialPath"] == unquote(
-        path
-    )
+    assert boot_payload == {"page": "dashboard", "apiBase": "/api"}
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/schedules",
+        "/schedules/schedule-alpha",
+        "/skills",
+        "/skills/local/editor",
+        "/settings",
+        "/settings/provider-profiles",
+        "/manifests",
+        "/manifests/default-workflow",
+        "/oauth-terminal",
+        "/index-health",
+    ),
+)
+async def test_supported_dashboard_deep_links_share_spa_shell(
+    async_client: AsyncClient,
+    path: str,
+) -> None:
+    response = await async_client.get(path, follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "moonmind-ui-boot" in response.text
+    assert "/static/workflow_console/dist/assets/" in response.text
+
+    boot_payload = _extract_boot_payload(response.text)
+    assert boot_payload == {"page": "dashboard", "apiBase": "/api"}
+
+
+async def test_ui_info_endpoint_exposes_spa_capabilities_and_endpoints(
+    async_client: AsyncClient,
+) -> None:
+    response = await async_client.get("/api/ui/info")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["app"] == "moonmind"
+    assert payload["apiBase"] == "/api"
+    assert payload["features"]["workflowList"] is True
+    assert payload["features"]["settings"] is True
+    assert payload["endpoints"]["workflows"] == "/api/executions"
+    assert payload["endpoints"]["workflowDetail"] == "/api/executions/{workflowId}"
+    assert "dashboardConfig" in payload
 
 
 @pytest.mark.parametrize(

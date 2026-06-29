@@ -22,7 +22,6 @@ describe("vite.config", () => {
     expect(tailwindConfig.content).toEqual(
       expect.arrayContaining([
         "./api_service/templates/react_dashboard.html",
-        "./api_service/templates/_navigation.html",
         "./frontend/src/**/*.{js,jsx,ts,tsx}",
       ]),
     );

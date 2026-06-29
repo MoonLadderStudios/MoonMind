@@ -148,7 +148,8 @@ def test_workflow_console_api_routes_are_workflow_native() -> None:
     assert "/workflows/{workflow_path:path}" in route_paths
     assert "/proposals" not in route_paths
     assert "/proposals/{proposal_id}" not in route_paths
-    assert "/api/dashboard/config" in route_paths
+    assert "/api/dashboard/config" not in route_paths
+    assert "/api/ui/info" in route_paths
     assert "/api/workflows/skills" in route_paths
     assert "/api/workflows/skills/upload" in route_paths
 
@@ -192,8 +193,8 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
     assert response.status_code == 200
     assert "moonmind-ui-boot" in response.text
     boot_payload = _extract_boot_payload(response.text)
-    assert boot_payload["page"] == "workflow-list"
-    assert boot_payload["initialData"]["dashboardConfig"]["initialPath"] == "/workflows"
+    assert boot_payload["page"] == "dashboard"
+    assert "dashboardConfig" not in json.dumps(boot_payload)
 
 def test_default_app_url_redirects_to_dashboard() -> None:
     response = TestClient(main_app).get("/", follow_redirects=False)
@@ -220,9 +221,6 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert "moonmind-ui-boot" in response.text
         assert 'type="module"' in response.text
         assert "/static/workflow_console/dist/assets/" in response.text
-        assert 'class="dashboard-shell-full"' in response.text
-        assert 'class="masthead-brand"' in response.text
-        assert 'src="/static/workflow_console/moonmindlogo.webp"' in response.text
         assert "MOONMIND OPERATIONS" not in response.text
         assert "workflow-console-config" not in response.text
         assert "/static/workflow_console/dashboard.js" not in response.text
@@ -233,8 +231,8 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
 
 def test_extensionless_dashboard_subroutes_fallback_to_spa_shell(client: TestClient) -> None:
     for path, expected_page in (
-        ("/settings/operations", "settings"),
-        ("/skills/local", "skills"),
+        ("/settings/operations", "dashboard"),
+        ("/skills/local", "dashboard"),
     ):
         response = client.get(path)
         assert response.status_code == 200
@@ -246,19 +244,27 @@ def test_extensionless_dashboard_subroutes_fallback_to_spa_shell(client: TestCli
     assert response.status_code == 404
     assert "moonmind-ui-boot" not in response.text
 
-def test_dashboard_client_config_endpoint_exposes_spa_boundary(client: TestClient) -> None:
-    response = client.get("/api/dashboard/config?currentPath=/workflows/new")
+def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> None:
+    response = client.get("/api/ui/info")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["currentPath"] == "/workflows/new"
-    assert payload["dashboardConfig"]["initialPath"] == "/workflows/new"
+    assert payload["app"] == "moonmind"
+    assert payload["apiBase"] == "/api"
+    assert payload["features"]["workflowLiveUpdates"] is True
+    assert payload["endpoints"]["workflows"] == "/api/executions"
+    assert payload["endpoints"]["workflowUpdatesStream"] == "/api/workflows/updates/stream"
     assert payload["workerPause"] == {
         "get": "/api/system/worker-pause",
         "post": "/api/system/worker-pause",
         "shardHealth": "/api/v1/operations/codex/shards",
     }
     assert isinstance(payload["settingsPermissions"], list)
+    assert "initialPath" not in payload["dashboardConfig"]
+
+    retired = client.get("/api/dashboard/config?currentPath=/workflows/new")
+    assert retired.status_code == 404
+    assert "moonmind-ui-boot" not in retired.text
 
     for path in (
         "/workflows",
@@ -282,8 +288,8 @@ def test_index_health_route_uses_index_health_boot_payload(client: TestClient) -
 
     assert response.status_code == 200
     boot_payload = _extract_boot_payload(response.text)
-    assert boot_payload["page"] == "index-health"
-    assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
+    assert boot_payload["page"] == "dashboard"
+    assert "initialData" not in boot_payload
 
 def test_dashboard_logo_asset_exists() -> None:
     asset_path = Path("api_service/static/workflow_console/moonmindlogo.webp")
@@ -292,29 +298,23 @@ def test_dashboard_logo_asset_exists() -> None:
     assert asset_path.stat().st_size < 25_000
 
 def test_task_create_route_uses_canonical_boot_payload(client: TestClient) -> None:
-    """GET /workflows/new renders the workflow-start shell with server runtime config."""
+    """GET /workflows/new renders the generic SPA shell without route data."""
     response = client.get("/workflows/new")
 
     assert response.status_code == 200
     assert "moonmind-ui-boot" in response.text
     boot_payload = _extract_boot_payload(response.text)
 
-    assert boot_payload["page"] == "workflow-start"
-    dashboard_config = boot_payload["initialData"]["dashboardConfig"]
-    assert dashboard_config["initialPath"] == "/workflows/new"
-    assert dashboard_config["sources"]["temporal"]["create"].startswith("/api/")
-    assert dashboard_config["sources"]["temporal"]["artifactCreate"].startswith(
-        "/api/"
-    )
+    assert boot_payload["page"] == "dashboard"
+    assert "dashboardConfig" not in json.dumps(boot_payload)
 
 def test_schedules_runtime_config_exposes_documented_templates(
     client: TestClient,
 ) -> None:
-    response = client.get("/schedules")
+    response = client.get("/api/ui/info")
 
     assert response.status_code == 200
-    boot_payload = _extract_boot_payload(response.text)
-    schedules = boot_payload["initialData"]["dashboardConfig"]["sources"]["schedules"]
+    schedules = response.json()["dashboardConfig"]["sources"]["schedules"]
 
     assert schedules == {
         "list": "/api/recurring-workflows?scope=personal",
@@ -332,10 +332,9 @@ def test_oauth_terminal_route_uses_terminal_boot_payload(client: TestClient) -> 
     assert response.status_code == 200
     assert "moonmind-ui-boot" in response.text
     boot_payload = _extract_boot_payload(response.text)
-    assert boot_payload["page"] == "oauth-terminal"
-    assert boot_payload["initialData"]["sessionId"] == "oas_route_shell"
-    assert boot_payload["initialData"]["dashboardConfig"]["initialPath"] == "/oauth-terminal"
-    assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
+    assert boot_payload["page"] == "dashboard"
+    assert "sessionId" not in json.dumps(boot_payload)
+    assert "initialData" not in boot_payload
 
 def test_removed_task_routes_do_not_redirect_or_render_console(client: TestClient) -> None:
     for path in (
@@ -386,16 +385,9 @@ def test_react_shell_wraps_navigation_in_centered_masthead_slot(
     response = client.get("/workflows")
 
     assert response.status_code == 200
-    assert '<div class="masthead-nav">' in response.text
-    assert response.text.index('<div class="masthead-nav">') < response.text.index(
-        'id="dashboard-nav"'
-    )
-
-    title_meta_marker = '<div class="masthead-title-meta">'
-    if title_meta_marker in response.text:
-        assert response.text.index('id="dashboard-nav"') < response.text.index(
-            title_meta_marker
-        )
+    assert 'id="dashboard-app-root"' in response.text
+    assert 'class="masthead-nav"' not in response.text
+    assert 'id="dashboard-nav"' not in response.text
 
 def test_trailing_slash_alias_routes_return_404_not_detail_page(client: TestClient) -> None:
     """Trailing-slash variants /workflows/new/ and /workflows/ must not render a detail shell."""
@@ -446,9 +438,8 @@ def test_detail_shell_boot_payload_keeps_workspace_query_state_browser_only(
 
     assert response.status_code == 200
     boot_payload = _extract_boot_payload(response.text)
-    dashboard_config = boot_payload["initialData"]["dashboardConfig"]
-    assert dashboard_config["initialPath"] == "/workflows/mm:workflow-123/steps"
     serialized_boot_payload = json.dumps(boot_payload)
+    assert "dashboardConfig" not in serialized_boot_payload
     assert token_param not in serialized_boot_payload
     assert password_param not in serialized_boot_payload
 
@@ -456,30 +447,27 @@ def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
     for path in (
         "/workflows",
         "/settings",
-    ):
-        response = client.get(path)
-        assert response.status_code == 200
-        assert '"dataWidePanel":true' in response.text
-    for path in (
         "/manifests",
         "/workflows/mm:workflow-123",
         "/workflows/mm:workflow-123/steps",
     ):
         response = client.get(path)
         assert response.status_code == 200
-        assert '"dataWidePanel":false' in response.text
+        boot_payload = _extract_boot_payload(response.text)
+        assert boot_payload["page"] == "dashboard"
+        assert "initialData" not in boot_payload
 
 
 def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> None:
-    for path, entrypoint in (
-        ("/manifests/nightly-docs", "manifests"),
-        ("/schedules/123e4567-e89b-12d3-a456-426614174000", "schedules"),
+    for path in (
+        "/manifests/nightly-docs",
+        "/schedules/123e4567-e89b-12d3-a456-426614174000",
     ):
         response = client.get(path)
         assert response.status_code == 200
         assert "moonmind-ui-boot" in response.text
         payload = _extract_boot_payload(response.text)
-        assert payload["page"] == entrypoint
+        assert payload["page"] == "dashboard"
 
 
 def test_proposal_review_routes_are_not_dashboard_surfaces(client: TestClient) -> None:
@@ -500,13 +488,13 @@ def test_legacy_settings_subroutes_redirect_to_unified_settings(client: TestClie
     assert secrets.status_code == 307
     assert secrets.headers["location"] == "/settings?section=providers-secrets"
 
-def test_react_tasks_list_and_detail_boot_include_dashboard_config(client: TestClient) -> None:
+def test_react_tasks_list_and_detail_boot_exclude_route_specific_config(client: TestClient) -> None:
     response = client.get("/workflows")
     assert response.status_code == 200
-    assert "dashboardConfig" in response.text
+    assert "dashboardConfig" not in response.text
     detail = client.get(f"/workflows/{uuid4()}")
     assert detail.status_code == 200
-    assert "dashboardConfig" in detail.text
+    assert "dashboardConfig" not in detail.text
 
 def test_react_shell_renders_build_metadata_with_accurate_labels(
     monkeypatch: pytest.MonkeyPatch,
@@ -514,11 +502,11 @@ def test_react_shell_renders_build_metadata_with_accurate_labels(
     monkeypatch.setenv("MOONMIND_BUILD_ID", "20260408.1703")
 
     with _client_with_mock_service(monkeypatch) as (client, _mock_service):
-        response = client.get("/workflows")
+        response = client.get("/api/ui/info")
 
     assert response.status_code == 200
-    assert 'title="MoonMind image version"' in response.text
-    assert '<span class="version-badge-value">v20260408.1703</span>' in response.text
+    assert response.json()["buildId"] == "20260408.1703"
+    assert "version-badge-value" not in response.text
     assert "MoonMind</span>" not in response.text
     assert 'title="Codex CLI version"' not in response.text
 
@@ -531,9 +519,9 @@ def test_react_shell_places_operator_metadata_in_title_row(
         response = client.get("/workflows")
 
     assert response.status_code == 200
-    assert 'class="masthead-title-meta"' in response.text
-    assert 'title="MoonMind image version"' in response.text
-    assert "v20260408.1703" in response.text
+    assert 'class="masthead-title-meta"' not in response.text
+    assert 'title="MoonMind image version"' not in response.text
+    assert "v20260408.1703" not in response.text
     assert 'class="masthead-meta"' not in response.text
 
 def test_react_shell_hides_title_row_metadata_when_build_id_is_not_configured(

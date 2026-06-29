@@ -18,7 +18,13 @@ export type DashboardRoute = {
   currentPath: string;
 };
 
-export type DashboardClientRouteConfig = {
+export type DashboardUiInfo = {
+  app?: string;
+  buildId?: string | null;
+  apiBase?: string;
+  features?: Record<string, unknown>;
+  limits?: Record<string, unknown>;
+  endpoints?: Record<string, unknown>;
   dashboardConfig?: unknown;
   settingsPermissions?: unknown;
   workerPause?: unknown;
@@ -96,10 +102,10 @@ function stringArrayValue(value: unknown): string[] | null {
 export function payloadForDashboardRoute(
   payload: BootPayload,
   route: DashboardRoute,
-  clientConfig?: DashboardClientRouteConfig | null,
+  uiInfo?: DashboardUiInfo | null,
 ): BootPayload {
   const initialData = baseInitialData(payload);
-  const routeDashboardConfig = objectValue(clientConfig?.dashboardConfig);
+  const routeDashboardConfig = objectValue(uiInfo?.dashboardConfig);
   const dashboardConfig =
     routeDashboardConfig ??
     (initialData.dashboardConfig && typeof initialData.dashboardConfig === 'object'
@@ -117,14 +123,14 @@ export function payloadForDashboardRoute(
   initialData.layout = layout;
 
   if (route.page === 'settings') {
-    initialData.workerPause = objectValue(clientConfig?.workerPause) ?? initialData.workerPause ?? {
+    initialData.workerPause = objectValue(uiInfo?.workerPause) ?? initialData.workerPause ?? {
       get: '/api/system/worker-pause',
       post: '/api/system/worker-pause',
       shardHealth: '/api/workflows/codex/shards',
     };
     initialData.runtimeConfig = initialData.runtimeConfig ?? nextDashboardConfig;
     initialData.settingsPermissions =
-      stringArrayValue(clientConfig?.settingsPermissions) ??
+      stringArrayValue(uiInfo?.settingsPermissions) ??
       stringArrayValue(initialData.settingsPermissions) ??
       [];
   }
@@ -132,6 +138,11 @@ export function payloadForDashboardRoute(
   return {
     ...payload,
     page: route.page,
+    apiBase: typeof uiInfo?.apiBase === 'string' ? uiInfo.apiBase : payload.apiBase,
+    features:
+      uiInfo?.features && typeof uiInfo.features === 'object'
+        ? (uiInfo.features as Record<string, boolean>)
+        : payload.features,
     initialData,
   };
 }

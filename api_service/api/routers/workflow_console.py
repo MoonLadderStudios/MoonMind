@@ -151,10 +151,15 @@ class DashboardIssueListResponse(BaseModel):
     items: list[DashboardIssueOption] = Field(default_factory=list)
     error: str | None = Field(None)
 
-class DashboardClientConfigResponse(BaseModel):
-    """Client-discoverable dashboard shell config for SPA route transitions."""
+class DashboardUiInfoResponse(BaseModel):
+    """Compact client-discoverable dashboard shell config for the SPA."""
 
-    current_path: str = Field(..., alias="currentPath")
+    app: str = "moonmind"
+    build_id: str | None = Field(None, alias="buildId")
+    api_base: str = Field("/api", alias="apiBase")
+    features: dict[str, bool] = Field(default_factory=dict)
+    limits: dict[str, int] = Field(default_factory=dict)
+    endpoints: dict[str, str] = Field(default_factory=dict)
     dashboard_config: dict = Field(..., alias="dashboardConfig")
     settings_permissions: list[str] = Field(
         default_factory=list,
@@ -316,23 +321,11 @@ async def _render_react_page(
     session: AsyncSession | None = None,
     user: User | None = None,
 ) -> HTMLResponse:
-    boot_initial_data = dict(initial_data or {})
-    boot_layout = dict(boot_initial_data.get("layout") or {})
-    boot_layout["dataWidePanel"] = data_wide_panel
-    boot_initial_data["layout"] = boot_layout
-    dashboard_config = dict(boot_initial_data.get("dashboardConfig") or {})
-    if not dashboard_config:
-        dashboard_config = await resolve_dashboard_runtime_config(
-            current_path, session=session, user=user
-        )
-        boot_initial_data["dashboardConfig"] = dashboard_config
-
-    boot_payload = generate_boot_payload(page, initial_data=boot_initial_data)
+    _ = (current_path, initial_data, data_wide_panel, session, user)
+    boot_payload = generate_boot_payload("dashboard")
     assets_html = _vite_assets_or_error(page)
     if isinstance(assets_html, HTMLResponse):
         return assets_html
-
-    system_config = dict(dashboard_config.get("system") or {})
 
     return templates.TemplateResponse(
         request,
@@ -342,7 +335,7 @@ async def _render_react_page(
             "boot_payload": boot_payload,
             "assets_html": assets_html,
             "current_path": current_path,
-            "build_id": system_config.get("buildId"),
+            "build_id": None,
         },
     )
 
@@ -648,14 +641,10 @@ async def workflow_console_root(
 ) -> HTMLResponse:
     """Serve the React-powered workflow list page."""
     list_path = "/workflows"
-    dashboard_config = await resolve_dashboard_runtime_config(
-        list_path, session=session, user=_user
-    )
     return await _render_react_page(
         request,
         "workflow-list",
         list_path,
-        initial_data={"dashboardConfig": dashboard_config},
         data_wide_panel=True,
         session=session,
         user=_user,
@@ -758,19 +747,10 @@ async def task_settings_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered settings page."""
-    runtime_config = await resolve_dashboard_runtime_config(
-        "/settings", session=session, user=_user
-    )
-    initial_data = {
-        "workerPause": _worker_pause_sources(),
-        "runtimeConfig": runtime_config,
-        "settingsPermissions": sorted(settings_permissions_for_user(_user)),
-    }
     return await _render_react_page(
         request,
         "settings",
         "/settings",
-        initial_data=initial_data,
         data_wide_panel=True,
         session=session,
         user=_user,
@@ -815,14 +795,10 @@ async def task_create_route(
 ) -> HTMLResponse:
     """Serve the React-powered workflow start page."""
     current_path = "/workflows/new"
-    dashboard_config = await resolve_dashboard_runtime_config(
-        current_path, session=session, user=_user
-    )
     return await _render_react_page(
         request,
         "workflow-start",
         current_path,
-        initial_data={"dashboardConfig": dashboard_config},
         session=session,
         user=_user,
     )
@@ -870,33 +846,57 @@ async def workflow_console_route(
         _raise_dashboard_route_not_found()
 
     detail_path = f"/workflows/{normalized}"
-    dashboard_config = await resolve_dashboard_runtime_config(
-        detail_path, session=session, user=_user
-    )
     return await _render_react_page(
         request,
         "workflow-detail",
         detail_path,
-        initial_data={"dashboardConfig": dashboard_config},
         session=session,
         user=_user,
     )
 
-@router.get("/api/dashboard/config", response_model=DashboardClientConfigResponse)
-async def get_dashboard_client_config(
-    current_path: str = Query("/workflows", alias="currentPath"),
+@router.get("/api/ui/info", response_model=DashboardUiInfoResponse)
+async def get_dashboard_ui_info(
     session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
-) -> DashboardClientConfigResponse:
-    """Expose dashboard shell config for persistent SPA clients."""
-    normalized_path = current_path if current_path.startswith("/") else f"/{current_path}"
+) -> DashboardUiInfoResponse:
+    """Expose compact shell capabilities and endpoint discovery for the SPA."""
     dashboard_config = await resolve_dashboard_runtime_config(
-        normalized_path,
+        "/workflows/new",
         session=session,
         user=_user,
     )
-    return DashboardClientConfigResponse(
-        currentPath=normalized_path,
+    dashboard_config.pop("initialPath", None)
+    system_config = dict(dashboard_config.get("system") or {})
+    return DashboardUiInfoResponse(
+        buildId=system_config.get("buildId"),
+        features={
+            "workflowList": True,
+            "workflowActions": True,
+            "workflowEditing": True,
+            "workflowLiveUpdates": True,
+            "artifacts": True,
+            "schedules": True,
+            "skills": True,
+            "settings": True,
+            "oauthTerminal": True,
+        },
+        limits={
+            "workflowListDefaultPageSize": 50,
+            "workflowListMaxPageSize": 200,
+            "artifactMaxUploadBytes": 10 * 1024 * 1024,
+        },
+        endpoints={
+            "workflows": "/api/executions",
+            "workflowDetail": "/api/executions/{workflowId}",
+            "workflowSteps": "/api/executions/{workflowId}/steps",
+            "workflowUpdatesPoll": "/api/executions",
+            "workflowUpdatesStream": "/api/workflows/updates/stream",
+            "workflowEventsStream": "/api/workflows/{workflowId}/events/stream",
+            "artifacts": "/api/artifacts",
+            "skills": "/api/workflows/skills",
+            "schedules": "/api/recurring-workflows",
+            "settings": "/api/settings",
+        },
         dashboardConfig=dashboard_config,
         settingsPermissions=sorted(settings_permissions_for_user(_user)),
         workerPause=_worker_pause_sources(),
