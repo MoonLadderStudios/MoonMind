@@ -3322,6 +3322,7 @@ class ExecutionListItemModel(BaseModel):
     scheduled_for: Optional[datetime] = Field(None, alias="scheduledFor")
     created_at: datetime = Field(..., alias="createdAt")
     started_at: datetime | None = Field(None, alias="startedAt")
+    queued_at: datetime | None = Field(None, alias="queuedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")
     depends_on: list[str] = Field(default_factory=list, alias="dependsOn")

@@ -2233,6 +2233,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
     started_at = getattr(record, "started_at", None)
     updated_at = getattr(record, "updated_at", None) or started_at or datetime.now(UTC)
     created_at = getattr(record, "created_at", None) or started_at or updated_at
+    queued_at = getattr(record, "queued_at", None) or created_at
     scheduled_for = getattr(record, "scheduled_for", None)
     workflow_id = str(getattr(record, "workflow_id", "") or "").strip()
     dashboard_status = _DASHBOARD_STATUS_BY_STATE.get(
@@ -2265,6 +2266,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         scheduled_for=scheduled_for,
         created_at=created_at,
         started_at=started_at,
+        queued_at=queued_at,
         updated_at=updated_at,
         closed_at=getattr(record, "closed_at", None),
         depends_on=depends_on,
