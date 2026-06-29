@@ -8644,11 +8644,14 @@ class TemporalAgentRuntimeActivities:
             if isinstance(request, AgentRuntimeFetchResultInput)
             else False
         )
-        pr_resolver_merge_gate_owned = (
-            request.pr_resolver_merge_gate_owned
-            if isinstance(request, AgentRuntimeFetchResultInput)
-            else False
-        )
+        pr_resolver_merge_gate_owned = False
+        if isinstance(request, AgentRuntimeFetchResultInput):
+            pr_resolver_merge_gate_owned = request.pr_resolver_merge_gate_owned
+            if (
+                pr_resolver_expected
+                and "pr_resolver_merge_gate_owned" not in request.model_fields_set
+            ):
+                pr_resolver_merge_gate_owned = True
 
         adapter = ManagedAgentAdapter(
             profile_fetcher=_unused_profile_fetcher,

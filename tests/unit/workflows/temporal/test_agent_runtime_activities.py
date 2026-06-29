@@ -2973,6 +2973,35 @@ async def test_fetch_result_forwards_pr_resolver_expected_flag(tmp_path: Path) -
         assert result.failure_class == "user_error"
 
 
+async def test_fetch_result_preserves_legacy_pr_resolver_gate_ownership(
+    tmp_path: Path,
+) -> None:
+    """Missing ownership field keeps old scheduled fetch_result payload semantics."""
+    from unittest.mock import patch
+
+    store = _make_store(tmp_path)
+    _save_record(store, run_id="fr-pr-legacy", status="completed")
+
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+        autospec=True,
+    ) as mock_adapter_cls:
+        adapter = mock_adapter_cls.return_value
+        adapter.fetch_result = AsyncMock(return_value=AgentRunResult(summary="ok"))
+
+        result = await activities.agent_runtime_fetch_result(
+            {"run_id": "fr-pr-legacy", "pr_resolver_expected": True}
+        )
+
+        adapter.fetch_result.assert_awaited_once_with(
+            "fr-pr-legacy",
+            pr_resolver_expected=True,
+            pr_resolver_merge_gate_owned=True,
+        )
+        assert result.summary == "ok"
+
+
 async def test_fetch_result_skips_infrastructure_push_for_jules_runtime(
     tmp_path: Path,
 ) -> None:
@@ -3646,7 +3675,7 @@ async def test_agent_runtime_fetch_result_temporal_boundary(tmp_path: Path) -> N
                 instance.fetch_result.assert_awaited_once_with(
                     "boundary-1",
                     pr_resolver_expected=True,
-                    pr_resolver_merge_gate_owned=False,
+                    pr_resolver_merge_gate_owned=True,
                 )
 
 @pytest.mark.asyncio
