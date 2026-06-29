@@ -2724,6 +2724,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('loads execution-wide artifacts against the latest run exposed by the step ledger', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -2776,7 +2777,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
     });
 
     await waitFor(() => {

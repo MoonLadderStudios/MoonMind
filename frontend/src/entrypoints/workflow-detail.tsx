@@ -6138,14 +6138,16 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const overviewTabActive = detailSubroute === 'overview';
   const runsTabActive = detailSubroute === 'runs';
   const debugTabActive = detailSubroute === 'debug';
+  const shouldFetchStepLedger = (stepsTabActive || artifactsTabActive) && Boolean(execution?.stepsHref);
 
   const stepsQuery = useQuery({
     queryKey: ['workflow-detail-steps', workflowId, execution?.stepsHref],
     queryFn: () => fetchStepLedger(String(execution?.stepsHref || '')),
-    enabled: stepsTabActive && Boolean(execution?.stepsHref),
-    refetchInterval: stepsTabActive && execution?.stepsHref && !isTerminalExecution ? detailPoll : false,
+    enabled: shouldFetchStepLedger,
+    refetchInterval: shouldFetchStepLedger && !isTerminalExecution ? detailPoll : false,
   });
   const latestRunId = stepsQuery.data?.runId || runId;
+  const artifactRunId = execution?.stepsHref ? stepsQuery.data?.runId : runId;
   const selectedRecoveryOptions = useMemo(() => {
     const failedStepId = execution?.resume?.failedStepId || '';
     const rows = stepsQuery.data?.steps || [];
@@ -6224,9 +6226,9 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     execution?.recoveryEligibility ?? stepRecoveryQuery.data?.recoveryEligibility ?? null;
 
   const artifactsQuery = useQuery({
-    queryKey: ['workflow-detail-artifacts', namespace, workflowId, latestRunId],
+    queryKey: ['workflow-detail-artifacts', namespace, workflowId, artifactRunId],
     queryFn: async () => {
-      const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(latestRunId)}/artifacts`;
+      const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(artifactRunId || '')}/artifacts`;
       const response = await fetch(path);
       if (!response.ok) {
         throw new Error(`Artifacts: ${response.statusText}`);
@@ -6235,16 +6237,16 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     },
     enabled:
       artifactsTabActive &&
-      Boolean(namespace && workflowId && latestRunId),
-    refetchInterval: namespace && workflowId && latestRunId && !isTerminalExecution
+      Boolean(namespace && workflowId && artifactRunId),
+    refetchInterval: namespace && workflowId && artifactRunId && !isTerminalExecution
       ? detailPoll
       : false,
   });
 
   const latestReportQuery = useQuery({
-    queryKey: ['workflow-detail-latest-report', namespace, workflowId, latestRunId],
+    queryKey: ['workflow-detail-latest-report', namespace, workflowId, artifactRunId],
     queryFn: async () => {
-      const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(latestRunId)}/artifacts?link_type=report.primary&latest_only=true`;
+      const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(artifactRunId || '')}/artifacts?link_type=report.primary&latest_only=true`;
       const response = await fetch(path);
       if (!response.ok) {
         throw new Error(`Report: ${response.statusText}`);
@@ -6253,8 +6255,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     },
     enabled:
       artifactsTabActive &&
-      Boolean(namespace && workflowId && latestRunId),
-    refetchInterval: namespace && workflowId && latestRunId && !isTerminalExecution
+      Boolean(namespace && workflowId && artifactRunId),
+    refetchInterval: namespace && workflowId && artifactRunId && !isTerminalExecution
       ? detailPoll
       : false,
   });
@@ -6347,8 +6349,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['workflow-detail', encodedTaskId] });
     void queryClient.invalidateQueries({ queryKey: ['workflow-detail-steps', workflowId] });
-    void queryClient.invalidateQueries({ queryKey: ['workflow-detail-artifacts', namespace, workflowId, latestRunId] });
-    void queryClient.invalidateQueries({ queryKey: ['workflow-detail-latest-report', namespace, workflowId, latestRunId] });
+    void queryClient.invalidateQueries({ queryKey: ['workflow-detail-artifacts', namespace, workflowId, artifactRunId] });
+    void queryClient.invalidateQueries({ queryKey: ['workflow-detail-latest-report', namespace, workflowId, artifactRunId] });
     void queryClient.invalidateQueries({ queryKey: ['workflow-detail-run-summary', summaryArtifactRef] });
     void queryClient.invalidateQueries({ queryKey: ['workflow-detail-remediations', workflowId] });
   };
