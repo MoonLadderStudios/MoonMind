@@ -207,7 +207,7 @@ describe('OperationsSettingsSection deployment update card', () => {
           json: async () => workerSnapshot,
         } as Response);
       }
-      if (url === '/api/workflows/codex/shards') {
+      if (url === '/api/v1/operations/codex/shards') {
         return Promise.resolve({
           ok: true,
           json: async () => workerShardHealth,
@@ -264,7 +264,7 @@ describe('OperationsSettingsSection deployment update card', () => {
         workerPauseConfig={{
           get: '/api/workers',
           post: '/api/worker-action',
-          ...(includeShardHealth ? { shardHealth: '/api/workflows/codex/shards' } : {}),
+          ...(includeShardHealth ? { shardHealth: '/api/v1/operations/codex/shards' } : {}),
           pollIntervalMs: 60_000,
         }}
       />,
@@ -337,7 +337,7 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(within(workerCard).queryByRole('heading', { name: /per-worker health/i })).toBeNull();
     expect(within(workerCard).queryByText(/no worker shards registered/i)).toBeNull();
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url) === '/api/workflows/codex/shards'),
+      fetchSpy.mock.calls.some(([url]) => String(url) === '/api/v1/operations/codex/shards'),
     ).toBe(false);
   });
 
@@ -375,7 +375,7 @@ describe('OperationsSettingsSection deployment update card', () => {
           json: async () => workerSnapshot,
         } as Response);
       }
-      if (url === '/api/workflows/codex/shards') {
+      if (url === '/api/v1/operations/codex/shards') {
         return Promise.resolve({
           ok: true,
           json: async () => workerShardHealth,
@@ -476,7 +476,7 @@ describe('OperationsSettingsSection deployment update card', () => {
       if (url === '/api/workers') {
         return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
       }
-      if (url === '/api/workflows/codex/shards') {
+      if (url === '/api/v1/operations/codex/shards') {
         return Promise.resolve({ ok: true, json: async () => workerShardHealth } as Response);
       }
       if (url === '/api/v1/operations/deployment/stacks/moonmind') {
@@ -505,7 +505,7 @@ describe('OperationsSettingsSection deployment update card', () => {
       if (url === '/api/workers') {
         return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
       }
-      if (url === '/api/workflows/codex/shards') {
+      if (url === '/api/v1/operations/codex/shards') {
         return Promise.resolve({ ok: true, json: async () => workerShardHealth } as Response);
       }
       if (url === '/api/v1/operations/deployment/stacks/moonmind') {

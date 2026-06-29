@@ -49,42 +49,6 @@ const workspaceCatalog = {
         diagnostics: [],
       },
       {
-        key: 'live_sessions.default_enabled',
-        title: 'Live Sessions Enabled By Default',
-        description: 'Whether live task sessions are enabled by default.',
-        category: 'Workflow',
-        section: 'user-workspace',
-        type: 'boolean',
-        ui: 'toggle',
-        scopes: ['workspace'],
-        default_value: true,
-        effective_value: true,
-        override_value: null,
-        source: 'workspace_override',
-        source_explanation: 'Resolved from a workspace override.',
-        apply_mode: 'worker_reload',
-        activation_state: 'pending_reload',
-        active: false,
-        pending_value: true,
-        affected_process_or_worker: 'live_sessions',
-        completion_guidance: 'Reload affected workers to activate this value.',
-        options: null,
-        constraints: null,
-        sensitive: false,
-        secret_role: null,
-        read_only: false,
-        read_only_reason: null,
-        requires_reload: false,
-        requires_worker_restart: true,
-        requires_process_restart: false,
-        applies_to: ['live_sessions'],
-        depends_on: [],
-        order: 20,
-        audit: { store_old_value: true, store_new_value: true, redact: false },
-        value_version: 1,
-        diagnostics: [{ code: 'restart', message: 'Worker restart required.', severity: 'warning' }],
-      },
-      {
         key: 'skills.canary_percent',
         title: 'Skills Canary Percent',
         description: 'Percentage of runs routed through skills-first policy.',
@@ -395,9 +359,6 @@ describe('GeneratedSettingsSection', () => {
       if (url === '/api/v1/settings/workspace') {
         return Promise.resolve(jsonResponse({ scope: 'workspace', values: {} }));
       }
-      if (url === '/api/v1/settings/workspace/live_sessions.default_enabled') {
-        return Promise.resolve(jsonResponse({ key: 'live_sessions.default_enabled' }));
-      }
       return Promise.resolve(jsonResponse({ error: 'not_found', message: 'not found' }, false, 404));
     });
   });
@@ -412,8 +373,6 @@ describe('GeneratedSettingsSection', () => {
     expect(await screen.findByText('Default Publish Mode')).toBeTruthy();
     expect(screen.getByText('Config')).toBeTruthy();
     expect(screen.getAllByText('Workspace')).not.toHaveLength(0);
-    expect(screen.getByText('Worker restart')).toBeTruthy();
-    expect(screen.getByText('Worker restart required.')).toBeTruthy();
     expect(screen.getAllByText('Applies on next task')).not.toHaveLength(0);
     expect(screen.getAllByText('Pending next boundary')).not.toHaveLength(0);
     expect(screen.getAllByText('New tasks will use this value when they are created.')).not.toHaveLength(0);
@@ -464,7 +423,6 @@ describe('GeneratedSettingsSection', () => {
     await screen.findByText('Default Publish Mode');
 
     fireEvent.change(screen.getByLabelText('Default Publish Mode'), { target: { value: 'branch' } });
-    fireEvent.click(screen.getByLabelText('Live Sessions Enabled By Default'));
     fireEvent.change(screen.getByLabelText('Skills Canary Percent'), { target: { value: '50' } });
     fireEvent.change(screen.getByLabelText('UI Density'), { target: { value: 'compact' } });
     fireEvent.change(screen.getByLabelText('Notification Channels'), { target: { value: 'email,slack' } });
@@ -473,7 +431,6 @@ describe('GeneratedSettingsSection', () => {
 
     const preview = screen.getByLabelText('Pending settings preview');
     expect(within(preview).getByText('workflow.default_publish_mode')).toBeTruthy();
-    expect(within(preview).getByText('live_sessions.default_enabled')).toBeTruthy();
     expect(within(preview).getByText('skills.canary_percent')).toBeTruthy();
     expect(within(preview).getByText('ui.density')).toBeTruthy();
     expect(within(preview).getByText('notifications.channels')).toBeTruthy();
@@ -527,22 +484,13 @@ describe('GeneratedSettingsSection', () => {
     expect(screen.getAllByText(/broken reference/i).length).toBeGreaterThan(0);
   });
 
-  it('resets overrides through the reset route and supports discard', async () => {
+  it('supports discard for pending generated setting changes', async () => {
     renderWithClient(<GeneratedSettingsSection />);
 
-    await screen.findAllByText('Live Sessions Enabled By Default');
+    await screen.findByText('Default Publish Mode');
     fireEvent.change(screen.getByLabelText('Default Publish Mode'), { target: { value: 'branch' } });
     expect(screen.getByLabelText('Pending settings preview')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
     expect(screen.queryByLabelText('Pending settings preview')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Reset Live Sessions Enabled By Default' }));
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/v1/settings/workspace/live_sessions.default_enabled',
-        expect.objectContaining({ method: 'DELETE' }),
-      );
-    });
   });
 });

@@ -1128,18 +1128,13 @@ def test_environment_values_are_parsed_to_declared_types():
     service = SettingsCatalogService(
         env={
             "WORKFLOW_SKILLS_CANARY_PERCENT": "42",
-            "MOONMIND_LIVE_SESSION_ENABLED_DEFAULT": "false",
         }
     )
 
     canary = service.effective_value("skills.canary_percent", scope="workspace")
-    live_sessions = service.effective_value(
-        "live_sessions.default_enabled", scope="workspace"
-    )
 
     assert canary.value == 42
     assert isinstance(canary.value, int)
-    assert live_sessions.value is False
 
 
 def test_secret_ref_diagnostic_does_not_expose_secret_plaintext():
@@ -3078,12 +3073,12 @@ def test_settings_registry_migration_gate_skipped_when_no_ledger():
 
 def test_settings_registry_default_uses_catalog_key_ledger():
     assert "workflow.default_runtime" in _CATALOG_KEY_LEDGER
-    assert len(_CATALOG_KEY_LEDGER) == 9
+    assert len(_CATALOG_KEY_LEDGER) == 8
 
 
 def test_settings_registry_default_registry_passes_ledger_check():
     registry = SettingsRegistry(_REGISTRY)
-    assert len(registry.entries) == 8
+    assert len(registry.entries) == 7
 
 
 def test_settings_catalog_builder_filters_by_section():
@@ -3300,7 +3295,7 @@ def test_workflow_settings_has_moonmind_expose_metadata():
     assert "workflow.default_publish_mode" in exposed_keys
     assert "skills.policy_mode" in exposed_keys
     assert "skills.canary_percent" in exposed_keys
-    assert "live_sessions.default_enabled" in exposed_keys
+    assert "live_sessions.default_enabled" not in exposed_keys
 
 
 # ---------------------------------------------------------------------------

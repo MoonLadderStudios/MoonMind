@@ -759,11 +759,6 @@ class TestWorkflowSettings:
         assert settings.allowed_skills == ("auto",)
         assert settings.skills_local_mirror_root == ".agents/skills/local"
         assert settings.skills_legacy_mirror_root == ".agents/skills"
-        assert settings.live_session_enabled_default is True
-        assert settings.live_session_provider == "none"
-        assert settings.live_session_ttl_minutes == 60
-        assert settings.live_session_rw_grant_ttl_minutes == 15
-        assert settings.live_session_allow_web is False
 
     def test_skills_overrides(self):
         """Skill settings should accept explicit override values."""
@@ -831,40 +826,6 @@ class TestWorkflowSettings:
         settings = WorkflowSettings(_env_file=None)
         assert settings.repo_root == "/tmp/workspace-root"
         monkeypatch.delenv("WORKFLOW_REPO_ROOT", raising=False)
-
-    def test_live_session_env_overrides(self, monkeypatch):
-        """Live session settings should honor MOONMIND_LIVE_SESSION_* overrides."""
-
-        monkeypatch.setenv("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT", "false")
-        monkeypatch.setenv("MOONMIND_LIVE_SESSION_PROVIDER", "none")
-        monkeypatch.setenv("MOONMIND_LIVE_SESSION_TTL_MINUTES", "90")
-        monkeypatch.setenv("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES", "25")
-        monkeypatch.setenv("MOONMIND_LIVE_SESSION_ALLOW_WEB", "true")
-        monkeypatch.setenv(
-            "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
-            "7",
-        )
-
-        settings = WorkflowSettings(_env_file=None)
-        assert settings.live_session_enabled_default is False
-        assert settings.live_session_provider == "none"
-        assert settings.live_session_ttl_minutes == 90
-        assert settings.live_session_rw_grant_ttl_minutes == 25
-        assert settings.live_session_allow_web is True
-        assert settings.live_session_max_concurrent_per_worker == 7
-
-        monkeypatch.delenv("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT", raising=False)
-        monkeypatch.delenv("MOONMIND_LIVE_SESSION_PROVIDER", raising=False)
-        monkeypatch.delenv("MOONMIND_LIVE_SESSION_TTL_MINUTES", raising=False)
-        monkeypatch.delenv(
-            "MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES",
-            raising=False,
-        )
-        monkeypatch.delenv("MOONMIND_LIVE_SESSION_ALLOW_WEB", raising=False)
-        monkeypatch.delenv(
-            "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
-            raising=False,
-        )
 
     def test_log_streaming_env_overrides(self, monkeypatch):
         """Log streaming should honor MOONMIND_LOG_STREAMING_ENABLED overrides."""

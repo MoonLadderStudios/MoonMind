@@ -361,7 +361,6 @@ workflow.default_publish_mode
 skills.policy_mode
 skills.canary_percent
 integrations.github.token_ref
-live_sessions.default_mode
 operations.worker_pause_default_reason
 ```
 

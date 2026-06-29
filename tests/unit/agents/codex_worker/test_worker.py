@@ -290,6 +290,25 @@ async def test_parse_positive_int_field_rejects_invalid_values() -> None:
             default=3,
         )
 
+
+async def test_queue_lifecycle_methods_fail_fast_after_mm_1022_cleanup() -> None:
+    """Legacy queue lifecycle calls should not issue obsolete API requests."""
+
+    queue = QueueApiClient(base_url="http://moonmind.test", worker_token=None)
+    try:
+        with pytest.raises(QueueClientError, match="MM-1022"):
+            await queue.claim_job(worker_id="worker-1", lease_seconds=30)
+
+        with pytest.raises(QueueClientError, match="MM-1022"):
+            await queue.complete_job(
+                job_id=uuid4(),
+                worker_id="worker-1",
+                result_summary="done",
+            )
+    finally:
+        await queue.aclose()
+
+
 class FailingUploadQueueClient(FakeQueueClient):
     """Queue client stub that simulates artifact upload failures."""
 

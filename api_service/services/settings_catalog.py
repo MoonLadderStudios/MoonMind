@@ -481,7 +481,6 @@ _CATALOG_KEY_LEDGER: frozenset[str] = frozenset(
         "workflow.operation_mode",
         "skills.policy_mode",
         "skills.canary_percent",
-        "live_sessions.default_enabled",
         "integrations.github.token_ref",
     }
 )
@@ -598,24 +597,6 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         constraints=SettingConstraints(minimum=0, maximum=100),
         applies_to=("workflow_runtime", "skills"),
         order=40,
-    ),
-    SettingRegistryEntry(
-        key="live_sessions.default_enabled",
-        title="Live Sessions Enabled By Default",
-        description=(
-            "Whether live task sessions are enabled by default for queue agent runs."
-        ),
-        category="Live Sessions",
-        section="user-workspace",
-        value_type="boolean",
-        ui="toggle",
-        scopes=("workspace",),
-        default_value=True,
-        settings_path=("workflow", "live_session_enabled_default"),
-        env_aliases=("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT",),
-        apply_mode="next_workflow",
-        applies_to=("workflow_creation", "live_sessions"),
-        order=50,
     ),
     SettingRegistryEntry(
         key="integrations.github.token_ref",
