@@ -2150,9 +2150,12 @@ class TemporalExecutionService:
         record = await self._require_cancel_target_execution(workflow_id)
 
         action_name = "reject" if action == "reject" else "cancel"
-        default_reason = (
-            "Rejected by operator." if action_name == "reject" else "Canceled by user."
-        )
+        if action_name == "reject":
+            default_reason = "Rejected by operator."
+        elif graceful:
+            default_reason = "Canceled by user."
+        else:
+            default_reason = "Force canceled by operator."
         reason_text = (reason or default_reason).strip() or default_reason
 
         if record.state in TERMINAL_STATES:
