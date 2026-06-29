@@ -508,6 +508,11 @@ The canonical shared workflow workspace remains a named volume such as:
 
 * `agent_workspaces` mounted at `/work/agent_jobs`
 
+`agent_workspaces` is a Docker-managed named volume. It does not use
+`driver_opts`, a bind-mounted `device`, or an externally precreated host path.
+Deployments that need this workspace on a dedicated data disk move Docker's
+daemon `data-root` to that disk so the volume remains under Docker ownership.
+
 Recommended layout:
 
 * `run_root = /work/agent_jobs/<agent_run_id>`

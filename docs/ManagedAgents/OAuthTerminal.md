@@ -102,6 +102,10 @@ The managed session container receives the shared workflow workspace volume:
 - configurable compose name: `MOONMIND_AGENT_WORKSPACES_VOLUME_NAME`
 - container mount root: `/work/agent_jobs`
 
+The backing volume is Docker-managed storage under the Docker daemon data root.
+It is not an external host bind path; data-disk deployments move Docker's
+`data-root` instead of overriding this volume with local driver bind options.
+
 The per-workflow layout under that root is:
 
 - `repo/` for the checked-out workflow repository

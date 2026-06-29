@@ -309,6 +309,28 @@ def test_api_service_mounts_agent_runtime_workspace_volume():
     ), "api service must mount agent_workspaces at /work/agent_jobs so observability APIs can read managed-run records"
 
 
+def test_agent_workspaces_volume_is_docker_managed_named_volume():
+    """agent_workspaces must stay under Docker's data root, not a host bind path."""
+    compose_data = _load_compose()
+    volumes = compose_data.get("volumes", {})
+    volume_config = volumes.get("agent_workspaces")
+    assert isinstance(
+        volume_config, dict
+    ), "agent_workspaces volume is missing from docker-compose.yaml"
+
+    assert volume_config.get("name") == (
+        "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
+    ), "agent_workspaces must remain the deployment-configurable named volume"
+    assert not volume_config.get("external"), (
+        "agent_workspaces must be created by the MoonMind compose project, not "
+        "borrowed from an externally configured host path"
+    )
+    assert "driver_opts" not in volume_config, (
+        "agent_workspaces must not configure local driver bind/device options; "
+        "place Docker on a data disk by configuring the daemon data-root"
+    )
+
+
 def test_moonmind_application_services_use_deployment_image_variable():
     """Deployment updates must be able to change the app image without YAML edits."""
     compose_path = Path("docker-compose.yaml")
