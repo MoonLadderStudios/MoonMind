@@ -7290,6 +7290,8 @@ export interface components {
             sourceExecutionOrdinal?: number | null;
             /** Recoverycheckpointref */
             recoveryCheckpointRef?: string | null;
+            /** Failedrunrecoverymanifestref */
+            failedRunRecoveryManifestRef?: string | null;
             /** Checkpointboundary */
             checkpointBoundary?: ("after_prepare" | "before_execution" | "after_execution" | "after_gate" | "before_publication" | "before_recovery_restoration") | null;
             /** Taskinputsnapshotref */
@@ -7356,6 +7358,8 @@ export interface components {
             sourceExecutionOrdinal?: number | null;
             /** Recoverycheckpointref */
             recoveryCheckpointRef?: string | null;
+            /** Failedrunrecoverymanifestref */
+            failedRunRecoveryManifestRef?: string | null;
             /** Checkpointboundary */
             checkpointBoundary?: ("after_prepare" | "before_execution" | "after_execution" | "after_gate" | "before_publication" | "before_recovery_restoration") | null;
             /** Taskinputsnapshotref */
