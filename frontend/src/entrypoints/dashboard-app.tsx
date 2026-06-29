@@ -336,7 +336,15 @@ function AppShell({
   );
 }
 
-function RoutedDashboardPage({ payload, uiInfo }: { payload: BootPayload; uiInfo: DashboardUiInfo | null }) {
+function RoutedDashboardPage({
+  payload,
+  uiInfo,
+  isUiInfoPending,
+}: {
+  payload: BootPayload;
+  uiInfo: DashboardUiInfo | null;
+  isUiInfoPending: boolean;
+}) {
   const location = useLocation();
   const route = resolveDashboardRoute(location.pathname);
 
@@ -344,6 +352,14 @@ function RoutedDashboardPage({ payload, uiInfo }: { payload: BootPayload; uiInfo
     return (
       <AppShell dataWidePanel={false} uiInfo={uiInfo}>
         <UnknownPage page={location.pathname} />
+      </AppShell>
+    );
+  }
+
+  if (route.page === 'workflow-start' && isUiInfoPending) {
+    return (
+      <AppShell dataWidePanel={route.dataWidePanel} uiInfo={uiInfo}>
+        <LoadingPage />
       </AppShell>
     );
   }
@@ -362,6 +378,9 @@ function RoutedDashboardPage({ payload, uiInfo }: { payload: BootPayload; uiInfo
 function DashboardRouter({ payload }: { payload: BootPayload }) {
   const uiInfoQuery = useDashboardUiInfo();
   const uiInfo = uiInfoQuery.data ?? null;
+  const routedDashboardPage = (
+    <RoutedDashboardPage payload={payload} uiInfo={uiInfo} isUiInfoPending={uiInfoQuery.isPending} />
+  );
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -399,21 +418,21 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/workflows" replace />} />
-      <Route path="/workflows" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/workflows/new" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/workflows/:workflowId" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/workflows/:workflowId/steps" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/workflows/:workflowId/artifacts" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/workflows/:workflowId/runs" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/workflows/:workflowId/debug" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/schedules" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/schedules/:definitionId" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/skills/*" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/settings/*" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/manifests" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/manifests/:manifestName" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/oauth-terminal" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
-      <Route path="/index-health" element={<RoutedDashboardPage payload={payload} uiInfo={uiInfo} />} />
+      <Route path="/workflows" element={routedDashboardPage} />
+      <Route path="/workflows/new" element={routedDashboardPage} />
+      <Route path="/workflows/:workflowId" element={routedDashboardPage} />
+      <Route path="/workflows/:workflowId/steps" element={routedDashboardPage} />
+      <Route path="/workflows/:workflowId/artifacts" element={routedDashboardPage} />
+      <Route path="/workflows/:workflowId/runs" element={routedDashboardPage} />
+      <Route path="/workflows/:workflowId/debug" element={routedDashboardPage} />
+      <Route path="/schedules" element={routedDashboardPage} />
+      <Route path="/schedules/:definitionId" element={routedDashboardPage} />
+      <Route path="/skills/*" element={routedDashboardPage} />
+      <Route path="/settings/*" element={routedDashboardPage} />
+      <Route path="/manifests" element={routedDashboardPage} />
+      <Route path="/manifests/:manifestName" element={routedDashboardPage} />
+      <Route path="/oauth-terminal" element={routedDashboardPage} />
+      <Route path="/index-health" element={routedDashboardPage} />
       <Route
         path="*"
         element={

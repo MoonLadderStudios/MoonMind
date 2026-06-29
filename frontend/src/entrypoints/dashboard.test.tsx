@@ -145,7 +145,16 @@ vi.mock('./workflow-detail', () => {
 });
 
 vi.mock('./workflow-start', () => ({
-  default: () => <div>Workflow start route loaded</div>,
+  default: ({ payload }: { payload: BootPayload }) => {
+    const initialData = payload.initialData as { dashboardConfig?: Record<string, unknown> } | undefined;
+    const repository = initialData?.dashboardConfig?.defaultRepository;
+    return (
+      <>
+        <div>Workflow start route loaded</div>
+        <div>Workflow start default repository: {typeof repository === 'string' ? repository : 'none'}</div>
+      </>
+    );
+  },
 }));
 
 vi.mock('./settings', () => ({
@@ -319,6 +328,38 @@ describe('Dashboard shared entry', () => {
     expect(document.querySelector('.panel')).toBe(shellPanel);
     expect(window.location.pathname).toBe('/workflows');
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('waits for UI info before mounting the workflow start route', async () => {
+    window.history.replaceState({}, '', '/workflows/new');
+    let resolveUiInfo: (response: Response) => void = () => {};
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return new Promise<Response>((resolve) => {
+          resolveUiInfo = resolve;
+        });
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Loading MoonMind...')).toBeTruthy();
+    expect(screen.queryByText('Workflow start route loaded')).toBeNull();
+
+    resolveUiInfo({
+      ok: true,
+      json: async () => uiInfo({ dashboardConfig: { defaultRepository: 'MoonLadderStudios/MoonMind' } }),
+    } as Response);
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    expect(screen.getByText('Workflow start default repository: MoonLadderStudios/MoonMind')).toBeTruthy();
   });
 
   it('MM-1029 navigateTo uses the SPA route event for dashboard-internal URLs', async () => {
