@@ -862,6 +862,7 @@ class MoonMindWorkflowState(str, enum.Enum):
     PROPOSALS = "proposals"
     AWAITING_EXTERNAL = "awaiting_external"
     FINALIZING = "finalizing"
+    NO_COMMIT = "no_commit"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELED = "canceled"

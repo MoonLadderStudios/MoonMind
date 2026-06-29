@@ -863,8 +863,24 @@ def test_serialize_execution_includes_finish_summary_projection_fields():
 
     payload = _serialize_execution(record).model_dump(by_alias=True, mode="json")
 
-    assert payload["finishOutcomeCode"] == "NO_CHANGES"
-    assert payload["finishSummary"] == record.finish_summary_json
+    assert payload["finishOutcomeCode"] == "NO_COMMIT"
+    assert payload["finishSummary"]["finishOutcome"]["code"] == "NO_COMMIT"
+    assert (
+        payload["finishSummary"]["finishOutcome"]["reason"]
+        == "No repository commit was needed."
+    )
+
+def test_serialize_execution_maps_no_commit_to_completed_dashboard_status():
+    record = _build_execution_record(state=MoonMindWorkflowState.NO_COMMIT)
+    record.close_status = TemporalExecutionCloseStatus.COMPLETED
+
+    payload = _serialize_execution(record).model_dump(by_alias=True, mode="json")
+
+    assert payload["state"] == "no_commit"
+    assert payload["dashboardStatus"] == "completed"
+    assert payload["status"] == "completed"
+    assert payload["temporalStatus"] == "completed"
+    assert payload["closeStatus"] == "completed"
 
 def test_serialize_execution_includes_bounded_progress_without_step_details() -> None:
     record = _build_execution_record()
@@ -4575,7 +4591,7 @@ def test_serialize_execution_projects_observability_from_finish_summary() -> Non
 
     assert payload["runMetrics"] == {
         "durationMs": 12345,
-        "outcomeCode": "NO_CHANGES",
+        "outcomeCode": "NO_COMMIT",
         "success": True,
         "successRateSample": {"success": 1, "sampleSize": 1},
         "cost": {"status": "not_recorded", "amountUsd": None},

@@ -66,6 +66,7 @@ PRE_WORK_STATES = frozenset(
 )
 
 TERMINAL_DOMAIN_STATE_TO_CLOSE_STATUS = {
+    MoonMindWorkflowState.NO_COMMIT: TemporalExecutionCloseStatus.COMPLETED,
     MoonMindWorkflowState.COMPLETED: TemporalExecutionCloseStatus.COMPLETED,
     MoonMindWorkflowState.FAILED: TemporalExecutionCloseStatus.FAILED,
     MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
@@ -121,6 +122,8 @@ def _coerce_mm_state(search_attributes: dict[str, Any]) -> MoonMindWorkflowState
     if raw_state is None:
         return None
     try:
+        if raw_state == "no_changes":
+            return MoonMindWorkflowState.NO_COMMIT
         return MoonMindWorkflowState(raw_state)
     except ValueError:
         logger.warning("Invalid value for mm_state search attribute: '%s'", raw_state)

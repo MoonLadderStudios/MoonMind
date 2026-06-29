@@ -177,6 +177,7 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.PROPOSALS: "running",
     MoonMindWorkflowState.AWAITING_EXTERNAL: "awaiting_action",
     MoonMindWorkflowState.FINALIZING: "running",
+    MoonMindWorkflowState.NO_COMMIT: "completed",
     MoonMindWorkflowState.COMPLETED: "completed",
     MoonMindWorkflowState.FAILED: "failed",
     MoonMindWorkflowState.CANCELED: "canceled",
@@ -2620,6 +2621,10 @@ def _serialize_execution(
         if isinstance(finish_summary_json, dict)
         else memo_finish_summary
     )
+    finish_summary = _normalize_no_commit_finish_summary(finish_summary)
+    finish_outcome_code = getattr(record, "finish_outcome_code", None)
+    if str(finish_outcome_code or "").strip().upper() == "NO_CHANGES":
+        finish_outcome_code = "NO_COMMIT"
     proposal_summary = _proposal_summary_from_memo(memo)
     if isinstance(finish_summary, Mapping):
         finish_proposals = finish_summary.get("proposals")
@@ -2749,7 +2754,7 @@ def _serialize_execution(
         log_context=log_context,
         proposal_summary=proposal_summary,
         proposal_outcomes=proposal_outcomes,
-        finish_outcome_code=getattr(record, "finish_outcome_code", None),
+        finish_outcome_code=finish_outcome_code,
         finish_summary=finish_summary,
         debug_fields=debug_fields,
         redirect_path=f"/workflows/{record.workflow_id}?source=temporal",
@@ -3034,7 +3039,7 @@ def _recommended_next_action(
             if not pr_url
             else "Review published pull request."
         )
-    if code == "NO_CHANGES":
+    if code in {"NO_COMMIT", "NO_CHANGES"}:
         return "No follow-up required unless the outcome is unexpected."
     if code == "PUBLISH_DISABLED":
         return "Review generated artifacts; publishing was disabled."
@@ -5501,6 +5506,45 @@ def _build_debug_fields(
         waiting_reason=waiting_reason,
         attention_required=attention_required,
     )
+
+def _normalize_no_commit_finish_summary(
+    finish_summary: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(finish_summary, Mapping):
+        return None
+    normalized = dict(finish_summary)
+    finish_outcome = normalized.get("finishOutcome")
+    if isinstance(finish_outcome, Mapping):
+        outcome = dict(finish_outcome)
+        if str(outcome.get("code") or "").strip().upper() == "NO_CHANGES":
+            outcome["code"] = "NO_COMMIT"
+            reason = str(outcome.get("reason") or "").strip().lower()
+            if reason in {
+                "publish skipped: no local changes",
+                "no local changes",
+                "workflow completed with no changes.",
+            }:
+                outcome["reason"] = "No repository commit was needed."
+        normalized["finishOutcome"] = outcome
+    publish = normalized.get("publish")
+    if isinstance(publish, Mapping):
+        publish_payload = dict(publish)
+        reason_code = str(
+            publish_payload.get("reasonCode")
+            or publish_payload.get("reason_code")
+            or ""
+        ).strip()
+        reason = str(publish_payload.get("reason") or "").strip().lower()
+        if reason_code == "no_changes" or reason in {
+            "publish skipped: no local changes",
+            "no local changes",
+        }:
+            publish_payload["reasonCode"] = "no_commit"
+            publish_payload["reason"] = (
+                "No repository changes were available to commit or publish."
+            )
+        normalized["publish"] = publish_payload
+    return normalized
 
 def _coerce_artifact_ref(value: Any) -> str | None:
     if value is None:

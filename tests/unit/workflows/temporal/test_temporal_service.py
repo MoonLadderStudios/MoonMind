@@ -2071,11 +2071,51 @@ async def test_record_terminal_state_indexes_finish_summary(
             TemporalExecutionCanonicalRecord, created.workflow_id
         )
         assert source is not None
-        assert source.finish_outcome_code == "NO_CHANGES"
-        assert source.finish_summary_json == finish_summary
+        assert source.finish_outcome_code == "NO_COMMIT"
+        assert source.finish_summary_json["finishOutcome"]["code"] == "NO_COMMIT"
+        assert (
+            source.finish_summary_json["finishOutcome"]["reason"]
+            == "No repository commit was needed."
+        )
         assert isinstance(projection, TemporalExecutionRecord)
-        assert projection.finish_outcome_code == "NO_CHANGES"
-        assert projection.finish_summary_json == finish_summary
+        assert projection.finish_outcome_code == "NO_COMMIT"
+        assert projection.finish_summary_json["finishOutcome"]["code"] == "NO_COMMIT"
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_accepts_no_commit_as_completed(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="No commit run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        projection = await service.record_terminal_state(
+            workflow_id=created.workflow_id,
+            state="no_commit",
+            summary="No repository commit was needed.",
+        )
+
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert source is not None
+        assert source.state is MoonMindWorkflowState.NO_COMMIT
+        assert source.close_status is TemporalExecutionCloseStatus.COMPLETED
+        assert isinstance(projection, TemporalExecutionRecord)
+        assert projection.state is MoonMindWorkflowState.NO_COMMIT
+        assert projection.close_status is TemporalExecutionCloseStatus.COMPLETED
 
 
 @pytest.mark.asyncio

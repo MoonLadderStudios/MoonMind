@@ -2053,10 +2053,14 @@ class CodexWorker:
 
             publish_payload = self._read_publish_result(prepared=prepared)
             if publish_payload:
-                if bool(publish_payload.get("skipped")):
+                if (
+                    publish_payload.get("status") == "skipped"
+                    or bool(publish_payload.get("skipped"))
+                ):
                     publish_status = "skipped"
                     publish_reason = str(
-                        publish_payload.get("reason") or "no local changes"
+                        publish_payload.get("reason")
+                        or "No repository changes were available to commit or publish."
                     ).strip()
                 else:
                     publish_status = "published"
@@ -2392,10 +2396,14 @@ class CodexWorker:
                         )
                     else:
                         publish_payload = self._read_publish_result(prepared=prepared)
-                        if publish_payload and bool(publish_payload.get("skipped")):
+                        if publish_payload and (
+                            publish_payload.get("status") == "skipped"
+                            or bool(publish_payload.get("skipped"))
+                        ):
                             publish_status = "skipped"
                             publish_reason = str(
-                                publish_payload.get("reason") or "no local changes"
+                                publish_payload.get("reason")
+                                or "No repository changes were available to commit or publish."
                             ).strip()
                             self._finish_stage(
                                 finish_stages,
@@ -3590,8 +3598,8 @@ class CodexWorker:
             )
 
         if publish_status == "skipped":
-            reason = publish_reason or "publish skipped: no local changes"
-            return FinishOutcome(code="NO_CHANGES", stage="publish", reason=reason)
+            reason = publish_reason or "No repository commit was needed."
+            return FinishOutcome(code="NO_COMMIT", stage="publish", reason=reason)
         if publish_status == "published" and (publish_mode == "pr" or publish_pr_url):
             return FinishOutcome(
                 code="PUBLISHED_PR",
@@ -3694,6 +3702,10 @@ class CodexWorker:
                 "errors": proposal_report.errors,
             },
         }
+        if publish_status == "skipped":
+            summary["publish"]["reasonCode"] = "no_commit"
+            summary["publish"]["commitCreated"] = False
+            summary["publish"]["branchPushed"] = False
         if jules_runtime_records:
             summary["externalRuntime"] = self._build_jules_runtime_report_payload(
                 jules_runtime_records
@@ -5935,8 +5947,11 @@ class CodexWorker:
                     "mode": publish_mode,
                     "branch": prepared.working_branch,
                     "prUrl": None,
-                    "skipped": True,
-                    "reason": "no local changes",
+                    "status": "skipped",
+                    "reasonCode": "no_commit",
+                    "reason": "No repository changes were available to commit or publish.",
+                    "commitCreated": False,
+                    "branchPushed": False,
                     "verification": verification_payload,
                 }
                 prepared.publish_result_path.write_text(
@@ -5974,11 +5989,12 @@ class CodexWorker:
                     message="moonmind.task.publish",
                     payload={
                         "status": "skipped",
-                        "reason": "no local changes",
+                        "reasonCode": "no_commit",
+                        "reason": "No repository changes were available to commit or publish.",
                         **dict(skill_meta),
                     },
                 )
-                return "publish skipped: no local changes"
+                return "No repository changes were available to commit or publish."
 
             await self._run_default_publish_verification_if_needed(
                 prepared=prepared,

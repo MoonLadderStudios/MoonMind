@@ -51,6 +51,7 @@ const TEMPORAL_STATUSES = [
   'awaiting_external',
   'intervention_requested',
   'finalizing',
+  'no_commit',
   'completed',
   'failed',
   'canceled',

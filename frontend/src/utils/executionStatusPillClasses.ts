@@ -32,6 +32,7 @@ function normalizedExecutionStatusKey(status: string | null | undefined): string
 }
 
 function executionStatusBaseClasses(key: string): string {
+  if (key === 'no_commit' || key === 'no_changes') return 'status status-no-commit';
   if (key === 'succeeded' || key === 'completed') return 'status status-completed';
   if (key === 'failed') return 'status status-failed';
   if (key === 'canceled' || key === 'cancelled') return 'status status-cancelled';

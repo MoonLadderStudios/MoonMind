@@ -1437,7 +1437,7 @@ RemediationActionPolicy:
 {
   "schemaVersion": "v1",
   "finishOutcome": {
-    "code": "NO_CHANGES",
+    "code": "NO_COMMIT",
     "stage": "finalizing",
     "reason": "target recovered after stale lease eviction"
   },

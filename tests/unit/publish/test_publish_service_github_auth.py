@@ -37,11 +37,42 @@ async def test_publish_branch_push_uses_resolved_token_env(monkeypatch, tmp_path
 
     push_call = next(call for call in calls if call["command"][:2] == ["git", "push"])
     env = push_call["env"]
-    assert result.startswith("published branch")
+    assert result is not None
+    assert result.status == "published"
+    assert result.branch_name
     assert env["GITHUB_TOKEN"] == "publish-token"
     assert env["GH_TOKEN"] == "publish-token"
     assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert "publish-token" in push_call["redaction_values"]
+
+
+async def test_publish_clean_worktree_returns_no_commit_result(tmp_path: Path):
+    calls: list[dict[str, object]] = []
+
+    async def _run(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        if command[:3] == ["git", "status", "--porcelain"]:
+            return SimpleNamespace(stdout="")
+        raise AssertionError(f"Unexpected command after clean worktree: {command!r}")
+
+    result = await PublishService().publish(
+        job_id=uuid4(),
+        instruction="MM-1024 already implemented",
+        publish_mode="pr",
+        publish_base_branch="main",
+        runtime_mode="codex",
+        repo_dir=tmp_path,
+        run_command=_run,
+        repo="owner/repo",
+    )
+
+    assert result is not None
+    assert result.status == "skipped"
+    assert result.reason_code == "no_commit"
+    assert result.reason == "No repository changes were available to commit or publish."
+    assert result.commit_created is False
+    assert result.branch_pushed is False
+    assert len(calls) == 1
 
 
 async def test_publish_branch_blocks_high_security_scan_before_push(
@@ -132,7 +163,9 @@ async def test_publish_pr_uses_rest_service_without_ambient_gh(monkeypatch, tmp_
         repo="owner/repo",
     )
 
-    assert result == "published PR https://github.com/owner/repo/pull/1"
+    assert result is not None
+    assert result.status == "published"
+    assert result.pr_url == "https://github.com/owner/repo/pull/1"
     assert created["github_token"] == "publish-token"
     assert created["repo"] == "owner/repo"
     assert not any(call["command"][:3] == ["gh", "pr", "create"] for call in calls)
@@ -166,7 +199,9 @@ async def test_publish_pr_gh_fallback_injects_explicit_token_without_repo(
         call for call in calls if call["command"][:3] == [sys.executable, "pr", "create"]
     )
     gh_env = gh_call["env"]
-    assert result.startswith("published PR from moonmind-job-")
+    assert result is not None
+    assert result.status == "published"
+    assert result.branch_name is not None
     assert gh_env["GITHUB_TOKEN"] == "publish-token"
     assert gh_env["GH_TOKEN"] == "publish-token"
     assert gh_env["GIT_TERMINAL_PROMPT"] == "0"

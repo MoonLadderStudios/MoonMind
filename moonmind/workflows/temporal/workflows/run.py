@@ -378,6 +378,7 @@ STATE_PROPOSALS = "proposals"
 STATE_AWAITING_EXTERNAL = "awaiting_external"
 STATE_FINALIZING = "finalizing"
 STATE_COMPLETED = "completed"
+STATE_NO_COMMIT = "no_commit"
 STATE_CANCELED = "canceled"
 STATE_FAILED = "failed"
 CLOSE_STATUS_COMPLETED = "completed"
@@ -3087,6 +3088,31 @@ class MoonMindRunWorkflow:
         )
         self._step_side_effect_records.setdefault(logical_step_id, []).append(record)
         return record
+
+    def _finish_summary_side_effects(self) -> list[dict[str, Any]]:
+        side_effects: list[dict[str, Any]] = []
+        for records in self._step_side_effect_records.values():
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                operation = self._coerce_text(record.get("operation"), max_chars=120)
+                disposition = self._coerce_text(record.get("disposition"), max_chars=40)
+                if not operation and not disposition:
+                    continue
+                side_effects.append(
+                    {
+                        "kind": self._coerce_text(
+                            record.get("class") or record.get("kind"),
+                            max_chars=80,
+                        )
+                        or "external",
+                        "status": "completed"
+                        if disposition == "accepted"
+                        else (disposition or "recorded"),
+                        "summary": operation or "Side effect recorded.",
+                    }
+                )
+        return side_effects[:20]
 
     def _is_jira_orchestrate_external_handoff_node(
         self,
@@ -5845,7 +5871,7 @@ class MoonMindRunWorkflow:
             if publish_failure:
                 finalizing_status = "failed"
                 finalizing_error = output_message
-            elif output_status == "no_changes":
+            elif output_status == "no_commit":
                 finalizing_error = self._publish_reason or output_message
 
         continuation_failure = False
@@ -5891,10 +5917,13 @@ class MoonMindRunWorkflow:
                 non_retryable=True,
             )
 
+        terminal_state = (
+            STATE_NO_COMMIT if output_status == "no_commit" else STATE_COMPLETED
+        )
         self._close_status = CLOSE_STATUS_COMPLETED
-        self._set_state(STATE_COMPLETED, summary=output_message)
+        self._set_state(terminal_state, summary=output_message)
         await self._record_terminal_state(
-            state=STATE_COMPLETED,
+            state=terminal_state,
             close_status=CLOSE_STATUS_COMPLETED,
             summary=output_message,
         )
@@ -7719,7 +7748,7 @@ class MoonMindRunWorkflow:
                 == "no_commits"
             ):
                 repair_failure_message = self._publish_reason or (
-                    self._compose_no_change_publish_reason(publish_mode="pr")
+                    self._compose_no_commit_publish_reason(publish_mode="pr")
                 )
                 repair_result = await self._execution_publish_repair(
                     parameters=parameters,
@@ -9811,7 +9840,7 @@ class MoonMindRunWorkflow:
         outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
-        self._record_no_change_publish_evidence(outputs)
+        self._record_no_commit_publish_evidence(outputs)
 
         not_required_reason = self._publish_not_required_reason(outputs)
         if not_required_reason is not None:
@@ -9841,7 +9870,7 @@ class MoonMindRunWorkflow:
                 parameters, include_applied_templates=True
             ):
                 self._publish_status = "not_required"
-                self._publish_reason = self._compose_no_change_publish_reason(
+                self._publish_reason = self._compose_no_commit_publish_reason(
                     publish_mode=publish_mode,
                     pr_publish_optional=True,
                 )
@@ -9849,7 +9878,7 @@ class MoonMindRunWorkflow:
                     self._publish_context["mergeAutomationStatus"] = "not_applicable"
                 return
             self._publish_status = "skipped"
-            self._publish_reason = self._compose_no_change_publish_reason(
+            self._publish_reason = self._compose_no_commit_publish_reason(
                 publish_mode=publish_mode,
             )
             return
@@ -10313,15 +10342,15 @@ class MoonMindRunWorkflow:
             self._report_ref = report_ref
             self._publish_context["reportRef"] = report_ref
 
-    def _record_no_change_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
+    def _record_no_commit_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
         push_status = self._coerce_text(outputs.get("push_status"), max_chars=80)
         if push_status == "no_commits":
-            self._publish_context["noChangePublish"] = {"status": "no_commits"}
+            self._publish_context["noCommitPublish"] = {"status": "no_commits"}
             return
 
         for key in ("noChanges", "no_changes", "repositoryUnchanged"):
             if outputs.get(key) is True:
-                self._publish_context["noChangePublish"] = {"status": key}
+                self._publish_context["noCommitPublish"] = {"status": key}
                 return
 
         publish_outcome = outputs.get("publishOutcome") or outputs.get(
@@ -10330,7 +10359,7 @@ class MoonMindRunWorkflow:
         if isinstance(publish_outcome, Mapping):
             for key in ("noChanges", "no_changes", "repositoryUnchanged"):
                 if publish_outcome.get(key) is True:
-                    self._publish_context["noChangePublish"] = {"status": key}
+                    self._publish_context["noCommitPublish"] = {"status": key}
                     return
 
     @staticmethod
@@ -10566,7 +10595,7 @@ class MoonMindRunWorkflow:
         scrubbed = scrub_github_tokens(summary).strip()
         return scrubbed or None
 
-    def _compose_no_change_publish_reason(
+    def _compose_no_commit_publish_reason(
         self,
         *,
         publish_mode: str,
@@ -10618,7 +10647,7 @@ class MoonMindRunWorkflow:
             )
 
         reason = ". ".join(part.rstrip(".") for part in parts if part)
-        return f"{reason}." if reason else "publish skipped: no local changes"
+        return f"{reason}." if reason else "No repository commit was needed."
 
     def _compose_success_completion_message(
         self,
@@ -10913,7 +10942,7 @@ class MoonMindRunWorkflow:
                     or "publishMode 'pr' requested but no local changes were produced",
                     True,
                 )
-            return ("no_changes", "Workflow completed with no local changes", False)
+            return ("no_commit", "No repository commit was needed.", False)
 
         if self._publish_status == "failed":
             return (
@@ -11531,7 +11560,7 @@ class MoonMindRunWorkflow:
             include_applied_templates=True,
         ):
             return
-        if not self._has_no_change_publish_evidence():
+        if not self._has_no_commit_publish_evidence():
             return
         evidence = self._already_implemented_no_work_evidence()
         if not evidence:
@@ -11553,7 +11582,7 @@ class MoonMindRunWorkflow:
             {
                 "parentWorkflowId": workflow.info().workflow_id,
                 "parentRunId": workflow.info().run_id,
-                "resolverDisposition": "already_implemented_no_changes",
+                "resolverDisposition": "already_implemented_no_commit",
                 "jiraIssueKey": issue_key,
                 "postMergeJira": post_merge_jira,
                 "candidateContext": {
@@ -11600,8 +11629,10 @@ class MoonMindRunWorkflow:
                 f"{completion_summary}"
             ).strip()
 
-    def _has_no_change_publish_evidence(self) -> bool:
-        evidence = self._publish_context.get("noChangePublish")
+    def _has_no_commit_publish_evidence(self) -> bool:
+        evidence = self._publish_context.get("noCommitPublish")
+        if not isinstance(evidence, Mapping):
+            evidence = self._publish_context.get("noChangePublish")
         if not isinstance(evidence, Mapping):
             return False
         status = self._coerce_text(evidence.get("status"), max_chars=80)
@@ -13766,6 +13797,8 @@ class MoonMindRunWorkflow:
             publish_reason = (
                 "run did not complete successfully"
                 if status in ("failed", "canceled")
+                else "No repository changes were available to commit or publish."
+                if status == "no_commit"
                 else (
                     "publishing disabled"
                     if publish_mode == "none"
@@ -13774,7 +13807,7 @@ class MoonMindRunWorkflow:
             )
 
             # Map Temporal status back to FinishOutcome code.
-            code = "FAILED" if status == "failed" else "NO_CHANGES"
+            code = "FAILED" if status == "failed" else "NO_COMMIT"
             if status == "canceled":
                 code = "CANCELLED"
 
@@ -13785,10 +13818,11 @@ class MoonMindRunWorkflow:
                         publish_status = "skipped"
                         publish_reason = "publishing disabled"
                     elif self._publish_status == "skipped":
-                        code = "NO_CHANGES"
+                        code = "NO_COMMIT"
                         publish_status = "skipped"
                         publish_reason = (
-                            self._publish_reason or "publish skipped: no local changes"
+                            self._publish_reason
+                            or "No repository changes were available to commit or publish."
                         )
                     elif self._publish_status == "not_required":
                         code = "PUBLISH_DISABLED"
@@ -13837,6 +13871,8 @@ class MoonMindRunWorkflow:
                 diagnostic_reason = self._failure_diagnostic.get("message") or None
 
             finish_outcome_reason = diagnostic_reason or error or "completed"
+            if code == "NO_COMMIT":
+                finish_outcome_reason = "No repository commit was needed."
 
             finish_summary = {
                 "schemaVersion": "v1",
@@ -13883,6 +13919,14 @@ class MoonMindRunWorkflow:
             }
             if self._operator_summary:
                 finish_summary["operatorSummary"] = self._operator_summary
+            side_effects = self._finish_summary_side_effects()
+            if side_effects:
+                finish_summary["sideEffects"] = side_effects
+            if code == "NO_COMMIT":
+                finish_summary["publish"]["reasonCode"] = "no_commit"
+                finish_summary["publish"]["commitCreated"] = False
+                finish_summary["publish"]["branchPushed"] = False
+                finish_summary["publish"]["prUrl"] = None
             if self._publish_context:
                 finish_summary["publishContext"] = dict(self._publish_context)
                 merge_automation_summary = self._merge_automation_summary_from_context()

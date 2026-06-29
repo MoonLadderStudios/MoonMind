@@ -1497,7 +1497,7 @@ async def test_already_implemented_no_commit_pr_handoff_completes_jira_done(
         "No pull request was required because this Jira-oriented workflow completed "
         "without repository changes. final agent report: MM-675 was already implemented."
     )
-    mock_run_workflow._publish_context["noChangePublish"] = {"status": "no_commits"}
+    mock_run_workflow._publish_context["noCommitPublish"] = {"status": "no_commits"}
     expected_evidence = mock_run_workflow._publish_reason[:700]
 
     await mock_run_workflow._complete_already_implemented_jira_if_needed(
@@ -1518,7 +1518,7 @@ async def test_already_implemented_no_commit_pr_handoff_completes_jira_done(
             "payload": {
                 "parentWorkflowId": "wf-1",
                 "parentRunId": "run-1",
-                "resolverDisposition": "already_implemented_no_changes",
+                "resolverDisposition": "already_implemented_no_commit",
                 "jiraIssueKey": "MM-675",
                 "postMergeJira": {
                     "enabled": True,
@@ -1552,6 +1552,14 @@ async def test_already_implemented_no_commit_pr_handoff_completes_jira_done(
     assert "Jira issue MM-675 was moved to Done." in str(
         mock_run_workflow._publish_reason
     )
+
+
+def test_no_commit_publish_evidence_accepts_legacy_context_key(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._publish_context["noChangePublish"] = {"status": "no_commits"}
+
+    assert mock_run_workflow._has_no_commit_publish_evidence() is True
 
 
 @pytest.mark.asyncio
@@ -1628,7 +1636,7 @@ async def test_ambiguous_no_commit_pr_handoff_does_not_complete_jira_done(
         "without repository changes. no structured agent report confirmed whether "
         "the Jira issue was already implemented."
     )
-    mock_run_workflow._publish_context["noChangePublish"] = {"status": "no_commits"}
+    mock_run_workflow._publish_context["noCommitPublish"] = {"status": "no_commits"}
 
     await mock_run_workflow._complete_already_implemented_jira_if_needed(
         parameters={
@@ -1677,7 +1685,7 @@ async def test_uncertain_already_implemented_wording_does_not_complete_jira_done
         "without repository changes. The agent could not confirm if MM-675 was "
         "already implemented."
     )
-    mock_run_workflow._publish_context["noChangePublish"] = {"status": "no_commits"}
+    mock_run_workflow._publish_context["noCommitPublish"] = {"status": "no_commits"}
 
     await mock_run_workflow._complete_already_implemented_jira_if_needed(
         parameters={
@@ -1724,7 +1732,7 @@ async def test_already_implemented_jira_completion_failure_blocks_success(
     )
     mock_run_workflow._publish_status = "not_required"
     mock_run_workflow._publish_reason = "MM-675 was already implemented."
-    mock_run_workflow._publish_context["noChangePublish"] = {"status": "no_commits"}
+    mock_run_workflow._publish_context["noCommitPublish"] = {"status": "no_commits"}
 
     with pytest.raises(ValueError, match="Expected exactly one done-category"):
         await mock_run_workflow._complete_already_implemented_jira_if_needed(

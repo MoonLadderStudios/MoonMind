@@ -248,6 +248,7 @@ Allowed values for v1:
 - `awaiting_external`
 - `proposals`
 - `finalizing`
+- `no_commit`
 - `completed`
 - `failed`
 - `canceled`
@@ -256,7 +257,7 @@ Rules:
 
 - `mm_state` must be set immediately on workflow start
 - terminal mapping must remain consistent with MoonMind `closeStatus`:
- - completed → `completed`
+ - no_commit / completed → `completed`
  - failed / terminated / timed out → `failed`
  - canceled → `canceled`
 - graceful workflow cancellation is represented by workflow-owned terminal
@@ -467,6 +468,7 @@ Temporal-backed rows should preserve exact Temporal/MoonMind state **and** provi
 | `awaiting_external` | `awaiting_action` | compatibility grouping only |
 | `proposals` | `running` | still active, post-execution proposal phase |
 | `finalizing` | `running` | still in-flight |
+| `no_commit` | `completed` | terminal completion without a repository commit |
 | `completed` | `completed` | terminal success |
 | `failed` | `failed` | terminal failure |
 | `canceled` | `canceled` | terminal cancellation |

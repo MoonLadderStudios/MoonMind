@@ -185,6 +185,7 @@ The current allowed values for `state` are:
 - `proposals`
 - `awaiting_external`
 - `finalizing`
+- `no_commit`
 - `completed`
 - `failed`
 - `canceled`
