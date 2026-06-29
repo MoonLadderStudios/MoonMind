@@ -2602,6 +2602,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/{dashboard_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Settings Spa Fallback Route
+         * @description Serve the settings SPA shell for extensionless settings sub-routes.
+         */
+        get: operations["settings_spa_fallback_route_settings__dashboard_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/oauth-terminal": {
         parameters: {
             query?: never;
@@ -2662,6 +2682,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skills/{dashboard_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Skills Spa Fallback Route
+         * @description Serve the skills SPA shell for extensionless skills sub-routes.
+         */
+        get: operations["skills_spa_fallback_route_skills__dashboard_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workflows/{workflow_path}": {
         parameters: {
             query?: never;
@@ -2674,6 +2714,26 @@ export interface paths {
          * @description Serve dashboard sub-routes from one HTML shell.
          */
         get: operations["workflow_console_route_workflows__workflow_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dashboard Client Config
+         * @description Expose dashboard shell config for persistent SPA clients.
+         */
+        get: operations["get_dashboard_client_config_api_dashboard_config_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4153,6 +4213,24 @@ export interface components {
              * @description Branch option source
              */
             source: string;
+        };
+        /**
+         * DashboardClientConfigResponse
+         * @description Client-discoverable dashboard shell config for SPA route transitions.
+         */
+        DashboardClientConfigResponse: {
+            /** Currentpath */
+            currentPath: string;
+            /** Dashboardconfig */
+            dashboardConfig: {
+                [key: string]: unknown;
+            };
+            /** Settingspermissions */
+            settingsPermissions?: string[];
+            /** Workerpause */
+            workerPause?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * DashboardIssueListResponse
@@ -14603,6 +14681,37 @@ export interface operations {
             };
         };
     };
+    settings_spa_fallback_route_settings__dashboard_path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboard_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     oauth_terminal_route_oauth_terminal_get: {
         parameters: {
             query?: {
@@ -14674,6 +14783,37 @@ export interface operations {
             };
         };
     };
+    skills_spa_fallback_route_skills__dashboard_path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboard_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     workflow_console_route_workflows__workflow_path__get: {
         parameters: {
             query?: never;
@@ -14692,6 +14832,37 @@ export interface operations {
                 };
                 content: {
                     "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dashboard_client_config_api_dashboard_config_get: {
+        parameters: {
+            query?: {
+                currentPath?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardClientConfigResponse"];
                 };
             };
             /** @description Validation Error */
