@@ -621,7 +621,7 @@ def _build_queue_request(
             },
             "git": {
                 "startingBranch": branch,
-                "targetBranch": branch,
+                "branch": branch,
             },
             "publish": {"mode": publish_mode},
         },
@@ -842,14 +842,35 @@ def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _write_run_artifacts(artifacts_dir: Path, payload: dict[str, Any]) -> None:
-    """Write the result payload and (when applicable) the no-op outcome file.
+    """Write the result payload and any terminal skill outcome marker.
 
     ``skill_outcome.json`` with ``status: "no_op"`` is written only when the run
     queued zero executions, hit no submission errors, and was not a dry run —
     i.e. a deliberate "no matching Dependabot PRs" outcome.
+
+    ``skill_outcome.json`` with ``status: "failed"`` is written when child
+    workflow submission errors occur so the managed-session runtime cannot
+    mark the parent skill turn successful based only on assistant text.
     """
 
     _write_artifacts(artifacts_dir / "batch_dependabot_resolver_result.json", payload)
+    if payload.get("errors"):
+        _write_artifacts(
+            artifacts_dir / "skill_outcome.json",
+            {
+                "schema_version": 1,
+                "status": "failed",
+                "reason": "child_workflow_submission_failed",
+                "failureClass": "execution_error",
+                "evidence": {
+                    "requested": payload.get("requested"),
+                    "matched": payload.get("matched"),
+                    "created": payload.get("created"),
+                    "errors": payload.get("errors"),
+                },
+            },
+        )
+        return
     if (
         payload.get("created") == 0
         and not payload.get("errors")
