@@ -64,7 +64,7 @@ The current dashboard bridge may intercept dashboard-internal links and push bro
 - route-specific dashboard config is loaded as a synthetic replacement for server boot payloads;
 - list pages still depend on polling instead of shell-managed update streams.
 
-The bridge is acceptable as an intermediate migration stage. It should not be considered the final SPA architecture.
+The bridge is acceptable as an intermediate state. It should not be considered the final SPA architecture.
 
 ---
 
@@ -274,7 +274,8 @@ Rules:
 - it must not include large page data;
 - it should be safe to cache briefly or revalidate;
 - feature gates should hide routes or controls without breaking direct deep links;
-- page data comes from page-specific APIs, not from the shell document.
+- page data comes from page-specific APIs, not from the shell document;
+- route-specific boot configuration and `/api/dashboard/config` are superseded by this endpoint and should not coexist with it after the SPA target is implemented.
 
 ---
 
@@ -388,64 +389,7 @@ Shared components should accept product-neutral inputs where practical, but shou
 
 ---
 
-## 13. Recommended migration phases
-
-## 13.1 Phase 1 — Stabilize the bridge
-
-- Keep existing client-navigation bridge working.
-- Ensure compact list and picker contracts are in place.
-- Ensure unknown list row fields are stripped or forbidden.
-- Keep QueryClient persistent across dashboard-internal transitions.
-- Add tests proving no full document navigation for internal dashboard links.
-
-## 13.2 Phase 2 — Move navigation and shell chrome into React
-
-- Replace `_navigation.html` with `DashboardNav.tsx`.
-- Move hamburger behavior out of inline script and into React.
-- Move masthead/alerts/layout chrome into `DashboardShell`.
-- Use route-native active state instead of DOM mutation.
-
-## 13.3 Phase 3 — Adopt standard client routing
-
-- Add React Router or equivalent.
-- Replace custom route-event handling with router navigation.
-- Define a canonical route table in TypeScript.
-- Preserve existing URLs and deep links.
-- Add route-level loading and error boundaries.
-
-## 13.4 Phase 4 — Replace boot payloads with UI info
-
-- Add `/api/ui/info`.
-- Move feature gates, endpoint templates, limits, and build identity into UI info.
-- Stop injecting route-specific page data into the HTML shell.
-- Keep a short compatibility layer until all pages read from providers/hooks.
-
-## 13.5 Phase 5 — Convert FastAPI dashboard serving to SPA fallback
-
-- Register API/auth/static/health routes first.
-- Serve the same SPA shell for recognized dashboard UI routes.
-- Ensure API-like unknown paths return JSON/API errors.
-- Add cache headers for HTML shell and hashed assets.
-
-## 13.6 Phase 6 — Shell-owned live updates
-
-- Add list-level update stream.
-- Add workflow detail event stream.
-- Patch TanStack Query cache from events.
-- Pause/reconnect based on panel state and document visibility.
-- Keep compact polling as fallback.
-
-## 13.7 Phase 7 — Shared MoonMind/Omnigent packages or modules
-
-- Extract shared API-client helpers.
-- Extract stream lifecycle helpers.
-- Extract shell and workspace primitives.
-- Align design tokens and component contracts.
-- Keep product-specific route modules separate.
-
----
-
-## 14. Acceptance criteria for full SPA completion
+## 13. Acceptance criteria for full SPA completion
 
 MoonMind can be considered fully converted when:
 
@@ -464,7 +408,7 @@ MoonMind can be considered fully converted when:
 
 ---
 
-## 15. Testing requirements
+## 14. Testing requirements
 
 Frontend tests should cover:
 
@@ -488,6 +432,6 @@ Backend tests should cover:
 
 ---
 
-## 16. Documentation maintenance
+## 15. Documentation maintenance
 
 When this target is implemented, update or retire older language that says client-side routing is out of scope. Until then, docs should describe the current custom-navigation bridge as an intermediate state and this document as the full SPA destination.
