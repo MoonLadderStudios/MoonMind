@@ -281,7 +281,7 @@ Optional bounded keys may include values such as:
 - `mm_target_skill`
 
 `mm_target_runtime` and `mm_target_skill` are authoritative filter/facet fields
-only after the Temporal namespace reports them registered as `Keyword` Search
+only after the Temporal namespace reports them registered as `KeywordList` Search
 Attributes. Before registration, requests that depend on those fields degrade
 without issuing invalid Temporal Visibility queries. Unknown values are omitted
 rather than serialized as blank strings.
@@ -450,7 +450,8 @@ Example:
 - `ownerType`, `entry`, `repo`, and `integration` are supported exact-match filters.
 - Runtime and skill filters use `mm_target_runtime` and the singular primary
   `mm_target_skill` Search Attribute only when the registry capability check
-  succeeds.
+  succeeds. They are one-item `KeywordList` values and are filterable through
+  membership queries, not sortable through Temporal Visibility.
 - `ownerId` is optional for admins.
 - Non-admin callers are implicitly scoped to themselves when `ownerId` is omitted.
 

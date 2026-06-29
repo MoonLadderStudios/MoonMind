@@ -14367,15 +14367,15 @@ class MoonMindRunWorkflow:
         if self._target_runtime:
             pairs.append(
                 SearchAttributePair(
-                    SearchAttributeKey.for_keyword("mm_target_runtime"),
-                    self._target_runtime,
+                    SearchAttributeKey.for_keyword_list("mm_target_runtime"),
+                    [self._target_runtime],
                 )
             )
         if self._target_skill:
             pairs.append(
                 SearchAttributePair(
-                    SearchAttributeKey.for_keyword("mm_target_skill"),
-                    self._target_skill,
+                    SearchAttributeKey.for_keyword_list("mm_target_skill"),
+                    [self._target_skill],
                 )
             )
         if self._scheduled_for:

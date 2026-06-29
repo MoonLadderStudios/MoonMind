@@ -155,8 +155,8 @@ Because we're using SQL Advanced Visibility (Postgres 12+), we rely on:
 | `mm_state` | keyword | Workflow lifecycle logic | Exact MoonMind lifecycle state |
 | `mm_updated_at` | datetime | Workflow lifecycle logic | Default recency/sort key |
 | `mm_entry` | keyword | Workflow start path | Execution category for UI/query surfaces |
-| `mm_target_runtime` | keyword | API/workflow start path; workflow lifecycle repair | Optional canonical runtime dimension for filtering/facets |
-| `mm_target_skill` | keyword | API/workflow start path; workflow lifecycle repair | Optional singular primary skill dimension for filtering/facets |
+| `mm_target_runtime` | keyword_list | API/workflow start path; workflow lifecycle repair | Optional one-item canonical runtime dimension for filtering/facets; not sortable |
+| `mm_target_skill` | keyword_list | API/workflow start path; workflow lifecycle repair | Optional one-item singular primary skill dimension for filtering/facets; not sortable |
 
 ### 8.3 Foundation contract
 

@@ -60,6 +60,12 @@ MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_BASE = (
 )
 ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
 _WORKFLOW_UPDATE_ACCEPTED_TIMEOUT = timedelta(seconds=10)
+_SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES = frozenset(
+    {
+        "mm_target_runtime",
+        "mm_target_skill",
+    }
+)
 
 def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
     """Check whether *exc* is a Temporal ``RPCError`` with the given gRPC status.
@@ -100,7 +106,10 @@ def _build_typed_search_attributes(
 
         # Temporal only supports lists for KeywordList. All other types must be unwrapped.
         if all(isinstance(v, str) for v in values):
-            if len(values) > 1:
+            if key in _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES:
+                key_type = SearchAttributeKey.for_keyword_list(key)
+                pairs.append(SearchAttributePair(key_type, values))
+            elif len(values) > 1:
                 key_type = SearchAttributeKey.for_keyword_list(key)
                 pairs.append(SearchAttributePair(key_type, values))
             else:

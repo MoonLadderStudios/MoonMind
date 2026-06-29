@@ -245,9 +245,15 @@ _EXECUTION_FACET_ATTRS = {
     "integration": "mm_integration",
 }
 _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES = {
-    "mm_target_runtime": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
-    "mm_target_skill": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+    "mm_target_runtime": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
+    "mm_target_skill": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
 }
+_UNSORTABLE_TEMPORAL_SEARCH_ATTRIBUTES = frozenset(
+    {
+        "mm_target_runtime",
+        "mm_target_skill",
+    }
+)
 _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES_CACHE_TTL_SECONDS = 300.0
 _optional_temporal_search_attributes_cache: dict[
     tuple[str, int], tuple[float, frozenset[str]]
@@ -324,6 +330,8 @@ def _search_attribute_type_value(raw: object) -> int | None:
         normalized = raw.strip().lower()
         if normalized == "keyword":
             return int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD)
+        if normalized in {"keywordlist", "keyword_list", "keyword list"}:
+            return int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
     return None
 
 
@@ -362,7 +370,7 @@ async def _detect_optional_temporal_search_attributes(
             usable.add(name)
         elif name in attrs:
             logger.error(
-                "Temporal Search Attribute %s has unexpected type; expected Keyword.",
+                "Temporal Search Attribute %s has unexpected type; expected KeywordList.",
                 name,
             )
     logger.info(
@@ -1385,6 +1393,8 @@ def _build_temporal_execution_query(
             raise TemporalExecutionValidationError(
                 "sort must be one of: " + ", ".join(sorted(_EXECUTION_SORT_FIELDS)) + "."
             )
+        if sort_attr in _UNSORTABLE_TEMPORAL_SEARCH_ATTRIBUTES:
+            return count_query, list_query
         if sort_attr in _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES and sort_attr not in usable_attrs:
             return count_query, list_query
         direction = str(sort_dir or "desc").strip().lower()

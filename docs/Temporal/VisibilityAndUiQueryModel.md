@@ -219,15 +219,19 @@ All MoonMind-owned Search Attributes for this query model follow these rules:
 | --- | --- | --- | --- | --- |
 | `mm_repo` | keyword | No | Repo-scoped executions when filtering is needed | Stable bounded repo identifier |
 | `mm_integration` | keyword | No | Integration-centric execution where filtering is useful | Examples: `jules`, `github`, `openclaw` |
-| `mm_target_runtime` | keyword | No | Workflow start path when the canonical runtime is known; workflow lifecycle logic if it resolves later | Canonical runtime ID such as `codex_cli`, `claude_code`, `gemini_cli`, `codex_cloud`, or `jules`; never a display label, model, profile name, prompt, or free text |
-| `mm_target_skill` | keyword | No | Workflow start path when the primary skill is known; workflow lifecycle logic if it resolves later | Singular primary skill slug/name/id used by `targetSkill`; future multi-skill faceting requires a separate explicitly documented attribute |
+| `mm_target_runtime` | keyword_list | No | Workflow start path when the canonical runtime is known; workflow lifecycle logic if it resolves later | One-item list containing the canonical runtime ID such as `codex_cli`, `claude_code`, `gemini_cli`, `codex_cloud`, or `jules`; never a display label, model, profile name, prompt, or free text |
+| `mm_target_skill` | keyword_list | No | Workflow start path when the primary skill is known; workflow lifecycle logic if it resolves later | One-item list containing the singular primary skill slug/name/id used by `targetSkill`; future multi-skill faceting requires a separate explicitly documented attribute |
 | `mm_scheduled_for` | datetime | No | Delayed start / schedule-backed execution | Queryable expected start time |
 
 Runtime and skill Search Attributes are optional during migration. The API must
 confirm that `mm_target_runtime` and `mm_target_skill` are registered as
-`Keyword` before issuing Temporal Visibility queries that reference them. When
+`KeywordList` before issuing Temporal Visibility queries that reference them. When
 they are unavailable, runtime/skill filters are not authoritative and facets
 return degraded metadata rather than failing the list page.
+
+Runtime/skill filters use Temporal KeywordList membership queries
+(`mm_target_runtime = "codex_cli"`). They are not sortable through Temporal
+Visibility because SQL Visibility rejects `ORDER BY` for KeywordList fields.
 
 Blank or unknown runtime/skill values are omitted, not written as empty strings
 or placeholders. Existing executions that cannot be updated in Temporal
