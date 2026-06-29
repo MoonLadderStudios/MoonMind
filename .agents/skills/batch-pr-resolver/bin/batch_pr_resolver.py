@@ -515,7 +515,7 @@ def _build_queue_request(
             },
             "git": {
                 "startingBranch": branch,
-                "targetBranch": branch,
+                "branch": branch,
             },
             "publish": {"mode": publish_mode},
         },
@@ -777,15 +777,35 @@ def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2))
 
 def _write_run_artifacts(artifacts_dir: Path, payload: dict[str, Any]) -> None:
-    """Write the result payload and (when applicable) the no-op outcome file.
+    """Write the result payload and any terminal skill outcome marker.
 
     A ``skill_outcome.json`` with ``status: "no_op"`` is written only when the
     run produced zero queued executions AND encountered no errors — i.e. the
     run is a deliberate no-op, not a failed-to-do-anything case. The runtime
     treats this artifact as a positive intentional-no-op signal and records
     the run as succeeded with a ``no_op`` disposition.
+
+    A ``skill_outcome.json`` with ``status: "failed"`` is written when child
+    workflow submission errors occur so the managed-session runtime cannot
+    mark the parent skill turn successful based only on assistant text.
     """
     _write_artifacts(artifacts_dir / "batch_pr_resolver_result.json", payload)
+    if payload["errors"]:
+        _write_artifacts(
+            artifacts_dir / "skill_outcome.json",
+            {
+                "schema_version": 1,
+                "status": "failed",
+                "reason": "child_workflow_submission_failed",
+                "failureClass": "execution_error",
+                "evidence": {
+                    "requested": payload["requested"],
+                    "created": payload["created"],
+                    "errors": payload["errors"],
+                },
+            },
+        )
+        return
     if payload["created"] == 0 and not payload["errors"]:
         _write_artifacts(
             artifacts_dir / "skill_outcome.json",

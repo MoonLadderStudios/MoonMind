@@ -255,7 +255,8 @@ def test_build_queue_request_child_payload_shape() -> None:
         "maxIterations": 3,
     }
     assert task["git"]["startingBranch"] == "dependabot/pip/anthropic-0.107.1"
-    assert task["git"]["targetBranch"] == "dependabot/pip/anthropic-0.107.1"
+    assert task["git"]["branch"] == "dependabot/pip/anthropic-0.107.1"
+    assert "targetBranch" not in task["git"]
     assert task["publish"]["mode"] == "none"
     assert task["runtime"]["mode"] == "codex"
     assert payload["targetRuntime"] == "codex"
@@ -420,7 +421,7 @@ def test_write_run_artifacts_skips_no_op_on_dry_run(tmp_path: Path) -> None:
     assert not (tmp_path / "skill_outcome.json").exists()
 
 
-def test_write_run_artifacts_skips_no_op_on_errors(tmp_path: Path) -> None:
+def test_write_run_artifacts_emits_failed_outcome_on_errors(tmp_path: Path) -> None:
     module = _load_module()
     payload = {
         "dryRun": False,
@@ -432,7 +433,12 @@ def test_write_run_artifacts_skips_no_op_on_errors(tmp_path: Path) -> None:
         "errors": [{"pr": 9, "branch": "dependabot/pip/x", "error": "boom"}],
     }
     module["_write_run_artifacts"](tmp_path, payload)
-    assert not (tmp_path / "skill_outcome.json").exists()
+    outcome = json.loads((tmp_path / "skill_outcome.json").read_text())
+    assert outcome["status"] == "failed"
+    assert outcome["reason"] == "child_workflow_submission_failed"
+    assert outcome["failureClass"] == "execution_error"
+    assert outcome["evidence"]["matched"] is None
+    assert outcome["evidence"]["errors"] == payload["errors"]
 
 
 # ---------------------------------------------------------------------------

@@ -1184,6 +1184,49 @@ def test_runtime_no_op_signal_ignored_when_assistant_text_present(
     assert response.status == "completed"
     assert "disposition" not in response.metadata
 
+def test_runtime_failed_skill_outcome_overrides_assistant_text(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="all done",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload={
+            "schema_version": 1,
+            "status": "failed",
+            "reason": "child_workflow_submission_failed",
+            "failureClass": "execution_error",
+            "evidence": {"created": 0, "errors": [{"error": "422"}]},
+        },
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "execution_error"
+    assert response.metadata["reason"] == "child_workflow_submission_failed"
+    assert "disposition" not in response.metadata
+
 def test_runtime_no_op_signal_ignored_when_schema_version_wrong(
     tmp_path: Path,
 ) -> None:
