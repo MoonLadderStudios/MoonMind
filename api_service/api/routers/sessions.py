@@ -94,6 +94,30 @@ def _artifact_refs_from_projection(projection: object) -> dict[str, Any]:
     }
 
 
+_SUPPORTED_ELICITATION_DECISIONS = {"approve", "reject"}
+
+_ELICITATION_DECISION_MESSAGES = {
+    "approve": "Approved.",
+    "reject": "Rejected.",
+}
+
+
+def _elicitation_resolution_decision(payload: dict[str, Any]) -> str:
+    decision = str(payload.get("decision") or "").strip().lower()
+    if decision not in _SUPPORTED_ELICITATION_DECISIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "unsupported_elicitation_resolution",
+                "message": (
+                    "Supported elicitation resolution decisions are approve "
+                    "and reject."
+                ),
+            },
+        )
+    return decision
+
+
 def _event_item(event: dict[str, Any]) -> dict[str, Any]:
     sequence = event.get("sequence")
     kind = str(event.get("kind") or event.get("stream") or "event")
@@ -231,7 +255,9 @@ async def post_session_event(
     payload: dict[str, Any],
     _enabled: None = Depends(_require_session_api_compat_enabled),
     _user: User = Depends(get_current_user()),
-    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    artifact_service: TemporalArtifactService = Depends(
+        _get_temporal_artifact_service
+    ),
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
     event_type = str(payload.get("type") or "").strip()
@@ -295,22 +321,42 @@ async def resolve_session_elicitation(
     payload: dict[str, Any],
     _enabled: None = Depends(_require_session_api_compat_enabled),
     _user: User = Depends(get_current_user()),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
+    decision = _elicitation_resolution_decision(payload)
     capabilities = agent_runs_router._build_intervention_capabilities(record)
-    if not any(capabilities.values()):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This managed session is not available for elicitation resolution.",
+    try:
+        agent_runs_router._require_session_control_capability(
+            action="send_follow_up",
+            capabilities=capabilities,
         )
-    if record.status in agent_runs_router._MANAGED_SESSION_TERMINAL_STATUSES:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This managed session is not available for elicitation resolution.",
-        )
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail=(
-            "Session elicitation resolution is not implemented for managed sessions."
-        ),
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_409_CONFLICT:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This managed session is not available for elicitation "
+                    "resolution."
+                ),
+            ) from exc
+        raise
+    control = ArtifactSessionControlRequest(
+        action="send_follow_up",
+        message=_ELICITATION_DECISION_MESSAGES[decision],
+        reason=f"session_elicitation:{elicitation_id}:{decision}",
     )
+    response = await control_agent_run_artifact_session(
+        agent_run_id=record.agent_run_id,
+        session_id=record.session_id,
+        payload=control,
+        _user=_user,
+        artifact_service=artifact_service,
+    )
+    return {
+        "type": "elicitation_resolution",
+        "elicitationId": elicitation_id,
+        "decision": decision,
+        "action": response.action,
+        "projection": jsonable_encoder(response.projection),
+    }
