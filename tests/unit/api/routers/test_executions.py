@@ -72,6 +72,7 @@ from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationE
 from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
+    FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
     StepExecutionDetailModel,
     StepExecutionManifestModel,
     StepLedgerSnapshotModel,
@@ -11823,6 +11824,55 @@ async def test_mm773_skips_related_run_metadata_for_foreign_owner() -> None:
     assert related["model"] is None
 
 
+def _valid_failed_run_recovery_manifest_payload(
+    canonical,
+    *,
+    checkpoint_ref: str,
+    failed_step_id: str = "implement",
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": "v1",
+        "contentType": FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
+        "workflowId": canonical.workflow_id,
+        "runId": canonical.run_id,
+        "failedLogicalStepId": failed_step_id,
+        "failedExecutionOrdinal": 1,
+        "checkpointRefs": [
+            {
+                "category": "checkpoint",
+                "status": "available",
+                "artifactRef": checkpoint_ref,
+                "boundary": "before_recovery_restoration",
+            }
+        ],
+        "validation": {
+            "result": "valid",
+            "checkpointRef": checkpoint_ref,
+            "boundary": "before_recovery_restoration",
+        },
+        "sideEffectDispositions": [],
+        "resumeAllowed": True,
+        "recoveryEligibility": {
+            "eligible": True,
+            "defaultAction": "resume_from_checkpoint",
+            "requiredBoundary": "before_recovery_restoration",
+            "checkpointRef": checkpoint_ref,
+            "sourceWorkflowId": canonical.workflow_id,
+            "sourceRunId": canonical.run_id,
+            "operatorGuidance": "resume",
+            "evidence": [
+                {
+                    "category": "checkpoint",
+                    "status": "available",
+                    "artifactRef": checkpoint_ref,
+                    "boundary": "before_recovery_restoration",
+                }
+            ],
+        },
+        "createdAt": "2026-06-13T12:00:00+00:00",
+    }
+
+
 def test_failed_step_recovery_hydrates_checkpoint_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -11833,6 +11883,7 @@ def test_failed_step_recovery_hydrates_checkpoint_artifact(
     canonical.memo = {
         **canonical.memo,
         "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "failed_run_recovery_manifest_ref": "artifact://recovery/manifest",
         "task_input_snapshot_ref": "artifact://snapshot/source",
     }
     mock_service.describe_execution.return_value = canonical
@@ -11873,12 +11924,19 @@ def test_failed_step_recovery_hydrates_checkpoint_artifact(
         "recoveryWorkspace": {
             "branch": "feature/resume",
             "commit": "abc123",
-            "checkpointRef": "artifact://workspace/before-implement",
+            "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
         },
     }
+    manifest_payload = _valid_failed_run_recovery_manifest_payload(
+        canonical,
+        checkpoint_ref="artifact://resume-checkpoints/source/checkpoint-v1",
+    )
     artifact_service = SimpleNamespace(
         read=AsyncMock(
-            return_value=(SimpleNamespace(), json.dumps(checkpoint_payload).encode())
+            side_effect=[
+                (SimpleNamespace(), json.dumps(manifest_payload).encode()),
+                (SimpleNamespace(), json.dumps(checkpoint_payload).encode()),
+            ]
         )
     )
 
@@ -11904,9 +11962,14 @@ def test_failed_step_recovery_hydrates_checkpoint_artifact(
         )
 
     assert response.status_code == 201
-    artifact_service.read.assert_awaited_once()
+    assert artifact_service.read.await_count == 2
     call_kwargs = mock_service.create_failed_step_recovery_execution.await_args.kwargs
     assert call_kwargs["checkpoint_payload"] == checkpoint_payload
+    assert call_kwargs["failed_run_recovery_manifest"] == manifest_payload
+    assert (
+        call_kwargs["failed_run_recovery_manifest_ref"]
+        == "artifact://recovery/manifest"
+    )
     assert call_kwargs["recovery_checkpoint_ref"] is None
 
 
@@ -11920,6 +11983,7 @@ def test_selected_step_recovery_pins_source_and_selected_step(
     canonical.memo = {
         **canonical.memo,
         "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "failed_run_recovery_manifest_ref": "artifact://recovery/manifest",
         "task_input_snapshot_ref": "artifact://snapshot/source",
     }
     mock_service.describe_execution.return_value = canonical
@@ -11955,11 +12019,20 @@ def test_selected_step_recovery_pins_source_and_selected_step(
                 "stateCheckpointRef": "artifact://workspace/before-plan",
             }
         ],
-        "recoveryWorkspace": {"checkpointRef": "artifact://workspace/source"},
+        "recoveryWorkspace": {
+            "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1"
+        },
     }
+    manifest_payload = _valid_failed_run_recovery_manifest_payload(
+        canonical,
+        checkpoint_ref="artifact://resume-checkpoints/source/checkpoint-v1",
+    )
     artifact_service = SimpleNamespace(
         read=AsyncMock(
-            return_value=(SimpleNamespace(), json.dumps(checkpoint_payload).encode())
+            side_effect=[
+                (SimpleNamespace(), json.dumps(manifest_payload).encode()),
+                (SimpleNamespace(), json.dumps(checkpoint_payload).encode()),
+            ]
         )
     )
 
@@ -12096,11 +12169,21 @@ def test_failed_step_recovery_reports_checkpoint_authorization_error(
     canonical.memo = {
         **canonical.memo,
         "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "failed_run_recovery_manifest_ref": "artifact://recovery/manifest",
         "task_input_snapshot_ref": "artifact://snapshot/source",
     }
     mock_service.describe_execution.return_value = canonical
+    manifest_payload = _valid_failed_run_recovery_manifest_payload(
+        canonical,
+        checkpoint_ref="artifact://resume-checkpoints/source/checkpoint-v1",
+    )
     artifact_service = SimpleNamespace(
-        read=AsyncMock(side_effect=TemporalArtifactAuthorizationError("denied"))
+        read=AsyncMock(
+            side_effect=[
+                (SimpleNamespace(), json.dumps(manifest_payload).encode()),
+                TemporalArtifactAuthorizationError("denied"),
+            ]
+        )
     )
 
     class Session:

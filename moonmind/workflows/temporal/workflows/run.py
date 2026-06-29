@@ -95,6 +95,9 @@ with workflow.unsafe.imports_passed_through():
         StepExecutionCheckpointBoundary,
         build_step_checkpoint_id,
     )
+    from moonmind.workflows.temporal.checkpoint_policy import (
+        resolve_checkpoint_policy,
+    )
     from moonmind.workflows.temporal.managed_session_errors import (
         is_managed_session_locator_mismatch_error,
     )
@@ -1906,8 +1909,15 @@ class MoonMindRunWorkflow:
         source_execution_ordinal: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         if source_execution_ordinal and logical_step_id == self._recovery_failed_step_id:
+            resolved_policy = resolve_checkpoint_policy(
+                boundary="before_recovery_restoration",
+                recovery_source=self._recovery_source
+                if isinstance(self._recovery_source, Mapping)
+                else None,
+                runtime_kind=self._target_runtime,
+            )
             workspace = workspace_policy_metadata(
-                policy="start_from_last_passed_commit",
+                policy=resolved_policy.workspace_policy,
                 checkpoint_ref=self._recovery_workspace_restored_ref,
                 checkpoint_valid=bool(self._recovery_workspace_restored_ref),
             )
@@ -2602,6 +2612,13 @@ class MoonMindRunWorkflow:
         )
         if not checkpoint_ref:
             raise ValueError("Recovery source requires recovery checkpoint ref.")
+        manifest_ref = self._recovery_source_text(
+            recovery_source,
+            "failedRunRecoveryManifestRef",
+            "failed_run_recovery_manifest_ref",
+        )
+        if not manifest_ref:
+            raise ValueError("Recovery source requires failed-run recovery manifest ref.")
 
         plan_identity = self._recovery_source_text(
             recovery_source,
@@ -2622,6 +2639,11 @@ class MoonMindRunWorkflow:
             raise ValueError("Recovery source requires resume workspace checkpoint.")
         if not self._recovery_workspace_has_evidence(workspace):
             raise ValueError("Recovery source requires workspace evidence.")
+        workspace_checkpoint_ref = self._recovery_workspace_checkpoint_ref(workspace)
+        if workspace_checkpoint_ref and workspace_checkpoint_ref != checkpoint_ref:
+            raise ValueError(
+                "Recovery source checkpoint ref must match workspace evidence."
+            )
 
         preserved_steps = recovery_source.get("preservedSteps") or recovery_source.get(
             "preserved_steps"
@@ -2749,11 +2771,16 @@ class MoonMindRunWorkflow:
             "sourcePlanDigest",
             "source_plan_digest",
         )
+        resolved_policy = resolve_checkpoint_policy(
+            boundary="before_recovery_restoration",
+            recovery_source=self._recovery_source,
+            runtime_kind=self._target_runtime,
+        )
         workspace_policy = self._recovery_source_text(
             self._recovery_workspace,
             "workspacePolicy",
             "workspace_policy",
-        ) or "restore_pre_execution"
+        ) or resolved_policy.workspace_policy
 
         validate_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "step_checkpoint.validate"
@@ -3968,37 +3995,24 @@ class MoonMindRunWorkflow:
         capture_input = dict(
             self._step_workspace_capture_inputs.get(logical_step_id) or {}
         )
-        emit_ephemeral_checkpoint = workflow.patched(
-            RUN_EMIT_EPHEMERAL_STEP_CHECKPOINTS_PATCH
-        )
         if not capture_input:
-            if not emit_ephemeral_checkpoint:
-                return None
-            workspace_ref = (
-                self._step_checkpoint_refs.get(logical_step_id)
-                or self._previous_step_checkpoint_refs.get(logical_step_id)
-                or (
-                    f"temporal://{identity.workflow_id}/{identity.run_id}/"
-                    f"{identity.logical_step_id}/{boundary}"
-                )
-            )
-            return {
-                "workspace": {
-                    "kind": "ephemeral_workspace_ref",
-                    "workspaceRef": workspace_ref,
-                    "createdAt": workflow.now().isoformat(),
-                },
-                "diagnosticRefs": [],
-            }
+            return None
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "workspace.capture_checkpoint"
         )
         checkpoint_id = build_step_checkpoint_id(identity, boundary)
+        resolved_policy = resolve_checkpoint_policy(
+            boundary=str(boundary),
+            recovery_source=self._recovery_source
+            if isinstance(self._recovery_source, Mapping)
+            else None,
+            runtime_kind=self._target_runtime,
+        )
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
             "boundary": boundary,
-            "kind": capture_input.get("kind") or "worktree_archive",
+            "kind": capture_input.get("kind") or resolved_policy.checkpoint_kind,
             "artifactNamespace": f"step-checkpoints/{identity.logical_step_id}",
             "idempotencyKey": f"{checkpoint_id}:capture",
         }
@@ -4021,10 +4035,7 @@ class MoonMindRunWorkflow:
         workspace_evidence = result.get("workspace")
         if not isinstance(workspace_evidence, Mapping):
             return None
-        if (
-            workspace_evidence.get("kind") == "ephemeral_workspace_ref"
-            and not emit_ephemeral_checkpoint
-        ):
+        if workspace_evidence.get("kind") == "ephemeral_workspace_ref":
             return None
         return {
             "workspace": dict(workspace_evidence),

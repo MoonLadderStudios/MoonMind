@@ -2001,6 +2001,9 @@ class RecoverFromFailedStepRequest(BaseModel):
         None, alias="sourceExecutionOrdinal", ge=1
     )
     recovery_checkpoint_ref: Optional[str] = Field(None, alias="recoveryCheckpointRef")
+    failed_run_recovery_manifest_ref: Optional[str] = Field(
+        None, alias="failedRunRecoveryManifestRef"
+    )
     checkpoint_boundary: Optional[StepExecutionCheckpointBoundary] = Field(
         None, alias="checkpointBoundary"
     )
@@ -2023,6 +2026,7 @@ class RecoverFromFailedStepRequest(BaseModel):
         "source_run_id",
         "logical_step_id",
         "recovery_checkpoint_ref",
+        "failed_run_recovery_manifest_ref",
         "task_input_snapshot_ref",
         "plan_ref",
         "plan_digest",
@@ -2223,6 +2227,12 @@ class RecoverySourceModel(BaseModel):
         None, alias="selectedStartStepExecution", ge=1
     )
     recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef", min_length=1)
+    failed_run_recovery_manifest_ref: str | None = Field(
+        None, alias="failedRunRecoveryManifestRef"
+    )
+    selected_checkpoint_boundary: str | None = Field(
+        None, alias="selectedCheckpointBoundary"
+    )
     recovery_workspace: dict[str, Any] = Field(
         default_factory=dict, alias="recoveryWorkspace"
     )

@@ -53,12 +53,14 @@ from moonmind.schemas.temporal_models import (
     AGENT_RUN_ID_MEMO_KEYS,
     AGENT_RUN_ID_PARAM_KEYS,
     AGENT_RUN_ID_SEARCH_ATTR_KEYS,
+    FailedRunRecoveryManifestModel,
     RecoveryCheckpointModel,
     RecoverySourceModel,
     has_user_workflow_plan_source,
 )
 from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
@@ -3003,6 +3005,8 @@ class TemporalExecutionService:
         recovery_checkpoint_ref: str | None,
         idempotency_key: str,
         checkpoint_payload: Mapping[str, Any] | None = None,
+        failed_run_recovery_manifest_ref: str | None = None,
+        failed_run_recovery_manifest: Mapping[str, Any] | None = None,
         selected_start_step_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a linked follow-up execution for failed-step recovery."""
@@ -3052,6 +3056,39 @@ class TemporalExecutionService:
         if checkpoint_payload is None:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Recovery checkpoint payload is required."
+            )
+        manifest_ref = str(failed_run_recovery_manifest_ref or "").strip()
+        if not manifest_ref:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Failed-run recovery manifest ref is required."
+            )
+        if failed_run_recovery_manifest is None:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Failed-run recovery manifest is required."
+            )
+        try:
+            recovery_manifest = FailedRunRecoveryManifestModel.model_validate(
+                failed_run_recovery_manifest
+            )
+        except ValidationError as exc:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Failed-run recovery manifest is invalid."
+            ) from exc
+        if not recovery_manifest.resume_allowed:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Failed-run recovery manifest does not allow resume."
+            )
+        if recovery_manifest.workflow_id != record.workflow_id:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Failed-run recovery manifest workflowId does not match source execution."
+            )
+        if recovery_manifest.run_id != source_run_id:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Failed-run recovery manifest runId does not match source execution."
+            )
+        if recovery_manifest.validation.checkpoint_ref != checkpoint_ref:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Failed-run recovery manifest checkpoint ref does not match source execution."
             )
         try:
             checkpoint = RecoveryCheckpointModel.model_validate(checkpoint_payload)
@@ -3144,6 +3181,10 @@ class TemporalExecutionService:
             recoveryWorkspace=checkpoint.recovery_workspace,
             preservedSteps=preserved_steps,
         ).model_dump(by_alias=True, mode="json")
+        recovery_source_payload["failedRunRecoveryManifestRef"] = manifest_ref
+        recovery_source_payload["selectedCheckpointBoundary"] = (
+            recovery_manifest.validation.boundary
+        )
         if recovery_mode == "last_failed_step":
             recovery_source_payload.pop("recoveryMode", None)
             recovery_source_payload.pop("selectedStartStepId", None)
@@ -3175,13 +3216,10 @@ class TemporalExecutionService:
                 ):
                     preserved_step_refs.append(artifact_ref)
         recovery_workspace = checkpoint.recovery_workspace or {}
-        workspace_policy = str(
-            recovery_workspace.get("workspacePolicy")
-            or recovery_workspace.get("workspace_policy")
-            or "restore_pre_execution"
-        ).strip()
-        if not workspace_policy:
-            workspace_policy = "restore_pre_execution"
+        workspace_policy = resolve_checkpoint_policy(
+            boundary="before_recovery_restoration",
+            recovery_source=recovery_source_payload,
+        ).workspace_policy
         dependency_signatures = recovery_workspace.get("dependencySignatures")
         if not isinstance(dependency_signatures, dict):
             dependency_signatures = {}
@@ -3198,6 +3236,7 @@ class TemporalExecutionService:
             "dependencySignatures": dependency_signatures,
             "workspacePolicy": workspace_policy,
         }
+        recover_ref["failedRunRecoveryManifestRef"] = manifest_ref
         if recovery_mode == "selected_step":
             recover_ref["recoveryMode"] = recovery_mode
             recover_ref["selectedStartStepId"] = failed_step_id

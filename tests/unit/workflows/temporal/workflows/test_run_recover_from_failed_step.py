@@ -45,7 +45,8 @@ def _recovery_source(**overrides: object) -> dict[str, object]:
         "sourcePlanDigest": "sha256:source-plan",
         "failedStepId": "implement",
         "failedStepExecution": 1,
-        "recoveryCheckpointRef": "artifact://recover/checkpoint",
+        "recoveryCheckpointRef": "artifact://workspace/before-implement",
+        "failedRunRecoveryManifestRef": "artifact://recovery/manifest",
         "recoveryWorkspace": {
             "checkpointRef": "artifact://workspace/before-implement",
         },
@@ -374,7 +375,7 @@ async def test_recover_step_execution_manifest_preserves_source_lineage(
         "relationship": "recover_from_failed_step",
         "lineageExecutionOrdinal": 2,
     }
-    assert manifest["workspace"]["policy"] == "start_from_last_passed_commit"
+    assert manifest["workspace"]["policy"] == "restore_pre_execution"
     assert manifest["workspace"]["checkpointRef"] == (
         "artifact://workspace/before-implement"
     )
@@ -417,6 +418,7 @@ def test_recovery_source_accepts_branch_commit_workspace_evidence() -> None:
 def test_recovery_source_accepts_checkpoint_payload_ref_workspace_evidence() -> None:
     now = datetime.now(UTC)
     source = _recovery_source(
+        recoveryCheckpointRef="artifact://checkpoint/payload",
         recoveryWorkspace={
             "checkpoint_payload_ref": "artifact://checkpoint/payload",
             "inline_checkpoint_metadata": "artifact://checkpoint/metadata",

@@ -25,7 +25,8 @@ def _recovery_source(**overrides: object) -> dict[str, object]:
         "sourcePlanDigest": "sha256:source-plan",
         "failedStepId": "implement",
         "failedStepExecution": 1,
-        "recoveryCheckpointRef": "artifact://resume/checkpoint",
+        "recoveryCheckpointRef": "artifact://workspace/before-implement",
+        "failedRunRecoveryManifestRef": "artifact://recovery/manifest",
         "recoveryWorkspace": {
             "checkpointRef": "artifact://workspace/before-implement",
         },
