@@ -501,6 +501,9 @@ RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
 RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
+RUN_SKIP_EPHEMERAL_STEP_CHECKPOINTS_PATCH = (
+    "run-skip-ephemeral-step-checkpoints-v1"
+)
 RUN_STEP_EXECUTION_NAMING_PATCH = "run-step-execution-naming-v1"
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
@@ -3938,7 +3941,20 @@ class MoonMindRunWorkflow:
             self._step_workspace_capture_inputs.get(logical_step_id) or {}
         )
         if not capture_input:
-            return None
+            if workflow.patched(RUN_SKIP_EPHEMERAL_STEP_CHECKPOINTS_PATCH):
+                return None
+            workspace_ref = self._step_checkpoint_refs.get(logical_step_id) or (
+                f"temporal://{identity.workflow_id}/{identity.run_id}/"
+                f"{identity.logical_step_id}/{boundary}"
+            )
+            return {
+                "workspace": {
+                    "kind": "ephemeral_workspace_ref",
+                    "workspaceRef": workspace_ref,
+                    "createdAt": workflow.now().isoformat(),
+                },
+                "diagnosticRefs": [],
+            }
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "workspace.capture_checkpoint"
@@ -3970,7 +3986,10 @@ class MoonMindRunWorkflow:
         workspace_evidence = result.get("workspace")
         if not isinstance(workspace_evidence, Mapping):
             return None
-        if workspace_evidence.get("kind") == "ephemeral_workspace_ref":
+        if (
+            workspace_evidence.get("kind") == "ephemeral_workspace_ref"
+            and workflow.patched(RUN_SKIP_EPHEMERAL_STEP_CHECKPOINTS_PATCH)
+        ):
             return None
         return {
             "workspace": dict(workspace_evidence),

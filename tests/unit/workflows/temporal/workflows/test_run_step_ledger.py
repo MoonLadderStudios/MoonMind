@@ -721,10 +721,15 @@ def test_canonical_step_checkpoint_writes_keep_replay_patch_guard() -> None:
     assert run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH == (
         "run-canonical-step-checkpoints-v1"
     )
+    assert run_module.RUN_SKIP_EPHEMERAL_STEP_CHECKPOINTS_PATCH == (
+        "run-skip-ephemeral-step-checkpoints-v1"
+    )
     guard = "if not workflow.patched(RUN_CANONICAL_STEP_CHECKPOINTS_PATCH):"
+    ephemeral_guard = "workflow.patched(RUN_SKIP_EPHEMERAL_STEP_CHECKPOINTS_PATCH)"
     activity_call = "result = await self._create_step_checkpoint_via_activity("
 
     assert source.index(guard) < source.index(activity_call)
+    assert source.index(ephemeral_guard) < source.index(activity_call)
 
 
 def test_recovery_workspace_prepares_before_marking_failed_step_running() -> None:
@@ -2524,7 +2529,7 @@ async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
 
 
 @pytest.mark.asyncio
-async def test_run_blocks_canonical_checkpoint_create_when_capture_is_not_durable(
+async def test_run_preserves_no_capture_ephemeral_checkpoint_for_pre_patch_histories(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -2532,6 +2537,240 @@ async def test_run_blocks_canonical_checkpoint_create_when_capture_is_not_durabl
         run_module.workflow,
         "patched",
         lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._input_ref = "artifact://task-input"
+    workflow._plan_ref = "artifact://plan"
+    captured: list[dict[str, Any]] = []
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "implement",
+        updated_at=now,
+        summary="Implementing",
+    )
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload})
+        assert activity == "step_checkpoint.create"
+        return _checkpoint_create_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    result = await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="after_prepare",
+        updated_at=now,
+    )
+
+    assert result == "artifact://checkpoint/after_prepare"
+    assert [call["activity"] for call in captured] == ["step_checkpoint.create"]
+    assert captured[0]["payload"]["workspace"] == {
+        "kind": "ephemeral_workspace_ref",
+        "workspaceRef": "temporal://wf-run-1/run-1/implement/after_prepare",
+        "createdAt": "2026-04-07T12:00:00+00:00",
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_no_capture_ephemeral_checkpoint_reuses_previous_ref_for_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._input_ref = "artifact://task-input"
+    workflow._plan_ref = "artifact://plan"
+    captured: list[dict[str, Any]] = []
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "implement",
+        updated_at=now,
+        summary="Implementing",
+    )
+    workflow._step_checkpoint_refs["implement"] = "artifact://checkpoint/after_prepare"
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload})
+        assert activity == "step_checkpoint.create"
+        return _checkpoint_create_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    result = await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="before_execution",
+        updated_at=now,
+    )
+
+    assert result == "artifact://checkpoint/before_execution"
+    assert captured[0]["payload"]["workspace"]["workspaceRef"] == (
+        "artifact://checkpoint/after_prepare"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_skips_no_capture_ephemeral_checkpoint_when_skip_patch_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_SKIP_EPHEMERAL_STEP_CHECKPOINTS_PATCH,
+        },
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "implement",
+        updated_at=now,
+        summary="Implementing",
+    )
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        raise AssertionError(f"unexpected activity: {activity} {payload}")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    result = await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="after_prepare",
+        updated_at=now,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_run_preserves_ephemeral_checkpoint_create_for_pre_patch_histories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._input_ref = "artifact://task-input"
+    workflow._plan_ref = "artifact://plan"
+    workflow._step_workspace_capture_inputs["implement"] = {
+        "workspacePath": "/work/agent_jobs/run-1/repo",
+        "kind": "worktree_archive",
+    }
+    captured: list[dict[str, Any]] = []
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "implement",
+        updated_at=now,
+        summary="Implementing",
+    )
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload})
+        if activity == "workspace.capture_checkpoint":
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": "ephemeral_workspace_ref",
+                    "workspaceRef": "artifact://diagnostic/ephemeral",
+                },
+                "diagnosticRefs": ["artifact://diagnostic/ephemeral"],
+            }
+        assert activity == "step_checkpoint.create"
+        return {
+            "checkpointRef": "artifact://checkpoint/after_execution",
+            "checkpointId": payload["idempotencyKey"],
+            "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+            "workspaceKind": payload["workspace"]["kind"],
+            "diagnosticRefs": [],
+            "idempotencyKey": payload["idempotencyKey"],
+        }
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    result = await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="after_execution",
+        updated_at=now,
+    )
+
+    assert result == "artifact://checkpoint/after_execution"
+    assert [call["activity"] for call in captured] == [
+        "workspace.capture_checkpoint",
+        "step_checkpoint.create",
+    ]
+    assert captured[1]["payload"]["workspace"]["kind"] == "ephemeral_workspace_ref"
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["stepCheckpointRef"] == "artifact://checkpoint/after_execution"
+    assert step["refs"]["stepExecutionCheckpointRefs"] == [
+        "artifact://checkpoint/after_execution"
+    ]
+    assert step["refs"]["checkpointRefsByBoundary"] == {
+        "after_execution": "artifact://checkpoint/after_execution"
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_blocks_canonical_checkpoint_create_when_ephemeral_skip_patch_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_SKIP_EPHEMERAL_STEP_CHECKPOINTS_PATCH,
+        },
     )
     workflow = MoonMindRunWorkflow()
     now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
