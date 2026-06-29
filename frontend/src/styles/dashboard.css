@@ -5050,7 +5050,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 #queue-dependency-list li {
-  align-items: center;
   flex-wrap: nowrap;
 }
 
