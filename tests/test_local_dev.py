@@ -321,7 +321,7 @@ def test_agent_workspaces_volume_is_docker_managed_named_volume():
     assert volume_config.get("name") == (
         "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
     ), "agent_workspaces must remain the deployment-configurable named volume"
-    assert volume_config.get("external") is not True, (
+    assert not volume_config.get("external"), (
         "agent_workspaces must be created by the MoonMind compose project, not "
         "borrowed from an externally configured host path"
     )
