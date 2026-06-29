@@ -2,7 +2,7 @@ import { formatStatusLabel } from './formatters';
 
 export const EXECUTING_STATUS_PILL_TRACEABILITY = Object.freeze({
   jiraIssue: 'MM-488',
-  relatedJiraIssues: ['MM-489', 'MM-490', 'MM-491', 'MM-704', 'MM-1035'],
+  relatedJiraIssues: ['MM-489', 'MM-490', 'MM-491', 'MM-704', 'MM-1035', 'MM-1036'],
   designRequirements: [
     'DESIGN-REQ-001',
     'DESIGN-REQ-002',
@@ -14,7 +14,7 @@ export const EXECUTING_STATUS_PILL_TRACEABILITY = Object.freeze({
   ],
 });
 
-const SHIMMER_SWEEP_KEYS = ['executing', 'running'] as const;
+const SHIMMER_SWEEP_KEYS = ['executing', 'running', 'initializing', 'planning', 'finalizing'] as const;
 type ShimmerSweepStatusKey = (typeof SHIMMER_SWEEP_KEYS)[number];
 
 export type ExecutionStatusPillProps = Readonly<{

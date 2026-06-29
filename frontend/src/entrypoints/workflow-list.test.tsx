@@ -1174,22 +1174,24 @@ describe('Workflows Entrypoint', () => {
         document.querySelectorAll(
           '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(6);
     });
 
     const activePills = document.querySelectorAll<HTMLElement>(
       '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
     );
-    expect(activePills).toHaveLength(2);
+    expect(activePills).toHaveLength(6);
     expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'executing')).toHaveLength(2);
+    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'planning')).toHaveLength(2);
+    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'finalizing')).toHaveLength(2);
     for (const pill of activePills) {
       const label = pill.dataset.state;
-      if (label !== 'executing') {
+      if (label !== 'executing' && label !== 'planning' && label !== 'finalizing') {
         throw new Error(`Unexpected active status pill state: ${label}`);
       }
       expect(pill.dataset.state).toBe(label);
       expect(pill.className).toContain(`is-${label}`);
-      expect(pill.className).toContain('status-running');
+      expect(pill.className).toContain(`status-${label === 'executing' ? 'running' : label}`);
       expect(pill.dataset.shimmerLabel).toBe(label);
       expect(pill.getAttribute('aria-label')).toBe(label);
       expect(pill.textContent).toBe(label);
@@ -1207,20 +1209,7 @@ describe('Workflows Entrypoint', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1035');
-
-    const planningPills = screen.getAllByText('planning');
-    expect(planningPills.length).toBeGreaterThan(0);
-    for (const pill of planningPills) {
-      expect(pill.closest('span')?.dataset.effect).toBeUndefined();
-      expect(pill.closest('span')?.className).toContain('status-planning');
-    }
-
-    const finalizingPills = screen.getAllByText('finalizing');
-    expect(finalizingPills.length).toBeGreaterThan(0);
-    for (const pill of finalizingPills) {
-      expect(pill.closest('span')?.dataset.effect).toBeUndefined();
-      expect(pill.closest('span')?.className).toContain('status-finalizing');
-    }
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1036');
 
     const waitingPills = screen.getAllByText('AWAITING DEP');
     expect(waitingPills.length).toBeGreaterThan(0);
