@@ -853,16 +853,20 @@ describe('Dashboard shared entry', () => {
 
   it('defines the shared MM-488 executing shimmer modifier contract', async () => {
     expect(dashboardCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*2600ms/);
+    // MM-1041: steeper band angle pairs with the flatter, more horizontal travel path.
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-angle:\s*-24deg/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-band-height:\s*180%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-core-width-multiplier:\s*9\.1667/);
     expect(dashboardCss).not.toContain('--mm-executing-sweep-halo-peak-width-multiplier');
     expect(dashboardCss).not.toContain('--mm-executing-sweep-core-peak-width-multiplier');
+    // MM-1041: vertical travel reduced (160% -> 128%) so the horizontal delta
+    // exceeds the vertical delta and the sweep travels more horizontally.
     expect(dashboardCss).toMatch(/--mm-executing-sweep-start-x:\s*135%/);
-    expect(dashboardCss).toMatch(/--mm-executing-sweep-start-y:\s*160%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-start-y:\s*128%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-end-x:\s*-135%/);
-    expect(dashboardCss).toMatch(/--mm-executing-sweep-end-y:\s*-160%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-end-y:\s*-128%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-layer-offset-x:\s*-12%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
     expect(dashboardCss).toContain('--mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)');
