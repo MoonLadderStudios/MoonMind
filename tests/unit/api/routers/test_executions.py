@@ -32,7 +32,10 @@ from api_service.api.routers.executions import (
     _effective_user_roles,
     _hydrate_related_run_metadata,
     _merge_workflow_preserving_artifact_instructions,
+    _canonical_recovery_manifest_ref,
+    _recovery_manifest_ref_from_record,
     _recovery_not_available_reason,
+    _reject_recovery_manifest_mismatch,
     _reuse_original_task_input_snapshot_from_source,
     _workflow_input_snapshot_descriptor_from_record,
     _normalize_task_steps,
@@ -73,6 +76,8 @@ from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
     FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
+    RecoverFromFailedStepRequest,
+    RecoverFromSelectedStepRequest,
     StepExecutionDetailModel,
     StepExecutionManifestModel,
     StepLedgerSnapshotModel,
@@ -848,6 +853,80 @@ def _build_execution_record(
         entry=entry,
         integration_state=None,
     )
+
+
+def _failed_run_manifest_payload() -> dict[str, Any]:
+    return {
+        "schemaVersion": "v1",
+        "contentType": FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
+        "workflowId": "mm:wf-1",
+        "runId": "run-2",
+        "failedLogicalStepId": "step-2",
+        "failedExecutionOrdinal": 2,
+        "validation": {
+            "result": "valid",
+            "checkpointRef": "artifact://checkpoint/1",
+            "boundary": "before_recovery_restoration",
+        },
+        "resumeAllowed": True,
+        "recoveryEligibility": {
+            "eligible": True,
+            "defaultAction": "resume_from_checkpoint",
+            "checkpointRef": "artifact://checkpoint/1",
+            "operatorGuidance": "resume",
+        },
+        "createdAt": datetime.now(UTC),
+    }
+
+
+def test_recovery_manifest_ref_reads_finish_summary_manifest_ref() -> None:
+    record = _build_execution_record()
+    record.finish_summary_json = {
+        "recoveryManifest": {
+            "manifestRef": "artifact://recovery/manifest-1",
+        }
+    }
+
+    assert _recovery_manifest_ref_from_record(record) == "artifact://recovery/manifest-1"
+
+
+def test_canonical_recovery_manifest_ref_rejects_request_override() -> None:
+    record = _build_execution_record()
+    record.finish_summary_json = {
+        "recoveryManifest": {
+            "manifestRef": "artifact://recovery/emitted",
+        }
+    }
+    request = RecoverFromFailedStepRequest(
+        idempotencyKey="recover-1",
+        recoveryCheckpointRef="artifact://checkpoint/1",
+        failedRunRecoveryManifestRef="artifact://recovery/request",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        _canonical_recovery_manifest_ref(request, record)
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["reason"] == "recovery_manifest_inconsistent"
+    assert exc.value.detail["fields"] == ["failedRunRecoveryManifestRef"]
+
+
+def test_reject_recovery_manifest_mismatch_accepts_selected_step_request() -> None:
+    request = RecoverFromSelectedStepRequest(
+        idempotencyKey="recover-1",
+        sourceWorkflowId="mm:wf-1",
+        sourceRunId="run-2",
+        selectedStartStepId="step-1",
+        recoveryCheckpointRef="artifact://checkpoint/1",
+    )
+
+    _reject_recovery_manifest_mismatch(
+        request,
+        canonical=_build_execution_record(),
+        manifest_payload=_failed_run_manifest_payload(),
+        checkpoint_ref="artifact://checkpoint/1",
+    )
+
 
 def test_serialize_execution_includes_finish_summary_projection_fields():
     record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)

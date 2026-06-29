@@ -3127,12 +3127,22 @@ def _recovery_manifest_ref_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
     params = dict(getattr(record, "parameters", None) or {})
+    finish_summary = dict(getattr(record, "finish_summary_json", None) or {})
+    recovery_manifest = finish_summary.get("recoveryManifest")
+    if not isinstance(recovery_manifest, Mapping):
+        recovery_manifest = finish_summary.get("recovery_manifest")
+    if not isinstance(recovery_manifest, Mapping):
+        recovery_manifest = {}
     recovery_block = params.get("recoverySource")
     if not isinstance(recovery_block, Mapping):
         recovery_block = params.get("recovery_source")
     if not isinstance(recovery_block, Mapping):
         recovery_block = {}
     for value in (
+        recovery_manifest.get("manifestRef"),
+        recovery_manifest.get("manifest_ref"),
+        recovery_manifest.get("failedRunRecoveryManifestRef"),
+        recovery_manifest.get("failed_run_recovery_manifest_ref"),
         memo.get("failed_run_recovery_manifest_ref"),
         memo.get("failedRunRecoveryManifestRef"),
         memo.get("recovery_manifest_ref"),
@@ -3145,6 +3155,25 @@ def _recovery_manifest_ref_from_record(record) -> str | None:
         if candidate:
             return candidate
     return None
+
+
+def _canonical_recovery_manifest_ref(
+    request: RecoverFromFailedStepRequest | RecoverFromSelectedStepRequest,
+    canonical: TemporalExecutionCanonicalRecord,
+) -> str | None:
+    manifest_ref = _recovery_manifest_ref_from_record(canonical)
+    requested_ref = str(request.failed_run_recovery_manifest_ref or "").strip()
+    if requested_ref and manifest_ref and requested_ref != manifest_ref:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Recovery request fields do not match recovery manifest evidence.",
+                "reason": "recovery_manifest_inconsistent",
+                "fields": ["failedRunRecoveryManifestRef"],
+            },
+        )
+    return manifest_ref
 
 
 def _recovery_failed_step_id_from_record(record) -> str | None:
@@ -7477,7 +7506,7 @@ async def _hydrate_failed_run_recovery_manifest_payload(
 
 
 def _reject_recovery_manifest_mismatch(
-    request: RecoverFromFailedStepRequest,
+    request: RecoverFromFailedStepRequest | RecoverFromSelectedStepRequest,
     *,
     canonical: TemporalExecutionCanonicalRecord,
     manifest_payload: Mapping[str, Any],
@@ -7492,11 +7521,13 @@ def _reject_recovery_manifest_mismatch(
         mismatches.append("sourceRunId")
     if manifest.validation.checkpoint_ref != checkpoint_ref:
         mismatches.append("recoveryCheckpointRef")
-    if request.logical_step_id and request.logical_step_id != manifest.failed_logical_step_id:
+    logical_step_id = getattr(request, "logical_step_id", None)
+    if logical_step_id and logical_step_id != manifest.failed_logical_step_id:
         mismatches.append("logicalStepId")
+    source_execution_ordinal = getattr(request, "source_execution_ordinal", None)
     if (
-        request.source_execution_ordinal is not None
-        and request.source_execution_ordinal != manifest.failed_execution_ordinal
+        source_execution_ordinal is not None
+        and source_execution_ordinal != manifest.failed_execution_ordinal
     ):
         mismatches.append("sourceExecutionOrdinal")
     if mismatches:
@@ -10905,10 +10936,7 @@ async def recover_execution_from_failed_step(
     checkpoint_ref = request.recovery_checkpoint_ref or _recovery_checkpoint_ref_from_record(
         canonical
     )
-    manifest_ref = (
-        request.failed_run_recovery_manifest_ref
-        or _recovery_manifest_ref_from_record(canonical)
-    )
+    manifest_ref = _canonical_recovery_manifest_ref(request, canonical)
     if _recovery_evidence_marked_stale(canonical):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -11009,10 +11037,7 @@ async def recover_execution_from_selected_step(
     checkpoint_ref = request.recovery_checkpoint_ref or _recovery_checkpoint_ref_from_record(
         canonical
     )
-    manifest_ref = (
-        request.failed_run_recovery_manifest_ref
-        or _recovery_manifest_ref_from_record(canonical)
-    )
+    manifest_ref = _canonical_recovery_manifest_ref(request, canonical)
     if not checkpoint_ref:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

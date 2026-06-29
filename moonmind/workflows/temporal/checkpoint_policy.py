@@ -46,7 +46,8 @@ def resolve_checkpoint_policy(
     """Return the shared policy used for capture, manifests, and recovery apply."""
 
     del runtime_kind
-    boundary_token = str(boundary or "").strip()
+    boundary_value = boundary.value if hasattr(boundary, "value") else boundary
+    boundary_token = str(boundary_value or "").strip()
     if boundary_token == "before_recovery_restoration":
         return ResolvedCheckpointPolicy(
             workspace_policy=_workspace_policy_from_recovery_source(recovery_source),
