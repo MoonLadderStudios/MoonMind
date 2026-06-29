@@ -4665,6 +4665,8 @@ export interface components {
             createdAt: string;
             /** Startedat */
             startedAt?: string | null;
+            /** Queuedat */
+            queuedAt?: string | null;
             /**
              * Updatedat
              * Format: date-time
