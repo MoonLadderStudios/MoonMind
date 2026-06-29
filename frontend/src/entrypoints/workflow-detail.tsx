@@ -6939,7 +6939,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           <div className="toolbar-identity-row">
             <p className="page-meta">Workflow {taskId || '—'}</p>
             {execution ? (
-              <ExecutionStatusPill status={execution.rawState || execution.state || execution.status} />
+              <ExecutionStatusPill status={execution.rawState || execution.state || execution.status} enableMotion={false} />
             ) : null}
           </div>
         </div>
