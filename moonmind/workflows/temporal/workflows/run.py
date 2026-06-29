@@ -5868,7 +5868,7 @@ class MoonMindRunWorkflow:
             if publish_failure:
                 finalizing_status = "failed"
                 finalizing_error = output_message
-            elif output_status == "no_changes":
+            elif output_status == "no_commit":
                 finalizing_error = self._publish_reason or output_message
 
         continuation_failure = False
@@ -7728,7 +7728,7 @@ class MoonMindRunWorkflow:
                 == "no_commits"
             ):
                 repair_failure_message = self._publish_reason or (
-                    self._compose_no_change_publish_reason(publish_mode="pr")
+                    self._compose_no_commit_publish_reason(publish_mode="pr")
                 )
                 repair_result = await self._execution_publish_repair(
                     parameters=parameters,
@@ -9820,7 +9820,7 @@ class MoonMindRunWorkflow:
         outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
-        self._record_no_change_publish_evidence(outputs)
+        self._record_no_commit_publish_evidence(outputs)
 
         not_required_reason = self._publish_not_required_reason(outputs)
         if not_required_reason is not None:
@@ -9850,7 +9850,7 @@ class MoonMindRunWorkflow:
                 parameters, include_applied_templates=True
             ):
                 self._publish_status = "not_required"
-                self._publish_reason = self._compose_no_change_publish_reason(
+                self._publish_reason = self._compose_no_commit_publish_reason(
                     publish_mode=publish_mode,
                     pr_publish_optional=True,
                 )
@@ -9858,7 +9858,7 @@ class MoonMindRunWorkflow:
                     self._publish_context["mergeAutomationStatus"] = "not_applicable"
                 return
             self._publish_status = "skipped"
-            self._publish_reason = self._compose_no_change_publish_reason(
+            self._publish_reason = self._compose_no_commit_publish_reason(
                 publish_mode=publish_mode,
             )
             return
@@ -10322,15 +10322,15 @@ class MoonMindRunWorkflow:
             self._report_ref = report_ref
             self._publish_context["reportRef"] = report_ref
 
-    def _record_no_change_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
+    def _record_no_commit_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
         push_status = self._coerce_text(outputs.get("push_status"), max_chars=80)
         if push_status == "no_commits":
-            self._publish_context["noChangePublish"] = {"status": "no_commits"}
+            self._publish_context["noCommitPublish"] = {"status": "no_commits"}
             return
 
         for key in ("noChanges", "no_changes", "repositoryUnchanged"):
             if outputs.get(key) is True:
-                self._publish_context["noChangePublish"] = {"status": key}
+                self._publish_context["noCommitPublish"] = {"status": key}
                 return
 
         publish_outcome = outputs.get("publishOutcome") or outputs.get(
@@ -10339,7 +10339,7 @@ class MoonMindRunWorkflow:
         if isinstance(publish_outcome, Mapping):
             for key in ("noChanges", "no_changes", "repositoryUnchanged"):
                 if publish_outcome.get(key) is True:
-                    self._publish_context["noChangePublish"] = {"status": key}
+                    self._publish_context["noCommitPublish"] = {"status": key}
                     return
 
     @staticmethod
@@ -10575,7 +10575,7 @@ class MoonMindRunWorkflow:
         scrubbed = scrub_github_tokens(summary).strip()
         return scrubbed or None
 
-    def _compose_no_change_publish_reason(
+    def _compose_no_commit_publish_reason(
         self,
         *,
         publish_mode: str,
@@ -11540,7 +11540,7 @@ class MoonMindRunWorkflow:
             include_applied_templates=True,
         ):
             return
-        if not self._has_no_change_publish_evidence():
+        if not self._has_no_commit_publish_evidence():
             return
         evidence = self._already_implemented_no_work_evidence()
         if not evidence:
@@ -11562,7 +11562,7 @@ class MoonMindRunWorkflow:
             {
                 "parentWorkflowId": workflow.info().workflow_id,
                 "parentRunId": workflow.info().run_id,
-                "resolverDisposition": "already_implemented_no_changes",
+                "resolverDisposition": "already_implemented_no_commit",
                 "jiraIssueKey": issue_key,
                 "postMergeJira": post_merge_jira,
                 "candidateContext": {
@@ -11609,8 +11609,10 @@ class MoonMindRunWorkflow:
                 f"{completion_summary}"
             ).strip()
 
-    def _has_no_change_publish_evidence(self) -> bool:
-        evidence = self._publish_context.get("noChangePublish")
+    def _has_no_commit_publish_evidence(self) -> bool:
+        evidence = self._publish_context.get("noCommitPublish")
+        if not isinstance(evidence, Mapping):
+            evidence = self._publish_context.get("noChangePublish")
         if not isinstance(evidence, Mapping):
             return False
         status = self._coerce_text(evidence.get("status"), max_chars=80)
