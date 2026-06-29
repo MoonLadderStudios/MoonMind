@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -16,6 +17,7 @@ from api_service.db.models import (
     MoonMindWorkflowState,
     TemporalExecutionCloseStatus,
 )
+from moonmind.schemas.temporal_models import FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -58,6 +60,30 @@ def _checkpoint_payload(*, workflow_id: str, run_id: str) -> dict[str, object]:
         ],
         "preparedArtifactRefs": ["artifact://prepared"],
         "recoveryWorkspace": {"branch": "feature", "commit": "abc123"},
+    }
+
+
+def _recovery_manifest_payload(*, workflow_id: str, run_id: str) -> dict[str, object]:
+    return {
+        "schemaVersion": "v1",
+        "contentType": FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
+        "workflowId": workflow_id,
+        "runId": run_id,
+        "failedLogicalStepId": "implement",
+        "failedExecutionOrdinal": 1,
+        "validation": {
+            "result": "valid",
+            "checkpointRef": "artifact://checkpoint/source",
+            "boundary": "before_recovery_restoration",
+        },
+        "resumeAllowed": True,
+        "recoveryEligibility": {
+            "eligible": True,
+            "defaultAction": "resume_from_checkpoint",
+            "checkpointRef": "artifact://checkpoint/source",
+            "operatorGuidance": "resume",
+        },
+        "createdAt": datetime.now(UTC),
     }
 
 
@@ -108,6 +134,11 @@ async def test_accepted_recovery_carries_canonical_recovery_and_recovery_refs(
                     workflow_id=created.workflow_id,
                     run_id=created.run_id,
                 ),
+                failed_run_recovery_manifest_ref="artifact://manifest/source",
+                failed_run_recovery_manifest=_recovery_manifest_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
+                ),
             )
             resumed = await service.describe_execution(result["execution"]["workflowId"])
 
@@ -124,6 +155,7 @@ async def test_accepted_recovery_carries_canonical_recovery_and_recovery_refs(
         "failedStepId": "implement",
         "failedStepExecution": 1,
         "recoveryCheckpointRef": "artifact://checkpoint/source",
+        "failedRunRecoveryManifestRef": "artifact://manifest/source",
         "checkpointBoundary": "before_recovery_restoration",
         "taskInputSnapshotRef": "artifact://snapshot/source",
         "planRef": "artifact://plan/source",
