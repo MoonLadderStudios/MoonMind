@@ -5,7 +5,7 @@ handoffs:
     agent: moonspec.plan
     prompt: Create a plan for the spec. I am building with...
 ---
-<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.specify.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/commands/markdown/moonspec.specify.md; edit MoonSpec repo instead. -->
 
 
 ## User Input

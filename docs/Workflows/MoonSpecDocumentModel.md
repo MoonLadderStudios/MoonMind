@@ -1,4 +1,4 @@
-<!-- Generated from vendor/moonspec/bundle/docs/MoonSpecDocumentModel.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/docs/MoonSpecDocumentModel.md; edit MoonSpec repo instead. -->
 
 # MoonSpec Document Model
 

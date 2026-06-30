@@ -1,4 +1,4 @@
-# Generated from vendor/moonspec/bundle/skills/moonspec-breakdown/agents/openai.yaml; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/skills/moonspec-breakdown/agents/openai.yaml; edit MoonSpec repo instead.
 interface:
   display_name: "MoonSpec Breakdown"
   short_description: "Split designs into coverage-checked one-story specs."

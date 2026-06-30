@@ -1,4 +1,4 @@
-# Generated from vendor/moonspec/bundle/skills/moonspec-orchestrate/agents/openai.yaml; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/skills/moonspec-orchestrate/agents/openai.yaml; edit MoonSpec repo instead.
 interface:
   display_name: "MoonSpec Orchestrate"
   short_description: "Run the MoonSpec lifecycle end to end"

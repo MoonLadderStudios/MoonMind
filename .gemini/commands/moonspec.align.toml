@@ -1,4 +1,4 @@
-# Generated from vendor/moonspec/bundle/commands/gemini/moonspec.align.toml; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/commands/gemini/moonspec.align.toml; edit MoonSpec repo instead.
 description = "Analyze and remediate MoonSpec artifact drift."
 
 prompt = """

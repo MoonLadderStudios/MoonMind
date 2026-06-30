@@ -1,4 +1,4 @@
-# Generated from vendor/moonspec/bundle/skills/moonspec-doc-reconcile/agents/openai.yaml; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/skills/moonspec-doc-reconcile/agents/openai.yaml; edit MoonSpec repo instead.
 interface:
   display_name: "MoonSpec Doc Reconcile"
   short_description: "Reconcile canonical docs after verified MoonSpec implementation."

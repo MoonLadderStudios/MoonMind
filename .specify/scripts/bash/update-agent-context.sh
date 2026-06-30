@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generated from vendor/moonspec/bundle/scripts/bash/update-agent-context.sh; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/scripts/bash/update-agent-context.sh; edit MoonSpec repo instead.
 
 # Update agent context files with information from plan.md
 #

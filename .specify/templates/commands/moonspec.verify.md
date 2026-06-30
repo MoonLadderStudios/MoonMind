@@ -3,7 +3,7 @@ description: Verify the final implementation against the original feature reques
 scripts:
   sh: .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
 ---
-<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.verify.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/commands/markdown/moonspec.verify.md; edit MoonSpec repo instead. -->
 
 
 ## User Input

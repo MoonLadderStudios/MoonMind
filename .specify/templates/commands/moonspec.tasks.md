@@ -15,7 +15,7 @@ handoffs:
 scripts:
   sh: .specify/scripts/bash/check-prerequisites.sh --json
 ---
-<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.tasks.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/commands/markdown/moonspec.tasks.md; edit MoonSpec repo instead. -->
 
 
 ## User Input

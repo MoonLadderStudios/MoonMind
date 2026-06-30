@@ -1,4 +1,4 @@
-# Generated from vendor/moonspec/bundle/skills/moonspec-specify/agents/openai.yaml; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/skills/moonspec-specify/agents/openai.yaml; edit MoonSpec repo instead.
 interface:
   display_name: "MoonSpec Specify"
   short_description: "Create MoonSpec specs from requests or designs."

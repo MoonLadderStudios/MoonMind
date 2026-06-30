@@ -12,7 +12,7 @@ from typing import Any
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SOURCE = REPO_ROOT / "vendor" / "moonspec"
+DEFAULT_SOURCE = REPO_ROOT / "moonspec"
 LOCAL_UNEXPECTED = (
     ".specify/templates/constitution-template.md",
     ".specify/templates/commands/align.md",
@@ -110,7 +110,7 @@ def _planned_files(
 
 def _header_for(path: Path, source_rel: Path) -> str:
     marker = (
-        f"Generated from vendor/moonspec/bundle/{source_rel.as_posix()}; "
+        f"Generated from moonspec/bundle/{source_rel.as_posix()}; "
         "edit MoonSpec repo instead."
     )
     if path.suffix == ".md":

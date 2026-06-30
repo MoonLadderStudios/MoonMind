@@ -1,4 +1,4 @@
-<!-- Generated from vendor/moonspec/bundle/templates/spec-template.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/templates/spec-template.md; edit MoonSpec repo instead. -->
 
 # Feature Specification: [FEATURE NAME]
 

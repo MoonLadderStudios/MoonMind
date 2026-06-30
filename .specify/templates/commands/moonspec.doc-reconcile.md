@@ -1,7 +1,7 @@
 ---
 description: Reconcile canonical docs after a verified MoonSpec implementation.
 ---
-<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.doc-reconcile.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/commands/markdown/moonspec.doc-reconcile.md; edit MoonSpec repo instead. -->
 
 
 ## User Input

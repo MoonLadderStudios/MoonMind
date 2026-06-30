@@ -162,7 +162,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip PyYAML
-          test -f vendor/moonspec/bundle/moonspec.bundle.yaml
+          test -f moonspec/bundle/moonspec.bundle.yaml
           python3 tools/sync_moonspec_submodule.py --check
 
   api-component:

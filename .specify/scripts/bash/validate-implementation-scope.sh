@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generated from vendor/moonspec/bundle/scripts/bash/validate-implementation-scope.sh; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/scripts/bash/validate-implementation-scope.sh; edit MoonSpec repo instead.
 
 set -euo pipefail
 

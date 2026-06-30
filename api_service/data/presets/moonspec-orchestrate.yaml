@@ -1,4 +1,4 @@
-# Generated from vendor/moonspec/bundle/presets/moonspec-orchestrate.yaml; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/presets/moonspec-orchestrate.yaml; edit MoonSpec repo instead.
 slug: moonspec-orchestrate
 title: MoonSpec Orchestrate
 description: Run the full MoonSpec lifecycle from a preselected single-story request or active feature context through specification, planning, alignment, implementation, and verification.

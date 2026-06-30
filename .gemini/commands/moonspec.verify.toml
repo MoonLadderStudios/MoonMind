@@ -1,4 +1,4 @@
-# Generated from vendor/moonspec/bundle/commands/gemini/moonspec.verify.toml; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/commands/gemini/moonspec.verify.toml; edit MoonSpec repo instead.
 description = "Verify a completed MoonSpec implementation."
 
 prompt = """

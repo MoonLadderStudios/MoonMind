@@ -1,4 +1,4 @@
-# Generated from vendor/moonspec/bundle/commands/gemini/moonspec.breakdown.toml; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/commands/gemini/moonspec.breakdown.toml; edit MoonSpec repo instead.
 description = "Split a broad design into coverage-checked one-story MoonSpec candidates."
 
 prompt = """

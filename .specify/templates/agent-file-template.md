@@ -1,4 +1,4 @@
-<!-- Generated from vendor/moonspec/bundle/templates/agent-file-template.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/templates/agent-file-template.md; edit MoonSpec repo instead. -->
 
 # [PROJECT NAME] Development Guidelines
 

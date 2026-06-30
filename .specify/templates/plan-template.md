@@ -1,4 +1,4 @@
-<!-- Generated from vendor/moonspec/bundle/templates/plan-template.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/templates/plan-template.md; edit MoonSpec repo instead. -->
 
 # Implementation Plan: [FEATURE]
 

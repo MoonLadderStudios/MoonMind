@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generated from vendor/moonspec/bundle/scripts/bash/check-prerequisites.sh; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/scripts/bash/check-prerequisites.sh; edit MoonSpec repo instead.
 
 # Consolidated prerequisite checking script
 #

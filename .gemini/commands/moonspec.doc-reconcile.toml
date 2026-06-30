@@ -1,4 +1,4 @@
-# Generated from vendor/moonspec/bundle/commands/gemini/moonspec.doc-reconcile.toml; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/commands/gemini/moonspec.doc-reconcile.toml; edit MoonSpec repo instead.
 description = "Reconcile canonical docs after verified MoonSpec implementation."
 
 prompt = """
