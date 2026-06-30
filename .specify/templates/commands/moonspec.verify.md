@@ -55,7 +55,7 @@ This command is the final MoonSpec check. It verifies that the completed impleme
 1. **Setup**: Run `{SCRIPT}` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
 
 2. **Load verification sources**:
-   - **Required**: `spec.md`, `plan.md`, `tasks.md`, `.specify/memory/constitution.md`
+   - **Required**: `spec.md`, `plan.md`, `tasks.md`, `AGENTS.md`
    - **If exists**: `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, `checklists/`
    - Extract the original request from the `**Input**` field in `spec.md`
    - Extract the single user story, acceptance scenarios or `SCN-*`, functional requirements `FR-*`, success criteria `SC-*`, edge cases, assumptions, independent test, and source design mappings such as `DESIGN-REQ-*` or `DOC-REQ-*`
@@ -202,7 +202,7 @@ Check if `.specify/extensions.yml` exists in the project root.
 
 - Verification is read-only except for normal test artifacts.
 - The original request in `spec.md` is the source of truth for final alignment.
-- `spec.md` plus `.specify/memory/constitution.md` define the governing requirements.
+- `spec.md` plus `AGENTS.md` define the governing requirements.
 - `plan.md` and `tasks.md` are useful context but never proof of implementation.
 - Unit tests and integration tests are both expected evidence.
 - Prefer direct, citeable repository evidence from production code, wiring, configuration, and tests.

@@ -155,7 +155,7 @@ When a contract is *consumed* by other modules:
 
 ## 7. Canonical-vs-Canonical Precedence
 
-The Document Model and the Constitution define **cross-class** precedence: canonical declarative documents win over derived and imperative artifacts, and derived artifacts never self-resolve conflicts (the *Docs-First Development and Traceability* and *Canonical Documentation Separates Desired State from Migration Backlog* principles in `.specify/memory/constitution.md`, and `docs/Workflows/MoonSpecDocumentModel.md`). This section adds the **same-class** rule: which canonical declarative document controls when two of them disagree.
+The Document Model and the Constitution define **cross-class** precedence: canonical declarative documents win over derived and imperative artifacts, and derived artifacts never self-resolve conflicts (the *Docs-First Development and Traceability* and *Canonical Documentation Separates Desired State from Migration Backlog* principles in `AGENTS.md`, and `docs/Workflows/MoonSpecDocumentModel.md`). This section adds the **same-class** rule: which canonical declarative document controls when two of them disagree.
 
 Two canonical declarative documents can disagree about the same claim — for example, a system view and a module view describing dependency direction differently, or a design view and a contract specification describing a DTO shape differently. When they do, the conflict is resolved **by authority scope, not by file age, edit recency, word count, or which document is more convenient to change.** The document whose scope *owns* the kind of claim in question is authoritative; the other document is the one that must be corrected.
 
@@ -163,7 +163,7 @@ Two canonical declarative documents can disagree about the same claim — for ex
 
 Canonical declarative documents rank by the breadth of authority their scope carries. Higher levels govern broader, more foundational desired state; lower levels specialize within the bounds the higher levels set. When two documents make conflicting claims, the document at the higher level wins **for claims within its scope**, and the lower-level document is reconciled to match.
 
-1. **Constitution / Document Model** — `.specify/memory/constitution.md` and `docs/Workflows/MoonSpecDocumentModel.md`. Non-negotiable principles, document classification, and the cross-class precedence rule. Governs everything below.
+1. **Constitution / Document Model** — `AGENTS.md` and `docs/Workflows/MoonSpecDocumentModel.md`. Non-negotiable principles, document classification, and the cross-class precedence rule. Governs everything below.
 2. **Documentation Architecture Standard** — this document. Governs how canonical documents relate to one another: same-class precedence, conflict handling, and where rationale lives.
 3. **System Architecture View** — the top-level system architecture (e.g. `docs/MoonMindArchitecture.md`). Owns system-wide structure, the orchestration model, and cross-module boundaries and dependency direction.
 4. **Cross-Cutting Concept View** — concepts that span modules (security, observability, artifact model, skill runtime, Temporal determinism). Owns the system-wide semantics of a concern wherever it appears.

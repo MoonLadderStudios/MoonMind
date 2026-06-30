@@ -96,7 +96,7 @@ steps:
       Workflow instructions:
       {{ inputs.feature_request }}
 
-      If the selected input is a readable repo path under docs/ (except docs/tmp/) or .specify/memory/constitution.md, use that file as the canonical declarative document and preserve its path plus stable canonical claim IDs in every story's sourceReference.path and sourceReference.claimIds.
+      If the selected input is a readable repo path under docs/ (except docs/tmp/) or AGENTS.md, use that file as the canonical declarative document and preserve its path plus stable canonical claim IDs in every story's sourceReference.path and sourceReference.claimIds.
       If the selected input is trusted Jira resolvedSourceDesignPath, treat it as a readable repo path selected through deterministic source resolution and preserve canonical claim IDs only when the resolved path is a canonical declarative source.
       If the selected input is a non-canonical file-backed source, preserve that source path in source.path, source.referencePath, and story sourceReference.path, record sourceReference.claimIds as an empty list, and use sourceReference.coverageIds for run-local traceability.
       If the selected input is the trusted Jira issue description, preserve the Jira issue key and summary as the source title, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.

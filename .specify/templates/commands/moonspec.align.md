@@ -62,7 +62,7 @@ This command MUST run only after `/moonspec.tasks` has successfully produced a c
 
 **No application implementation**: Do **not** edit application source code, production tests, migrations, or runtime configuration unless the user explicitly asks for implementation beyond artifact alignment.
 
-**Constitution Authority**: The project constitution (`.specify/memory/constitution.md`) is **non-negotiable** within this command. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, design artifacts, or tasks—not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside `/moonspec.align`.
+**Constitution Authority**: The project constitution (`AGENTS.md`) is **non-negotiable** within this command. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, design artifacts, or tasks—not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside `/moonspec.align`.
 
 ## Execution Steps
 
@@ -73,7 +73,7 @@ Run `{SCRIPT}` once from repo root and parse JSON for `FEATURE_DIR` and `AVAILAB
 - SPEC = FEATURE_DIR/spec.md
 - PLAN = FEATURE_DIR/plan.md
 - TASKS = FEATURE_DIR/tasks.md
-- CONSTITUTION = `.specify/memory/constitution.md`
+- CONSTITUTION = `AGENTS.md`
 
 Abort with an error message if any required file is missing. Instruct the user to run the missing prerequisite command.
 

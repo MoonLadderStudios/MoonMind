@@ -8,7 +8,7 @@ This document defines the document classes MoonSpec workflows operate on, the pr
 
 ### Canonical declarative documents
 
-- **Location**: long-lived files under `docs/`, plus `.specify/memory/constitution.md`.
+- **Location**: long-lived files under `docs/`, plus `AGENTS.md`.
 - **Content**: desired state — architecture, contracts, operator-visible behavior, and target semantics.
 - **Lifecycle**: version-controlled and durable. These are the primary source of truth for what the system is and how it should behave.
 - **Constraints**: canonical documents must stay declarative. Migration narratives, phased rollout sequencing, status checklists, and implementation backlogs must not become their primary framing (Constitution XII).

@@ -47,8 +47,8 @@ from typing import Iterable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Canonical declarative documentation lives under ``docs/`` (and the
-# constitution) per the Document Model. These ``docs/`` subtrees are NOT part of
+# Canonical declarative documentation lives under ``docs/`` (and ``AGENTS.md``)
+# per the Document Model. These ``docs/`` subtrees are NOT part of
 # the canonical Architecture Description and are excluded from canonical checks.
 CANONICAL_DOCS_ROOT = "docs"
 NON_CANONICAL_DOC_DIRS = ("docs/tmp", "docs/assets", "docs/ReleaseNotes")

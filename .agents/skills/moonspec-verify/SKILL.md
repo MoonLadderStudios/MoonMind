@@ -29,7 +29,7 @@ This skill answers:
 
 - Treat the user's text as optional verification focus.
 - Work from the active feature directory resolved by the prerequisite script unless the user provides a specific feature directory or `spec.md`.
-- Require `spec.md`, `plan.md`, `tasks.md`, and `.specify/memory/constitution.md`.
+- Require `spec.md`, `plan.md`, `tasks.md`, and `AGENTS.md`.
 - Use absolute paths in reports.
 - Keep the verdict conservative when evidence is incomplete.
 
@@ -87,7 +87,7 @@ Parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then derive:
 - `PLAN = FEATURE_DIR/plan.md`
 - `TASKS = FEATURE_DIR/tasks.md`
 - optional docs from `AVAILABLE_DOCS`
-- `CONSTITUTION = .specify/memory/constitution.md`
+- `CONSTITUTION = AGENTS.md`
 
 If shell arguments contain single quotes, use shell-safe escaping such as `'I'\''m Groot'`, or double quotes when possible.
 
@@ -122,7 +122,7 @@ Read:
 - `spec.md`: original request in `**Input**`, the single user story, independent test, acceptance scenarios or `SCN-*`, functional requirements `FR-*`, success criteria `SC-*`, edge cases, assumptions, key entities, and source design mappings such as `DESIGN-REQ-*` or `DOC-REQ-*`.
 - `plan.md`: intended architecture, project structure, test commands, test tooling, integration dependencies, and constraints. Treat as context, not proof.
 - `tasks.md`: expected file paths, sequencing, test commands, and process completion. Treat checked tasks as process evidence only, not implementation proof.
-- `.specify/memory/constitution.md`: `MUST` constraints and quality gates.
+- `AGENTS.md`: `MUST` constraints and quality gates.
 - `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `checklists/` when present and relevant.
 - `specs/breakdown.md` when source design coverage or cross-spec dependencies matter.
 - The canonical source document named by `spec.md` `**Source Document**` when present, plus `artifacts/doc-discoveries/<feature>.json` when it exists, so source-document drift can be assessed.
@@ -362,7 +362,7 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Verification is read-only except ignored disposable test artifacts.
 - The original request as preserved in `spec.md`, interpreted against the canonical source document per `docs/Workflows/MoonSpecDocumentModel.md`, is the alignment baseline. The canonical document — not the spec — remains the source of truth for desired state.
 - MoonSpec uses one story per spec.
-- `spec.md` plus `.specify/memory/constitution.md` define governing requirements.
+- `spec.md` plus `AGENTS.md` define governing requirements.
 - `plan.md` and `tasks.md` are useful context but never proof of implementation.
 - Unit tests and integration tests are both expected evidence.
 - Production code, wiring, configuration, migrations, contracts, and tests are stronger evidence than task checkboxes.

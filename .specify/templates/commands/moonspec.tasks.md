@@ -68,7 +68,7 @@ MoonSpec tasks turn one declarative design-backed spec into an executable implem
 
 2. **Load design documents**: Read from FEATURE_DIR:
    - **Required**: plan.md (tech stack, libraries, structure), spec.md (single user story)
-   - **Required**: `.specify/memory/constitution.md` for project constraints and test discipline
+   - **Required**: `AGENTS.md` for project constraints and test discipline
    - **Optional**: data-model.md (entities), contracts/ (interface contracts), research.md (decisions), quickstart.md (test scenarios), `specs/breakdown.md` (source design coverage context)
    - Note: Not all projects have all documents. Generate tasks based on what's available.
 

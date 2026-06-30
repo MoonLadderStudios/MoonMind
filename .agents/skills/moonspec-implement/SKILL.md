@@ -87,7 +87,7 @@ Parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then derive:
 - `PLAN = FEATURE_DIR/plan.md`
 - `TASKS = FEATURE_DIR/tasks.md`
 - optional docs from `AVAILABLE_DOCS`
-- `CONSTITUTION = .specify/memory/constitution.md`
+- `CONSTITUTION = AGENTS.md`
 
 If shell arguments contain single quotes, use shell-safe escaping such as `'I'\''m Groot'`, or double quotes when possible.
 
@@ -116,7 +116,7 @@ Read enough context to implement without guessing:
 - `tasks.md`: task IDs, phases, dependencies, parallel markers, file paths, required test commands, and final verification task.
 - `plan.md`: tech stack, architecture, project structure, test tooling, integration dependencies, and constraints.
 - `spec.md`: preserved `**Input**`, the single story, independent test, acceptance scenarios, edge cases, functional requirements, success criteria, assumptions, and source design mappings.
-- `.specify/memory/constitution.md`: project constraints, quality gates, and TDD expectations.
+- `AGENTS.md`: project constraints, quality gates, and TDD expectations.
 - `data-model.md` when present: entities, relationships, validation rules, and state transitions.
 - `contracts/` when present: public interfaces and contract or integration test obligations.
 - `research.md` when present: technical decisions and constraints.

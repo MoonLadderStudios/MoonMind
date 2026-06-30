@@ -79,7 +79,7 @@ def test_document_health_review_canonical_reference_discovery() -> None:
 
     assert "## Canonical Reference Discovery" in text
     assert "README.md" in text
-    assert ".specify/memory/constitution.md" in text
+    assert "AGENTS.md" in text
     assert "docs/MoonMindArchitecture.md" in text
 
 
