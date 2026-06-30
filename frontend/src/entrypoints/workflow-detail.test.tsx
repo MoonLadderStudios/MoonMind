@@ -1082,7 +1082,7 @@ describe('Workflow Detail Entrypoint', () => {
       /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.workflow-workspace-shell,[\s\S]*\.workflow-workspace-detail[\s\S]*transition:\s*none !important;[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,
     );
     expect(dashboardCss).toMatch(
-      /\.workflow-workspace-detail\s*\{[\s\S]*max-width:\s*66rem;/,
+      /\.workflow-workspace-detail\s*\{[^}]*max-width:\s*66rem;/,
     );
   });
 
