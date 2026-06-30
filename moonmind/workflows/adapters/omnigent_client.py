@@ -188,11 +188,26 @@ class OmnigentHttpClient:
             "/resources/environments/default/changes",
         )
 
+    async def list_workspace_files(self, session_id: str) -> dict[str, Any]:
+        return await self._request(
+            "GET",
+            f"/v1/sessions/{quote(session_id, safe='')}"
+            "/resources/environments/default/filesystem",
+        )
+
     async def get_workspace_file(self, session_id: str, path: str) -> bytes:
         return await self._request_bytes(
             "GET",
             f"/v1/sessions/{quote(session_id, safe='')}"
             "/resources/environments/default/filesystem/"
+            f"{quote(path, safe='')}",
+        )
+
+    async def get_workspace_diff(self, session_id: str, path: str) -> bytes:
+        return await self._request_bytes(
+            "GET",
+            f"/v1/sessions/{quote(session_id, safe='')}"
+            "/resources/environments/default/diff/"
             f"{quote(path, safe='')}",
         )
 

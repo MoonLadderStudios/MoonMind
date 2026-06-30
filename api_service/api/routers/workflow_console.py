@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import json
 import re
 import shutil
 import stat
@@ -12,9 +13,11 @@ import tempfile
 import uuid
 import zipfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from html import escape
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Any, Literal
+from urllib.parse import quote
 
 import yaml
 from fastapi import (
@@ -30,6 +33,7 @@ from fastapi import (
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.base import get_async_session
@@ -39,10 +43,14 @@ from api_service.api.routers.workflow_console_view_model import (
     resolve_dashboard_runtime_config,
 )
 from api_service.auth_providers import get_current_user
-from api_service.db.models import User
+from api_service.db.models import AgentSkillDefinition, TemporalArtifact, User
 from api_service.services.settings_catalog import settings_permissions_for_user
-from moonmind.capabilities.input_contracts import parse_skill_capability_input_contract
 from moonmind.config.settings import settings
+from moonmind.capabilities.input_contracts import (
+    contract_from_artifact_metadata,
+    content_digest_for_text,
+    parse_skill_capability_input_contract,
+)
 from moonmind.services.skill_resolution import (
     extract_required_capabilities_from_skill_markdown,
 )
@@ -84,7 +92,21 @@ _MAX_SKILL_ZIP_BYTES = 50 * 1024 * 1024
 _MAX_SKILL_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 _MAX_SKILL_FILE_BYTES = 25 * 1024 * 1024
 _MAX_SKILL_ZIP_ENTRIES = 500
+_MAX_INLINE_SKILL_INPUT_SCHEMA_BYTES = 8 * 1024
 _IMPORTED_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_SKILL_INPUT_CONTRACT_CACHE_MAX = 256
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedSkillInputContract:
+    content_digest: str
+    contract: dict[str, object]
+
+
+_SKILL_INPUT_CONTRACT_CACHE: dict[
+    tuple[str, str, int, int],
+    _CachedSkillInputContract,
+] = {}
 
 _DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
     "code": "dashboard_route_not_found",
@@ -106,22 +128,59 @@ class DashboardSkillOption(BaseModel):
     """Serializable skill option exposed to dashboard clients."""
 
     id: str = Field(description="Skill identifier")
-    kind: Literal["skill"] = "skill"
-    label: str | None = None
-    description: str | None = None
-    input_schema: dict[str, object] = Field(default_factory=dict, alias="inputSchema")
-    ui_schema: dict[str, object] = Field(default_factory=dict, alias="uiSchema")
-    defaults: dict[str, object] = Field(default_factory=dict)
-    contract_digest: str | None = Field(None, alias="contractDigest")
-    content_digest: str | None = Field(None, alias="contentDigest")
-    source: dict[str, object] | None = None
-    diagnostics: list[dict[str, object]] = Field(default_factory=list)
+    kind: Literal["skill"] = Field("skill", description="Capability kind")
+    label: str | None = Field(None, description="Human-readable skill label")
+    description: str | None = Field(None, description="Skill description")
     required_capabilities: list[str] = Field(
         default_factory=list,
         alias="requiredCapabilities",
         description="Default required capabilities declared by Skill metadata",
     )
-    markdown: str | None = Field(None, description="Markdown content of the skill, if requested")
+    markdown: str | None = Field(
+        None, description="Markdown content of the skill, if requested"
+    )
+    input_schema: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="inputSchema",
+        description="Normalized Skill input JSON Schema, when small enough to inline",
+    )
+    ui_schema: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="uiSchema",
+        description="Presentation-only UI schema for generated input forms",
+    )
+    defaults: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Safe normalized input defaults",
+    )
+    contract_digest: str | None = Field(
+        None,
+        alias="contractDigest",
+        description="Digest of the normalized Skill input contract",
+    )
+    diagnostics: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="Non-blocking Skill contract parser diagnostics",
+    )
+    source: dict[str, Any] | None = Field(
+        None,
+        description="Skill source and content evidence summary",
+    )
+    content_digest: str | None = Field(
+        None,
+        alias="contentDigest",
+        description="Digest of the Skill content used to derive the contract",
+    )
+    has_input_schema: bool = Field(
+        False,
+        alias="hasInputSchema",
+        description="Whether the Skill publishes structured input fields",
+    )
+    input_contract_ref: str | None = Field(
+        None,
+        alias="inputContractRef",
+        description="Endpoint for the full Skill input contract when not inlined",
+    )
 
 class DashboardSkillListResponse(BaseModel):
     """Dashboard response containing available skill options."""
@@ -130,6 +189,9 @@ class DashboardSkillListResponse(BaseModel):
     legacy_items: list[DashboardSkillOption] = Field(
         default_factory=list, alias="legacyItems"
     )
+
+class DashboardSkillInputContractResponse(DashboardSkillOption):
+    """Detailed Skill contract response with the full schema inlined."""
 
 class DashboardBranchOption(BaseModel):
     """Serializable Git branch option exposed to dashboard clients."""
@@ -177,6 +239,44 @@ class DashboardUiInfoResponse(BaseModel):
         alias="settingsPermissions",
     )
     worker_pause: dict = Field(default_factory=dict, alias="workerPause")
+
+
+async def _read_file_backed_skill_input_contract(
+    *,
+    skill_id: str,
+    label: str,
+    skill_file: Path,
+    source_kind: str,
+) -> tuple[str, dict[str, object]]:
+    """Read and parse a SKILL.md contract using content evidence as cache proof."""
+
+    stat_result = await asyncio.to_thread(skill_file.stat)
+    cache_key = (
+        str(skill_file.resolve()),
+        skill_id,
+        stat_result.st_mtime_ns,
+        stat_result.st_size,
+    )
+    skill_markdown = await asyncio.to_thread(skill_file.read_text, encoding="utf-8")
+    content_digest = content_digest_for_text(skill_markdown)
+    cached = _SKILL_INPUT_CONTRACT_CACHE.get(cache_key)
+    if cached is not None and cached.content_digest == content_digest:
+        return skill_markdown, dict(cached.contract)
+
+    contract = parse_skill_capability_input_contract(
+        skill_id=skill_id,
+        label=label,
+        markdown=skill_markdown,
+        source={"kind": source_kind, "path": str(skill_file)},
+    )
+    _SKILL_INPUT_CONTRACT_CACHE[cache_key] = _CachedSkillInputContract(
+        content_digest=content_digest,
+        contract=dict(contract),
+    )
+    if len(_SKILL_INPUT_CONTRACT_CACHE) > _SKILL_INPUT_CONTRACT_CACHE_MAX:
+        oldest_key = next(iter(_SKILL_INPUT_CONTRACT_CACHE))
+        _SKILL_INPUT_CONTRACT_CACHE.pop(oldest_key, None)
+    return skill_markdown, dict(contract)
 
 class _ValidatedSkillZip(BaseModel):
     skill_name: str
@@ -261,6 +361,157 @@ def _worker_pause_sources() -> dict[str, str]:
         "post": "/api/system/worker-pause",
         "shardHealth": "/api/v1/operations/codex/shards",
     }
+
+def _skill_input_contract_ref(skill_id: str, contract_digest: str | None) -> str:
+    ref = f"/api/workflows/skills/{quote(skill_id, safe='')}/input-contract"
+    if contract_digest:
+        ref = f"{ref}?digest={quote(contract_digest, safe='')}"
+    return ref
+
+def _schema_inline_size(input_schema: dict[str, Any]) -> int:
+    return len(
+        json.dumps(input_schema, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+def _skill_option_from_contract(
+    *,
+    skill_id: str,
+    label: str | None = None,
+    description: str | None = None,
+    required_capabilities: list[str] | None = None,
+    markdown: str | None = None,
+    contract: dict[str, Any],
+    source: dict[str, Any] | None,
+    inline_large_schema: bool = False,
+) -> DashboardSkillOption:
+    input_schema = dict(contract.get("inputSchema") or {})
+    contract_digest = contract.get("contractDigest")
+    has_input_schema = bool(contract.get("hasInputSchema"))
+    input_contract_ref = None
+    if (
+        has_input_schema
+        and not inline_large_schema
+        and _schema_inline_size(input_schema) > _MAX_INLINE_SKILL_INPUT_SCHEMA_BYTES
+    ):
+        input_contract_ref = _skill_input_contract_ref(
+            skill_id, str(contract_digest or "")
+        )
+
+    return DashboardSkillOption(
+        id=skill_id,
+        label=label or str(contract.get("label") or skill_id),
+        description=description
+        if description is not None
+        else (
+            str(contract.get("description"))
+            if isinstance(contract.get("description"), str)
+            else None
+        ),
+        requiredCapabilities=required_capabilities or [],
+        markdown=markdown,
+        inputSchema=input_schema,
+        uiSchema=dict(contract.get("uiSchema") or {}),
+        defaults=dict(contract.get("defaults") or {}),
+        contractDigest=contract_digest,
+        diagnostics=list(contract.get("diagnostics") or []),
+        source=source,
+        contentDigest=contract.get("contentDigest"),
+        hasInputSchema=has_input_schema,
+        inputContractRef=input_contract_ref,
+    )
+
+async def _file_backed_skill_option(
+    skill_id: str,
+    *,
+    include_content: bool,
+    inline_large_schema: bool = False,
+) -> DashboardSkillOption:
+    markdown_content = None
+    required_capabilities: list[str] = []
+    contract = {
+        "inputSchema": {"type": "object", "properties": {}},
+        "uiSchema": {},
+        "defaults": {},
+        "contractDigest": None,
+        "diagnostics": [],
+        "contentDigest": None,
+        "hasInputSchema": False,
+    }
+    source: dict[str, Any] | None = None
+    skill_file = resolve_skill_markdown_path(skill_id)
+    if skill_file is not None:
+        skill_markdown, contract = await _read_file_backed_skill_input_contract(
+            skill_id=skill_id,
+            label=skill_id,
+            skill_file=skill_file,
+            source_kind="file",
+        )
+        required_capabilities = list(
+            extract_required_capabilities_from_skill_markdown(
+                skill_markdown,
+                skill_name=skill_id,
+                source_label=str(skill_file),
+            )
+        )
+        source = {
+            "kind": "file",
+            "path": str(skill_file),
+            "contentDigest": contract.get("contentDigest"),
+        }
+        if include_content:
+            markdown_content = skill_markdown
+    return _skill_option_from_contract(
+        skill_id=skill_id,
+        required_capabilities=required_capabilities,
+        markdown=markdown_content,
+        contract=contract,
+        source=source,
+        inline_large_schema=inline_large_schema,
+    )
+
+async def _deployment_skill_options(
+    session: AsyncSession,
+) -> list[DashboardSkillOption]:
+    stmt = (
+        select(AgentSkillDefinition, TemporalArtifact.metadata_json)
+        .outerjoin(
+            TemporalArtifact,
+            TemporalArtifact.artifact_id == AgentSkillDefinition.artifact_ref,
+        )
+        .order_by(AgentSkillDefinition.slug.asc())
+    )
+    result = await session.execute(stmt)
+    options: list[DashboardSkillOption] = []
+    for definition, metadata_json in result.all():
+        metadata = metadata_json if isinstance(metadata_json, dict) else {}
+        contract = contract_from_artifact_metadata(
+            metadata.get("input_contract")
+            if isinstance(metadata.get("input_contract"), dict)
+            else {},
+            skill_id=definition.slug,
+            content_digest=definition.content_digest,
+        )
+        required_capabilities = [
+            str(item)
+            for item in metadata.get("required_capabilities") or []
+            if str(item).strip()
+        ]
+        source = {
+            "kind": "deployment",
+            "artifactRef": definition.artifact_ref,
+            "contentDigest": definition.content_digest,
+        }
+        options.append(
+            _skill_option_from_contract(
+                skill_id=definition.slug,
+                label=definition.title,
+                description=definition.description,
+                required_capabilities=required_capabilities,
+                contract=contract,
+                source=source,
+            )
+        )
+    return options
 
 def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
     """Return auth dependencies so tests can override them consistently."""
@@ -916,6 +1167,7 @@ async def get_dashboard_ui_info(
 @router.get("/api/workflows/skills", response_model=DashboardSkillListResponse)
 async def list_dashboard_skills(
     include_content: bool = Query(False, alias="includeContent"),
+    session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> DashboardSkillListResponse:
     """List currently available skills for workflow submission forms."""
@@ -923,76 +1175,108 @@ async def list_dashboard_skills(
     worker_skills = list(list_available_skill_names())
     legacy_sorted = sorted(set(worker_skills), key=str)
 
-    async def _get_skill_option(skill_id: str) -> DashboardSkillOption:
-        markdown_content = None
-        required_capabilities: list[str] = []
-        skill_file = resolve_skill_markdown_path(skill_id)
-        if skill_file is not None:
-            skill_markdown = await asyncio.to_thread(
-                skill_file.read_text,
-                encoding="utf-8",
-            )
-            contract = parse_skill_capability_input_contract(
-                skill_id=skill_id,
-                label=skill_id,
-                markdown=skill_markdown,
-                source={"kind": "local", "path": str(skill_file)},
-            )
-            required_capabilities = list(
-                extract_required_capabilities_from_skill_markdown(
-                    skill_markdown,
-                    skill_name=skill_id,
-                    source_label=str(skill_file),
-                )
-            )
-            if include_content:
-                markdown_content = skill_markdown
-        else:
-            contract = parse_skill_capability_input_contract(
-                skill_id=skill_id,
-                label=skill_id,
-                markdown="",
-                source={"kind": "configured"},
-            )
-        return DashboardSkillOption(
-            id=skill_id,
-            label=str(contract.get("label") or skill_id),
-            description=contract.get("description")
-            if isinstance(contract.get("description"), str)
-            else None,
-            inputSchema=contract.get("inputSchema")
-            if isinstance(contract.get("inputSchema"), dict)
-            else {},
-            uiSchema=contract.get("uiSchema")
-            if isinstance(contract.get("uiSchema"), dict)
-            else {},
-            defaults=contract.get("defaults")
-            if isinstance(contract.get("defaults"), dict)
-            else {},
-            contractDigest=contract.get("contractDigest")
-            if isinstance(contract.get("contractDigest"), str)
-            else None,
-            contentDigest=contract.get("contentDigest")
-            if isinstance(contract.get("contentDigest"), str)
-            else None,
-            source=contract.get("source") if isinstance(contract.get("source"), dict) else None,
-            diagnostics=contract.get("diagnostics")
-            if isinstance(contract.get("diagnostics"), list)
-            else [],
-            requiredCapabilities=required_capabilities,
-            markdown=markdown_content,
-        )
-
     legacy_items = await asyncio.gather(
-        *(_get_skill_option(skill_id) for skill_id in legacy_sorted)
+        *(
+            _file_backed_skill_option(skill_id, include_content=include_content)
+            for skill_id in legacy_sorted
+        )
     )
+    deployment_items = await _deployment_skill_options(session)
+    deployment_skill_ids = [item.id for item in deployment_items]
+    merged_items = {
+        item.id: item
+        for item in [
+            *deployment_items,
+            *legacy_items,
+        ]
+    }
+    items = {
+        "worker": worker_skills,
+    }
+    if deployment_skill_ids:
+        items["deployment"] = deployment_skill_ids
 
     return DashboardSkillListResponse(
-        items={
-            "worker": worker_skills,
-        },
-        legacyItems=legacy_items,
+        items=items,
+        legacyItems=[merged_items[key] for key in sorted(merged_items)],
     )
+
+@router.get(
+    "/api/workflows/skills/{skill_id}/input-contract",
+    response_model=DashboardSkillInputContractResponse,
+)
+async def get_dashboard_skill_input_contract(
+    skill_id: str,
+    digest: str | None = Query(None),
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> DashboardSkillInputContractResponse:
+    """Return a Skill catalog item with the full input contract inlined."""
+
+    try:
+        validated_skill_id = validate_skill_name(skill_id)
+    except SkillResolutionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    skill_file = resolve_skill_markdown_path(validated_skill_id)
+    if skill_file is not None:
+        option = await _file_backed_skill_option(
+            validated_skill_id,
+            include_content=False,
+            inline_large_schema=True,
+        )
+        if digest and option.contract_digest != digest:
+            raise HTTPException(
+                status_code=404,
+                detail="Skill input contract digest was not found.",
+            )
+        return DashboardSkillInputContractResponse(**option.model_dump(by_alias=True))
+
+    stmt = (
+        select(AgentSkillDefinition, TemporalArtifact.metadata_json)
+        .outerjoin(
+            TemporalArtifact,
+            TemporalArtifact.artifact_id == AgentSkillDefinition.artifact_ref,
+        )
+        .where(AgentSkillDefinition.slug == validated_skill_id)
+    )
+    result = await session.execute(stmt)
+    row = result.first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Skill was not found.")
+    definition, metadata_json = row
+    metadata = metadata_json if isinstance(metadata_json, dict) else {}
+    contract = contract_from_artifact_metadata(
+        metadata.get("input_contract")
+        if isinstance(metadata.get("input_contract"), dict)
+        else {},
+        skill_id=definition.slug,
+        content_digest=definition.content_digest,
+    )
+    if digest and contract.get("contractDigest") != digest:
+        raise HTTPException(
+            status_code=404,
+            detail="Skill input contract digest was not found.",
+        )
+    required_capabilities = [
+        str(item)
+        for item in metadata.get("required_capabilities") or []
+        if str(item).strip()
+    ]
+    option = _skill_option_from_contract(
+        skill_id=definition.slug,
+        label=definition.title,
+        description=definition.description,
+        required_capabilities=required_capabilities,
+        contract=contract,
+        source={
+            "kind": "deployment",
+            "artifactRef": definition.artifact_ref,
+            "contentDigest": definition.content_digest,
+        },
+        inline_large_schema=True,
+    )
+    return DashboardSkillInputContractResponse(**option.model_dump(by_alias=True))
 
 @router.get("/api/github/branches", response_model=DashboardBranchListResponse)
 async def list_dashboard_github_branches(

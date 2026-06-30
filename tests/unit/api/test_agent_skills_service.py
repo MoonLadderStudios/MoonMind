@@ -104,6 +104,150 @@ async def test_update_skill_content_success(tmp_path, mock_artifact_service: Asy
             mock_artifact_service.create.assert_awaited_once()
             mock_artifact_service.write_complete.assert_awaited_once()
 
+
+@pytest.mark.asyncio
+async def test_update_skill_content_persists_input_contract_metadata(
+    tmp_path, mock_artifact_service: AsyncMock
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as db_session:
+            svc = AgentSkillsService(
+                session=db_session, artifact_service=mock_artifact_service
+            )
+            await svc.create_skill(slug="jira-skill", title="Jira Skill")
+
+            await svc.update_skill_content(
+                skill_slug="jira-skill",
+                content="""---
+name: jira-skill
+metadata:
+  required-capabilities:
+    - jira
+inputSchema:
+  type: object
+  required:
+    - issue
+  properties:
+    issue:
+      type: string
+      title: Jira issue
+uiSchema:
+  issue:
+    widget: jira.issue-picker
+defaults:
+  issue: MM-1050
+---
+# Jira Skill
+""",
+            )
+
+            metadata = mock_artifact_service.create.await_args.kwargs["metadata_json"]
+            assert metadata["required_capabilities"] == ["jira"]
+            contract = metadata["input_contract"]
+            assert contract["has_input_schema"] is True
+            assert contract["input_schema"]["required"] == ["issue"]
+            assert (
+                contract["input_schema"]["properties"]["issue"]["title"]
+                == "Jira issue"
+            )
+            assert contract["ui_schema"] == {"issue": {"widget": "jira.issue-picker"}}
+            assert contract["defaults"] == {"issue": "MM-1050"}
+            assert contract["contract_digest"].startswith("sha256:")
+            assert contract["diagnostics"] == []
+
+@pytest.mark.asyncio
+async def test_update_skill_content_persists_input_contract_metadata(
+    tmp_path, mock_artifact_service: AsyncMock
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as db_session:
+            svc = AgentSkillsService(session=db_session, artifact_service=mock_artifact_service)
+            await svc.create_skill(slug="docs-skill", title="Docs")
+
+            await svc.update_skill_content(
+                skill_slug="docs-skill",
+                content=(
+                    "---\n"
+                    "name: docs-skill\n"
+                    "description: Collect an issue.\n"
+                    "inputSchema:\n"
+                    "  type: object\n"
+                    "  required: [issue]\n"
+                    "  properties:\n"
+                    "    issue:\n"
+                    "      type: string\n"
+                    "uiSchema:\n"
+                    "  issue:\n"
+                    "    widget: text\n"
+                    "defaults:\n"
+                    "  issue: MM-1047\n"
+                    "---\n"
+                    "# Docs\n"
+                ),
+            )
+
+            metadata = mock_artifact_service.create.await_args.kwargs["metadata_json"]
+            assert metadata["implementation_issue"] == "MM-1053"
+            assert metadata["source_issue"] == "MM-1047"
+            assert metadata["input_schema"]["required"] == ["issue"]
+            assert metadata["ui_schema"] == {"issue": {"widget": "text"}}
+            assert metadata["defaults"] == {"issue": "MM-1047"}
+            assert metadata["input_contract_digest"].startswith("sha256:")
+            assert metadata["input_schema_diagnostics"] == []
+
+@pytest.mark.asyncio
+async def test_update_skill_content_rejects_secret_like_defaults_before_artifact_create(
+    tmp_path, mock_artifact_service: AsyncMock
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as db_session:
+            svc = AgentSkillsService(session=db_session, artifact_service=mock_artifact_service)
+            await svc.create_skill(slug="docs-skill", title="Docs")
+
+            with pytest.raises(ValueError, match="Invalid Skill input schema"):
+                await svc.update_skill_content(
+                    skill_slug="docs-skill",
+                    content=(
+                        "---\n"
+                        "name: docs-skill\n"
+                        "inputSchema:\n"
+                        "  type: object\n"
+                        "  properties:\n"
+                        "    token:\n"
+                        "      type: string\n"
+                        "defaults:\n"
+                        "  token: token=raw-secret\n"
+                        "---\n"
+                        "# Docs\n"
+                    ),
+                )
+
+            mock_artifact_service.create.assert_not_awaited()
+            mock_artifact_service.write_complete.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_update_skill_content_rejects_malformed_frontmatter_before_artifact_create(
+    tmp_path, mock_artifact_service: AsyncMock
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as db_session:
+            svc = AgentSkillsService(session=db_session, artifact_service=mock_artifact_service)
+            await svc.create_skill(slug="docs-skill", title="Docs")
+
+            with pytest.raises(ValueError, match="invalid YAML frontmatter|frontmatter"):
+                await svc.update_skill_content(
+                    skill_slug="docs-skill",
+                    content=(
+                        "---\n"
+                        "name: [unterminated\n"
+                        "---\n"
+                        "# Docs\n"
+                    ),
+                )
+
+            mock_artifact_service.create.assert_not_awaited()
+            mock_artifact_service.write_complete.assert_not_awaited()
+
 @pytest.mark.asyncio
 async def test_update_skill_content_replaces_current_content(
     tmp_path, mock_artifact_service: AsyncMock

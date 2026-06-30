@@ -1,353 +1,199 @@
-# Visibility and UI Query Model
+# Temporal Visibility and UI Query Model
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
+Status: Active design guidance
+Owners: MoonMind Platform
+Last updated: 2026-06-30
 
-**Status:** Draft 
-**Owner:** MoonMind Platform 
-**Last updated:** 2026-04-04 
-**Audience:** backend, dashboard, API, workflow authors
+This document defines MoonMind's Temporal Visibility query model and the custom Search Attribute budget we use for workflow-list, dashboard, and operational views.
 
----
-
-## 1. Purpose
-
-Define the canonical **Visibility-backed query model** for **Temporal-managed executions** in MoonMind.
-
-This document turns the higher-level decisions in the architecture and lifecycle docs into an implementation-facing contract for:
-
-- required **Search Attributes**
-- allowed **list/detail filters**
-- **Memo** fields used by UI projections
-- default **sorting** and **recency** behavior
-- **pagination token** and **count** semantics
-- mapping from Temporal execution data into the **workflow console UI**
-- exact vs compatibility status presentation rules
-- waiting and attention metadata for blocked executions
-
-This document is intentionally the bridge between:
-
-- the target rule that **Temporal Visibility** is the source of truth for Temporal-managed list/query/count, and
-- the current implementation reality that MoonMind serves `/workflows/*` console surfaces and execution-oriented `/api/executions` APIs
+It is intentionally provider-neutral. External integrations such as Omnigent, Jules, Codex Cloud, OpenClaw, or future execution substrates must not add provider-specific indexed fields unless the dimension is promoted to a generic MoonMind query concept first.
 
 ---
 
-## 2. Related docs
+## 1. Goals
 
-- `docs/Temporal/TemporalArchitecture.md`
-- `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
-- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
-- `docs/Temporal/WorkflowArtifactSystemDesign.md`
-- `docs/UI/WorkflowConsoleArchitecture.md`
+Temporal Visibility is used for bounded, operationally important workflow queries:
 
-This document narrows several open items from those docs so frontend and backend work can proceed without inventing ad hoc query behavior.
+- list the current user's workflow executions;
+- filter by owner, entry type, status, repository, integration, schedule, runtime, and skill when supported;
+- sort by stable built-in or registered indexed fields;
+- compute facets and metrics where exact counts are operationally safe;
+- recover gracefully when optional Search Attributes are absent during migration.
 
----
-
-## 3. Scope and non-goals
-
-## 3.1 In scope
-
-- Search Attribute registry for Temporal-managed executions
-- Memo registry for list/detail presentation
-- canonical list/detail field model for Temporal-backed rows
-- allowed filters, sort order, recency rules, pagination, and counts
-- mapping into the dashboard workflow grouping semantics
-- rules for adapter APIs and unified workflow surfaces
-
-## 3.2 Out of scope
-
-- event-history rendering or Temporal Web UI parity
-- artifact storage, upload, or ACL design
-- worker topology and task queue routing
-- full dashboard route redesign
-- raw Temporal server query syntax details
+Temporal Visibility is **not** the source of truth for full workflow details, step ledgers, artifacts, prompts, raw logs, provider-native metadata, or external session internals.
 
 ---
 
-## 4. Current implementation reality and target contract
+## 2. Query ownership boundaries
 
-## 4.1 Current implementation reality
-
-MoonMind already has a Temporal execution adapter surface, including endpoints such as:
-
-- `POST /api/executions`
-- `GET /api/executions`
-- `GET /api/executions/{workflowId}`
-- `POST /api/executions/{workflowId}/update`
-- `POST /api/executions/{workflowId}/signal`
-- `POST /api/executions/{workflowId}/cancel`
-
-During migration, some of that surface may still be backed by:
-
-- `TemporalExecutionService`
-- app DB projection rows
-- adapter/cache/reconciliation layers
-
-Current list behavior may already resemble the target shape, but the projection layer is not the semantic owner of query behavior.
-
-## 4.2 Target contract
-
-For **Temporal-managed work**, **Temporal Visibility** is the source of truth for:
-
-- list
-- filter/query
-- pagination
-- count semantics
-
-The app DB projection may continue to exist during migration, but it is an **adapter/cache/reconciliation layer**, not the owner of canonical query semantics.
-
-Contractually:
-
-1. any adapter API for Temporal-backed list/detail data must preserve **Visibility semantics**
-2. unified `/workflows/*` surfaces may reshape Temporal rows into workflow-product payloads, but they must **not invent conflicting state, sort, or pagination rules**
-3. if a projection disagrees with Temporal-backed canonical fields, **Temporal wins**
-4. provider-specific payloads and runtime-native details must not become ad hoc list/query semantics outside the canonical field model
+| Concern | Owner | Query surface |
+|---|---|---|
+| Workflow orchestration | Temporal | Workflow ids, run ids, status, visibility queries |
+| MoonMind workflow lifecycle | MoonMind workflow code | `mm_state`, `mm_updated_at`, `mm_started_at` |
+| User/security scoping | MoonMind API/workflow start path | `mm_owner_type`, `mm_owner_id` |
+| Workflow list grouping | MoonMind API/workflow start path | `mm_entry`, `WorkflowType` |
+| Repository/integration filters | MoonMind API/workflow start path | `mm_repo`, `mm_integration` |
+| Runtime/skill facets | MoonMind API/workflow start path and workflow lifecycle repair | `mm_target_runtime`, `mm_target_skill` |
+| Schedules/deferred starts | MoonMind API/Temporal start path | `mm_scheduled_for` |
+| Full evidence | MoonMind artifacts | Artifact refs, not Search Attributes |
+| Provider-native session metadata | Provider adapter / diagnostics | Mapping tables and artifacts, not Search Attributes |
 
 ---
 
-## 5. Canonical query entity model
+## 3. Search Attribute naming rules
 
-## 5.1 Canonical entity
+All MoonMind-owned Search Attributes follow these rules:
 
-The primary durable query entity for Temporal-managed work is a **Workflow Execution**.
-
-Some legacy API fields still carry `task` naming (they rename in the hard switch), but those rows map to Workflow Executions when the runtime is Temporal-backed.
-
-## 5.2 Canonical identifiers
-
-- `workflowId`: durable canonical identifier for Temporal-managed work
-- `runId`: current/latest Temporal run instance identifier; detail/debug oriented
-- `taskId`: legacy alias still present on some payloads (renames in the hard switch)
-
-Rules:
-
-- `workflowId` is the stable identity used for links, cache keys, and adapter lookups
-- `runId` must not replace `workflowId` as the primary product handle
-- detail pages may show `runId`, but only as run/debug metadata
-
-## 5.2.1 Compatibility identifier bridge
-
-For any Temporal-backed row exposed through a workflow product surface:
-
-- `taskId` **must equal** `workflowId`
-- APIs may return both `taskId` and `workflowId` during migration
-- compatibility adapters must not mint a second opaque identifier for the same Temporal execution
-- `runId` must never be used as the route identifier for workflow detail pages
-
-This keeps the workflow UI stable without introducing another alias table or migration dependency.
-
-## 5.3 Canonical list row fields
-
-A Temporal-backed list row should be expressible with the following stable fields:
-
-- `workflowId`
-- `taskId?`
-- `workflowType`
-- `entry`
-- `state`
-- `temporalStatus`
-- `title`
-- `summary`
-- `ownerType`
-- `ownerId`
-- `updatedAt`
-- `startedAt`
-- `closedAt?`
-- `waitingReason?`
-- `attentionRequired?`
-- `dashboardStatus`
-
-Optional bounded fields when available:
-
-- `repo?`
-- `integration?`
-
-Rules:
-
-- `state` is the exact `mm_state` value
-- `dashboardStatus` is a compatibility grouping only
-- list fields should not require artifact hydration to render a normal row
-- provider-native raw payloads should not become top-level list fields
-
-## 5.4 Canonical detail fields
-
-A Temporal-backed detail model may additionally include:
-
-- `runId`
-- `closeStatus`
-- `artifactRefs[]`
-- `progress`
-- `stepsHref`
-- `waitingReason?`
-- `attentionRequired?`
-- `searchAttributes`
-- `memo`
-- optional debug or reconciliation metadata
-- optional live query-derived fields such as active child state or current execution phase
-
-Detail views should show the exact Temporal-facing state (`state`, `temporalStatus`, `closeStatus`) even when list pages group them into broader workflow status groups.
+- prefix with `mm_` unless the attribute belongs to a non-MoonMind operational workflow family that predates this convention;
+- use lowercase snake_case for new MoonMind workflow attributes;
+- store bounded values only;
+- store no secrets;
+- store no large free text;
+- store no raw prompts, transcripts, stack traces, logs, or provider error bodies;
+- store no step-ledger rows or attempt history;
+- store no display-only user prose;
+- add documentation here before adding a new Search Attribute to bootstrap.
 
 ---
 
-## 6. Search Attribute registry
+## 4. Current registered custom Search Attributes
 
-## 6.1 Naming rules
+MoonMind currently registers 20 custom Search Attributes in the Temporal namespace bootstrap. Exactly 10 are `Keyword`, which is the important SQL Visibility keyword ceiling guarded by integration tests.
 
-All MoonMind-owned Search Attributes for this query model follow these rules:
+### 4.1 Keyword attributes — current 10-slot budget
 
-- prefix `mm_`
-- lowercase snake_case
-- bounded values only
-- no secrets
-- no large free text
-- no step-ledger rows or attempt history
-- no display-only user prose
+| Name | Type | Owner | Keep? | Purpose |
+|---|---:|---|---|---|
+| `mm_entry` | Keyword | API/workflow start path | Keep | Execution category for UI/query surfaces. |
+| `mm_owner_id` | Keyword | API/workflow start path | Keep | Principal identifier for user/security scoping. |
+| `mm_owner_type` | Keyword | API/workflow start path | Keep | `user`, `system`, or `service` owner class. |
+| `mm_state` | Keyword | Workflow lifecycle logic | Keep | Exact MoonMind lifecycle state. |
+| `mm_repo` | Keyword | API/workflow start path | Keep if repo filtering remains core | Stable bounded repo identifier. |
+| `mm_integration` | Keyword | API/workflow start path | Conditional keep | Integration-centric workflow filter/facet. |
+| `AgentRunId` | Keyword | Managed session workflows | Re-evaluate | Operational managed-session correlation. |
+| `RuntimeId` | Keyword | Managed session workflows | Re-evaluate | Managed-session runtime id; overlaps conceptually with generic runtime dimensions. |
+| `SessionId` | Keyword | Managed session workflows | Conditional keep | Direct Temporal lookup/correlation for managed sessions. |
+| `SessionStatus` | Keyword | Managed session / operational workflows | Strongest managed-session keep | Managed-session and cleanup/reconcile operational status. |
 
-## 6.2 Required Search Attributes
+### 4.2 Non-Keyword attributes
+
+| Name | Type | Owner | Purpose |
+|---|---:|---|---|
+| `mm_updated_at` | Datetime | Workflow lifecycle logic | Canonical user-visible recency/update time. |
+| `mm_started_at` | Datetime | Workflow lifecycle logic | Semantic “real work began” timestamp distinct from Temporal start time. |
+| `mm_scheduled_for` | Datetime | API/start path | Expected/deferred start time. |
+| `mm_target_runtime` | KeywordList | API/workflow start path; workflow repair | One-item list containing canonical runtime id for filtering/facets. |
+| `mm_target_skill` | KeywordList | API/workflow start path; workflow repair | One-item list containing primary skill id/slug/name for filtering/facets. |
+| `mm_title` | KeywordList | Workflow start/lifecycle logic | Tokenized title word search. Must be materialized before relying on title search. |
+| `mm_has_dependencies` | Bool | Dependency lifecycle | Dependency presence signal. Re-evaluate if unused by production queries. |
+| `mm_dependency_count` | Int | Dependency lifecycle | Bounded dependency count. Re-evaluate if unused by production queries. |
+| `SessionEpoch` | Int | Managed session workflows | Managed-session clear/reset/epoch correlation. |
+| `IsDegraded` | Bool | Managed session / operational workflows | Operational degraded marker. |
+
+---
+
+## 5. Required workflow-list attributes
+
+These are required for the primary Temporal-backed workflow list.
 
 | Name | Type | Required | Lifecycle owner | Update rule | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `mm_owner_type` | keyword | Yes | API/workflow start path | Set at start; immutable in v1 | `user`, `system`, or `service` |
-| `mm_owner_id` | keyword | Yes | API/workflow start path | Set at start; immutable in v1 | Principal identifier |
-| `mm_state` | keyword | Yes | Workflow lifecycle logic | Update on every domain-state transition | Exact MoonMind lifecycle state |
-| `mm_updated_at` | datetime | Yes | Workflow lifecycle logic | Update on meaningful user-visible mutation | Default recency/sort key |
-| `mm_entry` | keyword | Yes | Workflow start path | Set at start; immutable | Execution category for UI/query surfaces |
+|---|---:|---:|---|---|---|
+| `mm_owner_type` | Keyword | Yes | API/workflow start path | Set at start; immutable in v1 | `user`, `system`, or `service`. |
+| `mm_owner_id` | Keyword | Yes | API/workflow start path | Set at start; immutable in v1 | Principal identifier. |
+| `mm_state` | Keyword | Yes | Workflow lifecycle logic | Update on every domain-state transition | Exact MoonMind lifecycle state. |
+| `mm_updated_at` | Datetime | Yes | Workflow lifecycle logic | Update on meaningful user-visible mutation | Default recency/sort key. |
+| `mm_entry` | Keyword | Yes | Workflow start path | Set at start; immutable | Execution category for UI/query surfaces. |
 
-## 6.3 Optional Search Attributes
+### 5.1 `mm_state` value set
+
+Allowed values for v1:
+
+```text
+scheduled
+initializing
+waiting_on_dependencies
+planning
+awaiting_slot
+executing
+awaiting_external
+proposals
+finalizing
+no_commit
+completed
+failed
+canceled
+```
+
+Rules:
+
+- `mm_state` must be set immediately on workflow start.
+- Terminal mapping must remain consistent with MoonMind `closeStatus`:
+  - `no_commit` / `completed` -> `completed`
+  - `failed` / `terminated` / `timed_out` -> `failed`
+  - `canceled` -> `canceled`
+- Graceful workflow cancellation is represented by workflow-owned terminal `mm_state=canceled` / `closeStatus=canceled` even when raw Temporal `ExecutionStatus` is `Completed` because the workflow finalized and returned normally.
+
+### 5.2 `mm_owner_type` value set
+
+Allowed values for v1:
+
+```text
+user
+system
+service
+```
+
+Rules:
+
+- `mm_owner_type` and `mm_owner_id` must always be populated together.
+- `unknown` is not an allowed owner type.
+- Standard end-user views should only show executions where `mm_owner_type = user` and `mm_owner_id` matches the authenticated principal unless a product surface explicitly says otherwise.
+
+### 5.3 `mm_entry` value set
+
+Allowed values for v1:
+
+```text
+user_workflow
+manifest
+provider_profile
+```
+
+Rules:
+
+- `mm_entry` is required.
+- `mm_entry` should not be inferred by parsing raw workflow type strings in UI code.
+- Compatibility surfaces may collapse multiple `entry` values into one broader product grouping, but the exact value must remain queryable.
+
+---
+
+## 6. Optional workflow-list attributes
 
 | Name | Type | Required | When to set | Notes |
-| --- | --- | --- | --- | --- |
-| `mm_repo` | keyword | No | Repo-scoped executions when filtering is needed | Stable bounded repo identifier |
-| `mm_integration` | keyword | No | Integration-centric execution where filtering is useful | Examples: `jules`, `github`, `openclaw` |
-| `mm_target_runtime` | keyword_list | No | Workflow start path when the canonical runtime is known; workflow lifecycle logic if it resolves later | One-item list containing the canonical runtime ID such as `codex_cli`, `claude_code`, `gemini_cli`, `codex_cloud`, or `jules`; never a display label, model, profile name, prompt, or free text |
-| `mm_target_skill` | keyword_list | No | Workflow start path when the primary skill is known; workflow lifecycle logic if it resolves later | One-item list containing the singular primary skill slug/name/id used by `targetSkill`; future multi-skill faceting requires a separate explicitly documented attribute |
-| `mm_scheduled_for` | datetime | No | Delayed start / schedule-backed execution | Queryable expected start time |
+|---|---:|---:|---|---|
+| `mm_repo` | Keyword | No | Repo-scoped executions when filtering is needed | Stable bounded repo identifier. |
+| `mm_integration` | Keyword | No | Integration-centric execution where filtering is useful | Examples: `jules`, `github`, `openclaw`, `omnigent`. |
+| `mm_target_runtime` | KeywordList | No | Workflow start path when canonical runtime is known; workflow lifecycle logic if it resolves later | One-item list containing canonical runtime ID such as `codex_cli`, `claude_code`, `gemini_cli`, `codex_cloud`, `jules`, or a generic provider-backed runtime id. Never a display label, model, profile name, prompt, or free text. |
+| `mm_target_skill` | KeywordList | No | Workflow start path when primary skill is known; workflow lifecycle logic if it resolves later | One-item list containing singular primary skill slug/name/id used by `targetSkill`; future multi-skill faceting requires a separate explicitly documented attribute. |
+| `mm_scheduled_for` | Datetime | No | Delayed start / schedule-backed execution | Queryable expected start time. |
+| `mm_title` | KeywordList | No | Workflow start/lifecycle title materialization | Tokenized title word search. Verify materialization before relying on this filter. |
 
-Runtime and skill Search Attributes are optional during migration. The API must
-confirm that `mm_target_runtime` and `mm_target_skill` are registered as
-`KeywordList` before issuing Temporal Visibility queries that reference them. When
-they are unavailable, runtime/skill filters are not authoritative and facets
-return degraded metadata rather than failing the list page.
+Runtime and skill Search Attributes are optional during migration. The API must confirm that `mm_target_runtime` and `mm_target_skill` are registered as `KeywordList` before issuing Temporal Visibility queries that reference them. When they are unavailable, runtime/skill filters are not authoritative and facets return degraded metadata rather than failing the list page.
 
-Runtime/skill filters use Temporal KeywordList membership queries
-(`mm_target_runtime = "codex_cli"`). They are not sortable through Temporal
-Visibility because SQL Visibility rejects `ORDER BY` for KeywordList fields.
+Runtime/skill filters use Temporal KeywordList membership queries:
 
-Blank or unknown runtime/skill values are omitted, not written as empty strings
-or placeholders. Existing executions that cannot be updated in Temporal
-Visibility remain blank/unknown for these dimensions; historical facet counts
-must not be faked from projection-only display values. Open executions may
-repair these attributes from canonical parameters or workflow-owned metadata
-when they next perform a bounded lifecycle Search Attribute update.
+```text
+mm_target_runtime = "codex_cli"
+mm_target_skill = "jira-implement"
+```
 
-## 6.4 Deferred Search Attributes
+They are not sortable through Temporal Visibility because SQL Visibility rejects `ORDER BY` for KeywordList fields.
 
-These are intentionally **not** required in v1:
-
-- `mm_stage`
-- `mm_error_category`
-- free-text search attributes
-- unbounded tag arrays
-- child-workflow/activity-level indexing fields
-
-If one becomes necessary, update this document first rather than adding it ad hoc in code.
-
-## 6.5 Required value sets
-
-### `mm_state`
-
-Allowed values for v1:
-
-- `scheduled`
-- `initializing`
-- `waiting_on_dependencies`
-- `planning`
-- `awaiting_slot`
-- `executing`
-- `awaiting_external`
-- `proposals`
-- `finalizing`
-- `no_commit`
-- `completed`
-- `failed`
-- `canceled`
-
-Rules:
-
-- `mm_state` must be set immediately on workflow start
-- terminal mapping must remain consistent with MoonMind `closeStatus`:
- - no_commit / completed → `completed`
- - failed / terminated / timed out → `failed`
- - canceled → `canceled`
-- graceful workflow cancellation is represented by workflow-owned terminal
-  `mm_state=canceled` / `closeStatus=canceled` even when the raw Temporal
-  `ExecutionStatus` is `Completed` because the workflow finalized and returned
-  normally
-
-### `mm_owner_type`
-
-Allowed values for v1:
-
-- `user`
-- `system`
-- `service`
-
-Rules:
-
-- `mm_owner_type` and `mm_owner_id` must always be populated together
-- `unknown` is not an allowed target-state value
-- standard end-user views should only show executions where `mm_owner_type = user` and `mm_owner_id` matches the authenticated principal, unless a product surface explicitly says otherwise
-
-### `mm_entry`
-
-Allowed values for v1 (currently normalized by the executions API):
-
-- `run`
-- `manifest`
-- `provider_profile`
-
-*(Note: additional workflow types like `agent_run` and `oauth_session` are planned or used internally but are not currently normalized for top-level list filtering by the primary executions API.)*
-
-Rules:
-
-- `mm_entry` is required
-- `mm_entry` should not be inferred by parsing raw workflow type strings in UI code
-- compatibility surfaces may collapse multiple `entry` values into one broader product grouping, but the exact value must remain queryable
+Blank or unknown runtime/skill values are omitted, not written as empty strings or placeholders. Existing executions that cannot be updated in Temporal Visibility remain blank/unknown for these dimensions; historical facet counts must not be faked from projection-only display values. Open executions may repair these attributes from canonical parameters or workflow-owned metadata when they next perform a bounded lifecycle Search Attribute update.
 
 ---
 
-## 7. Memo registry
-
-## 7.1 Required Memo fields
-
-| Field | Required | Purpose | Rules |
-| --- | --- | --- | --- |
-| `title` | Yes | Human-readable execution title | small, display-safe, mutable |
-| `summary` | Yes | Compact current summary for list/detail surfaces | small, display-safe, mutable |
-
-## 7.2 Optional Memo fields
-
-| Field | Required | Purpose | Rules |
-| --- | --- | --- | --- |
-| `input_ref` | No | Safe reference to input artifact | reference only |
-| `manifest_ref` | No | Safe reference for manifest-driven workflows | reference only |
-| `error_category` | No | Debug/detail classification for failures | display/debug only |
-| `entry_label` | No | Optional human-friendly display label | small, bounded |
-| `progress_hint` | No | Compact execution-level progress hint when useful | small, bounded, never a step ledger |
-
-## 7.3 Memo rules
-
-- keep Memo small and human-readable
-- never store secrets, full prompts, manifests, or large payloads in Memo
-- never store step-ledger rows, attempts, `checks[]`, or long error bodies in Memo
-- Memo is for **display metadata**, not filtering
-- list views should rely on `title` and `summary`, not raw artifact payloads
-
----
-
-## 8. Allowed filters and query model
-
-## 8.1 Exact filters for Temporal-backed queries
+## 7. Exact filters for Temporal-backed queries
 
 Allowed exact-match filters for Temporal-managed list queries:
 
@@ -358,373 +204,244 @@ Allowed exact-match filters for Temporal-managed list queries:
 - `entry`
 - `repo`
 - `integration`
+- `targetRuntime` when `mm_target_runtime` is registered as `KeywordList`
+- `targetRuntimeIn` / `targetRuntimeNotIn` when `mm_target_runtime` is registered as `KeywordList`
+- `targetSkillIn` / `targetSkillNotIn` when `mm_target_skill` is registered as `KeywordList`
 
-## 8.2 Filter priorities
+### 7.1 Filter priorities
 
-### Required now
+Required now:
 
 - `workflowType`
 - `ownerId`
-- `state`
-
-### Required next
-
-- `entry`
 - `ownerType`
+- `state`
+- `entry`
 
-### Optional later
+Required when product surface uses it:
 
 - `repo`
 - `integration`
+- `targetRuntime`
+- `targetSkill`
 
-These should ship only when a real UI/API consumer needs them.
-
-## 8.3 Not in v1
-
-The following are intentionally out of scope for v1 query behavior:
-
-- free-text search
-- fuzzy title search
-- arbitrary multi-field OR composition
-- arbitrary date-range filtering
-- child-workflow filtering
-- activity-level filtering
-
-## 8.4 Ownership scoping rules
-
-Ownership is not just a filter; it is part of authorization.
-
-Rules:
-
-- standard users are implicitly scoped to their own executions
-- standard users must not see `system` or `service` executions on user-facing workflow pages unless the product explicitly supports that
-- non-admin callers must not query another user’s executions
-- admin/operator callers may filter by `ownerType`, `ownerId`, or omit them
-
-The UI should not offer arbitrary owner-picking to ordinary end users.
+Do not add a new Search Attribute merely because a display field exists. A field should consume Search Attribute budget only when MoonMind needs server-side filtering, sorting, faceting, metrics, or operational lookup.
 
 ---
 
-## 9. Sorting, recency, and stable ordering
+## 8. Sort fields
 
-## 9.1 Default ordering
+Supported Temporal-backed sort fields must use built-in fields or registered sortable Search Attributes.
 
-The canonical default order for Temporal-managed list rows is:
+Sortable examples:
 
-1. `mm_updated_at DESC`
-2. `workflowId DESC` as deterministic tie-breaker
-
-This must remain true whether the backing implementation comes directly from Temporal Visibility or from a temporary adapter/projection layer.
-
-## 9.2 No queue semantics
-
-Temporal-backed lists must not imply:
-
-- FIFO queue ordering
-- worker queue position
-- queue depth semantics
-- “next to run” promises
-
-Task queues are plumbing, not a user-visible ordering model.
-
-## 9.3 What moves `mm_updated_at`
-
-`mm_updated_at` should move on **meaningful user-visible mutations**, including:
-
-- domain-state transitions
-- accepted updates
-- signal handling that changes visible workflow state
-- pause/resume/cancel/rerun actions
-- terminal success/failure transitions
-- bounded progress checkpoints that materially affect UI recency
-- step-ready, step-started, step-reviewing, step-succeeded, step-failed, step-skipped, and step-canceled transitions
-- title/summary changes that materially alter visible list/detail presentation
-
-`mm_updated_at` should **not** move on every:
-
-- heartbeat
-- log line
-- low-level retry
-- internal polling tick
-- low-level retry/backoff detail inside one step execution
-
-Implementation guidance:
-
-- progress updates must be bounded and meaningful before they affect `mm_updated_at`
-- telemetry spam must not churn ordering
-
----
-
-## 10. Compatibility status mapping for the dashboard
-
-The current dashboard uses broad normalized workflow statuses such as:
-
-- `queued`
-- `running`
-- `awaiting_action`
-- `waiting`
-- `completed`
-- `failed`
-- `canceled`
-
-Temporal-backed rows should preserve exact Temporal/MoonMind state **and** provide a compatibility grouping.
-
-## 10.1 Exact vs compatibility fields
-
-- **Exact fields:** `state`, `temporalStatus`, `closeStatus`
-- **Compatibility field:** `dashboardStatus`
-
-## 10.2 v1 mapping
-
-| Exact Temporal-backed state | Compatibility dashboard status | Notes |
-| --- | --- | --- |
-| `scheduled` | `queued` | waiting for deferred start |
-| `initializing` | `queued` | not yet materially executing user work |
-| `waiting_on_dependencies` | `waiting` | blocked on prerequisite work |
-| `planning` | `running` | active pre-execution work |
-| `awaiting_slot` | `queued` | waiting for a bounded runtime resource |
-| `executing` | `running` | active execution |
-| `awaiting_external` | `awaiting_action` | compatibility grouping only |
-| `proposals` | `running` | still active, post-execution proposal phase |
-| `finalizing` | `running` | still in-flight |
-| `no_commit` | `completed` | terminal completion without a repository commit |
-| `completed` | `completed` | terminal success |
-| `failed` | `failed` | terminal failure |
-| `canceled` | `canceled` | terminal cancellation |
-
-## 10.3 Important note on `awaiting_external`
-
-`awaiting_external` does **not** always mean the current user must take action.
-
-For compatibility surfaces it maps to `awaiting_action` because that is the nearest existing grouped status, but exact detail views must still show `awaiting_external`.
-
-That distinction matters because the actual cause may be:
-
-- approval required
-- provider callback wait
-- provider completion wait
-- operator pause
-- retry backoff
-- other non-user-blocking external wait
-
-## 10.4 Required waiting metadata
-
-To avoid misleading users, Temporal-backed rows in blocked states should expose:
-
-- `waitingReason`
-- `attentionRequired`
-
-### Allowed `waitingReason` values for v1
-
-- `approval_required`
-- `external_callback`
-- `external_completion`
-- `operator_paused`
-- `retry_backoff`
-- `dependency_wait`
-- `provider_profile_slot`
-- `unknown_external`
-
-Rules:
-
-- `waitingReason` should be set whenever the execution is in a blocked or waiting state where the reason is knowable
-- `attentionRequired = true` only when progress is blocked on human/operator action exposed by the current product surface
-- compatibility dashboards may continue using broad grouped statuses, but they must not imply user action is required when `attentionRequired = false`
-
----
-
-## 11. Pagination and count strategy
-
-## 11.1 Pagination inputs
-
-Temporal-backed list APIs use:
-
-- `pageSize`
-- `nextPageToken`
-
-Rules:
-
-- `nextPageToken` is opaque
-- clients must only echo it back to the same endpoint with the same query scope
-- changing filters invalidates the token
-
-## 11.2 Current adapter behavior
-
-Current implementations may still use opaque encoded offsets internally.
-
-That is an implementation detail, not a client contract.
-
-## 11.3 Target behavior
-
-When list/query/count is fully backed by Temporal Visibility, the API should pass through Temporal-backed pagination semantics without forcing the UI to know Temporal internals.
-
-## 11.4 Count behavior
-
-List responses may include:
-
-- `count`
-- `countMode`
-
-Allowed `countMode` values:
-
-- `exact`
-- `estimated_or_unknown`
-
-Target rule:
-
-- return exact count when operationally acceptable
-- otherwise return `estimated_or_unknown` or omit `count`
-
-## 11.5 Freshness and degraded-read behavior
-
-In an eventually consistent system:
-
-- the response from a successful update/signal/cancel/rerun action is the authoritative immediate view for that execution
-- list pages should patch the acted-on row from that action response when possible, then background-refetch the active query
-- clients must not infer that unrelated rows were refreshed
-- when `countMode != exact`, the UI must not present a precise total as authoritative
-- when `count` is omitted, pagination should rely on rows plus `nextPageToken`, not synthetic totals
-- operator-facing surfaces should expose a refresh timestamp or equivalent stale-state indicator
-
----
-
-## 12. Canonical adapter projection for UI consumers
-
-## 12.1 Preferred top-level fields
-
-When an adapter API exposes Temporal-backed data to UI consumers, it should promote these values to stable top-level fields:
-
-- `workflowId`
-- `runId`
-- `taskId`
-- `workflowType`
-- `entry`
-- `ownerType`
-- `ownerId`
-- `state`
-- `temporalStatus`
-- `closeStatus`
-- `title`
-- `summary`
-- `waitingReason`
-- `attentionRequired`
-- `updatedAt`
-- `startedAt`
-- `closedAt`
-- `dashboardStatus`
-
-Optional bounded top-level fields when available:
-
-- `repo`
-- `integration`
-
-## 12.2 Raw blobs still allowed
-
-Raw `searchAttributes` and `memo` objects may still be returned for:
-
-- debugging
-- admin/operator views
-- migration parity checks
-- adapter inspection
-
-But those raw maps are not the preferred long-term UI contract.
-
-## 12.3 Artifact references
-
-`artifactRefs[]` belongs on detail responses and on list responses only when the payload remains small and useful.
-
-List views should not require artifact hydration to render basic execution rows.
-
----
-
-## 13. UI integration requirements
-
-The dashboard runtime config and route shell should treat `temporal` as the primary execution source for Temporal-backed rows.
-
-The dashboard should use:
-
-- Temporal-backed list/detail endpoints
-- `workflowId` as the durable handle
-- `taskId == workflowId` on compatibility surfaces
-- `runId` only as run/debug metadata
-- exact state plus compatibility grouping
-- waiting metadata (`waitingReason`, `attentionRequired`)
-- Temporal action handlers for update, signal, cancel, and rerun semantics
-
-Higher-level product actions may still be composed from those primitives.
-
----
-
-## 14. Projection rules and source of truth
-
-## 14.1 Projection discipline
-
-Any app DB projection or adapter cache that mirrors Temporal-managed executions must mirror these canonical fields faithfully:
-
-- `workflowId`
-- `runId`
-- `workflowType`
-- `mm_owner_type`
-- `mm_owner_id`
+- `WorkflowId`
+- `StartTime`
+- `CloseTime`
 - `mm_state`
-- `mm_updated_at`
-- `mm_entry`
-- Memo `title`
-- Memo `summary`
+- `mm_repo`
+- `mm_integration`
+- `mm_scheduled_for`
+- `mm_updated_at` when used by supported query path
 
-## 14.2 What a projection may add
+Not sortable through Temporal Visibility:
 
-A projection may add helper fields for:
+- `mm_target_runtime`
+- `mm_target_skill`
+- `mm_title`
+- any KeywordList field
+- progress derived from step ledger or workflow queries
 
-- authorization
-- joins
-- migration telemetry
-- dashboard performance
-- reconciliation status
-
-It may not redefine the meaning of canonical Visibility-backed fields.
-
-## 14.3 Drift rule
-
-If a projection and Temporal-backed canonical metadata drift, the system should repair the projection rather than redefining the query contract around projection drift.
+KeywordList filters may be authoritative while sort remains current-page/projection-only.
 
 ---
 
-## 15. Target contract vs implementation
+## 9. Count and facet degradation
 
-This document specifies the **desired** Visibility, Memo, adapter list/detail, and UI query contract.
+List row retrieval is the primary payload. Counts and facets are enrichments.
 
-Current implementation gaps, Visibility-native query work, and items to retire after substrate cutover belong in:
+If `list_workflows` succeeds and `count_workflows` fails or times out, the API should return rows with:
 
-- `docs/Temporal/VisibilityAndUiQueryModel.md`
+```json
+{
+  "count": null,
+  "countMode": "estimated_or_unknown",
+  "degradedCount": true
+}
+```
 
-This document should remain the normative semantics source rather than a live gap tracker.
+If an optional facet Search Attribute is unavailable, the facet endpoint should return degraded metadata, not 503:
 
----
+```json
+{
+  "items": [],
+  "countMode": "estimated_or_unknown",
+  "source": "current_page_fallback"
+}
+```
 
-## 16. Acceptance criteria
-
-This document is operationally done when:
-
-1. Search Attribute names, types, and required/optional status are fixed
-2. Memo fields for list/detail presentation are fixed
-3. default ordering and `mm_updated_at` mutation rules are fixed
-4. compatibility status mapping is fixed
-5. pagination token rules and count semantics are fixed
-6. adapter/projection layers are explicitly bound to these semantics
-7. the identifier bridge is fixed (`taskId == workflowId` for Temporal-backed rows)
-8. owner semantics are fixed (`mm_owner_type` + `mm_owner_id`)
-9. step-ledger truth is explicitly kept out of Visibility and Memo
-9. waiting metadata is fixed (`waitingReason` + `attentionRequired`)
-10. `mm_entry` values are fixed and cover the current workflow catalog
-11. the UI path for Temporal-backed rows is implemented as a first-class source
+A missing optional Search Attribute is not the same as an exact zero-result query. Avoid returning `countMode="exact"` for a result that was produced by skipping unavailable authoritative filters.
 
 ---
 
-## 17. Open follow-ups
+## 10. Provider-neutral indexing rules
 
-1. Add `entry` and `ownerType` filters to public adapter APIs if not already present
-2. Add top-level `taskId`, `ownerType`, `waitingReason`, and `attentionRequired` fields wherever adapter payloads still lack them
-3. Decide when `mm_repo` and `mm_integration` become required for specific workflow families
-4. Decide whether `/api/executions` remains a migration adapter surface or evolves into a stable public API after the legacy task-named fields retire
-5. Decide whether any additional `mm_entry` values are needed beyond the current workflow catalog
+External providers and runtime substrates must not add provider-specific Search Attributes by default.
+
+Do not add provider-specific attributes such as:
+
+```text
+mm_omnigent_session_id
+mm_omnigent_agent_id
+mm_omnigent_host_type
+mm_omnigent_harness
+mm_jules_session_id
+mm_codex_cloud_thread_id
+mm_external_provider_run_id
+```
+
+Use generic dimensions when they serve a cross-provider product query:
+
+```text
+mm_integration
+mm_target_runtime
+mm_target_skill
+mm_repo
+mm_state
+mm_owner_id
+mm_owner_type
+mm_entry
+```
+
+Provider-native details belong in:
+
+- provider-specific durable mapping tables;
+- `AgentRunResult.metadata`;
+- diagnostics artifacts;
+- artifact links;
+- step/run evidence;
+- local projection database columns if needed for non-Temporal API reads.
+
+### 10.1 Omnigent-specific posture
+
+Omnigent integration must not make Temporal Visibility an Omnigent session browser.
+
+Use:
+
+```text
+mm_integration = "omnigent"        # only if integration-level filtering/faceting is needed
+mm_target_runtime = ["omnigent"]   # or another canonical provider-backed runtime id, if product uses runtime filtering
+mm_target_skill = ["<primary skill>"]
+```
+
+Store Omnigent-native fields outside Temporal Search Attributes:
+
+```text
+omnigent_session_id
+omnigent_agent_id
+omnigent_agent_name
+omnigent_host_type
+omnigent_endpoint_ref
+first_message_state
+first_message_digest
+sse_events_ref
+final_snapshot_ref
+```
+
+Preferred locations:
+
+```text
+omnigent_external_runs
+AgentRunResult.metadata
+diagnostics artifacts
+capture manifests
+step/run evidence links
+```
+
+This keeps the custom Search Attribute budget useful for MoonMind-wide workflow queries and leaves a future MoonMind API / Omnigent Server merger path open without coupling Temporal Visibility to Omnigent's internal session model.
+
+---
+
+## 11. Deferred Search Attributes
+
+These are intentionally **not** required in v1:
+
+- `mm_stage`
+- `mm_error_category`
+- `mm_external_session_id`
+- `mm_external_provider_run_id`
+- provider-specific session ids
+- child-workflow/activity-level indexing fields
+- free-text search attributes
+- unbounded tag arrays
+- multi-skill global facet arrays
+
+If one becomes necessary, update this document first rather than adding it ad hoc in code.
+
+---
+
+## 12. Memo registry
+
+### 12.1 Required Memo fields
+
+| Field | Required | Purpose | Rules |
+|---|---:|---|---|
+| `title` | Yes | Human-readable execution title | Small, display-safe, mutable. |
+| `summary` | Yes | Compact current summary for list/detail surfaces | Small, display-safe, mutable. |
+
+### 12.2 Optional Memo fields
+
+| Field | Required | Purpose | Rules |
+|---|---:|---|---|
+| `input_ref` | No | Safe reference to input artifact | Reference only. |
+| `manifest_ref` | No | Safe reference for manifest-driven workflows | Reference only. |
+| `error_category` | No | Debug/detail classification for failures | Display/debug only. |
+| `entry_label` | No | Optional human-friendly display label | Small, bounded. |
+| `progress_hint` | No | Compact execution-level progress hint when useful | Small, bounded, never a step ledger. |
+
+Memo rules:
+
+- keep Memo small and human-readable;
+- never store secrets, full prompts, manifests, or large payloads in Memo;
+- never store step-ledger rows, attempts, `checks[]`, or long error bodies in Memo;
+- Memo is for display metadata, not filtering;
+- list views should rely on `title` and `summary`, not raw artifact payloads.
+
+---
+
+## 13. Operational review checklist for new Search Attributes
+
+Before adding a new Search Attribute, answer these questions in the PR description:
+
+1. Which user or operator query requires server-side Temporal filtering/faceting/sorting?
+2. Is the dimension generic across providers, or provider-specific?
+3. Can the value be bounded and secret-free?
+4. Is the type correct for intended queries?
+5. Does it consume one of the 10 `Keyword` slots?
+6. If it consumes a `Keyword` slot, which current Keyword becomes less important?
+7. Can the same need be met by projection DB, artifact metadata, or provider mapping table instead?
+8. Is the value set documented here?
+9. Is bootstrap idempotent and type-safe?
+10. Are missing/unregistered-attribute states handled without taking down the Workflows list?
+
+---
+
+## 14. Recommended next cleanup
+
+The current registry is serviceable, but the managed-session Keyword fields should be periodically reviewed:
+
+```text
+AgentRunId
+RuntimeId
+SessionId
+SessionStatus
+```
+
+Recommended stance:
+
+- Keep `SessionStatus` if managed-session operations rely on Temporal Web/Visibility.
+- Keep `SessionId` only if direct Temporal lookup by session id is operationally common.
+- Re-evaluate `AgentRunId` and `RuntimeId` because app DB/store lookups and generic runtime dimensions may cover those use cases without consuming Keyword slots.
+- Re-evaluate `mm_has_dependencies` and `mm_dependency_count` if no production query uses them.
+
+Do not replace these with provider-specific fields. Free slots should be reserved for future generic MoonMind workflow dimensions.

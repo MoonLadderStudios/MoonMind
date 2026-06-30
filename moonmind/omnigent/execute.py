@@ -1,4 +1,4 @@
-"""Run one Omnigent streaming-gateway execution for MM-1030."""
+"""Run one Omnigent streaming-gateway execution for MM-1059."""
 
 from __future__ import annotations
 
@@ -653,6 +653,44 @@ async def _cancel_omnigent_session(
             await client.stop_session(session_id)
 
 
+async def _capture_cancelled_omnigent_session(
+    *,
+    client: OmnigentHttpClient,
+    artifact_gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
+    session_id: str,
+    agent_id: str | None,
+    initial_snapshot: dict[str, Any] | None,
+    first_message_request: dict[str, Any] | None,
+    first_message_response: dict[str, Any] | None,
+    raw_events: list[dict[str, Any]],
+    normalized_events: list[dict[str, Any]],
+    capture_policy: dict[str, Any] | None,
+) -> None:
+    with suppress(Exception):
+        final_snapshot = await client.get_session(session_id)
+        await _build_capture_bundle(
+            client=client,
+            artifact_gateway=artifact_gateway,
+            request=request,
+            session_id=session_id,
+            agent_id=agent_id,
+            initial_snapshot=initial_snapshot,
+            final_snapshot=final_snapshot or {"status": "canceled"},
+            first_message_request=first_message_request,
+            first_message_response=first_message_response,
+            raw_events=raw_events,
+            normalized_events=normalized_events,
+            terminal_status="canceled",
+            diagnostics={
+                "cancelled": True,
+                "failureClass": "system_error",
+            },
+            harvest_resources=True,
+            capture_policy=capture_policy,
+        )
+
+
 async def _harvest_changed_files(
     *,
     client: OmnigentHttpClient,
@@ -661,7 +699,7 @@ async def _harvest_changed_files(
     session_id: str,
     manifest: dict[str, Any],
     refs: dict[str, str],
-) -> None:
+) -> list[dict[str, Any]]:
     try:
         changed = await client.list_changed_files(session_id)
     except Exception as exc:
@@ -669,7 +707,7 @@ async def _harvest_changed_files(
             exc,
             fallback="changed files unavailable",
         )
-        return
+        return []
     index_ref = await _capture_artifact_json(
         artifact_gateway,
         request,
@@ -714,6 +752,111 @@ async def _harvest_changed_files(
         harvested.append({"path": path, "artifactRef": ref})
     manifest["changedFiles"] = harvested
     manifest.setdefault("patchUnavailable", True)
+    return file_items
+
+
+async def _harvest_workspace_files(
+    *,
+    client: OmnigentHttpClient,
+    artifact_gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
+    session_id: str,
+    manifest: dict[str, Any],
+    refs: dict[str, str],
+) -> None:
+    try:
+        files = await client.list_workspace_files(session_id)
+    except Exception as exc:
+        manifest["workspaceFilesUnavailable"] = _compact_summary(
+            exc,
+            fallback="workspace files unavailable",
+        )
+        return
+    index_ref = await _capture_artifact_json(
+        artifact_gateway,
+        request,
+        refs,
+        key="workspaceFilesIndexRef",
+        name="output.omnigent.workspace_files.index.json",
+        payload=files,
+        link_type="output.omnigent.workspace_files.index",
+    )
+    manifest["workspaceFilesIndexRef"] = index_ref
+    harvested: list[dict[str, Any]] = []
+    for item in _resource_items(files)[:_MAX_OMNIGENT_HARVEST_ITEMS]:
+        path = _resource_path(item)
+        if not path:
+            continue
+        if str(item.get("type") or item.get("kind") or "").strip().lower() in {
+            "dir",
+            "directory",
+            "folder",
+        }:
+            harvested.append({"path": path, "skipped": "directory"})
+            continue
+        try:
+            content = await client.get_workspace_file(session_id, path)
+        except Exception as exc:
+            harvested.append(
+                {
+                    "path": path,
+                    "unavailable": _compact_summary(
+                        exc,
+                        fallback="workspace file content unavailable",
+                    ),
+                }
+            )
+            continue
+        ref = await artifact_gateway.write_bytes(
+            request=request,
+            name=f"output.omnigent.workspace_files/{path}",
+            payload=content,
+            link_type="output.omnigent.workspace_file",
+        )
+        harvested.append({"path": path, "artifactRef": ref})
+    manifest["workspaceFiles"] = harvested
+
+
+async def _harvest_workspace_diffs(
+    *,
+    client: OmnigentHttpClient,
+    artifact_gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
+    session_id: str,
+    changed_items: list[dict[str, Any]],
+    manifest: dict[str, Any],
+    refs: dict[str, str],
+) -> None:
+    paths = [
+        path
+        for path in (_resource_path(item) for item in changed_items)
+        if path
+    ][:_MAX_OMNIGENT_HARVEST_ITEMS]
+    if not paths:
+        manifest["workspaceDiffs"] = []
+        manifest["patchUnavailable"] = True
+        return
+    harvested: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            diff = await client.get_workspace_diff(session_id, path)
+        except Exception as exc:
+            manifest["workspaceDiffsUnavailable"] = _compact_summary(
+                exc,
+                fallback="workspace diff capability unavailable",
+            )
+            manifest["patchUnavailable"] = True
+            return
+        ref = await artifact_gateway.write_bytes(
+            request=request,
+            name=f"output.omnigent.workspace_diffs/{path}.diff",
+            payload=diff,
+            link_type="output.omnigent.workspace_diff",
+            content_type="text/x-diff",
+        )
+        harvested.append({"path": path, "artifactRef": ref})
+    manifest["workspaceDiffs"] = harvested
+    manifest["patchUnavailable"] = not bool(harvested)
 
 
 async def _harvest_session_files(
@@ -801,6 +944,17 @@ def _resource_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _resource_path(item: dict[str, Any]) -> str:
+    return str(
+        item.get("path")
+        or item.get("file_path")
+        or item.get("filePath")
+        or item.get("relativePath")
+        or item.get("name")
+        or ""
+    ).strip().strip("/")
+
+
 def _child_session_ids(
     events: list[dict[str, Any]],
     *,
@@ -850,6 +1004,7 @@ async def _build_capture_bundle(
     terminal_status: str,
     diagnostics: dict[str, Any],
     harvest_resources: bool,
+    capture_policy: dict[str, Any] | None = None,
 ) -> OmnigentCaptureBundle:
     refs: dict[str, str] = {}
     if first_message_request is not None:
@@ -965,22 +1120,43 @@ async def _build_capture_bundle(
                 )
         manifest["childSessionEvidence"] = child_snapshots
     if harvest_resources and client is not None and session_id:
-        await _harvest_changed_files(
+        changed_items: list[dict[str, Any]] = []
+        if _capture_enabled(capture_policy, "changedFiles"):
+            changed_items = await _harvest_changed_files(
+                client=client,
+                artifact_gateway=artifact_gateway,
+                request=request,
+                session_id=session_id,
+                manifest=manifest,
+                refs=refs,
+            )
+        if _capture_enabled(capture_policy, "workspaceFiles"):
+            await _harvest_workspace_files(
+                client=client,
+                artifact_gateway=artifact_gateway,
+                request=request,
+                session_id=session_id,
+                manifest=manifest,
+                refs=refs,
+            )
+        await _harvest_workspace_diffs(
             client=client,
             artifact_gateway=artifact_gateway,
             request=request,
             session_id=session_id,
+            changed_items=changed_items,
             manifest=manifest,
             refs=refs,
         )
-        await _harvest_session_files(
-            client=client,
-            artifact_gateway=artifact_gateway,
-            request=request,
-            session_id=session_id,
-            manifest=manifest,
-            refs=refs,
-        )
+        if _capture_enabled(capture_policy, "sessionFiles"):
+            await _harvest_session_files(
+                client=client,
+                artifact_gateway=artifact_gateway,
+                request=request,
+                session_id=session_id,
+                manifest=manifest,
+                refs=refs,
+            )
     diagnostics_payload = {
         "provider": "omnigent",
         "omnigentSessionId": session_id,
@@ -1017,6 +1193,7 @@ async def _build_capture_bundle(
         "firstMessageResponseRef",
         "initialSnapshotRef",
         "changedFilesIndexRef",
+        "workspaceFilesIndexRef",
         "sessionFilesIndexRef",
         "childSessionsRef",
     ):
@@ -1036,6 +1213,12 @@ def _jsonl(events: list[dict[str, Any]]) -> str:
         json.dumps(event, sort_keys=True, default=str, separators=(",", ":")) + "\n"
         for event in events
     )
+
+
+def _capture_enabled(capture_policy: dict[str, Any] | None, key: str) -> bool:
+    if capture_policy is None:
+        return True
+    return bool(capture_policy.get(key, True))
 
 
 async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
@@ -1074,8 +1257,14 @@ async def run_omnigent_execution(
     raw_events: list[dict[str, Any]] = []
     normalized_events: list[dict[str, Any]] = []
     target_agent_id: str | None = None
+    delete_after_harvest = False
+    capture_policy: dict[str, Any] | None = None
     try:
         selection = build_omnigent_selection(request)
+        capture_policy = selection.capture
+        delete_after_harvest = bool(
+            selection.capture.get("deleteOmnigentSessionAfterHarvest", False)
+        )
         async with httpx.AsyncClient() as httpx_client:
             client = OmnigentHttpClient(
                 base_url=resolved_server_url(),
@@ -1106,7 +1295,7 @@ async def run_omnigent_execution(
             session_payload["idempotency_key"] = request.idempotency_key
             labels = session_payload.setdefault("labels", {})
             if isinstance(labels, dict):
-                labels.setdefault("moonmind.issue", "MM-1030")
+                labels.setdefault("moonmind.issue", "MM-1059")
 
             durable_row = None
             if run_store is not None:
@@ -1389,6 +1578,7 @@ async def run_omnigent_execution(
                 terminal_status=terminal_status,
                 diagnostics={"failureClass": _failure_class_for(terminal_status)},
                 harvest_resources=True,
+                capture_policy=capture_policy,
             )
             if run_store is not None:
                 await run_store.mark_terminal(
@@ -1413,7 +1603,29 @@ async def run_omnigent_execution(
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
         if client is not None and session_id:
-            await _cancel_omnigent_session(client, session_id)
+            async with httpx.AsyncClient() as cleanup_httpx_client:
+                cleanup_client = OmnigentHttpClient(
+                    base_url=resolved_server_url(),
+                    api_token=resolved_api_token(),
+                    client=cleanup_httpx_client,
+                )
+                await _cancel_omnigent_session(cleanup_client, session_id)
+                await _capture_cancelled_omnigent_session(
+                    client=cleanup_client,
+                    artifact_gateway=artifact_gateway,
+                    request=request,
+                    session_id=session_id,
+                    agent_id=target_agent_id,
+                    initial_snapshot=initial_snapshot,
+                    first_message_request=first_message,
+                    first_message_response=first_message_response,
+                    raw_events=raw_events,
+                    normalized_events=normalized_events,
+                    capture_policy=capture_policy,
+                )
+                if delete_after_harvest:
+                    with suppress(Exception):
+                        await cleanup_client.delete_session(session_id)
         raise
     except (
         OmnigentArtifactError,

@@ -526,6 +526,7 @@ class AgentExecutionRequest(BaseModel):
         default_factory=dict, alias="expectedOutputSchema"
     )
     workspace_spec: dict[str, Any] = Field(default_factory=dict, alias="workspaceSpec")
+    skill: dict[str, Any] = Field(default_factory=dict, alias="skill")
     parameters: dict[str, Any] = Field(default_factory=dict, alias="parameters")
     timeout_policy: dict[str, Any] = Field(default_factory=dict, alias="timeoutPolicy")
     retry_policy: dict[str, Any] = Field(default_factory=dict, alias="retryPolicy")

@@ -5427,7 +5427,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(request.payload.task.skill).toEqual({
       id: "moonspec-orchestrate",
-      args: {
+      inputs: {
         issueKey: "MM-564",
         mode: "runtime",
       },
@@ -15569,24 +15569,122 @@ describe("Task Create schema-driven capability inputs", () => {
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          items: { worker: ["schema.skill"] },
+          items: { worker: ["schema.skill", "schema.other", "no-schema.skill"] },
           legacyItems: [
             {
               id: "schema.skill",
+              description: "Schema-backed Skill fixture.",
+              contentDigest: "sha256:current-skill-content",
+              contentRef: "artifact://skill/schema.skill",
               inputSchema: {
                 type: "object",
                 required: ["repository"],
                 properties: {
-                  repository: { type: "string", title: "Repository name" },
+                  repository: {
+                    type: "string",
+                    title: "Repository name",
+                    "x-moonmind-widget": "repository",
+                  },
+                  branch: {
+                    type: "string",
+                    title: "Branch",
+                    "x-moonmind-widget": "branch",
+                  },
+                  notes: {
+                    type: "string",
+                    title: "Notes",
+                    "x-moonmind-widget": "textarea",
+                  },
+                  markdown: {
+                    type: "string",
+                    title: "Markdown",
+                    "x-moonmind-widget": "markdown",
+                  },
                   effort: { type: "number", title: "Effort" },
+                  enabled: { type: "boolean", title: "Enabled" },
+                  priority: {
+                    type: "string",
+                    title: "Priority",
+                    enum: ["low", "high"],
+                  },
+                  labels: {
+                    type: "array",
+                    title: "Labels",
+                    items: {
+                      type: "string",
+                      enum: ["frontend", "backend"],
+                    },
+                  },
+                  homepage: {
+                    type: "string",
+                    format: "uri",
+                    title: "Homepage",
+                  },
+                  email: {
+                    type: "string",
+                    format: "email",
+                    title: "Email",
+                  },
+                  due: {
+                    type: "string",
+                    format: "date",
+                    title: "Due",
+                  },
+                  starts_at: {
+                    type: "string",
+                    format: "date-time",
+                    title: "Starts at",
+                  },
+                  metadata: { type: "object", title: "Metadata" },
+                  unsupported_widget: {
+                    type: "string",
+                    title: "Unsupported widget",
+                    "x-moonmind-widget": "external.lookup",
+                  },
                 },
               },
               uiSchema: {},
               defaults: {
                 repository: "MoonLadderStudios/MoonMind",
+                branch: "main",
                 effort: 2,
+                enabled: true,
+                priority: "high",
+                labels: ["frontend"],
+                metadata: { source: "skill" },
               },
               contractDigest: "sha256:schema-v1",
+            },
+            {
+              id: "schema.other",
+              inputSchema: {
+                type: "object",
+                required: ["repository"],
+                properties: {
+                  repository: {
+                    type: "string",
+                    title: "Repository name",
+                    "x-moonmind-widget": "repository",
+                  },
+                  branch: {
+                    type: "string",
+                    title: "Branch",
+                    "x-moonmind-widget": "branch",
+                  },
+                },
+              },
+              uiSchema: {},
+              defaults: {
+                repository: "MoonLadderStudios/Other",
+                branch: "develop",
+              },
+            },
+            {
+              id: "no-schema.skill",
+              description: "Instruction-driven Skill fixture.",
+              inputSchema: {},
+              uiSchema: {},
+              defaults: {},
             },
           ],
         }),
@@ -15963,6 +16061,12 @@ describe("Task Create schema-driven capability inputs", () => {
         json: async () => ({ workflowId: "mm:schema-create" }),
       } as Response);
     }
+    if (url === "/api/presets/save-from-workflow") {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ title: "Schema Skill Preset" }),
+      } as Response);
+    }
     return Promise.resolve({
       ok: false,
       status: 404,
@@ -16181,6 +16285,224 @@ describe("Task Create schema-driven capability inputs", () => {
     });
 
     expect(await within(step).findByLabelText("Repository name")).toBeTruthy();
+    expect(within(step).getByLabelText("Branch")).toBeTruthy();
+    expect(within(step).getByLabelText("Notes").tagName).toBe("TEXTAREA");
+    expect(within(step).getByLabelText("Markdown").tagName).toBe("TEXTAREA");
+    expect((within(step).getByLabelText("Effort") as HTMLInputElement).type).toBe("number");
+    expect(within(step).getByLabelText("Enabled")).toBeTruthy();
+    expect(within(step).getByLabelText("Priority")).toBeTruthy();
+    expect((within(step).getByLabelText("Labels") as HTMLSelectElement).multiple).toBe(true);
+    expect((within(step).getByLabelText("Homepage") as HTMLInputElement).type).toBe("url");
+    expect((within(step).getByLabelText("Email") as HTMLInputElement).type).toBe("email");
+    expect((within(step).getByLabelText("Due") as HTMLInputElement).type).toBe("date");
+    expect((within(step).getByLabelText("Starts at") as HTMLInputElement).type).toBe("datetime-local");
+    expect(within(step).getByLabelText("Metadata").tagName).toBe("TEXTAREA");
+    expect(within(step).getByText("Unsupported field widget.")).toBeTruthy();
+  });
+
+  it("preserves MM-1056 Skill fallback values under step.skill.inputs for MM-1047 traceability", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    fireEvent.change(await within(step).findByLabelText("Repository name"), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+    fireEvent.change(within(step).getByLabelText("Branch"), {
+      target: { value: "feature/mm-1056" },
+    });
+    fireEvent.change(within(step).getByLabelText("Unsupported widget"), {
+      target: { value: "manual fallback survives" },
+    });
+    fireEvent.change(within(step).getByLabelText("Metadata"), {
+      target: { value: '{"sourceIssue":"MM-1047"}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: {
+        task: {
+          skill?: {
+            inputs?: Record<string, unknown>;
+            args?: Record<string, unknown>;
+            inputContractDigest?: string;
+            contentDigest?: string;
+            contentRef?: string;
+          };
+        };
+      };
+    };
+    expect(request.payload.task.skill?.inputs).toMatchObject({
+      repository: "MoonLadderStudios/MoonMind",
+      branch: "feature/mm-1056",
+      unsupported_widget: "manual fallback survives",
+      metadata: { sourceIssue: "MM-1047" },
+    });
+    expect(request.payload.task.skill?.inputContractDigest).toBe(
+      "sha256:current-skill-contract",
+    );
+    expect(request.payload.task.skill?.contentDigest).toBe(
+      "sha256:current-skill-content",
+    );
+    expect(request.payload.task.skill?.contentRef).toBe(
+      "artifact://skill/schema.skill",
+    );
+    expect(request.payload.task.skill?.args).toBeUndefined();
+  });
+
+  it("renders schema-less skill fallback details and remains executable", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "no-schema.skill" },
+    });
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Run the no-schema Skill with instructions." },
+    });
+
+    const fallbackNote = await within(step).findByTestId("skill-schema-fallback-0");
+    expect(within(fallbackNote).getByText("no-schema.skill")).toBeTruthy();
+    expect(within(fallbackNote).getByText(/Instruction-driven Skill fixture/)).toBeTruthy();
+    expect(
+      within(fallbackNote).getByText(/does not publish structured input fields/),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: {
+        task: {
+          skill?: { id?: string; inputs?: Record<string, unknown> };
+        };
+      };
+    };
+    expect(request.payload.task.skill?.id).toBe("no-schema.skill");
+    expect(request.payload.task.skill?.inputs).toEqual({});
+  });
+
+  it("keeps unsupported skill widgets editable and submits entered values", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: ["schema.skill"] },
+            legacyItems: [
+              {
+                id: "schema.skill",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    externalLookup: {
+                      type: "string",
+                      title: "External lookup",
+                    },
+                  },
+                },
+                uiSchema: {
+                  externalLookup: {
+                    widget: "remote.component",
+                    minimum: 99,
+                  },
+                },
+                defaults: {},
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return mockSchemaCapabilityFetch(input, init);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    const unsupported = (await waitFor(() => {
+      const input = step.querySelector<HTMLInputElement>(
+        "#queue-capability-input-externalLookup",
+      );
+      expect(input).toBeTruthy();
+      return input as HTMLInputElement;
+    })) as HTMLInputElement;
+    expect(unsupported.disabled).toBe(false);
+    fireEvent.change(unsupported, { target: { value: "preserve-me" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: {
+        task: {
+          skill?: { inputs?: Record<string, unknown> };
+        };
+      };
+    };
+    expect(request.payload.task.skill?.inputs).toMatchObject({
+      externalLookup: "preserve-me",
+    });
+  });
+
+  it("offers deployment-only skills in the skill combobox", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: [], deployment: ["deployment.skill"] },
+            legacyItems: [
+              {
+                id: "deployment.skill",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    repository: { type: "string", title: "Deployment repository" },
+                  },
+                },
+                uiSchema: {},
+                defaults: {},
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return mockSchemaCapabilityFetch(input, init);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    const skillInput = within(step).getByLabelText("Skill (optional)");
+    fireEvent.pointerDown(skillInput);
+
+    expect(await screen.findByRole("option", { name: "deployment.skill" })).toBeTruthy();
+    fireEvent.change(skillInput, {
+      target: { value: "deployment.skill" },
+    });
+
+    expect(await within(step).findByLabelText("Deployment repository")).toBeTruthy();
   });
 
   it("submits direct skill schema inputs in the skill payload", async () => {
@@ -16209,6 +16531,7 @@ describe("Task Create schema-driven capability inputs", () => {
           skill?: {
             inputs?: Record<string, unknown>;
             inputContractDigest?: string;
+            args?: Record<string, unknown>;
           };
         };
       };
@@ -16220,6 +16543,108 @@ describe("Task Create schema-driven capability inputs", () => {
       repository: "MoonLadderStudios/SchemaRepo",
     });
     expect(request.payload.task.skill?.inputContractDigest).toBe("sha256:schema-v1");
+    expect(request.payload.task.skill?.args).toBeUndefined();
+  });
+
+  it("saves direct skill schema inputs in preset payloads", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Save schema-backed skill inputs." },
+    });
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    fireEvent.change(await within(step).findByLabelText("Repository name"), {
+      target: { value: "MoonLadderStudios/SavedSchemaRepo" },
+    });
+    fireEvent.change(within(step).getByLabelText("Branch"), {
+      target: { value: "feature/saved-schema" },
+    });
+
+    const presetsSection = await screen.findByLabelText("Preset Management");
+    fireEvent.click(
+      within(presetsSection).getByRole("button", { name: "Save preset" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Save preset" });
+    fireEvent.change(within(dialog).getByLabelText("Preset Name"), {
+      target: { value: "Schema Skill Preset" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm save preset" }),
+    );
+
+    await waitFor(() => {
+      const saveCall = fetchSpy.mock.calls.find(
+        ([url, init]) =>
+          String(url) === "/api/presets/save-from-workflow" &&
+          init?.method === "POST",
+      );
+      expect(saveCall).toBeTruthy();
+      const body = JSON.parse(String(saveCall?.[1]?.body || "{}")) as {
+        steps: Array<{
+          skill?: { inputs?: Record<string, unknown> };
+          tool?: { inputs?: Record<string, unknown> };
+        }>;
+      };
+      expect(body.steps[0]?.tool?.inputs).toMatchObject({
+        repository: "MoonLadderStudios/SavedSchemaRepo",
+        branch: "feature/saved-schema",
+      });
+      expect(body.steps[0]?.skill?.inputs).toMatchObject({
+        repository: "MoonLadderStudios/SavedSchemaRepo",
+        branch: "feature/saved-schema",
+      });
+    });
+  });
+
+  it("clears direct skill schema values when switching skills", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    fireEvent.change(await within(step).findByLabelText("Repository name"), {
+      target: { value: "MoonLadderStudios/StaleRepo" },
+    });
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.other" },
+    });
+
+    await waitFor(() => {
+      expect(
+        (within(step).getByLabelText("Repository name") as HTMLInputElement)
+          .value,
+      ).toBe("MoonLadderStudios/Other");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: {
+        task: {
+          skill?: { inputs?: Record<string, unknown> };
+          tool?: { inputs?: Record<string, unknown> };
+        };
+      };
+    };
+    expect(request.payload.task.tool?.inputs).toMatchObject({
+      repository: "MoonLadderStudios/Other",
+      branch: "develop",
+    });
+    expect(request.payload.task.skill?.inputs).toMatchObject({
+      repository: "MoonLadderStudios/Other",
+      branch: "develop",
+    });
   });
 
   it("keeps cleared optional numeric schema inputs unset", async () => {

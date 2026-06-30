@@ -192,7 +192,7 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
 
         async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
             assert payload["agent_id"] == "agent-1"
-            assert payload["labels"]["moonmind.issue"] == "MM-1030"
+            assert payload["labels"]["moonmind.issue"] == "MM-1059"
             return {"id": "session-1"}
 
         async def post_event(
@@ -366,7 +366,7 @@ async def test_run_omnigent_execution_uses_nested_session_parameters(
             "labels": {
                 "moonmind.correlation_id": "corr-1",
                 "moonmind.idempotency_key": "idem-1",
-                "moonmind.issue": "MM-1030",
+                "moonmind.issue": "MM-1059",
             },
             "host_type": "external",
             "workspace": "/workspace/repo",
@@ -507,14 +507,18 @@ async def test_run_omnigent_execution_preserves_session_after_transport_error(
 
 
 @pytest.mark.asyncio
-async def test_run_omnigent_execution_interrupts_and_stops_on_cancellation(
+async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[tuple[str, object]] = []
+    httpx_clients: list[object] = []
+    cleanup_harvest_client_ids: list[int] = []
 
     class FakeClient:
-        def __init__(self, **_: object) -> None:
-            pass
+        def __init__(self, **kwargs: object) -> None:
+            self.httpx_client = kwargs["client"]
+            httpx_clients.append(self.httpx_client)
 
         async def list_agents(self) -> dict[str, object]:
             return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
@@ -547,6 +551,36 @@ async def test_run_omnigent_execution_interrupts_and_stops_on_cancellation(
             calls.append(("stop_session", session_id))
             return {}
 
+        async def list_changed_files(self, session_id: str) -> dict[str, object]:
+            calls.append(("list_changed_files", session_id))
+            cleanup_harvest_client_ids.append(id(self.httpx_client))
+            return {"items": [{"path": "src/app.py"}]}
+
+        async def list_workspace_files(self, session_id: str) -> dict[str, object]:
+            calls.append(("list_workspace_files", session_id))
+            return {"items": [{"path": "src/app.py", "type": "file"}]}
+
+        async def get_workspace_file(self, session_id: str, path: str) -> bytes:
+            calls.append(("get_workspace_file", path))
+            return b"print('cancelled')\n"
+
+        async def get_workspace_diff(self, session_id: str, path: str) -> bytes:
+            calls.append(("get_workspace_diff", path))
+            return b"diff --git a/src/app.py b/src/app.py\n"
+
+        async def list_session_files(self, session_id: str) -> dict[str, object]:
+            calls.append(("list_session_files", session_id))
+            return {"items": []}
+
+        async def delete_session(
+            self,
+            session_id: str,
+            *,
+            delete_branch: bool = False,
+        ) -> dict[str, object]:
+            calls.append(("delete_session", session_id))
+            return {}
+
     async def cancel_immediately(_delay: float) -> None:
         raise asyncio.CancelledError()
 
@@ -567,13 +601,26 @@ async def test_run_omnigent_execution_interrupts_and_stops_on_cancellation(
                         "agent": {"agentName": "codex-native-ui"},
                         "session": {"allowEmptyWorkspace": True},
                         "prompt": {"text": "Do the task"},
+                        "capture": {"deleteOmnigentSessionAfterHarvest": True},
                     },
                 },
-            )
+            ),
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
         )
 
     assert ("interrupt", "session-1") in calls
     assert ("stop_session", "session-1") in calls
+    assert ("list_changed_files", "session-1") in calls
+    assert ("delete_session", "session-1") in calls
+    assert len(httpx_clients) == 2
+    assert cleanup_harvest_client_ids == [id(httpx_clients[1])]
+    assert calls.index(("list_changed_files", "session-1")) < calls.index(
+        ("delete_session", "session-1")
+    )
+    manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["terminalStatus"] == "canceled"
+    assert manifest["patchUnavailable"] is False
 
 
 @pytest.mark.asyncio
@@ -1151,8 +1198,22 @@ async def test_run_omnigent_execution_harvests_changed_and_session_files(
             return {"items": [{"path": "src/app.py"}]}
 
         async def get_workspace_file(self, session_id: str, path: str) -> bytes:
+            return {
+                "README.md": b"# Project\n",
+                "src/app.py": b"print('changed')\n",
+            }[path]
+
+        async def list_workspace_files(self, session_id: str) -> dict[str, object]:
+            return {
+                "items": [
+                    {"path": "README.md", "type": "file"},
+                    {"path": "src", "type": "directory"},
+                ]
+            }
+
+        async def get_workspace_diff(self, session_id: str, path: str) -> bytes:
             assert path == "src/app.py"
-            return b"print('changed')\n"
+            return b"diff --git a/src/app.py b/src/app.py\n"
 
         async def list_session_files(self, session_id: str) -> dict[str, object]:
             return {"items": [{"id": "file-1", "filename": "session.log"}]}
@@ -1184,8 +1245,91 @@ async def test_run_omnigent_execution_harvests_changed_and_session_files(
 
     assert result.failure_class is None
     assert result.metadata["changedFilesIndexRef"].startswith("artifact://omnigent/")
+    assert result.metadata["workspaceFilesIndexRef"].startswith("artifact://omnigent/")
     assert result.metadata["sessionFilesIndexRef"].startswith("artifact://omnigent/")
     assert result.metadata["githubPrUrl"] == "https://github.example/org/repo/pull/1"
+    manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["workspaceFiles"][0]["path"] == "README.md"
+    assert manifest["workspaceDiffs"][0]["path"] == "src/app.py"
+    assert manifest["patchUnavailable"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_honors_workspace_files_capture_opt_out(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            return {"pending_id": "pending-1"}
+
+        async def stream_events(self, session_id: str):
+            yield {"type": "response.completed"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            return {"status": "completed", "summary": "done"}
+
+        async def list_changed_files(self, session_id: str) -> dict[str, object]:
+            return {"items": [{"path": "src/app.py"}]}
+
+        async def get_workspace_file(self, session_id: str, path: str) -> bytes:
+            assert path == "src/app.py"
+            return b"print('changed')\n"
+
+        async def list_workspace_files(self, session_id: str) -> dict[str, object]:
+            raise AssertionError("workspaceFiles=false must skip workspace file harvest")
+
+        async def get_workspace_diff(self, session_id: str, path: str) -> bytes:
+            assert path == "src/app.py"
+            return b"diff --git a/src/app.py b/src/app.py\n"
+
+        async def list_session_files(self, session_id: str) -> dict[str, object]:
+            return {"items": []}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                    "capture": {"workspaceFiles": False},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    assert result.failure_class is None
+    assert "workspaceFilesIndexRef" not in result.metadata
+    manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert "workspaceFilesIndexRef" not in manifest
+    assert "workspaceFiles" not in manifest
+    assert manifest["changedFiles"][0]["path"] == "src/app.py"
+    assert manifest["workspaceDiffs"][0]["path"] == "src/app.py"
 
 
 @pytest.mark.asyncio
@@ -1335,4 +1479,5 @@ async def test_run_omnigent_execution_records_missing_resource_harvest_and_child
     assert manifest["childSessions"] == 1
     assert manifest["childSessionEvidence"][0]["childSessionId"] == "child-1"
     assert "changedFilesUnavailable" in manifest
+    assert "workspaceFilesUnavailable" in manifest
     assert "sessionFilesUnavailable" in manifest

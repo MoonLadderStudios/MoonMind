@@ -2766,6 +2766,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflows/skills/{skill_id}/input-contract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dashboard Skill Input Contract
+         * @description Return a Skill catalog item with the full input contract inlined.
+         */
+        get: operations["get_dashboard_skill_input_contract_api_workflows_skills__skill_id__input_contract_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/github/branches": {
         parameters: {
             query?: never;
@@ -4257,6 +4277,100 @@ export interface components {
             labels?: string[];
         };
         /**
+         * DashboardSkillInputContractResponse
+         * @description Detailed Skill contract response with the full schema inlined.
+         */
+        DashboardSkillInputContractResponse: {
+            /**
+             * Id
+             * @description Skill identifier
+             */
+            id: string;
+            /**
+             * Kind
+             * @description Capability kind
+             * @default skill
+             * @constant
+             */
+            kind: "skill";
+            /**
+             * Label
+             * @description Human-readable skill label
+             */
+            label?: string | null;
+            /**
+             * Description
+             * @description Skill description
+             */
+            description?: string | null;
+            /**
+             * Requiredcapabilities
+             * @description Default required capabilities declared by Skill metadata
+             */
+            requiredCapabilities?: string[];
+            /**
+             * Markdown
+             * @description Markdown content of the skill, if requested
+             */
+            markdown?: string | null;
+            /**
+             * Inputschema
+             * @description Normalized Skill input JSON Schema, when small enough to inline
+             */
+            inputSchema?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Uischema
+             * @description Presentation-only UI schema for generated input forms
+             */
+            uiSchema?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Defaults
+             * @description Safe normalized input defaults
+             */
+            defaults?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Contractdigest
+             * @description Digest of the normalized Skill input contract
+             */
+            contractDigest?: string | null;
+            /**
+             * Diagnostics
+             * @description Non-blocking Skill contract parser diagnostics
+             */
+            diagnostics?: {
+                [key: string]: string;
+            }[];
+            /**
+             * Source
+             * @description Skill source and content evidence summary
+             */
+            source?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Contentdigest
+             * @description Digest of the Skill content used to derive the contract
+             */
+            contentDigest?: string | null;
+            /**
+             * Hasinputschema
+             * @description Whether the Skill publishes structured input fields
+             * @default false
+             */
+            hasInputSchema: boolean;
+            /**
+             * Inputcontractref
+             * @description Endpoint for the full Skill input contract when not inlined
+             */
+            inputContractRef?: string | null;
+        };
+        /**
          * DashboardSkillListResponse
          * @description Dashboard response containing available skill options.
          */
@@ -4280,38 +4394,21 @@ export interface components {
             id: string;
             /**
              * Kind
+             * @description Capability kind
              * @default skill
              * @constant
              */
             kind: "skill";
-            /** Label */
+            /**
+             * Label
+             * @description Human-readable skill label
+             */
             label?: string | null;
-            /** Description */
+            /**
+             * Description
+             * @description Skill description
+             */
             description?: string | null;
-            /** Inputschema */
-            inputSchema?: {
-                [key: string]: unknown;
-            };
-            /** Uischema */
-            uiSchema?: {
-                [key: string]: unknown;
-            };
-            /** Defaults */
-            defaults?: {
-                [key: string]: unknown;
-            };
-            /** Contractdigest */
-            contractDigest?: string | null;
-            /** Contentdigest */
-            contentDigest?: string | null;
-            /** Source */
-            source?: {
-                [key: string]: unknown;
-            } | null;
-            /** Diagnostics */
-            diagnostics?: {
-                [key: string]: unknown;
-            }[];
             /**
              * Requiredcapabilities
              * @description Default required capabilities declared by Skill metadata
@@ -4322,6 +4419,62 @@ export interface components {
              * @description Markdown content of the skill, if requested
              */
             markdown?: string | null;
+            /**
+             * Inputschema
+             * @description Normalized Skill input JSON Schema, when small enough to inline
+             */
+            inputSchema?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Uischema
+             * @description Presentation-only UI schema for generated input forms
+             */
+            uiSchema?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Defaults
+             * @description Safe normalized input defaults
+             */
+            defaults?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Contractdigest
+             * @description Digest of the normalized Skill input contract
+             */
+            contractDigest?: string | null;
+            /**
+             * Diagnostics
+             * @description Non-blocking Skill contract parser diagnostics
+             */
+            diagnostics?: {
+                [key: string]: string;
+            }[];
+            /**
+             * Source
+             * @description Skill source and content evidence summary
+             */
+            source?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Contentdigest
+             * @description Digest of the Skill content used to derive the contract
+             */
+            contentDigest?: string | null;
+            /**
+             * Hasinputschema
+             * @description Whether the Skill publishes structured input fields
+             * @default false
+             */
+            hasInputSchema: boolean;
+            /**
+             * Inputcontractref
+             * @description Endpoint for the full Skill input contract when not inlined
+             */
+            inputContractRef?: string | null;
         };
         /**
          * DashboardUiInfoResponse
@@ -14992,6 +15145,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dashboard_skill_input_contract_api_workflows_skills__skill_id__input_contract_get: {
+        parameters: {
+            query?: {
+                digest?: string | null;
+            };
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardSkillInputContractResponse"];
                 };
             };
             /** @description Validation Error */

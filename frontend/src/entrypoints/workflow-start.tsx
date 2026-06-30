@@ -524,6 +524,7 @@ export function resolveDefaultProviderProfileId(
 interface SkillsResponse {
   items?: {
     worker?: string[];
+    [source: string]: string[] | undefined;
   };
   legacyItems?: SkillCapabilityDetail[];
 }
@@ -605,11 +606,13 @@ interface PresetDetail extends PresetSummary {
 
 interface SkillCapabilityDetail {
   id: string;
+  description?: string;
   inputSchema?: Record<string, unknown>;
   uiSchema?: Record<string, unknown>;
   defaults?: Record<string, unknown>;
   contractDigest?: string | null;
   contentDigest?: string | null;
+  contentRef?: string | null;
   source?: Record<string, unknown> | null;
   diagnostics?: Array<Record<string, unknown>>;
   requiredCapabilities?: string[];
@@ -3076,7 +3079,15 @@ function schemaChoiceOptions(schema: Record<string, unknown>): Array<{
 
 function textInputTypeForSchema(schema: Record<string, unknown>): string {
   const format = String(schema.format || "").trim().toLowerCase();
-  if (format === "email" || format === "uri" || format === "url" || format === "date") {
+  if (format === "date-time") {
+    return "datetime-local";
+  }
+  if (
+    format === "email" ||
+    format === "uri" ||
+    format === "url" ||
+    format === "date"
+  ) {
     return format === "uri" ? "url" : format;
   }
   if (schema.type === "number" || schema.type === "integer") {
@@ -3121,15 +3132,23 @@ function unsupportedCapabilityWidget(
   const supported = new Set([
     "array",
     "boolean",
+    "branch",
     "date",
+    "date-time",
     "email",
     "integer",
     "github.issue-picker",
     "jira.issue-picker",
+    "markdown",
     "number",
     "object",
+    "repository",
+    "repository-picker",
+    "repo",
+    "repo-picker",
     "string",
     "text",
+    "textarea",
     "uri",
     "url",
   ]);
@@ -3189,6 +3208,13 @@ function capabilityInputTextValue(
     return String(record.key || "");
   }
   return value === undefined || value === null ? "" : String(value);
+}
+
+function capabilityInputStringArrayValue(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => String(item)).filter(Boolean);
 }
 
 function normalizeGitHubIssueInput(
@@ -3335,6 +3361,21 @@ function validateSchemaCapabilityValues(
     if (value === undefined || value === null || value === "") {
       continue;
     }
+    if (fieldSchema.type === "array") {
+      if (!Array.isArray(value)) {
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a JSON array.`;
+        continue;
+      }
+      const itemSchema = recordValue(fieldSchema.items);
+      if (Array.isArray(itemSchema.enum)) {
+        const allowed = new Set(itemSchema.enum.map((item) => String(item)));
+        const invalid = value.some((item) => !allowed.has(String(item)));
+        if (invalid) {
+          errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must use available options.`;
+          continue;
+        }
+      }
+    }
     if (Array.isArray(fieldSchema.enum)) {
       const allowed = new Set(fieldSchema.enum.map((item) => String(item)));
       if (!allowed.has(String(value))) {
@@ -3396,6 +3437,24 @@ function schemaSkillInputs(
   };
 }
 
+function skillInputContractPayload(
+  detail: SkillCapabilityDetail | null | undefined,
+): Record<string, unknown> {
+  if (!detail) {
+    return {};
+  }
+  return {
+    ...(detail.inputSchema ? { inputSchema: detail.inputSchema } : {}),
+    ...(detail.uiSchema ? { uiSchema: detail.uiSchema } : {}),
+    ...(detail.defaults ? { defaults: detail.defaults } : {}),
+    ...(detail.contractDigest
+      ? { inputContractDigest: detail.contractDigest }
+      : {}),
+    ...(detail.contentDigest ? { contentDigest: detail.contentDigest } : {}),
+    ...(detail.contentRef ? { contentRef: detail.contentRef } : {}),
+  };
+}
+
 function mergeSkillArgsWithSchemaInputs(
   skillArgs: Record<string, unknown>,
   schemaInputs: Record<string, unknown>,
@@ -3415,33 +3474,34 @@ function skillContractDigestNotice(
   return "This Skill input contract changed since the draft was saved. Entered values were preserved and will be revalidated before submission.";
 }
 
-function skillPayloadWithInputs({
-  skillId,
-  inputs,
-  savedInputContractDigest,
-  currentInputContractDigest,
-  requiredCapabilities,
-}: {
+function skillPayloadWithInputs(args: {
   skillId: string;
   inputs: Record<string, unknown>;
   savedInputContractDigest?: string | null | undefined;
   currentInputContractDigest?: string | null | undefined;
   requiredCapabilities?: string[];
-}): Record<string, unknown> {
+  detail?: SkillCapabilityDetail | null;
+}): PresetStepSkill {
   const normalizedInputs = Object.fromEntries(
-    Object.entries(inputs).filter(([, value]) => value !== undefined),
+    Object.entries(args.inputs).filter(([, value]) => value !== undefined),
   );
-  const savedDigest = String(savedInputContractDigest || "").trim();
-  const currentDigest = String(currentInputContractDigest || "").trim();
+  const detailPayload = skillInputContractPayload(args.detail);
+  const savedDigest = String(
+    args.savedInputContractDigest || detailPayload.inputContractDigest || "",
+  ).trim();
+  const currentDigest = String(
+    args.currentInputContractDigest || detailPayload.inputContractDigest || "",
+  ).trim();
   return {
-    id: skillId,
+    id: args.skillId,
     inputs: normalizedInputs,
+    ...detailPayload,
     ...(savedDigest ? { inputContractDigest: savedDigest } : {}),
     ...(currentDigest && currentDigest !== savedDigest
       ? { currentInputContractDigest: currentDigest }
       : {}),
-    ...(requiredCapabilities && requiredCapabilities.length > 0
-      ? { requiredCapabilities }
+    ...(args.requiredCapabilities && args.requiredCapabilities.length > 0
+      ? { requiredCapabilities: args.requiredCapabilities }
       : {}),
   };
 }
@@ -3810,6 +3870,8 @@ function SchemaCapabilityFields({
   values,
   errors,
   disabled,
+  repositoryOptions,
+  branchOptions,
   onChange,
 }: {
   fields: Array<[string, unknown]>;
@@ -3817,6 +3879,8 @@ function SchemaCapabilityFields({
   values: Record<string, unknown>;
   errors: Record<string, string>;
   disabled: boolean;
+  repositoryOptions: RepositoryOption[];
+  branchOptions: BranchOption[];
   onChange: (name: string, value: unknown) => void;
 }): ReactElement | null {
   if (fields.length === 0) {
@@ -3840,13 +3904,15 @@ function SchemaCapabilityFields({
               {label}
               <input
                 id={inputId}
+                aria-label={label}
                 type="text"
                 value={capabilityInputTextValue(values, detail.defaults, name)}
-                disabled
-                aria-invalid
-                onChange={() => undefined}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                onChange={(event) => onChange(name, event.target.value)}
               />
               <span className="notice small">Unsupported field widget.</span>
+              {error ? <span className="notice small">{error}</span> : null}
             </label>
           );
         }
@@ -3862,6 +3928,7 @@ function SchemaCapabilityFields({
               {label}
               <input
                 id={inputId}
+                aria-label={label}
                 type="text"
                 value={issuePickerTextValue(value, provider)}
                 placeholder={placeholder}
@@ -3895,12 +3962,62 @@ function SchemaCapabilityFields({
               {label}
               <input
                 id={inputId}
+                aria-label={label}
                 type="checkbox"
                 checked={Boolean(value)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
                 onChange={(event) => onChange(name, event.target.checked)}
               />
+              {description ? <span className="small">{description}</span> : null}
+              {error ? <span className="notice small">{error}</span> : null}
+            </label>
+          );
+        }
+        const itemSchema = recordValue(fieldSchema.items);
+        if (
+          fieldSchema.type === "array" &&
+          (Array.isArray(itemSchema.enum) || schemaChoiceOptions(itemSchema).length > 0)
+        ) {
+          const itemChoices = schemaChoiceOptions(itemSchema);
+          const itemEnumOptions = Array.isArray(itemSchema.enum)
+            ? itemSchema.enum
+            : [];
+          const itemOptions: Array<{ label: string; value: unknown }> =
+            itemChoices.length > 0
+              ? itemChoices
+              : itemEnumOptions.map((option: unknown) => ({
+                  label: String(option),
+                  value: option,
+                }));
+          const selectedValues = capabilityInputStringArrayValue(value);
+          return (
+            <label key={name} htmlFor={inputId}>
+              {label}
+              <select
+                id={inputId}
+                aria-label={label}
+                multiple
+                value={selectedValues}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                onChange={(event) => {
+                  const selected = Array.from(event.currentTarget.selectedOptions)
+                    .map((option) => {
+                      const matched = itemOptions.find(
+                        (item) => String(item.value) === option.value,
+                      );
+                      return matched?.value ?? option.value;
+                    });
+                  onChange(name, selected);
+                }}
+              >
+                {itemOptions.map((option) => (
+                  <option key={String(option.value)} value={String(option.value)}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
               {description ? <span className="small">{description}</span> : null}
               {error ? <span className="notice small">{error}</span> : null}
             </label>
@@ -3922,6 +4039,7 @@ function SchemaCapabilityFields({
               {label}
               <select
                 id={inputId}
+                aria-label={label}
                 value={capabilityInputTextValue(values, detail.defaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
@@ -3943,12 +4061,30 @@ function SchemaCapabilityFields({
             </label>
           );
         }
+        if (widget === "textarea" || widget === "markdown") {
+          return (
+            <label key={name} htmlFor={inputId}>
+              {label}
+              <textarea
+                id={inputId}
+                aria-label={label}
+                value={capabilityInputTextValue(values, detail.defaults, name)}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                onChange={(event) => onChange(name, event.target.value)}
+              />
+              {description ? <span className="small">{description}</span> : null}
+              {error ? <span className="notice small">{error}</span> : null}
+            </label>
+          );
+        }
         if (fieldSchema.type === "array" || fieldSchema.type === "object") {
           return (
             <label key={name} htmlFor={inputId}>
               {label}
               <textarea
                 id={inputId}
+                aria-label={label}
                 value={complexCapabilityTextValue(value)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
@@ -3967,7 +4103,17 @@ function SchemaCapabilityFields({
             {label}
             <input
               id={inputId}
+              aria-label={label}
               type={inputType}
+              list={
+                widget === "repository" ||
+                widget === "repository-picker" ||
+                widget === "repo" ||
+                widget === "repo-picker" ||
+                widget === "branch"
+                  ? `${inputId}-options`
+                  : undefined
+              }
               value={capabilityInputTextValue(values, detail.defaults, name)}
               disabled={disabled}
               aria-invalid={Boolean(error)}
@@ -3982,6 +4128,31 @@ function SchemaCapabilityFields({
                 )
               }
             />
+            {widget === "repository" ||
+            widget === "repository-picker" ||
+            widget === "repo" ||
+            widget === "repo-picker" ? (
+              <datalist id={`${inputId}-options`}>
+                {repositoryOptions.map((option) => (
+                  <option
+                    key={option.value}
+                    value={option.value}
+                    label={option.label}
+                  />
+                ))}
+              </datalist>
+            ) : null}
+            {widget === "branch" ? (
+              <datalist id={`${inputId}-options`}>
+                {branchOptions.map((option) => (
+                  <option
+                    key={option.value}
+                    value={option.value}
+                    label={option.label}
+                  />
+                ))}
+              </datalist>
+            ) : null}
             {description ? <span className="small">{description}</span> : null}
             {error ? <span className="notice small">{error}</span> : null}
           </label>
@@ -5918,11 +6089,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         }
         detailsById[id] = {
           id,
+          description: String(item.description || "").trim(),
           ...(item.inputSchema ? { inputSchema: item.inputSchema } : {}),
           ...(item.uiSchema ? { uiSchema: item.uiSchema } : {}),
           ...(item.defaults ? { defaults: item.defaults } : {}),
           ...(item.contractDigest ? { contractDigest: item.contractDigest } : {}),
           ...(item.contentDigest ? { contentDigest: item.contentDigest } : {}),
+          ...(item.contentRef ? { contentRef: item.contentRef } : {}),
           ...(item.source ? { source: item.source } : {}),
           ...(Array.isArray(item.diagnostics)
             ? { diagnostics: item.diagnostics }
@@ -5936,8 +6109,16 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             : {}),
         };
       }
+      const ids = Array.from(
+        new Set(
+          Object.values(data.items || {})
+            .flatMap((items) => items || [])
+            .map((id) => String(id || "").trim())
+            .filter(Boolean),
+        ),
+      );
       return {
-        ids: data.items?.worker || Object.keys(detailsById),
+        ids: ids.length > 0 ? ids : Object.keys(detailsById),
         detailsById,
       };
     },
@@ -7284,9 +7465,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         }
         if (
           Object.prototype.hasOwnProperty.call(updates, "skillId") &&
-          !showAdvancedStepOptions
+          updates.skillId !== step.skillId
         ) {
-          nextStep.skillArgs = "";
+          nextStep.presetInputValues = {};
+          nextStep.presetInputErrors = {};
+          if (!showAdvancedStepOptions) {
+            nextStep.skillArgs = "";
+          }
         }
         if (Object.prototype.hasOwnProperty.call(updates, "toolInputValues")) {
           nextStep.toolInputs = serializeToolInputValues(nextStep.toolInputValues);
@@ -8333,7 +8518,29 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       // chip selector, so they persist into presets regardless of Advanced mode.
       const caps = step.explicitRequiredCapabilities;
       const skillArgsRaw = showAdvancedStepOptions ? step.skillArgs.trim() : "";
-      if (skillId || skillArgsRaw || caps.length > 0) {
+      const skillDetail = skillId
+        ? skillsQuery.data?.detailsById[skillId] || null
+        : null;
+      const structuredSkillInputs = schemaSkillInputs(
+        skillDetail,
+        step.presetInputValues,
+      );
+      if (Object.keys(structuredSkillInputs.errors).length > 0) {
+        updateStep(step.localId, {
+          presetInputErrors: structuredSkillInputs.errors,
+        });
+        setTemplateMessage(
+          Object.values(structuredSkillInputs.errors)[0] ||
+            `Complete required Skill input fields before saving Step ${index + 1}.`,
+        );
+        return false;
+      }
+      if (
+        skillId ||
+        skillArgsRaw ||
+        Object.keys(structuredSkillInputs.values).length > 0 ||
+        caps.length > 0
+      ) {
         let skillArgs: Record<string, unknown> = {};
         if (skillArgsRaw) {
           try {
@@ -8353,6 +8560,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             return false;
           }
         }
+        skillArgs = mergeSkillArgsWithSchemaInputs(
+          skillArgs,
+          structuredSkillInputs.values,
+        );
         const normalizedTool = {
           type: "skill",
           name: skillId || "auto",
@@ -8368,6 +8579,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           savedInputContractDigest: selectedSkillDetail?.contractDigest,
           currentInputContractDigest: selectedSkillDetail?.contractDigest,
           requiredCapabilities: caps,
+          detail: selectedSkillDetail,
         });
       }
       presetSteps.push(blueprint);
@@ -9068,19 +9280,19 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       ...(Object.keys(primarySkillArgs).length > 0
         ? { inputs: primarySkillArgs }
         : {}),
+      ...skillInputContractPayload(primarySkillDetail),
       ...(taskSkillRequiredCapabilities.length > 0
         ? { requiredCapabilities: taskSkillRequiredCapabilities }
         : {}),
     };
-    const primaryStepSkill = {
-      ...skillPayloadWithInputs({
-        skillId: primarySkillId,
-        inputs: primarySkillArgs,
-        savedInputContractDigest: primarySavedInputContractDigest,
-        currentInputContractDigest: primaryCurrentInputContractDigest,
-        requiredCapabilities: taskSkillRequiredCapabilities,
-      }),
-    };
+    const primaryStepSkill = skillPayloadWithInputs({
+      skillId: primarySkillId,
+      inputs: primarySkillArgs,
+      savedInputContractDigest: primarySavedInputContractDigest,
+      currentInputContractDigest: primaryCurrentInputContractDigest,
+      requiredCapabilities: taskSkillRequiredCapabilities,
+      detail: primarySkillDetail,
+    });
     const primaryStepHasSkillOverride =
       hasExplicitSkillSelection(primarySkillId) ||
       Object.keys(primarySkillArgs).length > 0 ||
@@ -9091,6 +9303,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       sourceIndex: number;
       step: StepState;
       skillId: string;
+      skillDetail: SkillCapabilityDetail | null;
       skillArgsRaw: string;
       skillArgs: Record<string, unknown>;
       skillInputContractDigest: string;
@@ -9240,6 +9453,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         sourceIndex: index,
         step,
         skillId: stepSkillId,
+        skillDetail: stepSkillDetail,
         skillArgsRaw: stepSkillArgsRaw,
         skillArgs: stepSkillArgs,
         skillInputContractDigest: stepSavedInputContractDigest,
@@ -9476,6 +9690,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       sourceIndex,
       step,
       skillId: stepSkillId,
+      skillDetail: stepSkillDetail,
       skillArgsRaw: stepSkillArgsRaw,
       skillArgs: stepSkillArgs,
       skillInputContractDigest: stepSkillInputContractDigest,
@@ -9528,19 +9743,19 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           type: "skill",
           name: stepSkillId || primarySkillId,
           inputs: stepSkillArgs,
+          ...skillInputContractPayload(stepSkillDetail || primarySkillDetail),
           ...(stepSkillCaps.length > 0
             ? { requiredCapabilities: stepSkillCaps }
             : {}),
         };
-        stepPayload.skill = {
-          ...skillPayloadWithInputs({
-            skillId: stepSkillId || primarySkillId,
-            inputs: stepSkillArgs,
-            savedInputContractDigest: stepSkillInputContractDigest,
-            currentInputContractDigest: stepCurrentSkillInputContractDigest,
-            requiredCapabilities: stepSkillCaps,
-          }),
-        };
+        stepPayload.skill = skillPayloadWithInputs({
+          skillId: stepSkillId || primarySkillId,
+          inputs: stepSkillArgs,
+          savedInputContractDigest: stepSkillInputContractDigest,
+          currentInputContractDigest: stepCurrentSkillInputContractDigest,
+          requiredCapabilities: stepSkillCaps,
+          detail: stepSkillDetail || primarySkillDetail,
+        });
         stepSkillRequiredCapabilities.push(...stepSkillCaps);
       }
       additionalSteps.push({ sourceIndex, payload: stepPayload });
@@ -10920,6 +11135,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                             values={step.toolInputValues}
                             errors={step.toolInputErrors}
                             disabled={false}
+                            repositoryOptions={repositoryOptions}
+                            branchOptions={branchOptions}
                             onChange={(name, value) =>
                               updateToolInputValue(step.localId, name, value)
                             }
@@ -11215,6 +11432,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                                 values={step.toolInputValues}
                                 errors={step.toolInputErrors}
                                 disabled={false}
+                                repositoryOptions={repositoryOptions}
+                                branchOptions={branchOptions}
                                 onChange={(name, value) =>
                                   updateToolInputValue(step.localId, name, value)
                                 }
@@ -11349,6 +11568,21 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           </span>
                         )}
                       </div>
+                      {selectedSkillDetail && visibleSkillSchemaFields.length === 0 ? (
+                        <div
+                          className="notice small"
+                          data-testid={`skill-schema-fallback-${index}`}
+                        >
+                          <strong>{selectedSkillDetail.id}</strong>
+                          {selectedSkillDetail.description ? (
+                            <span>{`: ${selectedSkillDetail.description}`}</span>
+                          ) : null}
+                          <span>
+                            {" "}
+                            This Skill does not publish structured input fields.
+                          </span>
+                        </div>
+                      ) : null}
 
                       {showSkillArgsField ? (
                         <label
@@ -11387,6 +11621,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           values={step.presetInputValues}
                           errors={step.presetInputErrors}
                           disabled={false}
+                          repositoryOptions={repositoryOptions}
+                          branchOptions={branchOptions}
                           onChange={(name, value) =>
                             updateStepPresetInputValue(
                               step.localId,
@@ -11624,6 +11860,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           values={step.presetInputValues}
                           errors={step.presetInputErrors}
                           disabled={isApplyingPreset}
+                          repositoryOptions={repositoryOptions}
+                          branchOptions={branchOptions}
                           onChange={(name, value) =>
                             updateStepPresetInputValue(
                               step.localId,
