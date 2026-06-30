@@ -4011,9 +4011,7 @@ function StepExecutionHistoryRow({
     <li className="step-execution-history-item">
       <div className="step-execution-history-head">
         <span className="step-execution-pill">Execution {execution.executionOrdinal}</span>
-        <span {...executionStatusPillProps(execution.status)}>
-          {formatStatusLabel(execution.status)}
-        </span>
+        <ExecutionStatusPill status={execution.status} />
         <span className="step-execution-reason">{formatStatusLabel(execution.reason)}</span>
         {downstreamInvalidated ? (
           <span
@@ -4238,7 +4236,7 @@ function StepLedgerRowCard({
             <span className="step-tl-title">{row.title}</span>
             <span className="step-tl-right">
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
-              <span {...executionStatusPillProps(row.status)}>{formatStatusLabel(row.status)}</span>
+              <ExecutionStatusPill status={row.status} />
               {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}
               <StepProvenanceMarker row={row} />
               <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
@@ -7491,7 +7489,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                               <strong>{item.title || item.workflowId}</strong>
                             </a>
                             <code className="text-xs break-all">{item.workflowId}</code>
-                            <span {...executionStatusPillProps(stateLabel)}>{formatStatusLabel(stateLabel)}</span>
+                            <ExecutionStatusPill status={stateLabel} />
                             {isWaitingForRerun ? (
                               <p className="small">
                                 <strong>Prerequisite failed; waiting for successful rerun.</strong>{' '}
@@ -7529,7 +7527,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                             <strong>{item.title || item.workflowId}</strong>
                           </a>
                           <code className="text-xs break-all">{item.workflowId}</code>
-                          <span {...executionStatusPillProps(item.state)}>{formatStatusLabel(item.state, 'unknown')}</span>
+                          <ExecutionStatusPill status={item.state || 'unknown'} />
                           {item.summary ? <p className="small">{item.summary}</p> : null}
                           {item.closeStatus ? <p className="small">Close status: {formatStatusLabel(item.closeStatus)}</p> : null}
                         </div>
