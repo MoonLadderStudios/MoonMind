@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import re
@@ -99,9 +100,9 @@ def parse_capability_input_contract(
     ui_schema = _first_mapping(metadata, "uiSchema", "ui_schema")
     defaults = _first_mapping(metadata, "defaults")
     return CapabilityInputContractParts(
-        input_schema=input_schema,
-        ui_schema=ui_schema,
-        defaults=defaults,
+        input_schema=_json_compatible_mapping(input_schema),
+        ui_schema=_json_compatible_mapping(ui_schema),
+        defaults=_json_compatible_mapping(defaults),
     )
 
 
@@ -154,9 +155,9 @@ def normalize_capability_input_contract(
     """Return a camelCase renderer-facing capability input contract."""
 
     diagnostics = [dict(item) for item in parts.diagnostics]
-    input_schema = dict(parts.input_schema) if isinstance(parts.input_schema, Mapping) else {}
-    ui_schema = dict(parts.ui_schema) if isinstance(parts.ui_schema, Mapping) else {}
-    defaults = dict(parts.defaults) if isinstance(parts.defaults, Mapping) else {}
+    input_schema = _json_compatible_mapping(parts.input_schema) or {}
+    ui_schema = _json_compatible_mapping(parts.ui_schema) or {}
+    defaults = _json_compatible_mapping(parts.defaults) or {}
 
     if input_schema:
         root_type = input_schema.get("type")
@@ -273,6 +274,23 @@ def _legacy_input_to_json_schema(definition: Mapping[str, Any]) -> dict[str, Any
     if placeholder:
         schema["description"] = placeholder
     return schema
+
+
+
+def _json_compatible_mapping(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return {str(key): _json_compatible_value(item) for key, item in value.items()}
+
+
+def _json_compatible_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_compatible_value(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_json_compatible_value(item) for item in value]
+    if isinstance(value, (dt.date, dt.datetime, dt.time)):
+        return value.isoformat()
+    return value
 
 
 def _first_mapping(metadata: Mapping[str, Any], *keys: str) -> dict[str, Any] | None:
