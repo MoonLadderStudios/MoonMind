@@ -6332,7 +6332,10 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                                 },
                             )
                         except Exception:
-                            pass
+                            logger.debug(
+                                "Failed to emit skill input contract digest mismatch metric",
+                                exc_info=True,
+                            )
                     raw_caps = selected_skill.get("requiredCapabilities")
                     if raw_caps is not None:
                         normalized_caps = _coerce_string_list(
