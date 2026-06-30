@@ -164,7 +164,6 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
                 "feature_request": normalized_goal,
                 "jira_project_key": _jira_project_key(normalized_goal),
                 "jira_issue_type": "Story",
-                "jira_board_id": "",
                 "jira_dependency_mode": "linear_blocker_chain",
                 "publish_mode": "pr_with_merge_automation",
                 "source_issue_key": "",

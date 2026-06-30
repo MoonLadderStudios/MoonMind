@@ -2043,7 +2043,10 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
                 scope=PresetScopeType.GLOBAL,
                 scope_ref=None,
             )
-            assert template.title == "Jira Breakdown"
+            assert template.title == "Breakdown and Jira Create"
+            assert "jira_board_id" not in {
+                item["name"] for item in template.inputs_schema
+            }
             assert [
                 (step.get("skill") or step.get("tool"))["id"]
                 for step in template.steps
@@ -2079,10 +2082,10 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
                 "jira": {
                     "projectKey": "MM",
                     "issueTypeName": "Story",
-                    "boardId": "",
                     "dependencyMode": "linear_blocker_chain",
                 },
             }
+            assert "Selected Jira board" not in expanded["steps"][1]["instructions"]
             assert expanded["appliedTemplate"]["inputs"]["jira_dependency_mode"] == (
                 "linear_blocker_chain"
             )
@@ -2433,7 +2436,6 @@ async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
             assert expanded["steps"][1]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
-                "boardId": "",
                 "dependencyMode": "none",
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
@@ -2505,7 +2507,6 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 "jira": {
                     "projectKey": "GAME",
                     "issueTypeName": "Story",
-                    "boardId": "",
                     "sourceIssueKey": "GAME-404",
                     "dependencyMode": "linear_blocker_chain",
                 },
@@ -2564,7 +2565,6 @@ async def test_jira_breakdown_replaces_legacy_placeholder_with_single_allowed_pr
             assert expanded["steps"][1]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
-                "boardId": "",
                 "dependencyMode": "none",
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
@@ -2991,7 +2991,10 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
                 scope=PresetScopeType.GLOBAL,
                 scope_ref=None,
             )
-            assert template.title == "Jira Breakdown and Orchestrate"
+            assert template.title == "Breakdown and Jira Orchestrate"
+            assert "jira_board_id" not in {
+                item["name"] for item in template.inputs_schema
+            }
             assert template.annotations["sourceSkill"] == (
                 "jira-breakdown"
             )
@@ -3017,7 +3020,6 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
                     "jira_issue_type": "Story",
-                    "jira_board_id": "84",
                     "jira_dependency_mode": "linear_blocker_chain",
                     "publish_mode": "pr_with_merge_automation",
                     "source_issue_key": "MM-404",
@@ -3041,7 +3043,6 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
             assert expanded["steps"][3]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
-                "boardId": "84",
                 "sourceIssueKey": "MM-404",
                 "dependencyMode": "linear_blocker_chain",
             }
@@ -3050,7 +3051,7 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
             assert "Create one Jira Orchestrate task" in downstream["instructions"]
             assert "dependsOn" in downstream["instructions"]
             assert "MM-404" in downstream["instructions"]
-            assert "Selected Jira board ID: 84" in expanded["steps"][3]["instructions"]
+            assert "Selected Jira board" not in expanded["steps"][3]["instructions"]
             assert downstream["jiraOrchestration"]["task"] == {
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
@@ -3107,7 +3108,6 @@ async def test_jira_breakdown_orchestrate_can_create_source_subtasks(
             assert jira_step["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Sub-task",
-                "boardId": "",
                 "sourceIssueKey": "MM-404",
                 "dependencyMode": "linear_blocker_chain",
             }
@@ -3149,6 +3149,7 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
                 scope_ref=None,
             )
 
+    assert template["title"] == "Breakdown and Jira Implement"
     assert "jira_board_id" not in {item["name"] for item in template["inputs"]}
     assert len(expanded["steps"]) == 5
     assert expanded["steps"][0]["tool"]["id"] == "jira.load_preset_brief"

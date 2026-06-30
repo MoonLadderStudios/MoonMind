@@ -505,7 +505,6 @@ async def test_child_jira_breakdown_implement_expands_workflow_runtime_context(
                             "feature_request": "docs/Designs/RuntimeTypes.md",
                             "jira_project_key": "MM",
                             "jira_issue_type": "Story",
-                            "jira_board_id": "",
                             "jira_dependency_mode": "linear_blocker_chain",
                             "publish_mode": "pr_with_merge_automation",
                             "source_issue_key": "MM-404",
@@ -1434,7 +1433,7 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     plan = planner(
         inputs={
             "task": {
-                "title": "Jira Breakdown",
+                "title": "Breakdown and Jira Create",
                 "instructions": "Break down docs/Design.md into Jira stories.",
                 "runtime": {"mode": "codex_cli"},
                 "publish": {"mode": "pr"},
@@ -1476,7 +1475,9 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
         breakdown["inputs"]["storyOutput"]["requiresStoryBreakdownArtifactRef"]
         is True
     )
-    assert breakdown["inputs"]["targetBranch"].startswith("jira-breakdown-")
+    assert breakdown["inputs"]["targetBranch"].startswith(
+        "breakdown-and-jira-create-"
+    )
     assert (
         jira["inputs"]["storyBreakdownPath"]
         == breakdown["inputs"]["storyBreakdownPath"]
@@ -1505,7 +1506,7 @@ def test_runtime_planner_preserves_step_story_output_without_task_story_output()
     plan = planner(
         inputs={
             "task": {
-                "title": "Jira Breakdown",
+                "title": "Breakdown and Jira Create",
                 "instructions": "Create Jira stories from a step-local config.",
                 "runtime": {"mode": "codex_cli"},
                 "publish": {"mode": "none"},
@@ -1660,7 +1661,7 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     plan = planner(
         inputs={
             "task": {
-                "title": "Jira Breakdown and Orchestrate",
+                "title": "Breakdown and Jira Orchestrate",
                 "instructions": "Break down docs/Design.md into Jira stories.",
                 "runtime": {"mode": "codex_cli"},
                 "publish": {"mode": "none"},
@@ -1752,7 +1753,7 @@ def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
     plan = planner(
         inputs={
             "task": {
-                "title": "Jira Breakdown and Implement",
+                "title": "Breakdown and Jira Implement",
                 "instructions": "Break down docs/Design.md into Jira stories.",
                 "runtime": {"mode": "codex_cli"},
                 "publish": {"mode": "none"},
@@ -1943,7 +1944,6 @@ def test_runtime_planner_dedupes_repeated_identical_preset_steps():
             "jira": {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
-                "boardId": "15",
                 "dependencyMode": "linear_blocker_chain",
             },
         },
@@ -2403,7 +2403,7 @@ def test_runtime_planner_uses_branch_handoff_for_jira_output_when_task_publish_n
     plan = planner(
         inputs={
             "task": {
-                "title": "Jira Breakdown",
+                "title": "Breakdown and Jira Create",
                 "instructions": "Break down docs/Design.md into Jira stories.",
                 "runtime": {"mode": "codex_cli"},
                 "publish": {"mode": "none"},
@@ -2438,7 +2438,9 @@ def test_runtime_planner_uses_branch_handoff_for_jira_output_when_task_publish_n
 
     assert breakdown["inputs"]["storyOutput"]["mode"] == "jira"
     assert breakdown["inputs"]["publishMode"] == "branch"
-    assert breakdown["inputs"]["targetBranch"].startswith("jira-breakdown-")
+    assert breakdown["inputs"]["targetBranch"].startswith(
+        "breakdown-and-jira-create-"
+    )
     assert "commit your work" in breakdown["inputs"]["instructions"]
     assert jira["inputs"]["publishMode"] == "none"
     assert jira["inputs"]["storyOutput"]["mode"] == "jira"

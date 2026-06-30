@@ -88,6 +88,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         jira_template = result.scalar_one_or_none()
         assert jira_template is not None
+        assert jira_template.title == "Breakdown and Jira Create"
+        assert "jira_board_id" not in {
+            item["name"] for item in jira_template.inputs_schema
+        }
         assert [
             (step.get("skill") or step.get("tool"))["id"]
             for step in jira_template.steps
@@ -96,6 +100,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "moonspec-breakdown",
             "story.create_jira_issues",
         ]
+        jira_create_step = jira_template.steps[2]
+        assert "Selected Jira board" not in jira_create_step["instructions"]
+        assert "boardId" not in jira_create_step["storyOutput"]["jira"]
 
         result = await session.execute(
             select(Preset)
@@ -364,6 +371,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         composite_template = result.scalar_one_or_none()
         assert composite_template is not None
+        assert composite_template.title == "Breakdown and Jira Orchestrate"
+        assert "jira_board_id" not in {
+            item["name"] for item in composite_template.inputs_schema
+        }
         assert [
             (step.get("skill") or step.get("tool"))["id"]
             for step in composite_template.steps
@@ -376,6 +387,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         ]
         reconcile_step = composite_template.steps[2]
         assert "fully implemented stories" in reconcile_step["instructions"]
+        composite_jira_step = composite_template.steps[3]
+        assert "Selected Jira board" not in composite_jira_step["instructions"]
+        assert "boardId" not in composite_jira_step["storyOutput"]["jira"]
         downstream_step = composite_template.steps[4]
         assert "trusted Jira story output" in downstream_step["instructions"]
         assert "dependsOn" in downstream_step["instructions"]
@@ -398,6 +412,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         implement_composite_template = result.scalar_one_or_none()
         assert implement_composite_template is not None
+        assert implement_composite_template.title == "Breakdown and Jira Implement"
         assert "jira_board_id" not in {
             item["name"] for item in implement_composite_template.inputs_schema
         }
