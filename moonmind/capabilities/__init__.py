@@ -1,2 +1,1 @@
 """Shared capability contract helpers."""
-

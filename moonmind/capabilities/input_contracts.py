@@ -310,4 +310,3 @@ def _diagnostic(
     if details:
         diagnostic["details"] = dict(details)
     return diagnostic
-
