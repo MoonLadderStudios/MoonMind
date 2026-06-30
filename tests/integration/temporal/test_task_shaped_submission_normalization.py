@@ -16,6 +16,7 @@ from api_service.db.base import get_async_session
 from api_service.db.models import TemporalArtifactStatus
 from moonmind.config.settings import settings
 from tests.unit.api.routers.test_executions import (
+    _ExecuteResult,
     _artifact_session,
     _build_execution_record,
     _override_user_dependencies,
@@ -38,7 +39,17 @@ def _client() -> tuple[TestClient, AsyncMock]:
 
 class _SkillContractSession:
     def __init__(self) -> None:
-        self.execute = AsyncMock(return_value=[])
+        self.execute = AsyncMock(
+            return_value=_ExecuteResult(
+                [
+                    SimpleNamespace(
+                        slug="issue-implement",
+                        artifact_ref="art_skill",
+                        content_digest="sha256:skill",
+                    )
+                ]
+            )
+        )
         self.get = AsyncMock(
             return_value=SimpleNamespace(
                 metadata_json={

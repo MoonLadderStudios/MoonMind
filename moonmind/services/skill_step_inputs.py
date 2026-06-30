@@ -240,7 +240,7 @@ async def _resolve_deployment_skill_entry(
     result = await session.execute(
         select(AgentSkillDefinition).where(AgentSkillDefinition.slug == skill_name)
     )
-    definition = result.scalars().first()
+    definition = _first_scalar_result(result)
     if definition is None or not definition.artifact_ref:
         return None
 
@@ -250,6 +250,21 @@ async def _resolve_deployment_skill_entry(
         content_digest=definition.content_digest,
         provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.DEPLOYMENT),
     )
+
+
+def _first_scalar_result(result: Any) -> Any | None:
+    scalar_one_or_none = getattr(type(result), "scalar_one_or_none", None)
+    if callable(scalar_one_or_none):
+        return result.scalar_one_or_none()
+    scalars = result.scalars() if hasattr(result, "scalars") else result
+    first = getattr(scalars, "first", None)
+    if callable(first):
+        return first()
+    all_rows = getattr(scalars, "all", None)
+    if callable(all_rows):
+        rows = all_rows()
+        return rows[0] if rows else None
+    return next(iter(scalars), None)
 
 
 async def _load_input_contract(
