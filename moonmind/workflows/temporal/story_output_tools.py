@@ -43,7 +43,7 @@ JIRA_STORY_TOOL_NAMES = frozenset(
 )
 _SOURCE_DOCUMENT_PATH_RE = re.compile(
     r"(?P<path>(?:docs/(?:[A-Za-z0-9_.@+=-]+/)*[A-Za-z0-9_.@+=-]+|"
-    r"\.specify/memory/constitution)\.md)"
+    r"(?<![A-Za-z0-9_])AGENTS)\.md)"
 )
 _DOWNSTREAM_PRESET_ORCHESTRATE = "orchestrate"
 _DOWNSTREAM_PRESET_IMPLEMENT = "implement"
@@ -866,10 +866,7 @@ def _is_canonical_source_path(path: str) -> bool:
     normalized = normalized.lstrip("/")
     if not normalized:
         return False
-    if (
-        normalized == ".specify/memory/constitution.md"
-        or normalized.endswith("/.specify/memory/constitution.md")
-    ):
+    if normalized == "AGENTS.md" or normalized.endswith("/AGENTS.md"):
         return True
     if normalized.startswith("docs/tmp/") or "/docs/tmp/" in normalized:
         return False
@@ -2744,7 +2741,7 @@ def _normalize_source_document_path(value: object) -> str:
     if any(part in {"", ".", ".."} for part in path.parts):
         return ""
     normalized = path.as_posix()
-    if normalized == ".specify/memory/constitution.md":
+    if normalized == "AGENTS.md":
         return normalized
     if normalized.startswith("docs/") and normalized.endswith(".md"):
         return normalized

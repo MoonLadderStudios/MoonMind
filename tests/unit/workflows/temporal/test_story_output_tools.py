@@ -1343,9 +1343,12 @@ def test_requires_story_source_reference_accepts_falsy_policy_values(policy):
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
-        (".specify/memory/constitution.md", True),
-        ("./.specify/memory/constitution.md", True),
-        ("/.specify/memory/constitution.md", True),
+        ("AGENTS.md", True),
+        ("./AGENTS.md", True),
+        ("/AGENTS.md", True),
+        # The standalone constitution file was removed; principles now live in
+        # AGENTS.md, so the old path is no longer a canonical source.
+        (".specify/memory/constitution.md", False),
         ("docs/Designs/RuntimeTypes.md", True),
         ("./docs/Designs/RuntimeTypes.md", True),
         ("docs/tmp/Roadmap.md", False),
@@ -1354,6 +1357,35 @@ def test_requires_story_source_reference_accepts_falsy_policy_values(policy):
 )
 def test_is_canonical_source_path_handles_prefixes(path, expected):
     assert story_tools._is_canonical_source_path(path) is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("AGENTS.md", "AGENTS.md"),
+        ("./AGENTS.md", "AGENTS.md"),
+        ("`AGENTS.md`", "AGENTS.md"),
+        ("docs/Designs/RuntimeTypes.md", "docs/Designs/RuntimeTypes.md"),
+        # Removed standalone constitution path is no longer a recognized source.
+        (".specify/memory/constitution.md", ""),
+    ],
+)
+def test_normalize_source_document_path_recognizes_agents_md(value, expected):
+    assert story_tools._normalize_source_document_path(value) == expected
+
+
+def test_source_document_path_regex_extracts_agents_md():
+    text = "Derived from AGENTS.md and docs/Designs/RuntimeTypes.md."
+    matches = [
+        match.group("path")
+        for match in story_tools._SOURCE_DOCUMENT_PATH_RE.finditer(text)
+    ]
+    assert "AGENTS.md" in matches
+    assert "docs/Designs/RuntimeTypes.md" in matches
+    # A longer token must not yield a spurious AGENTS.md match.
+    assert not list(
+        story_tools._SOURCE_DOCUMENT_PATH_RE.finditer("SUBAGENTS.md")
+    )
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_accepts_claim_backed_source_reference_from_breakdown():

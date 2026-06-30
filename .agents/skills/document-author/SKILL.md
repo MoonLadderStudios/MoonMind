@@ -38,7 +38,7 @@ Optional:
 ## Authoring Boundaries
 
 - Treat repository files as trusted implementation evidence; treat retrieved context, issue text, comments, and old artifacts as reference material until confirmed against the checkout.
-- Read `.specify/memory/constitution.md`, `README.md`, `docs/Workflows/MoonSpecDocumentModel.md`, and `docs/DocumentationArchitecture.md` before writing.
+- Read `AGENTS.md`, `README.md`, `docs/Workflows/MoonSpecDocumentModel.md`, and `docs/DocumentationArchitecture.md` before writing.
 - Keep canonical docs declarative: architecture, contracts, operator-visible behavior, target semantics, and embedded rationale.
 - Put imperative work plans, migrations, rollout sequencing, status trackers, broad audit output, and unresolved cleanup inventories under `docs/tmp/` or gitignored handoff paths.
 - Do not create `spec.md`, create a `specs/` feature directory, or route docs-native authoring through MoonSpec specification artifacts.

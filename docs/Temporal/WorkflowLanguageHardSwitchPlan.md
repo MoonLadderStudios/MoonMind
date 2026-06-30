@@ -1311,7 +1311,7 @@ Before any field deletion ships, this hard switch requires an explicit versioned
 3. **Drain or terminate plan.** For each environment, document whether in-flight runs are drained to completion, paused and resumed on the new branch, or explicitly terminated and restarted. Hard-switch installs must record the chosen option per environment before deploy.
 4. **Activity/signal/update payload coverage.** Apply the same versioning to activity input/output payloads, signal names/shapes, and update names/shapes whose fields are being renamed or removed.
 
-This is consistent with the constitution's Temporal-facing contract rules in `.specify/memory/constitution.md`: workflow/activity/update/signal payload shapes are compatibility-sensitive, and any non-additive change must preserve worker-bound invocation compatibility for in-flight runs or be versioned with an explicit migration/cutover plan. The Phase 10 release notes MUST link to the per-environment cutover record before the breaking release is published.
+This is consistent with the constitution's Temporal-facing contract rules in `AGENTS.md`: workflow/activity/update/signal payload shapes are compatibility-sensitive, and any non-additive change must preserve worker-bound invocation compatibility for in-flight runs or be versioned with an explicit migration/cutover plan. The Phase 10 release notes MUST link to the per-environment cutover record before the breaking release is published.
 
 MM-730 implements this cutover as an explicit runtime gate:
 

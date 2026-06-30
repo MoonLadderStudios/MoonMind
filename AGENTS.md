@@ -4,12 +4,31 @@
 
 Read relevant documents in the following order before implementing tasks:
 
-1. **Constitution:** `.specify/memory/constitution.md` for non-negotiable principles and constraints
-2. **Standards:** Code style and guidance in `README.md`
+1. **Project guidance:** this `AGENTS.md` file for MoonMind principles, non-negotiable constraints, testing discipline, and repo-specific agent rules.
+2. **Standards:** Code style and guidance in `README.md`.
 3. **Docs:** `docs/*.md` as needed for system architecture (see **Documentation: canonical vs feature artifacts** below).
    - Start here for Agent Skills: `docs/Steps/SkillSystem.md`
    - For Executable Tools: `docs/Workflows/SkillAndPlanContracts.md`
    - For Runtime boundaries: `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+
+## MoonMind Principles
+
+- **Orchestrate, don't recreate agents.** MoonMind coordinates provider-maintained agents through standard interfaces and runtime adapters; core orchestration consumes canonical contracts and compact metadata, not provider internals.
+- **Safety is built into the substrate.** Runtime, credential, filesystem, Docker, network, publish, and approval boundaries are enforced by policy and fail fast with actionable errors when unsafe or ambiguous.
+- **Temporal owns durable orchestration.** Workflow code stays deterministic and side-effect-free; side effects run in Activities or external services, with compact non-sensitive payloads and replay/in-flight safety where histories or persisted payloads cross a change boundary.
+- **Artifacts are durable evidence.** Large prompts, logs, diagnostics, generated files, provider bundles, and session summaries live as artifacts or artifact refs; dashboards and summaries are projections, not second sources of truth.
+- **Local-first deployment remains simple.** The canonical operator path is Docker Compose with documented prerequisites, safe defaults, optional integrations, and actionable failures for missing requirements.
+- **Avoid vendor lock-in.** Provider behavior belongs behind adapters, portable formats, and explicit vendor-specific decisions.
+- **Own context and data.** Ingested context and generated artifacts stay operator-controlled by default; inject only the context each step needs and clear or bound context between steps.
+- **Skills are first-class and low ceremony.** Skills are discoverable, composable, runtime-neutral at the workflow level, and identified by one canonical skill name.
+- **Scaffolding is disposable; evidence-based verification is permanent.** Build AI scaffolds to be deleted, swapped, or regenerated, while preserving stable contracts, tests, telemetry, and the Hypothesize → Execute → Verify → Publish → Learn loop.
+- **Runtime behavior is configurable.** Routine operator changes should use documented, namespaced, safe-by-default configuration with deterministic precedence and observable runtime mode switches.
+- **Architecture stays modular.** Add capabilities behind explicit module boundaries and stable contracts; justify cross-cutting changes and speculative abstractions before implementation.
+- **Resilience is evidence-backed.** Prefer retry, reroute, degraded mode, or explicit workaround when operator intent and safety boundaries are preserved; never silently substitute credentials, provider profiles, billing-relevant runtime values, source authority, or less-constrained execution paths.
+- **Continuous improvement is reviewable.** Runs end with structured outcomes and may produce improvement signals, but suggested changes are opt-in and reviewable.
+- **Docs are durable; specs are execution scratch.** Long-lived desired-state knowledge lives in `docs/` and this file. MoonSpec packets, `docs/tmp/`, `artifacts/`, and other run-local handoffs are temporary execution scaffolding.
+- **Canonical docs stay declarative.** Put migration narratives, phased rollout plans, implementation backlogs, and status checklists in `docs/tmp/` or local handoff paths; delete or archive them when complete.
+- **Pre-release means delete, don't deprecate.** Remove superseded internal patterns, aliases, models, and docs in the same cohesive change, except where durable workflow histories or persisted payloads require an explicit replay/cutover path.
 
 ## Agent Skill System Terminology
 - Executable `tool.type = "skill"` contracts are **not** the same thing as agent instruction bundles (skill sets) under `.agents/skills`.
@@ -29,7 +48,7 @@ When writing code that interacts with skills:
 
 - **Canonical docs** (`docs/`): describe **declarative desired state** — architecture, contracts, operator-visible behavior, target semantics. Avoid making phased migration or implementation checklists the main story in these files.
 - **Migration, rollout, and MoonSpec execution notes** belong under **`docs/tmp/`** or in **local-only / gitignored paths** (e.g. `artifacts/` for tool handoffs), not as the primary framing of canonical docs. `specs/` is no longer a version-controlled source of guidance.
-- Align with the **Canonical Documentation Separates Desired State from Migration Backlog** principle in `.specify/memory/constitution.md`.
+- Align with the **Canonical docs stay declarative** principle in this file.
 - Document classes, declarative-vs-imperative classification, and precedence rules are defined in `docs/Workflows/MoonSpecDocumentModel.md`.
 
 ## Simplicity Gate
@@ -97,8 +116,8 @@ Note: Jules **unit** tests (`tests/unit/jules/`, `tests/unit/workflows/temporal/
 - **Frontend Test Prereqs**: Frontend unit tests require local Node/npm and repo JS dependencies from `package-lock.json`. `./tools/test_unit.sh` should prepare these automatically when dashboard tests are enabled. If `node_modules` is missing or stale relative to `package-lock.json`, the script runs `npm ci --no-fund --no-audit` before executing `npm run ui:test`.
 - **Targeted Test Runs**: Positional args to `./tools/test_unit.sh` filter Python tests only. They do not target a Vitest file. For focused frontend iteration, use `npm run ui:test -- <path>` after local JS deps are prepared, or use `./tools/test_unit.sh --ui-args <path>` to route Vitest targets through the test runner. Before preparing a PR, rerun the selector-equivalent targeted suite for the changed area; escalate to the full suite only for fail-open, broad, risky, or ambiguous changes.
 - **No Docker Assumption in Agent Jobs**: Do not assume the Docker socket is available inside MoonMind-managed agent workspaces when running unit tests.
-- **Hermetic Integration Tests**: Run compose-backed, no-credentials-required tests marked with `integration_ci` only when the change affects Docker, compose, database, migrations, integration-test coverage, runtime infrastructure, or another selector-selected integration boundary. Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1` (PowerShell). Under the hood: `docker compose -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"`.
-- **Provider Verification**: Run live external-provider tests that require real credentials. Use `./tools/test_jules_provider.sh` (Bash) or `tools/test-provider.ps1` (PowerShell). These scripts fail fast if `JULES_API_KEY` is not set.
+- **Hermetic Integration Tests**: Run compose-backed, no-credentials-required tests marked with `integration_ci` only when the change affects Docker, compose, database, migrations, integration-test coverage, runtime infrastructure, or another selector-selected integration boundary. Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1`. Under the hood: `docker compose -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"`.
+- **Provider Verification**: Run live external-provider tests that require real credentials. Use `./tools/test_jules_provider.sh` (Bash) or `tools/test-provider.ps1`. These scripts fail fast if `JULES_API_KEY` is not set.
 - **Workflow Boundary Coverage**: Any change to Temporal workflows, activity signatures, signal/update names, serialized payload shapes, status normalization, or adapter-to-workflow contracts MUST add or update tests at the workflow boundary, not just isolated unit tests. At minimum:
   - cover the real invocation shape used by the worker binding or Temporal activity wrapper,
   - cover one compatibility case for the previous payload/history shape when runs may already be in flight,
@@ -170,7 +189,7 @@ Key diagnostics:
 - Repo and local skill sources are potentially *untrusted input*. Implementations must respect deployment policy on whether those sources are allowed and must not silently assume repo/local skills are always enabled.
 
 ## Compatibility Policy
-- MoonMind is a **pre-release project** (see the **Pre-Release Velocity: Delete, Don't Deprecate** principle in the Constitution). Do NOT introduce compatibility aliases, translation layers, or backward-compat wrappers for internal contracts. When a pattern is superseded, **remove the old version entirely** in the same change.
+- MoonMind is a **pre-release project**. Do NOT introduce compatibility aliases, translation layers, or backward-compat wrappers for internal contracts. When a pattern is superseded, **remove the old version entirely** in the same change.
 - When refactoring an activity name, model, or interface: grep the entire codebase, update every caller, test, mock, and doc reference, and delete the old artifact. Partial migrations are not acceptable.
 - Never introduce compatibility transforms that change execution semantics or billing-relevant values (for example model identifiers, effort values, queue semantics, or publish behavior).
 - Prefer fail-fast behavior for unsupported runtime input values over hidden fallback behavior.

@@ -284,7 +284,7 @@ Some may surface incidentally when needed to answer a selected question (for exa
 Before reviewing target docs, build a small canonical context bundle.
 
 1. Read `README.md`.
-2. Read the constitution from `.specify/memory/constitution.md` (MoonMind). In other repos, fall back to `prompts/constitution.md` or the repo-specific equivalent — use whichever path exists.
+2. Read the constitution from `AGENTS.md` (MoonMind). In other repos, fall back to `prompts/constitution.md` or the repo-specific equivalent — use whichever path exists.
 3. Find main architecture docs:
    - MoonMind: prefer `docs/MoonMindArchitecture.md` when present, then domain architecture docs such as `docs/Workflows/WorkflowArchitecture.md`, `docs/ManagedAgents/ManagedAgentArchitecture.md`, `docs/Memory/MemoryArchitecture.md`, `docs/Temporal/TemporalArchitecture.md`, and `docs/UI/WorkflowConsoleArchitecture.md`.
    - Tactics: prefer `Docs/Architecture/` docs and any configured architecture docs.
