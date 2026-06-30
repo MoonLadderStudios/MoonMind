@@ -1,14 +1,14 @@
 # Workflow Status Color Semantics
-
 Status: Active  
 Owners: MoonMind Engineering  
 Last updated: 2026-06-29
 
-Canonical for: execution status pill color semantics, Workflows List status color grouping, workflow-detail status color grouping, and shared dashboard execution-status color rationale.
+Canonical for: execution status pill color semantics, Workflows List status color grouping, workflow-detail status color grouping, status-aware shimmer hue, and shared dashboard execution-status color rationale.
 
 Related:
 
 - `docs/UI/DashboardDesignSystem.md` — shared dashboard color tokens and overall visual language.
+- `docs/UI/EffectShimmerSweep.md` — shared status-pill shimmer sweep behavior, status-derived shimmer hue, and sweep motion profile.
 - `docs/UI/WorkflowsListPage.md` — Workflows List page behavior and status filtering.
 - `docs/Temporal/VisibilityAndUiQueryModel.md` — canonical `mm_state` values and dashboard compatibility grouping.
 - `docs/Workflows/NoCommitStatus.md` — `no_commit` lifecycle and publish-outcome semantics.
@@ -39,6 +39,8 @@ executing
 
 The closer a state is to active execution, the closer its hue should sit to the existing executing hue. The furthest waiting states should stay away from red-adjacent colors so they do not read as failure.
 
+When a status pill has shimmer motion, that shimmer must reinforce the same semantic hue as the pill. Shimmer is not a license to reuse the executing hue for every active-looking status.
+
 ---
 
 ## 2. Required existing-color invariants
@@ -64,6 +66,7 @@ Current interpretation:
 | Status | Consumes provider-profile slot? | Color consequence |
 | --- | --- | --- |
 | `executing` | Yes | Use existing executing color. |
+| `running` | Compatibility/live alias | Use existing executing color. |
 | `initializing` | No | Use near-execution blue. |
 | `planning` | No by current lifecycle semantics | Use near-execution blue. |
 | `scheduled` | No | Use pre-execution waiting indigo. |
@@ -84,6 +87,7 @@ Rationale: `awaiting_slot` represents a workflow that is waiting for capacity, n
 | `completed` | Completed | Success green | `#22C55E` | `#4ADE80` | Successful terminal outcome. |
 | `failed` | Failed | Failure red | `#F43F5E` | `#FB7185` | Terminal error outcome. |
 | `executing` | Executing | Live/executing | `#22D3EE` | `#7DF9FF` | Active execution and provider-slot consumption. |
+| `running` | Running | Live/executing compatibility | `#22D3EE` | `#7DF9FF` | Compatibility/live alias that shares executing treatment. |
 | `canceled` | Canceled | Canceled orange | `#F97316` | `#F97316` | Intentional stop; attention-worthy but not failure. |
 | `initializing` | Initializing | Near-execution blue | `#2563EB` | `#2563EB` | Closest non-executing state to execution; startup/preparation before active work. |
 | `planning` | Planning | Near-execution blue | `#2563EB` | `#2563EB` | Active planning/preparation and conceptually near execution. |
@@ -111,7 +115,7 @@ Terminal outcomes should remain visually stable and easy to scan:
 
 ### 5.2 Active execution
 
-`executing` is the live/executing hue. Other states should only use the executing hue when they actively consume the same scarce runtime/provider resource. Do not use the executing hue simply because a workflow is non-terminal.
+`executing` is the live/executing hue. Other states should only use the executing hue when they actively consume the same scarce runtime/provider resource or when they are a compatibility/live alias such as `running`. Do not use the executing hue simply because a workflow is non-terminal or animated.
 
 ### 5.3 Distance from execution
 
@@ -123,13 +127,36 @@ Terminal outcomes should remain visually stable and easy to scan:
 
 `finalizing` uses slate because it is neither active execution nor terminal success/failure. It should feel calm and transitional.
 
+### 5.4 Motion and shimmer hue
+
+Motion eligibility is separate from color grouping. A status may shimmer because it communicates active transition, but its shimmer must still derive from the exact status pill hue.
+
+Current shimmer-hue expectations:
+
+| Status | Shimmer eligibility | Shimmer hue rule |
+| --- | --- | --- |
+| `executing` | On | Use live/executing cyan, matching the pill. |
+| `running` | On | Use live/executing cyan, matching the compatibility/live pill. |
+| `initializing` | On | Use near-execution blue, matching the pill. |
+| `planning` | On | Use near-execution blue, matching the pill. |
+| `finalizing` | On | Use finalization slate, matching the pill. |
+| `scheduled` / `awaiting_slot` | Off | No shimmer. |
+| `waiting_on_dependencies` / `awaiting_external` | Off | No shimmer. |
+| Terminal statuses | Off | No shimmer. |
+
+The shimmer implementation should use shared CSS variables or `currentColor`-derived tokens so the existing fill, border, and text masks all inherit the same status-aware hue. Do not copy the executing shimmer into separate per-status selector blocks, and do not force `planning`, `initializing`, or `finalizing` through the executing/cyan hue.
+
+The shimmer sweep angle should remain subtle. A small horizontal-bias refinement is acceptable; the effect should not become a scanner beam, loading bar, warning pulse, or decorative rainbow.
+
 ---
 
 ## 6. Implementation guidance
 
 1. Keep `completed`, `failed`, and `executing` wired to their existing token values.
-2. Add explicit classes or token aliases for `status-canceled`, `status-scheduled`, `status-awaiting-slot`, `status-awaiting-dependencies`, `status-awaiting-external`, `status-initializing`, `status-planning`, `status-finalizing`, and `status-no-commit` rather than forcing all states through broad `running`, `queued`, or `waiting` classes.
-3. Preserve shimmer/motion only for states where motion communicates actual active work. Do not apply executing shimmer to `scheduled`, `awaiting_slot`, `waiting_on_dependencies`, `awaiting_external`, `finalizing`, or `no_commit`.
-4. If the implementation keeps compatibility classes such as `status-running` or `status-queued`, those classes are grouping helpers only. Exact `mm_state` should win for final pill color.
-5. Status filters should show the same pill colors used by table rows and detail headers.
-6. Do not introduce amber or cyan for new status assignments. The existing executing color is grandfathered because it is the current `executing` hue.
+2. Add or preserve explicit classes or token aliases for `status-canceled`, `status-scheduled`, `status-awaiting-slot`, `status-awaiting-dependencies`, `status-awaiting-external`, `status-initializing`, `status-planning`, `status-finalizing`, and `status-no-commit` rather than forcing all states through broad `running`, `queued`, or `waiting` classes.
+3. Preserve shimmer/motion only for states where motion communicates active work or active transition.
+4. When shimmer is enabled, derive the shimmer hue from the exact status pill hue. `planning` and `initializing` shimmer blue; `finalizing` shimmers slate; only `executing` and `running` shimmer cyan.
+5. Keep shimmer implemented as one shared effect: one selector contract, one moving light field, one keyframe path, and status-derived hue inputs. Avoid duplicated per-status shimmer implementations.
+6. If the implementation keeps compatibility classes such as `status-running` or `status-queued`, those classes are grouping helpers only. Exact `mm_state` should win for final pill color.
+7. Status filters should show the same pill colors used by table rows and detail headers.
+8. Do not introduce amber or cyan for new status assignments. The existing executing color is grandfathered because it is the current `executing` hue.
