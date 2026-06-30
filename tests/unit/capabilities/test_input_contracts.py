@@ -181,6 +181,67 @@ def test_preset_contract_dates_are_json_compatible() -> None:
     assert contract["contractDigest"].startswith("sha256:")
 
 
+def test_one_of_const_options_are_preserved_for_renderer_choices() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(
+            id="demo-preset",
+            kind="preset",
+            label="Demo Preset",
+        ),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "title": "Mode",
+                            "oneOf": [
+                                {"const": "safe", "title": "Safe"},
+                                {"const": "fast", "title": "Fast"},
+                            ],
+                        }
+                    },
+                }
+            },
+        ),
+    )
+
+    assert contract["inputSchema"]["properties"]["mode"]["oneOf"] == [
+        {"const": "safe", "title": "Safe"},
+        {"const": "fast", "title": "Fast"},
+    ]
+    assert contract["diagnostics"] == []
+
+
+def test_schema_object_defaults_are_preserved_as_values() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(
+            id="demo-preset",
+            kind="preset",
+            label="Demo Preset",
+        ),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "issue": {
+                            "type": "object",
+                            "title": "Issue",
+                            "default": {"key": "MM-1"},
+                        }
+                    },
+                }
+            },
+        ),
+    )
+
+    assert contract["inputSchema"]["properties"]["issue"]["default"] == {"key": "MM-1"}
+    assert contract["diagnostics"] == []
+
+
 def test_unsupported_safe_schema_and_widget_metadata_are_diagnosed() -> None:
     markdown = (
         "---\n"

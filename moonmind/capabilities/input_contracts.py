@@ -26,6 +26,7 @@ _SUPPORTED_SCHEMA_KEYWORDS = frozenset(
         "$schema",
         "additionalProperties",
         "anyOf",
+        "const",
         "default",
         "description",
         "enum",
@@ -562,7 +563,9 @@ def _normalize_schema_metadata(
         key_str = str(key)
         child_path = f"{path}.{key_str}"
         if _is_preserved_schema_key(key_str):
-            if isinstance(value, Mapping):
+            if key_str == "default":
+                normalized[key_str] = _json_compatible_value(value)
+            elif isinstance(value, Mapping):
                 if key_str in {"properties", "$defs"}:
                     child_properties: dict[str, Any] = {}
                     for child_key, child_value in value.items():
