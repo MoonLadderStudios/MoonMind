@@ -318,6 +318,13 @@ def validate_capability_inputs(
         path=path_prefix,
         errors=errors,
     )
+    _validate_integration_references(
+        schema=input_schema,
+        ui_schema=ui_schema,
+        value=effective,
+        path=path_prefix,
+        errors=errors,
+    )
 
     source = contract.get("source")
     source_content_ref = (
@@ -559,11 +566,25 @@ def _validate_schema_value(
                         path=f"{path}.{key}",
                         errors=errors,
                     )
+        additional_properties = schema.get("additionalProperties")
+        if additional_properties is False:
+            allowed = {str(key) for key in properties}
+            for key in value:
+                if str(key) not in allowed:
+                    errors.append(
+                        _validation_issue(
+                            path=f"{path}.{key}",
+                            message="Additional properties are not allowed.",
+                            code="additionalProperties",
+                        )
+                    )
         return
+
     if schema_type == "string" and not isinstance(value, str):
         errors.append(
             _validation_issue(path=path, message="Value must be a string.", code="type")
         )
+        return
     elif schema_type == "integer" and not (
         isinstance(value, int) and not isinstance(value, bool)
     ):
@@ -574,12 +595,14 @@ def _validate_schema_value(
                 code="type",
             )
         )
+        return
     elif schema_type == "number" and not (
         isinstance(value, (int, float)) and not isinstance(value, bool)
     ):
         errors.append(
             _validation_issue(path=path, message="Value must be a number.", code="type")
         )
+        return
     elif schema_type == "boolean" and not isinstance(value, bool):
         errors.append(
             _validation_issue(
@@ -588,10 +611,12 @@ def _validate_schema_value(
                 code="type",
             )
         )
+        return
     elif schema_type == "array" and not isinstance(value, list):
         errors.append(
             _validation_issue(path=path, message="Value must be an array.", code="type")
         )
+        return
 
     enum = schema.get("enum")
     if isinstance(enum, list) and value not in enum:
@@ -602,6 +627,98 @@ def _validate_schema_value(
                 code="enum",
             )
         )
+    if schema_type == "string" and isinstance(value, str):
+        min_length = schema.get("minLength")
+        if isinstance(min_length, int) and len(value) < min_length:
+            errors.append(
+                _validation_issue(
+                    path=path,
+                    message=f"Value must be at least {min_length} characters.",
+                    code="minLength",
+                )
+            )
+        max_length = schema.get("maxLength")
+        if isinstance(max_length, int) and len(value) > max_length:
+            errors.append(
+                _validation_issue(
+                    path=path,
+                    message=f"Value must be at most {max_length} characters.",
+                    code="maxLength",
+                )
+            )
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str):
+            try:
+                matches = re.search(pattern, value) is not None
+            except re.error:
+                matches = True
+            if not matches:
+                errors.append(
+                    _validation_issue(
+                        path=path,
+                        message="Value must match the required pattern.",
+                        code="pattern",
+                    )
+                )
+    if schema_type in {"integer", "number"} and isinstance(value, (int, float)):
+        minimum = schema.get("minimum")
+        if isinstance(minimum, (int, float)) and value < minimum:
+            errors.append(
+                _validation_issue(
+                    path=path,
+                    message=f"Value must be greater than or equal to {minimum}.",
+                    code="minimum",
+                )
+            )
+        maximum = schema.get("maximum")
+        if isinstance(maximum, (int, float)) and value > maximum:
+            errors.append(
+                _validation_issue(
+                    path=path,
+                    message=f"Value must be less than or equal to {maximum}.",
+                    code="maximum",
+                )
+            )
+    if schema_type == "array" and isinstance(value, list):
+        min_items = schema.get("minItems")
+        if isinstance(min_items, int) and len(value) < min_items:
+            errors.append(
+                _validation_issue(
+                    path=path,
+                    message=f"Value must contain at least {min_items} items.",
+                    code="minItems",
+                )
+            )
+        max_items = schema.get("maxItems")
+        if isinstance(max_items, int) and len(value) > max_items:
+            errors.append(
+                _validation_issue(
+                    path=path,
+                    message=f"Value must contain at most {max_items} items.",
+                    code="maxItems",
+                )
+            )
+        if schema.get("uniqueItems") is True:
+            encoded_items = [
+                json.dumps(item, sort_keys=True, default=str) for item in value
+            ]
+            if len(set(encoded_items)) != len(encoded_items):
+                errors.append(
+                    _validation_issue(
+                        path=path,
+                        message="Array items must be unique.",
+                        code="uniqueItems",
+                    )
+                )
+        item_schema = schema.get("items")
+        if isinstance(item_schema, Mapping):
+            for index, item in enumerate(value):
+                _validate_schema_value(
+                    schema=item_schema,
+                    value=item,
+                    path=f"{path}[{index}]",
+                    errors=errors,
+                )
     fmt = str(schema.get("format") or "").strip()
     if fmt == "uri" and isinstance(value, str) and not urlparse(value).scheme:
         errors.append(
@@ -615,6 +732,88 @@ def _validate_schema_value(
                 code="format",
             )
         )
+
+
+def _validate_integration_references(
+    *,
+    schema: Mapping[str, Any],
+    ui_schema: Mapping[str, Any],
+    value: Mapping[str, Any],
+    path: str,
+    errors: list[dict[str, Any]],
+) -> None:
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return
+    for field_name, field_schema in properties.items():
+        name = str(field_name)
+        if name not in value or not isinstance(field_schema, Mapping):
+            continue
+        field_ui_schema = ui_schema.get(name)
+        widget = (
+            field_ui_schema.get("widget")
+            if isinstance(field_ui_schema, Mapping)
+            else None
+        )
+        semantic_type = field_schema.get("x-moonmind-semantic-type")
+        field_value = value.get(name)
+        field_path = f"{path}.{name}"
+        if (
+            widget in {"jira.issue-picker", "github.issue-picker"}
+            or semantic_type == "issue-reference"
+        ):
+            _validate_issue_reference(field_value, field_path, errors)
+        elif widget == "github.repository-picker" or semantic_type == "repository":
+            _validate_repository_reference(field_value, field_path, errors)
+        elif widget == "github.branch-picker" or semantic_type == "branch":
+            if not isinstance(field_value, str) or not field_value.strip():
+                errors.append(
+                    _validation_issue(
+                        path=field_path,
+                        message="Branch reference must be a non-empty string.",
+                        code="reference",
+                    )
+                )
+
+
+def _validate_issue_reference(
+    value: Any,
+    path: str,
+    errors: list[dict[str, Any]],
+) -> None:
+    if isinstance(value, str):
+        if value.strip():
+            return
+    elif isinstance(value, Mapping):
+        key = str(
+            value.get("key") or value.get("id") or value.get("url") or ""
+        ).strip()
+        number = value.get("number")
+        if key or (isinstance(number, int) and not isinstance(number, bool)):
+            return
+    errors.append(
+        _validation_issue(
+            path=path,
+            message="Issue reference must include a key, URL, or numeric issue number.",
+            code="reference",
+        )
+    )
+
+
+def _validate_repository_reference(
+    value: Any,
+    path: str,
+    errors: list[dict[str, Any]],
+) -> None:
+    if isinstance(value, str) and re.fullmatch(r"[^/\s]+/[^/\s]+", value.strip()):
+        return
+    errors.append(
+        _validation_issue(
+            path=path,
+            message="Repository reference must use owner/name format.",
+            code="reference",
+        )
+    )
 
 
 def _schema_path_to_input_path(path: Any) -> str:

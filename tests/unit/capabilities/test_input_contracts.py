@@ -270,3 +270,103 @@ def test_validate_capability_inputs_ignores_secret_defaults_and_remote_code_meta
     assert "schema_code_ignored" in warning_codes
     assert "unsupported_widget" in warning_codes
     assert "token" not in result["values"]
+
+
+def test_validate_capability_inputs_applies_json_schema_constraints() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(id="demo", kind="skill", label="Demo"),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["title"],
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "minLength": 3,
+                            "pattern": "^MM-",
+                        },
+                        "priority": {"type": "integer", "minimum": 1, "maximum": 5},
+                        "labels": {
+                            "type": "array",
+                            "minItems": 1,
+                            "uniqueItems": True,
+                            "items": {"type": "string", "enum": ["bug", "docs"]},
+                        },
+                    },
+                }
+            },
+        ),
+    )
+
+    result = validate_capability_inputs(
+        contract=contract,
+        values={
+            "title": "no",
+            "priority": 10,
+            "labels": ["bug", "bug", "other"],
+            "extra": True,
+        },
+        path_prefix="steps[2].skill.inputs",
+    )
+
+    errors_by_code = {error["code"]: error["path"] for error in result["errors"]}
+    assert errors_by_code["additionalProperties"] == "steps[2].skill.inputs.extra"
+    assert errors_by_code["minLength"] == "steps[2].skill.inputs.title"
+    assert errors_by_code["pattern"] == "steps[2].skill.inputs.title"
+    assert errors_by_code["maximum"] == "steps[2].skill.inputs.priority"
+    assert errors_by_code["uniqueItems"] == "steps[2].skill.inputs.labels"
+    assert "steps[2].skill.inputs.labels[2]" in [
+        error["path"] for error in result["errors"] if error["code"] == "enum"
+    ]
+
+
+def test_validate_capability_inputs_checks_registered_reference_fields() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(id="demo", kind="skill", label="Demo"),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "issue": {
+                            "type": "object",
+                            "x-moonmind-semantic-type": "issue-reference",
+                        },
+                        "repository": {
+                            "type": "string",
+                            "x-moonmind-semantic-type": "repository",
+                        },
+                        "branch": {
+                            "type": "string",
+                            "x-moonmind-semantic-type": "branch",
+                        },
+                    },
+                },
+                "uiSchema": {
+                    "issue": {"widget": "jira.issue-picker"},
+                    "repository": {"widget": "github.repository-picker"},
+                    "branch": {"widget": "github.branch-picker"},
+                },
+            },
+        ),
+    )
+
+    result = validate_capability_inputs(
+        contract=contract,
+        values={"issue": {}, "repository": "MoonMind", "branch": ""},
+        path_prefix="steps[3].skill.inputs",
+    )
+
+    assert [
+        (error["path"], error["code"])
+        for error in result["errors"]
+        if error["code"] == "reference"
+    ] == [
+        ("steps[3].skill.inputs.issue", "reference"),
+        ("steps[3].skill.inputs.repository", "reference"),
+        ("steps[3].skill.inputs.branch", "reference"),
+    ]
