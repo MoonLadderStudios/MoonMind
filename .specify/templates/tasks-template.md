@@ -1,7 +1,7 @@
 ---
 description: "Task list template for single-story MoonSpec implementation"
 ---
-<!-- Generated from vendor/moonspec/bundle/templates/tasks-template.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/templates/tasks-template.md; edit MoonSpec repo instead. -->
 
 
 # Tasks: [FEATURE NAME]

@@ -1,4 +1,4 @@
-# Generated from vendor/moonspec/bundle/skills/moonspec-implement/agents/openai.yaml; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/skills/moonspec-implement/agents/openai.yaml; edit MoonSpec repo instead.
 interface:
   display_name: "MoonSpec Implement"
   short_description: "Implement a one-story MoonSpec task breakdown with TDD."

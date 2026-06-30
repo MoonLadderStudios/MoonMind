@@ -1,4 +1,4 @@
-# Generated from vendor/moonspec/bundle/skills/moonspec-tasks/agents/openai.yaml; edit MoonSpec repo instead.
+# Generated from moonspec/bundle/skills/moonspec-tasks/agents/openai.yaml; edit MoonSpec repo instead.
 interface:
   display_name: "MoonSpec Tasks"
   short_description: "Generate a one-story TDD task breakdown"

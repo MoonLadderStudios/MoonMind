@@ -48,7 +48,7 @@ def test_markdown_header_preserves_skill_front_matter() -> None:
 
     assert result.startswith("---\nname: moonspec-test\n---\n")
     assert (
-        "Generated from vendor/moonspec/bundle/skills/moonspec-test/SKILL.md"
+        "Generated from moonspec/bundle/skills/moonspec-test/SKILL.md"
         in result
     )
 

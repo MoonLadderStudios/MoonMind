@@ -5,7 +5,7 @@ metadata:
   required-capabilities:
     - git
 ---
-<!-- Generated from vendor/moonspec/bundle/skills/moonspec-align/SKILL.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/skills/moonspec-align/SKILL.md; edit MoonSpec repo instead. -->
 
 
 # MoonSpec Align

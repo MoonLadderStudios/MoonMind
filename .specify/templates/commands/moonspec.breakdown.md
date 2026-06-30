@@ -5,7 +5,7 @@ handoffs:
     agent: moonspec.plan
     prompt: Create an implementation plan for the highest-priority generated spec.
 ---
-<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.breakdown.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/commands/markdown/moonspec.breakdown.md; edit MoonSpec repo instead. -->
 
 
 ## User Input

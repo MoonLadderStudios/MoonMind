@@ -10,7 +10,7 @@ scripts:
 agent_scripts:
   sh: .specify/scripts/bash/update-agent-context.sh __AGENT__
 ---
-<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.plan.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/commands/markdown/moonspec.plan.md; edit MoonSpec repo instead. -->
 
 
 ## User Input

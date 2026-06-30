@@ -1,4 +1,4 @@
-<!-- Generated from vendor/moonspec/bundle/templates/checklist-template.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/templates/checklist-template.md; edit MoonSpec repo instead. -->
 
 # [CHECKLIST TYPE] Checklist: [FEATURE NAME]
 

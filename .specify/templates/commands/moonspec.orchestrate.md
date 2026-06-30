@@ -1,7 +1,7 @@
 ---
 description: Run the full MoonSpec lifecycle for one preselected story.
 ---
-<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.orchestrate.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/commands/markdown/moonspec.orchestrate.md; edit MoonSpec repo instead. -->
 
 
 ## User Input

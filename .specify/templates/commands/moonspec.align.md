@@ -3,7 +3,7 @@ description: Analyze and automatically remediate MoonSpec artifact drift across 
 scripts:
   sh: .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
 ---
-<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.align.md; edit MoonSpec repo instead. -->
+<!-- Generated from moonspec/bundle/commands/markdown/moonspec.align.md; edit MoonSpec repo instead. -->
 
 
 ## User Input
