@@ -1,7 +1,10 @@
 import datetime as dt
+import pytest
 
 from moonmind.capabilities.input_contracts import (
+    CapabilityInputContractError,
     CapabilityInputOwner,
+    CapabilityInputContractParts,
     capability_contract_from_legacy_inputs,
     normalize_capability_input_contract,
     parse_skill_capability_input_contract,
@@ -178,3 +181,123 @@ def test_preset_contract_dates_are_json_compatible() -> None:
     assert contract["inputSchema"]["properties"]["due_date"]["default"] == "2026-06-30"
     assert contract["defaults"] == {"due_date": "2026-06-30"}
     assert contract["contractDigest"].startswith("sha256:")
+
+
+def test_lenient_skill_contract_blocks_remote_refs_and_executable_metadata() -> None:
+    markdown = (
+        "---\n"
+        "name: Demo Skill\n"
+        "description: '<script>alert(1)</script>Safe text'\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    target:\n"
+        "      type: string\n"
+        "      $ref: https://example.invalid/schema.json\n"
+        "      onClick: steal()\n"
+        "      x-moonmind-widget: remote.component\n"
+        "      x-foreign-widget: unsafe\n"
+        "      description: '[bad](javascript:unsafe)Safe description'\n"
+        "uiSchema:\n"
+        "  target:\n"
+        "    widget: https://example.invalid/widget.js\n"
+        "    component: RemoteComponent\n"
+        "---\n"
+        "# Demo\n"
+    )
+
+    contract = parse_skill_capability_input_contract(
+        skill_id="demo-skill",
+        label="Demo Skill",
+        markdown=markdown,
+    )
+
+    target = contract["inputSchema"]["properties"]["target"]
+    assert "$ref" not in target
+    assert "onClick" not in target
+    assert "x-foreign-widget" not in target
+    assert contract["uiSchema"]["target"] == {}
+    assert contract["description"] == "Safe text"
+    assert target["description"] == "Safe description"
+    diagnostic_codes = {item["code"] for item in contract["diagnostics"]}
+    assert "remote_ref_disabled" in diagnostic_codes
+    assert "executable_metadata_ignored" in diagnostic_codes
+    assert "ignored_hint" in diagnostic_codes
+    assert "fallback_renderer" in diagnostic_codes
+    assert "unsafe_markdown_ignored" in diagnostic_codes
+
+
+def test_strict_skill_contract_rejects_secret_like_defaults() -> None:
+    markdown = (
+        "---\n"
+        "name: Demo Skill\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    token:\n"
+        "      type: string\n"
+        "defaults:\n"
+        "  token: ghp_1234567890abcdef\n"
+        "---\n"
+        "# Demo\n"
+    )
+
+    with pytest.raises(CapabilityInputContractError, match="secret-like value"):
+        parse_skill_capability_input_contract(
+            skill_id="demo-skill",
+            label="Demo Skill",
+            markdown=markdown,
+            strict=True,
+        )
+
+
+def test_skill_contract_omits_secret_like_schema_default() -> None:
+    markdown = (
+        "---\n"
+        "name: Demo Skill\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    token:\n"
+        "      type: string\n"
+        "      default: password=raw-secret\n"
+        "---\n"
+        "# Demo\n"
+    )
+
+    contract = parse_skill_capability_input_contract(
+        skill_id="demo-skill",
+        label="Demo Skill",
+        markdown=markdown,
+    )
+
+    token_schema = contract["inputSchema"]["properties"]["token"]
+    assert "default" not in token_schema
+    assert {item["code"] for item in contract["diagnostics"]} >= {
+        "secret_like_default",
+    }
+
+
+def test_strict_contract_rejects_schema_size_limit() -> None:
+    huge_description = "a" * (128 * 1024)
+
+    with pytest.raises(CapabilityInputContractError, match="inputSchema exceeds"):
+        normalize_capability_input_contract(
+            owner=CapabilityInputOwner(
+                id="demo-skill",
+                kind="skill",
+                label="Demo Skill",
+            ),
+            parts=CapabilityInputContractParts(
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "target": {
+                            "type": "string",
+                            "description": huge_description,
+                        }
+                    },
+                },
+            ),
+            strict=True,
+        )

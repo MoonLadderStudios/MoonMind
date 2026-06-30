@@ -133,6 +133,7 @@ export type TemporalSubmissionDraft = {
     preset?: TemporalSubmissionDraftPresetPayload;
     skillId: string;
     skillArgs: Record<string, unknown>;
+    skillInputContractDigest: string;
     skillRequiredCapabilities: string[];
     templateStepId: string;
     templateInstructions: string;
@@ -539,6 +540,10 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     ...(Object.keys(preset).length > 0 ? { preset } : {}),
     skillId: stringValue(tool.name, tool.id, skill.id, skill.name),
     skillArgs: firstObjectValue(tool.inputs, tool.args, skill.inputs, skill.args),
+    skillInputContractDigest: stringValue(
+      tool.inputContractDigest,
+      skill.inputContractDigest,
+    ),
     skillRequiredCapabilities: stringArrayValue(
       tool.requiredCapabilities,
       skill.requiredCapabilities,

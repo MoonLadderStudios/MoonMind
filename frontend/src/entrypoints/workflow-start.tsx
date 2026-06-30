@@ -608,6 +608,7 @@ interface SkillCapabilityDetail {
   inputSchema?: Record<string, unknown>;
   uiSchema?: Record<string, unknown>;
   defaults?: Record<string, unknown>;
+  contractDigest?: string;
   requiredCapabilities?: string[];
 }
 
@@ -771,6 +772,7 @@ interface StepState {
   pentestScopeDraft: PentestScopeDraftState;
   skillId: string;
   skillArgs: string;
+  skillInputContractDigest: string;
   // MM-936: explicit, user-authored required capabilities for this step. The
   // chip selector treats this as the only removable capability source; derived
   // capabilities (skill/tool/preset/runtime/publish) are computed for display.
@@ -1551,6 +1553,7 @@ function createStepStateEntry(
     pentestScopeDraft: createPentestScopeDraftState(),
     skillId: "",
     skillArgs: "",
+    skillInputContractDigest: "",
     explicitRequiredCapabilities: [],
     runtimeMode: "",
     runtimeModel: "",
@@ -1854,6 +1857,8 @@ function createStepStateEntriesFromTemporalDraft(
           : "",
       skillArgs:
         step.stepType === "skill" ? stringifySkillArgs(step.skillArgs) : "",
+      skillInputContractDigest:
+        step.stepType === "skill" ? step.skillInputContractDigest : "",
       explicitRequiredCapabilities: mergeCapabilities(
         step.skillRequiredCapabilities,
       ),
@@ -3389,6 +3394,15 @@ function mergeSkillArgsWithSchemaInputs(
   schemaInputs: Record<string, unknown>,
 ): Record<string, unknown> {
   return { ...skillArgs, ...schemaInputs };
+}
+
+function skillContractDigestMismatch(
+  savedDigest: string,
+  detail: Pick<SkillCapabilityDetail, "contractDigest"> | null | undefined,
+): boolean {
+  const saved = savedDigest.trim();
+  const current = String(detail?.contractDigest || "").trim();
+  return Boolean(saved && current && saved !== current);
 }
 
 function schemaToolInputs(
@@ -8910,6 +8924,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           primaryStep?.explicitRequiredCapabilities,
         )
       : [];
+    const primaryInputContractDigest = primaryStepIsSkill
+      ? String(
+          primarySkillDetail?.contractDigest ||
+            primaryStep?.skillInputContractDigest ||
+            "",
+        ).trim()
+      : "";
     const primarySchemaInputs = primaryStep
       ? schemaSkillInputs(primarySkillDetail, primaryStep.presetInputValues)
       : { values: {}, errors: {} };
@@ -8997,6 +9018,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       ...(Object.keys(primarySkillArgs).length > 0
         ? { inputs: primarySkillArgs }
         : {}),
+      ...(primaryInputContractDigest
+        ? { inputContractDigest: primaryInputContractDigest }
+        : {}),
       ...(taskSkillRequiredCapabilities.length > 0
         ? { requiredCapabilities: taskSkillRequiredCapabilities }
         : {}),
@@ -9004,6 +9028,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const primaryStepSkill = {
       id: primarySkillId,
       args: primarySkillArgs,
+      ...(primaryInputContractDigest
+        ? { inputContractDigest: primaryInputContractDigest }
+        : {}),
       ...(taskSkillRequiredCapabilities.length > 0
         ? { requiredCapabilities: taskSkillRequiredCapabilities }
         : {}),
@@ -9011,6 +9038,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const primaryStepHasSkillOverride =
       hasExplicitSkillSelection(primarySkillId) ||
       Object.keys(primarySkillArgs).length > 0 ||
+      Boolean(primaryInputContractDigest) ||
       taskSkillRequiredCapabilities.length > 0;
 
     const parsedAdditionalStepInputs: Array<{
@@ -9022,6 +9050,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       skillCaps: string[];
       toolCaps: string[];
       toolInputs: Record<string, unknown>;
+      inputContractDigest: string;
       hasStepContent: boolean;
     }> = [];
     for (let index = 1; index < submissionSteps.length; index += 1) {
@@ -9051,6 +9080,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             step.explicitRequiredCapabilities,
           )
         : [];
+      const stepInputContractDigest = stepIsSkill
+        ? String(
+            stepSkillDetail?.contractDigest ||
+              step.skillInputContractDigest ||
+              "",
+          ).trim()
+        : "";
       const stepToolDefinition =
         stepIsTool
           ? (trustedToolsQuery.data || []).find(
@@ -9163,6 +9199,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         skillCaps: stepSkillCaps,
         toolCaps: stepToolCaps,
         toolInputs: stepToolInputs,
+        inputContractDigest: stepInputContractDigest,
         hasStepContent,
       });
     }
@@ -9397,6 +9434,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       skillCaps: stepSkillCaps,
       toolCaps: stepToolCaps,
       toolInputs: stepToolInputs,
+      inputContractDigest: stepInputContractDigest,
       hasStepContent: hasPreUploadStepContent,
     } of parsedAdditionalStepInputs) {
       const uploadedStepAttachmentsForStep =
@@ -9442,6 +9480,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           type: "skill",
           name: stepSkillId || primarySkillId,
           inputs: stepSkillArgs,
+          ...(stepInputContractDigest
+            ? { inputContractDigest: stepInputContractDigest }
+            : {}),
           ...(stepSkillCaps.length > 0
             ? { requiredCapabilities: stepSkillCaps }
             : {}),
@@ -9449,6 +9490,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         stepPayload.skill = {
           id: stepSkillId || primarySkillId,
           args: stepSkillArgs,
+          ...(stepInputContractDigest
+            ? { inputContractDigest: stepInputContractDigest }
+            : {}),
           ...(stepSkillCaps.length > 0
             ? { requiredCapabilities: stepSkillCaps }
             : {}),
@@ -10494,6 +10538,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               )
                 ? Object.entries(schemaProperties(selectedSkillDetail?.inputSchema))
                 : [];
+              const selectedSkillContractChanged = skillContractDigestMismatch(
+                step.skillInputContractDigest,
+                selectedSkillDetail,
+              );
               const toolSearchText = toolSearchTextByStep[step.localId] || "";
               const trustedToolDefinitions = trustedToolsQuery.data || [];
               const toolChoiceGroups = groupedToolChoices(
@@ -11243,6 +11291,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           onChange={(nextValue) =>
                             updateStep(step.localId, {
                               skillId: nextValue,
+                              skillInputContractDigest: "",
                             })
                           }
                         />
@@ -11274,20 +11323,27 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                         </label>
                       ) : null}
                       {selectedSkillDetail ? (
-                        <SchemaCapabilityFields
-                          fields={visibleSkillSchemaFields}
-                          detail={selectedSkillDetail}
-                          values={step.presetInputValues}
-                          errors={step.presetInputErrors}
-                          disabled={false}
-                          onChange={(name, value) =>
-                            updateStepPresetInputValue(
-                              step.localId,
-                              { name },
-                              value,
-                            )
-                          }
-                        />
+                        <>
+                          {selectedSkillContractChanged ? (
+                            <p className="notice small" role="status">
+                              Skill input contract changed. Existing draft values are preserved and will be revalidated before submit.
+                            </p>
+                          ) : null}
+                          <SchemaCapabilityFields
+                            fields={visibleSkillSchemaFields}
+                            detail={selectedSkillDetail}
+                            values={step.presetInputValues}
+                            errors={step.presetInputErrors}
+                            disabled={false}
+                            onChange={(name, value) =>
+                              updateStepPresetInputValue(
+                                step.localId,
+                                { name },
+                                value,
+                              )
+                            }
+                          />
+                        </>
                       ) : null}
                     </div>
                   ) : null}
