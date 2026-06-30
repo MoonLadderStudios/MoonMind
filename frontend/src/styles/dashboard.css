@@ -2250,8 +2250,7 @@ tbody tr:hover {
 
 .workflow-list-row-title {
   display: -webkit-box;
-  min-height: 2.5em;
-  max-height: 2.5em;
+  height: 2.5em;
   overflow: hidden;
   color: inherit;
   font-weight: 600;
@@ -6966,8 +6965,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .workflow-workspace-sidebar-title {
   display: -webkit-box;
   min-width: 0;
-  min-height: 2.5em;
-  max-height: 2.5em;
+  height: 2.5em;
   overflow: hidden;
   font-size: 0.875rem;
   font-weight: 600;

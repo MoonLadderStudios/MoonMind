@@ -533,8 +533,7 @@ describe('Dashboard shared entry', () => {
   it('keeps workflow titles clamped to two consistent lines in the list and sidebar', async () => {
     const tableTitleBlock = cssRuleBlock(dashboardCss, '.workflow-list-row-title');
     expect(tableTitleBlock).toContain('display: -webkit-box');
-    expect(tableTitleBlock).toContain('min-height: 2.5em');
-    expect(tableTitleBlock).toContain('max-height: 2.5em');
+    expect(tableTitleBlock).toContain('height: 2.5em');
     expect(tableTitleBlock).toContain('-webkit-line-clamp: 2');
 
     const sidebarRowBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-row');
@@ -542,8 +541,7 @@ describe('Dashboard shared entry', () => {
 
     const sidebarTitleBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-title');
     expect(sidebarTitleBlock).toContain('display: -webkit-box');
-    expect(sidebarTitleBlock).toContain('min-height: 2.5em');
-    expect(sidebarTitleBlock).toContain('max-height: 2.5em');
+    expect(sidebarTitleBlock).toContain('height: 2.5em');
     expect(sidebarTitleBlock).toContain('-webkit-line-clamp: 2');
     expect(sidebarTitleBlock).not.toContain('white-space: nowrap');
   });
