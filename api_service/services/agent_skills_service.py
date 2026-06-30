@@ -14,6 +14,7 @@ from api_service.db.models import (
     AgentSkillFormat,
     SkillSet,
 )
+from moonmind.capabilities.input_contracts import parse_skill_capability_input_contract
 from moonmind.services.skill_resolution import (
     extract_required_capabilities_from_skill_markdown,
     extract_required_skill_names_from_skill_markdown,
@@ -110,6 +111,12 @@ class AgentSkillsService:
             skill_name=skill_slug,
             source_label=f"deployment skill '{skill_slug}'",
         )
+        input_contract = parse_skill_capability_input_contract(
+            skill_id=skill_slug,
+            label=skill.title or skill_slug,
+            markdown=content,
+            source={"kind": "deployment"},
+        )
 
         try:
             parsed_format = AgentSkillFormat(format_str)
@@ -127,6 +134,12 @@ class AgentSkillsService:
                 "format": format_str,
                 "required_skills": list(required_skills),
                 "required_capabilities": list(required_capabilities),
+                "input_schema": input_contract.get("inputSchema", {}),
+                "ui_schema": input_contract.get("uiSchema", {}),
+                "defaults": input_contract.get("defaults", {}),
+                "input_contract_digest": input_contract.get("contractDigest"),
+                "input_schema_diagnostics": input_contract.get("diagnostics", []),
+                "content_digest": input_contract.get("contentDigest"),
             },
         )
         artifact = await self._artifact_service.write_complete(
