@@ -635,6 +635,21 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     skill_markdown = (
         "---\n"
         "name: speckit-orchestrate\n"
+        "description: Run the full Moon Spec lifecycle.\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  required:\n"
+        "    - issueKey\n"
+        "  properties:\n"
+        "    issueKey:\n"
+        "      type: string\n"
+        "      title: Issue key\n"
+        "uiSchema:\n"
+        "  issueKey:\n"
+        "    widget: jira.issue-picker\n"
+        "defaults:\n"
+        "  issueKey: MM-1047\n"
+        "  unsafeDefault: token=raw-secret\n"
         "metadata:\n"
         "  required-capabilities:\n"
         "    - git\n"
@@ -662,11 +677,21 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     item = response.json()["legacyItems"][0]
     assert item["id"] == "speckit-orchestrate"
     assert item["kind"] == "skill"
+    assert item["description"] == "Run the full Moon Spec lifecycle."
     assert item["requiredCapabilities"] == ["git"]
     assert item["markdown"] == skill_markdown
-    assert item["inputSchema"] == {}
-    assert item["uiSchema"] == {}
-    assert item["defaults"] == {}
+    assert item["inputSchema"] == {
+        "type": "object",
+        "required": ["issueKey"],
+        "properties": {
+            "issueKey": {
+                "type": "string",
+                "title": "Issue key",
+            },
+        },
+    }
+    assert item["uiSchema"] == {"issueKey": {"widget": "jira.issue-picker"}}
+    assert item["defaults"] == {"issueKey": "MM-1047"}
     assert item["source"]["kind"] == "file"
     assert item["source"]["path"].endswith("speckit-orchestrate/SKILL.md")
     assert item["contentDigest"].startswith("sha256:")

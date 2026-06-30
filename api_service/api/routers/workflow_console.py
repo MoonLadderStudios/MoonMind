@@ -48,7 +48,6 @@ from api_service.services.settings_catalog import settings_permissions_for_user
 from moonmind.config.settings import settings
 from moonmind.capabilities.input_contracts import (
     contract_from_artifact_metadata,
-    contract_from_skill_markdown,
     content_digest_for_text,
     parse_skill_capability_input_contract,
 )
