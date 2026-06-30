@@ -247,6 +247,7 @@ _EXECUTION_FACET_ATTRS = {
 _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES = {
     "mm_target_runtime": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
     "mm_target_skill": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
+    "mm_title": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
 }
 _UNSORTABLE_TEMPORAL_SEARCH_ATTRIBUTES = frozenset(
     {
@@ -264,6 +265,7 @@ _EXECUTION_FILTER_ATTR_BY_ALIAS = {
     "targetRuntimeNotIn": "mm_target_runtime",
     "targetSkillIn": "mm_target_skill",
     "targetSkillNotIn": "mm_target_skill",
+    "titleContains": "mm_title",
 }
 _EXECUTION_FACET_FILTER_ALIASES = {
     "status": frozenset({"state", "stateIn", "stateNotIn"}),
@@ -1349,7 +1351,7 @@ def _build_temporal_execution_query(
             request.query_params.get("workflowIdContains"),
             alias="workflowIdContains",
         )
-    if not excluded("titleContains"):
+    if attr_available("mm_title") and not excluded("titleContains"):
         _append_word_match_temporal_filter(
             query_parts,
             "mm_title",
@@ -9314,10 +9316,10 @@ async def list_executions(
                 return ExecutionListResponse(
                     items=[],
                     nextPageToken=None,
-                    count=0,
-                    countMode="exact",
+                    count=None,
+                    countMode="estimated_or_unknown",
                     staleState=False,
-                    degradedCount=False,
+                    degradedCount=True,
                     refreshedAt=datetime.now(UTC),
                 )
             count_query, list_query = _build_temporal_execution_query(
@@ -9359,14 +9361,30 @@ async def list_executions(
             import base64
             token_bytes = base64.b64decode(next_page_token) if next_page_token else None
 
-            count_info = await client.count_workflows(query=count_query)
-
             iterator = client.list_workflows(
                 query=list_query,
                 page_size=page_size,
                 next_page_token=token_bytes,
             )
             await iterator.fetch_next_page()
+
+            count_value: int | None = None
+            count_mode = "exact"
+            degraded_count = False
+            try:
+                count_info = await asyncio.wait_for(
+                    client.count_workflows(query=count_query),
+                    timeout=settings.temporal_dashboard.list_count_timeout_seconds,
+                )
+                count_value = count_info.count
+            except Exception as exc:
+                count_mode = "estimated_or_unknown"
+                degraded_count = True
+                logger.warning(
+                    "Temporal execution list count degraded for query_present=%s: %s",
+                    bool(count_query),
+                    exc,
+                )
 
             page = iterator.current_page or []
             canonical_map: dict[str, TemporalExecutionCanonicalRecord] = {}
@@ -9410,16 +9428,6 @@ async def list_executions(
                             getattr(record_obj, "started_at", None) or datetime.now(UTC)
                         )
                     execution = _serialize_execution_list_item(record_obj)
-                    if _execution_uses_live_workflow_queries(execution):
-                        progress, queried_run_id = await _load_execution_progress(
-                            temporal_client=temporal_client,
-                            workflow_id=wf.id,
-                        )
-                        update: dict[str, object] = {"progress": progress}
-                        if queried_run_id:
-                            update["run_id"] = queried_run_id
-                            update["temporal_run_id"] = queried_run_id
-                        execution = execution.model_copy(update=update)
                     items.append(execution)
 
                 if _request_has_progress_filters(request):
@@ -9461,9 +9469,9 @@ async def list_executions(
             return ExecutionListResponse(
                 items=items,
                 next_page_token=new_token_str,
-                count=count_info.count,
-                count_mode="exact",
-                degraded_count=False,
+                count=count_value,
+                count_mode=count_mode,
+                degraded_count=degraded_count,
                 refreshed_at=datetime.now(UTC),
             )
         except TemporalExecutionValidationError as exc:

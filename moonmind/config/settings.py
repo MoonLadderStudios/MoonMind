@@ -302,6 +302,11 @@ class TemporalDashboardSettings(BaseSettings):
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIVE_QUERY_TIMEOUT_SECONDS"),
         gt=0,
     )
+    list_count_timeout_seconds: float = Field(
+        1.0,
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIST_COUNT_TIMEOUT_SECONDS"),
+        gt=0,
+    )
     list_endpoint: str = Field(
         "/api/executions",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIST_ENDPOINT"),
