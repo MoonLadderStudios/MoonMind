@@ -541,9 +541,11 @@ h1 {
 
 /* Workflows table and unified workspace run edge-to-edge, reaching up to the
  * full-width border line under the masthead instead of sitting inside a
- * narrower centered card. */
-.panel--data-wide:has(.workflow-list-data-slab),
-.panel--data-wide:has(.workflow-workspace-shell) {
+ * narrower centered card. The `.panel` prefix raises specificity above the
+ * later `.panel.panel--data-wide` 112rem cap so the edge-to-edge intent wins
+ * regardless of source order. */
+.panel.panel--data-wide:has(.workflow-list-data-slab),
+.panel.panel--data-wide:has(.workflow-workspace-shell) {
   max-width: none;
 }
 
@@ -6906,16 +6908,25 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   overflow: visible;
 }
 
+/* Rows are separated by the same hairline dividers used elsewhere, not by
+ * individual bordered cards. The divider lives on the `li` container rather
+ * than on the row so the row's `border-radius` cannot curve the hairline at
+ * its corners. */
+.workflow-workspace-sidebar-list li {
+  border-bottom: 1px solid rgb(var(--mm-border) / 0.4);
+}
+
+.workflow-workspace-sidebar-list li:last-child {
+  border-bottom: 0;
+}
+
 .workflow-workspace-sidebar-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.55rem;
   padding: 0.5rem 0.45rem;
-  /* Rows are separated by the same hairline dividers used elsewhere, not by
-   * individual bordered cards. */
   border: 0;
-  border-bottom: 1px solid rgb(var(--mm-border) / 0.4);
   border-radius: 0.4rem;
   background: transparent;
   color: rgb(var(--mm-ink));
@@ -6923,10 +6934,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transition:
     background-color 140ms ease,
     box-shadow 140ms ease;
-}
-
-.workflow-workspace-sidebar-list li:last-child .workflow-workspace-sidebar-row {
-  border-bottom: 0;
 }
 
 .workflow-workspace-sidebar-row-pinned {
