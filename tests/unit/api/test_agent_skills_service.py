@@ -112,53 +112,6 @@ async def test_update_skill_content_persists_input_contract_metadata(
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as db_session:
             svc = AgentSkillsService(
-                session=db_session,
-                artifact_service=mock_artifact_service,
-            )
-            await svc.create_skill(slug="issue-skill", title="Issue Skill")
-
-            await svc.update_skill_content(
-                skill_slug="issue-skill",
-                content=(
-                    "---\n"
-                    "name: Issue Skill\n"
-                    "inputSchema:\n"
-                    "  type: object\n"
-                    "  required: [issue_key]\n"
-                    "  properties:\n"
-                    "    issue_key:\n"
-                    "      type: string\n"
-                    "      title: Issue key\n"
-                    "      allOf:\n"
-                    "        - minLength: 3\n"
-                    "uiSchema:\n"
-                    "  issue_key:\n"
-                    "    widget: jira.issue-picker\n"
-                    "defaults:\n"
-                    "  issue_key: MM-1047\n"
-                    "---\n"
-                    "# Issue Skill\n"
-                ),
-            )
-
-            metadata = mock_artifact_service.create.await_args.kwargs["metadata_json"]
-            assert metadata["skill_slug"] == "issue-skill"
-            assert metadata["input_schema"]["required"] == ["issue_key"]
-            assert metadata["ui_schema"]["issue_key"]["widget"] == "jira.issue-picker"
-            assert metadata["defaults"] == {"issue_key": "MM-1047"}
-            assert metadata["input_contract_digest"].startswith("sha256:")
-            assert metadata["content_digest"].startswith("sha256:")
-            assert metadata["input_schema_diagnostics"][0]["code"] == (
-                "unsupported_keyword"
-            )
-
-@pytest.mark.asyncio
-async def test_update_skill_content_persists_input_contract_metadata(
-    tmp_path, mock_artifact_service: AsyncMock
-):
-    async with template_db(tmp_path) as session_maker:
-        async with session_maker() as db_session:
-            svc = AgentSkillsService(
                 session=db_session, artifact_service=mock_artifact_service
             )
             await svc.create_skill(slug="jira-skill", title="Jira Skill")

@@ -58,6 +58,7 @@ from moonmind.schemas.temporal_models import (
     RecoverySourceModel,
     has_user_workflow_plan_source,
 )
+from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
@@ -1037,6 +1038,18 @@ class TemporalExecutionService:
             owner_id=owner_id,
             owner_type=owner_type,
         )
+        if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
+            skill_validation = await validate_skill_step_inputs(
+                initial_parameters=initial_parameters,
+                session=self._session,
+            )
+            if not skill_validation.valid:
+                first_error = skill_validation.errors[0]
+                raise TemporalExecutionValidationError(
+                    "Skill step inputs failed validation: "
+                    f"{first_error.path}: {first_error.message}"
+                )
+            initial_parameters = skill_validation.parameters
 
         if workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
             if not manifest_artifact_ref:

@@ -135,6 +135,7 @@ from moonmind.workflows.executions.runtime_inheritance import (
     apply_inherited_runtime_to_payload,
     resolve_child_runtime_inheritance,
 )
+from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from api_service.api.execution_principal import (
     execution_principal_dependency,
     resolve_execution_principal,
@@ -6297,6 +6298,14 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                         raw_args = selected_skill.get("inputs")
                     if isinstance(raw_args, dict):
                         normalized_skill["args"] = dict(raw_args)
+                    for evidence_key in (
+                        "contentRef",
+                        "contentDigest",
+                        "inputContractDigest",
+                    ):
+                        evidence_value = selected_skill.get(evidence_key)
+                        if isinstance(evidence_value, str) and evidence_value.strip():
+                            normalized_skill[evidence_key] = evidence_value.strip()
                     raw_caps = selected_skill.get("requiredCapabilities")
                     if raw_caps is not None:
                         normalized_caps = _coerce_string_list(
@@ -8469,6 +8478,20 @@ async def _create_execution_from_workflow_request(
         initial_parameters["instructions"] = instructions
     if normalized_task_for_planner:
         initial_parameters["workflow"] = normalized_task_for_planner
+    skill_validation = await validate_skill_step_inputs(
+        initial_parameters=initial_parameters,
+        session=session,
+    )
+    if not skill_validation.valid:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_skill_step_inputs",
+                "message": "Skill step inputs failed validation.",
+                "errors": skill_validation.error_dicts(),
+            },
+        )
+    initial_parameters = skill_validation.parameters
 
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
@@ -9200,6 +9223,20 @@ async def create_execution(
         if route.recurring_response is not None:
             return route.recurring_response
 
+        skill_validation = await validate_skill_step_inputs(
+            initial_parameters=request.initial_parameters,
+            session=session,
+        )
+        if not skill_validation.valid:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "invalid_skill_step_inputs",
+                    "message": "Skill step inputs failed validation.",
+                    "errors": skill_validation.error_dicts(),
+                },
+            )
+
         record = await service.create_execution(
             workflow_type=request.workflow_type,
             owner_id=user.id,
@@ -9209,7 +9246,7 @@ async def create_execution(
             plan_artifact_ref=request.plan_artifact_ref,
             manifest_artifact_ref=request.manifest_artifact_ref,
             failure_policy=request.failure_policy,
-            initial_parameters=request.initial_parameters,
+            initial_parameters=skill_validation.parameters,
             idempotency_key=request.idempotency_key,
             start_delay=route.start_delay,
             scheduled_for=route.scheduled_for,
