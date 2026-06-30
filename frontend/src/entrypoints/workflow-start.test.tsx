@@ -15574,6 +15574,9 @@ describe("Task Create schema-driven capability inputs", () => {
             {
               id: "schema.skill",
               description: "Schema-backed Skill fixture.",
+              contractDigest: "sha256:current-skill-contract",
+              contentDigest: "sha256:current-skill-content",
+              contentRef: "artifact://skill/schema.skill",
               inputSchema: {
                 type: "object",
                 required: ["repository"],
@@ -16327,7 +16330,13 @@ describe("Task Create schema-driven capability inputs", () => {
     const request = latestSchemaCreateRequest() as {
       payload: {
         task: {
-          skill?: { inputs?: Record<string, unknown>; args?: Record<string, unknown> };
+          skill?: {
+            inputs?: Record<string, unknown>;
+            args?: Record<string, unknown>;
+            inputContractDigest?: string;
+            contentDigest?: string;
+            contentRef?: string;
+          };
         };
       };
     };
@@ -16337,6 +16346,15 @@ describe("Task Create schema-driven capability inputs", () => {
       unsupported_widget: "manual fallback survives",
       metadata: { sourceIssue: "MM-1047" },
     });
+    expect(request.payload.task.skill?.inputContractDigest).toBe(
+      "sha256:current-skill-contract",
+    );
+    expect(request.payload.task.skill?.contentDigest).toBe(
+      "sha256:current-skill-content",
+    );
+    expect(request.payload.task.skill?.contentRef).toBe(
+      "artifact://skill/schema.skill",
+    );
     expect(request.payload.task.skill?.args).toBeUndefined();
   });
 

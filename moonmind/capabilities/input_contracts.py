@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -132,6 +133,11 @@ _CODE_LIKE_SCHEMA_KEYS = {
     "x-moonmind-code",
     "x-moonmind-transform",
 }
+logger = logging.getLogger(__name__)
+
+
+class CapabilityInputContractError(ValueError):
+    """Raised when strict contract policy rejects untrusted metadata."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +170,8 @@ def content_digest_for_text(content: str) -> str:
 
 def parse_skill_markdown_frontmatter(
     content: str,
+    *,
+    strict: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Parse YAML frontmatter from a SKILL.md file with a safe loader."""
 
@@ -172,56 +180,74 @@ def parse_skill_markdown_frontmatter(
     marker = "\n---"
     end = content.find(marker, 3)
     if end < 0:
-        return {}, [
-            _diagnostic(
-                code="frontmatter_unclosed",
-                message=(
-                    "Skill frontmatter is not closed; structured metadata was ignored."
-                ),
-                severity="warning",
-                path="frontmatter",
+        diagnostic = _diagnostic(
+            code="frontmatter_unclosed",
+            message="Skill frontmatter is not closed; structured metadata was ignored.",
+            severity="error" if strict else "warning",
+            path="frontmatter",
+        )
+        if strict:
+            _record_contract_event(
+                "skill_input_schema_strict_policy_rejection",
+                code=diagnostic["code"],
             )
-        ]
+            raise CapabilityInputContractError(diagnostic["message"])
+        return {}, [diagnostic]
     raw_frontmatter = content[3:end]
     if len(raw_frontmatter.encode("utf-8")) > MAX_FRONTMATTER_BYTES:
-        return {}, [
-            _diagnostic(
-                code="frontmatter_too_large",
-                message=(
-                    "Skill frontmatter exceeds the supported size; structured "
-                    "metadata was ignored."
-                ),
-                severity="warning",
-                path="frontmatter",
+        diagnostic = _diagnostic(
+            code="frontmatter_too_large",
+            message=(
+                "Skill frontmatter exceeds the supported size; structured "
+                "metadata was ignored."
+            ),
+            severity="error" if strict else "warning",
+            path="frontmatter",
+        )
+        if strict:
+            _record_contract_event(
+                "skill_input_schema_strict_policy_rejection",
+                code=diagnostic["code"],
             )
-        ]
+            raise CapabilityInputContractError(diagnostic["message"])
+        return {}, [diagnostic]
     try:
         parsed = yaml.safe_load(raw_frontmatter) or {}
     except yaml.YAMLError as exc:
-        return {}, [
-            _diagnostic(
-                code="frontmatter_yaml_invalid",
-                message=(
-                    "Skill frontmatter YAML could not be parsed; structured "
-                    "metadata was ignored."
-                ),
-                severity="warning",
-                path="frontmatter",
-                details={"error": str(exc)},
+        diagnostic = _diagnostic(
+            code="frontmatter_yaml_invalid",
+            message=(
+                "Skill frontmatter YAML could not be parsed; structured "
+                "metadata was ignored."
+            ),
+            severity="error" if strict else "warning",
+            path="frontmatter",
+            details={"error": str(exc)},
+        )
+        if strict:
+            _record_contract_event(
+                "skill_input_schema_strict_policy_rejection",
+                code=diagnostic["code"],
             )
-        ]
+            raise CapabilityInputContractError(diagnostic["message"]) from exc
+        return {}, [diagnostic]
     if not isinstance(parsed, Mapping):
-        return {}, [
-            _diagnostic(
-                code="frontmatter_not_object",
-                message=(
-                    "Skill frontmatter must be a YAML mapping; structured "
-                    "metadata was ignored."
-                ),
-                severity="warning",
-                path="frontmatter",
+        diagnostic = _diagnostic(
+            code="frontmatter_not_object",
+            message=(
+                "Skill frontmatter must be a YAML mapping; structured "
+                "metadata was ignored."
+            ),
+            severity="error" if strict else "warning",
+            path="frontmatter",
+        )
+        if strict:
+            _record_contract_event(
+                "skill_input_schema_strict_policy_rejection",
+                code=diagnostic["code"],
             )
-        ]
+            raise CapabilityInputContractError(diagnostic["message"])
+        return {}, [diagnostic]
     return dict(parsed), []
 
 
@@ -238,6 +264,8 @@ def extract_frontmatter(
 
 def parse_capability_input_contract(
     raw_metadata: Mapping[str, Any] | None,
+    *,
+    strict: bool = False,
 ) -> CapabilityInputContractParts:
     """Extract schema metadata using accepted source casing."""
 
@@ -251,18 +279,21 @@ def parse_capability_input_contract(
         path="inputSchema",
         max_bytes=MAX_INPUT_SCHEMA_BYTES,
         diagnostics=diagnostics,
+        strict=strict,
     )
     ui_schema = _bounded_mapping(
         ui_schema,
         path="uiSchema",
         max_bytes=MAX_UI_SCHEMA_BYTES,
         diagnostics=diagnostics,
+        strict=strict,
     )
     defaults = _bounded_mapping(
         defaults,
         path="defaults",
         max_bytes=MAX_DEFAULTS_BYTES,
         diagnostics=diagnostics,
+        strict=strict,
     )
     return CapabilityInputContractParts(
         input_schema=_json_compatible_mapping(input_schema),
@@ -317,10 +348,25 @@ def normalize_capability_input_contract(
     *,
     owner: CapabilityInputOwner,
     parts: CapabilityInputContractParts,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Return a camelCase renderer-facing capability input contract."""
 
     diagnostics = [dict(item) for item in parts.diagnostics]
+    if strict:
+        for path, value, max_bytes in (
+            ("inputSchema", parts.input_schema, MAX_INPUT_SCHEMA_BYTES),
+            ("uiSchema", parts.ui_schema, MAX_UI_SCHEMA_BYTES),
+            ("defaults", parts.defaults, MAX_DEFAULTS_BYTES),
+        ):
+            if isinstance(value, Mapping) and _json_size_bytes(value) > max_bytes:
+                _record_contract_event(
+                    "skill_input_schema_strict_policy_rejection",
+                    code="metadata_too_large",
+                )
+                raise CapabilityInputContractError(
+                    f"Capability {path} exceeds the supported size and was omitted."
+                )
     input_schema = _sanitize_schema_descriptions(
         _json_compatible_mapping(parts.input_schema) or {}
     )
@@ -328,22 +374,38 @@ def normalize_capability_input_contract(
     defaults = _json_compatible_mapping(parts.defaults) or {}
 
     if input_schema:
-        diagnostics.extend(_schema_trust_diagnostics(input_schema))
+        trust_diagnostics = _schema_trust_diagnostics(input_schema)
+        if strict:
+            for diagnostic in trust_diagnostics:
+                if diagnostic.get("code") == "remote_ref_ignored":
+                    _record_contract_event(
+                        "skill_input_schema_strict_policy_rejection",
+                        code="remote_ref_disabled",
+                    )
+                    raise CapabilityInputContractError(
+                        "Remote schema references are disabled for Skill input schemas."
+                    )
+        diagnostics.extend(trust_diagnostics)
         root_type = input_schema.get("type")
         if root_type != "object" or not isinstance(
             input_schema.get("properties", {}), Mapping
         ):
-            diagnostics.append(
-                _diagnostic(
-                    code="input_schema_root_not_object",
-                    message=(
-                        "Capability inputSchema must be a root object schema; "
-                        "generated fields were omitted."
-                    ),
-                    severity="warning",
-                    path="inputSchema",
-                )
+            diagnostic = _diagnostic(
+                code="input_schema_root_not_object",
+                message=(
+                    "Capability inputSchema must be a root object schema; "
+                    "generated fields were omitted."
+                ),
+                severity="error" if strict else "warning",
+                path="inputSchema",
             )
+            diagnostics.append(diagnostic)
+            if strict:
+                _record_contract_event(
+                    "skill_input_schema_strict_policy_rejection",
+                    code=diagnostic["code"],
+                )
+                raise CapabilityInputContractError(diagnostic["message"])
             input_schema = {}
         else:
             input_schema, schema_diagnostics = _normalize_schema_metadata(
@@ -356,10 +418,14 @@ def normalize_capability_input_contract(
         input_schema, schema_default_diagnostics = _remove_secret_like_schema_defaults(
             input_schema,
             path="inputSchema",
+            strict=strict,
         )
         diagnostics.extend(schema_default_diagnostics)
 
-    defaults, default_diagnostics = _remove_secret_like_defaults(defaults)
+    defaults, default_diagnostics = _remove_secret_like_defaults(
+        defaults,
+        strict=strict,
+    )
     diagnostics.extend(default_diagnostics)
 
     if ui_schema:
@@ -498,6 +564,7 @@ def contract_from_skill_markdown(
     skill_id: str,
     source_label: str,
     content_digest: str | None = None,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Return the normalized input contract parsed from one Skill markdown body."""
 
@@ -506,6 +573,7 @@ def contract_from_skill_markdown(
         label=skill_id,
         markdown=markdown,
         source={"kind": "file", "path": source_label},
+        strict=strict,
     )
     if content_digest:
         contract["contentDigest"] = content_digest
@@ -583,12 +651,16 @@ def parse_skill_capability_input_contract(
     label: str,
     markdown: str,
     source: Mapping[str, Any] | None = None,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Parse SKILL.md frontmatter into a normalized kind=skill contract."""
 
-    frontmatter, diagnostics = parse_skill_markdown_frontmatter(markdown)
+    frontmatter, diagnostics = parse_skill_markdown_frontmatter(
+        markdown,
+        strict=strict,
+    )
     description = str(frontmatter.get("description") or "").strip() or None
-    parts = parse_capability_input_contract(frontmatter)
+    parts = parse_capability_input_contract(frontmatter, strict=strict)
     parts = CapabilityInputContractParts(
         input_schema=parts.input_schema,
         ui_schema=parts.ui_schema,
@@ -610,6 +682,7 @@ def parse_skill_capability_input_contract(
             },
         ),
         parts=parts,
+        strict=strict,
     )
 
 
@@ -1137,19 +1210,25 @@ def _bounded_mapping(
     path: str,
     max_bytes: int,
     diagnostics: list[dict[str, Any]],
+    strict: bool = False,
 ) -> Mapping[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     if _json_size_bytes(_json_compatible_mapping(value) or {}) <= max_bytes:
         return value
-    diagnostics.append(
-        _diagnostic(
-            code="metadata_too_large",
-            message=f"Capability {path} exceeds the supported size and was omitted.",
-            severity="warning",
-            path=path,
-        )
+    diagnostic = _diagnostic(
+        code="metadata_too_large",
+        message=f"Capability {path} exceeds the supported size and was omitted.",
+        severity="error" if strict else "warning",
+        path=path,
     )
+    diagnostics.append(diagnostic)
+    if strict:
+        _record_contract_event(
+            "skill_input_schema_strict_policy_rejection",
+            code=diagnostic["code"],
+        )
+        raise CapabilityInputContractError(diagnostic["message"])
     return None
 
 
@@ -1265,6 +1344,7 @@ def _remove_secret_like_schema_defaults(
     value: Any,
     *,
     path: str,
+    strict: bool = False,
 ) -> tuple[Any, list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
     if isinstance(value, Mapping):
@@ -1272,21 +1352,27 @@ def _remove_secret_like_schema_defaults(
         for key, item in value.items():
             child_path = f"{path}.{key}"
             if str(key) == "default" and _contains_secret_like_value(item):
-                diagnostics.append(
-                    _diagnostic(
-                        code="defaults_secret_like_value",
-                        message=(
-                            "Capability schema default contained a secret-like "
-                            "value and was omitted."
-                        ),
-                        severity="warning",
-                        path=child_path,
-                    )
+                diagnostic = _diagnostic(
+                    code="defaults_secret_like_value",
+                    message=(
+                        "Capability schema default contained a secret-like "
+                        "value and was omitted."
+                    ),
+                    severity="error" if strict else "warning",
+                    path=child_path,
                 )
+                diagnostics.append(diagnostic)
+                if strict:
+                    _record_contract_event(
+                        "skill_input_schema_strict_policy_rejection",
+                        code=diagnostic["code"],
+                    )
+                    raise CapabilityInputContractError(diagnostic["message"])
                 continue
             sanitized_value, child_diagnostics = _remove_secret_like_schema_defaults(
                 item,
                 path=child_path,
+                strict=strict,
             )
             sanitized[str(key)] = sanitized_value
             diagnostics.extend(child_diagnostics)
@@ -1297,6 +1383,7 @@ def _remove_secret_like_schema_defaults(
             sanitized_item, child_diagnostics = _remove_secret_like_schema_defaults(
                 item,
                 path=f"{path}[{index}]",
+                strict=strict,
             )
             sanitized_items.append(sanitized_item)
             diagnostics.extend(child_diagnostics)
@@ -1306,6 +1393,8 @@ def _remove_secret_like_schema_defaults(
 
 def _remove_secret_like_defaults(
     defaults: Mapping[str, Any],
+    *,
+    strict: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
     sanitized: dict[str, Any] = {}
@@ -1313,17 +1402,22 @@ def _remove_secret_like_defaults(
         if _SECRET_LIKE_KEY_PATTERN.search(
             str(key or "")
         ) or _contains_secret_like_value(value):
-            diagnostics.append(
-                _diagnostic(
-                    code="defaults_secret_like_value",
-                    message=(
-                        "Capability defaults contained a secret-like value "
-                        "and were omitted."
-                    ),
-                    severity="warning",
-                    path=f"defaults.{key}",
-                )
+            diagnostic = _diagnostic(
+                code="defaults_secret_like_value",
+                message=(
+                    "Capability defaults contained a secret-like value "
+                    "and were omitted."
+                ),
+                severity="error" if strict else "warning",
+                path=f"defaults.{key}",
             )
+            diagnostics.append(diagnostic)
+            if strict:
+                _record_contract_event(
+                    "skill_input_schema_strict_policy_rejection",
+                    code=diagnostic["code"],
+                )
+                raise CapabilityInputContractError(diagnostic["message"])
             continue
         sanitized[str(key)] = value
     return sanitized, diagnostics
@@ -1426,3 +1520,17 @@ def _diagnostic(
     if details:
         diagnostic["details"] = dict(details)
     return diagnostic
+
+
+def _record_contract_event(event: str, **attributes: Any) -> None:
+    safe_attributes = {
+        key: value
+        for key, value in attributes.items()
+        if value is not None
+        and key not in {"default", "defaults", "input", "inputs", "value", "values"}
+    }
+    logger.info(
+        "capability_input_contract.%s",
+        event,
+        extra={"event": event, "attributes": safe_attributes},
+    )

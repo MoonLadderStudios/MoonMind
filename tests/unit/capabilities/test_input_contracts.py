@@ -1,7 +1,11 @@
 import datetime as dt
 
+import pytest
+
 from moonmind.capabilities.input_contracts import (
+    CapabilityInputContractError,
     CapabilityInputOwner,
+    CapabilityInputContractParts,
     capability_contract_from_legacy_inputs,
     normalize_capability_input_contract,
     parse_skill_capability_input_contract,
@@ -336,6 +340,88 @@ def test_secret_like_defaults_are_removed_from_schema_and_defaults() -> None:
     assert [
         item["code"] for item in contract["diagnostics"]
     ].count("defaults_secret_like_value") == 2
+
+
+def test_strict_skill_contract_rejects_secret_like_defaults() -> None:
+    markdown = (
+        "---\n"
+        "name: Demo Skill\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    token:\n"
+        "      type: string\n"
+        "defaults:\n"
+        "  token: ghp_1234567890abcdef\n"
+        "---\n"
+        "# Demo\n"
+    )
+
+    with pytest.raises(CapabilityInputContractError, match="secret-like value"):
+        parse_skill_capability_input_contract(
+            skill_id="demo-skill",
+            label="Demo Skill",
+            markdown=markdown,
+            strict=True,
+        )
+
+
+def test_strict_contract_records_remote_ref_rejection(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    markdown = (
+        "---\n"
+        "name: Demo Skill\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    target:\n"
+        "      type: string\n"
+        "      $ref: https://example.invalid/schema.json\n"
+        "---\n"
+        "# Demo\n"
+    )
+
+    caplog.set_level("INFO", logger="moonmind.capabilities.input_contracts")
+
+    with pytest.raises(CapabilityInputContractError, match="Remote schema references"):
+        parse_skill_capability_input_contract(
+            skill_id="demo-skill",
+            label="Demo Skill",
+            markdown=markdown,
+            strict=True,
+        )
+
+    assert any(
+        getattr(record, "event", None) == "skill_input_schema_strict_policy_rejection"
+        and getattr(record, "attributes", None) == {"code": "remote_ref_disabled"}
+        for record in caplog.records
+    )
+
+
+def test_strict_contract_rejects_schema_size_limit() -> None:
+    huge_description = "a" * (128 * 1024)
+
+    with pytest.raises(CapabilityInputContractError, match="inputSchema exceeds"):
+        normalize_capability_input_contract(
+            owner=CapabilityInputOwner(
+                id="demo-skill",
+                kind="skill",
+                label="Demo Skill",
+            ),
+            parts=CapabilityInputContractParts(
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "target": {
+                            "type": "string",
+                            "description": huge_description,
+                        }
+                    },
+                },
+            ),
+            strict=True,
+        )
 
 
 def test_oversized_skill_frontmatter_is_omitted_with_diagnostic() -> None:

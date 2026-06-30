@@ -342,4 +342,34 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     ]);
     expect(draft.appliedTemplates[0]?.slug).toBe("jira-implement");
   });
+
+  it("preserves Skill input contract digests from saved drafts", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:skill-contract-digest",
+      workflowType: "MoonMind.UserWorkflow",
+      inputParameters: {
+        workflow: {
+          instructions: "Edit a saved Skill draft.",
+          steps: [
+            {
+              type: "skill",
+              instructions: "Use the saved structured values.",
+              skill: {
+                id: "schema.skill",
+                inputContractDigest: "sha256:saved-contract",
+                args: { repository: "MoonLadderStudios/MoonMind" },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.steps[0]?.skillInputContractDigest).toBe(
+      "sha256:saved-contract",
+    );
+    expect(draft.steps[0]?.skillArgs).toEqual({
+      repository: "MoonLadderStudios/MoonMind",
+    });
+  });
 });

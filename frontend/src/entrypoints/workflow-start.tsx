@@ -6055,6 +6055,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           ...(item.inputSchema ? { inputSchema: item.inputSchema } : {}),
           ...(item.uiSchema ? { uiSchema: item.uiSchema } : {}),
           ...(item.defaults ? { defaults: item.defaults } : {}),
+          ...(item.contractDigest ? { contractDigest: item.contractDigest } : {}),
+          ...(item.contentDigest ? { contentDigest: item.contentDigest } : {}),
+          ...(item.contentRef ? { contentRef: item.contentRef } : {}),
           ...(Array.isArray(item.requiredCapabilities)
             ? {
                 requiredCapabilities: item.requiredCapabilities
