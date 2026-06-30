@@ -14,14 +14,18 @@ from moonmind.workflows.adapters.omnigent_client import (
 
 @pytest.mark.asyncio
 async def test_omnigent_client_exposes_confirmed_operations() -> None:
-    assert not hasattr(OmnigentHttpClient, "get_workspace_diff")
-
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET" and request.url.path == "/api/agents":
             return httpx.Response(
                 200,
                 json={"agents": [{"id": "ag_1", "name": "codex"}]},
             )
+        if request.method == "GET" and request.url.path.endswith("/diff/src/app.py"):
+            return httpx.Response(200, content=b"diff --git a/src/app.py b/src/app.py\n")
+        if request.method == "GET" and request.url.path.endswith(
+            "/filesystem/src/app.py"
+        ):
+            return httpx.Response(200, content=b"print('ok')\n")
         if request.method == "DELETE":
             assert request.url.path == "/v1/sessions/sess_1"
             assert request.url.query == b"delete_branch=false"
@@ -48,6 +52,12 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
         {"answer": "yes"},
     ) == {"ok": True}
     assert await client.list_changed_files("sess_1") == {"ok": True}
+    assert await client.list_workspace_files("sess_1") == {"ok": True}
+    assert await client.get_workspace_file("sess_1", "src/app.py") == b"print('ok')\n"
+    assert await client.get_workspace_diff(
+        "sess_1",
+        "src/app.py",
+    ) == b"diff --git a/src/app.py b/src/app.py\n"
     assert await client.list_session_files("sess_1") == {"ok": True}
     assert await client.interrupt("sess_1") == {"ok": True}
     assert await client.stop_session("sess_1") == {"ok": True}

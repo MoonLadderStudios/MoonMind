@@ -524,6 +524,7 @@ export function resolveDefaultProviderProfileId(
 interface SkillsResponse {
   items?: {
     worker?: string[];
+    [source: string]: string[] | undefined;
   };
   legacyItems?: SkillCapabilityDetail[];
 }
@@ -605,6 +606,7 @@ interface PresetDetail extends PresetSummary {
 
 interface SkillCapabilityDetail {
   id: string;
+  description?: string;
   inputSchema?: Record<string, unknown>;
   uiSchema?: Record<string, unknown>;
   defaults?: Record<string, unknown>;
@@ -6026,6 +6028,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         }
         detailsById[id] = {
           id,
+          description: String(item.description || "").trim(),
           ...(item.inputSchema ? { inputSchema: item.inputSchema } : {}),
           ...(item.uiSchema ? { uiSchema: item.uiSchema } : {}),
           ...(item.defaults ? { defaults: item.defaults } : {}),
@@ -6038,8 +6041,16 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             : {}),
         };
       }
+      const ids = Array.from(
+        new Set(
+          Object.values(data.items || {})
+            .flatMap((items) => items || [])
+            .map((id) => String(id || "").trim())
+            .filter(Boolean),
+        ),
+      );
       return {
-        ids: data.items?.worker || Object.keys(detailsById),
+        ids: ids.length > 0 ? ids : Object.keys(detailsById),
         detailsById,
       };
     },
@@ -11445,6 +11456,21 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           </span>
                         )}
                       </div>
+                      {selectedSkillDetail && visibleSkillSchemaFields.length === 0 ? (
+                        <div
+                          className="notice small"
+                          data-testid={`skill-schema-fallback-${index}`}
+                        >
+                          <strong>{selectedSkillDetail.id}</strong>
+                          {selectedSkillDetail.description ? (
+                            <span>{`: ${selectedSkillDetail.description}`}</span>
+                          ) : null}
+                          <span>
+                            {" "}
+                            This Skill does not publish structured input fields.
+                          </span>
+                        </div>
+                      ) : null}
 
                       {showSkillArgsField ? (
                         <label
