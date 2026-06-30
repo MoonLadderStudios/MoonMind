@@ -56,6 +56,12 @@ class _SkillInputContract:
     contract_digest: str
 
 
+class SkillInputContractResolutionError(ValueError):
+    def __init__(self, *, message: str, code: str = "input_contract_unavailable"):
+        super().__init__(message)
+        self.code = code
+
+
 async def validate_skill_step_inputs(
     *,
     initial_parameters: Mapping[str, Any] | None,
@@ -107,11 +113,21 @@ async def validate_skill_step_inputs(
             )
             continue
 
-        contract = await _load_input_contract(
-            entry=entry,
-            skill_payload=skill_payload,
-            session=session,
-        )
+        try:
+            contract = await _load_input_contract(
+                entry=entry,
+                skill_payload=skill_payload,
+                session=session,
+            )
+        except SkillInputContractResolutionError as exc:
+            errors.append(
+                SkillInputValidationError(
+                    path=f"steps[{index}].skill.inputs",
+                    message=str(exc),
+                    code=exc.code,
+                )
+            )
+            continue
         raw_inputs = _skill_inputs(skill_payload)
         values = _apply_defaults(
             schema=contract.input_schema,
@@ -227,8 +243,24 @@ async def _load_input_contract(
         from api_service.db.models import TemporalArtifact
 
         artifact = await session.get(TemporalArtifact, entry.content_ref)
+        if artifact is None:
+            raise SkillInputContractResolutionError(
+                message=(
+                    "Selected Skill content evidence could not be loaded for "
+                    f"contentRef '{entry.content_ref}'."
+                ),
+                code="content_evidence_not_found",
+            )
         if artifact is not None and isinstance(artifact.metadata_json, Mapping):
             metadata = artifact.metadata_json
+    elif entry.content_ref:
+        raise SkillInputContractResolutionError(
+            message=(
+                "Selected Skill content evidence requires a backend session for "
+                f"contentRef '{entry.content_ref}'."
+            ),
+            code="content_evidence_not_found",
+        )
     if not metadata and entry.provenance.source_path:
         skill_path = Path(entry.provenance.source_path) / "SKILL.md"
         try:
@@ -251,15 +283,18 @@ async def _load_input_contract(
         or skill_payload.get("inputContractDigest")
         or ""
     ).strip()
+    ui_schema = _mapping(metadata.get("ui_schema") or metadata.get("uiSchema"))
     if not input_schema and markdown is not None:
         frontmatter = _frontmatter(markdown)
         input_schema = _mapping(
             frontmatter.get("inputSchema") or frontmatter.get("input_schema")
         )
+        ui_schema = _mapping(frontmatter.get("uiSchema") or frontmatter.get("ui_schema"))
         defaults = _mapping(frontmatter.get("defaults"))
     if not digest:
         digest = _contract_digest(
             input_schema=input_schema,
+            ui_schema=ui_schema,
             defaults=defaults,
             content_digest=str(entry.content_digest or ""),
         )
@@ -289,9 +324,34 @@ def _frontmatter(markdown: str) -> dict[str, Any]:
     return dict(parsed) if isinstance(parsed, Mapping) else {}
 
 
+def extract_skill_input_contract_metadata(
+    markdown: str,
+    *,
+    content_digest: str,
+) -> dict[str, Any]:
+    frontmatter = _frontmatter(markdown)
+    input_schema = _mapping(
+        frontmatter.get("inputSchema") or frontmatter.get("input_schema")
+    )
+    ui_schema = _mapping(frontmatter.get("uiSchema") or frontmatter.get("ui_schema"))
+    defaults = _mapping(frontmatter.get("defaults"))
+    return {
+        "input_schema": input_schema,
+        "ui_schema": ui_schema,
+        "defaults": defaults,
+        "input_contract_digest": _contract_digest(
+            input_schema=input_schema,
+            ui_schema=ui_schema,
+            defaults=defaults,
+            content_digest=content_digest,
+        ),
+    }
+
+
 def _contract_digest(
     *,
     input_schema: Mapping[str, Any],
+    ui_schema: Mapping[str, Any] | None = None,
     defaults: Mapping[str, Any],
     content_digest: str,
 ) -> str:
@@ -299,6 +359,7 @@ def _contract_digest(
         "parser": "moonmind.skill-input-contract.v1",
         "contentDigest": content_digest,
         "inputSchema": input_schema,
+        "uiSchema": ui_schema or {},
         "defaults": defaults,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

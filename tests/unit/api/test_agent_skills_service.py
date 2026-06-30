@@ -104,6 +104,50 @@ async def test_update_skill_content_success(tmp_path, mock_artifact_service: Asy
             mock_artifact_service.create.assert_awaited_once()
             mock_artifact_service.write_complete.assert_awaited_once()
 
+
+@pytest.mark.asyncio
+async def test_update_skill_content_stores_input_contract_metadata(
+    tmp_path, mock_artifact_service: AsyncMock
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as db_session:
+            svc = AgentSkillsService(
+                session=db_session, artifact_service=mock_artifact_service
+            )
+            await svc.create_skill(slug="issue-implement", title="Issue Implement")
+
+            await svc.update_skill_content(
+                skill_slug="issue-implement",
+                content="""---
+name: issue-implement
+inputSchema:
+  type: object
+  required:
+    - issue
+  properties:
+    issue:
+      type: string
+uiSchema:
+  issue:
+    widget: text
+defaults:
+  dryRun: true
+---
+Implement an issue.
+""",
+            )
+
+            metadata = mock_artifact_service.create.await_args.kwargs["metadata_json"]
+            assert metadata["input_schema"] == {
+                "type": "object",
+                "required": ["issue"],
+                "properties": {"issue": {"type": "string"}},
+            }
+            assert metadata["ui_schema"] == {"issue": {"widget": "text"}}
+            assert metadata["defaults"] == {"dryRun": True}
+            assert metadata["input_contract_digest"].startswith("sha256:")
+
+
 @pytest.mark.asyncio
 async def test_update_skill_content_replaces_current_content(
     tmp_path, mock_artifact_service: AsyncMock

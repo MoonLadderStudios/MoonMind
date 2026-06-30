@@ -18,6 +18,7 @@ from moonmind.services.skill_resolution import (
     extract_required_capabilities_from_skill_markdown,
     extract_required_skill_names_from_skill_markdown,
 )
+from moonmind.services.skill_step_inputs import extract_skill_input_contract_metadata
 from moonmind.workflows.temporal import TemporalArtifactService
 
 class AgentSkillDuplicateError(ValueError):
@@ -110,6 +111,10 @@ class AgentSkillsService:
             skill_name=skill_slug,
             source_label=f"deployment skill '{skill_slug}'",
         )
+        input_contract_metadata = extract_skill_input_contract_metadata(
+            content,
+            content_digest=content_digest,
+        )
 
         try:
             parsed_format = AgentSkillFormat(format_str)
@@ -127,6 +132,7 @@ class AgentSkillsService:
                 "format": format_str,
                 "required_skills": list(required_skills),
                 "required_capabilities": list(required_capabilities),
+                **input_contract_metadata,
             },
         )
         artifact = await self._artifact_service.write_complete(

@@ -9,8 +9,10 @@ from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 
 
 class _ArtifactMetadataSession:
-    def __init__(self, metadata: dict[str, object]) -> None:
-        self._artifact = SimpleNamespace(metadata_json=metadata)
+    def __init__(self, metadata: dict[str, object] | None) -> None:
+        self._artifact = (
+            SimpleNamespace(metadata_json=metadata) if metadata is not None else None
+        )
         self.get = AsyncMock(return_value=self._artifact)
 
 
@@ -132,3 +134,31 @@ async def test_validate_skill_step_inputs_normalizes_legacy_args() -> None:
     assert "id" not in skill
     assert "args" not in skill
     assert skill["inputs"]["issue"] == "MM-1052"
+
+
+@pytest.mark.asyncio
+async def test_validate_skill_step_inputs_rejects_missing_content_evidence() -> None:
+    result = await validate_skill_step_inputs(
+        initial_parameters=_parameters(
+            {
+                "name": "issue-implement",
+                "contentRef": "missing_art_skill",
+                "contentDigest": "sha256:skill",
+                "inputs": {"issue": "MM-1052"},
+            }
+        ),
+        session=_ArtifactMetadataSession(None),
+    )
+
+    assert not result.valid
+    assert [error.as_dict() for error in result.errors] == [
+        {
+            "path": "steps[0].skill.inputs",
+            "message": (
+                "Selected Skill content evidence could not be loaded for "
+                "contentRef 'missing_art_skill'."
+            ),
+            "code": "content_evidence_not_found",
+            "recoverable": True,
+        }
+    ]
