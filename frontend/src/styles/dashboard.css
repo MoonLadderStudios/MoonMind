@@ -530,12 +530,21 @@ h1 {
  * needed to constrain and center it. */
 
 .panel:has(.workflow-list-notices-deck),
-.panel:has(.workflow-list-data-slab) {
+.panel:has(.workflow-list-data-slab),
+.panel:has(.workflow-workspace-shell) {
   border: 0;
   background: transparent;
   box-shadow: none;
   padding: 0;
   min-height: 0;
+}
+
+/* Workflows table and unified workspace run edge-to-edge, reaching up to the
+ * full-width border line under the masthead instead of sitting inside a
+ * narrower centered card. */
+.panel--data-wide:has(.workflow-list-data-slab),
+.panel--data-wide:has(.workflow-workspace-shell) {
+  max-width: none;
 }
 
 .panel:has(.settings-page) {
@@ -1865,8 +1874,13 @@ tbody tr:hover {
   gap: 0;
   overflow: visible;
   padding: 0;
-  border-color: rgb(var(--mm-border) / 0.45);
-  background: rgb(var(--mm-panel) / 0.96);
+  /* Not a card: drop the rounded border, fill, and shadow inherited from
+   * `.panel--data` so the table reads as content that runs to the page edges.
+   * Row dividers (td border-bottom) and the header/footer rules keep structure. */
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .queue-results-toolbar {
@@ -6789,16 +6803,18 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .workflow-workspace-shell {
   display: grid;
-  grid-template-columns: minmax(17.5rem, 21rem) minmax(0, 1fr);
+  grid-template-columns: minmax(14rem, 17rem) minmax(0, 1fr);
   align-items: start;
-  gap: 1rem;
+  column-gap: 2.25rem;
   width: 100%;
-  max-width: min(118rem, calc(100vw - 2rem));
-  margin-inline: auto;
+  max-width: none;
 }
 
+/* Collapsed: the sidebar becomes a single toggle icon in a narrow left rail so
+ * the centered detail container keeps the same width and only re-centers. */
 .workflow-workspace-shell[data-sidebar-collapsed="true"] {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 1rem;
 }
 
 .workflow-workspace-sidebar {
@@ -6806,38 +6822,50 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   top: 1rem;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
   max-height: calc(100vh - 2rem);
   overflow: hidden;
-  border: 1px solid var(--mm-glass-border);
-  border-radius: 0.8rem;
-  background: var(--mm-glass-fill);
-  box-shadow: var(--mm-elevation-panel);
-  border-right-color: rgb(var(--mm-border) / 0.92);
-  padding: 0.75rem;
+  /* Not a card: the sidebar is a plain left column separated from the detail by
+   * the grid gap and a single hairline divider, like ChatGPT. */
+  padding: 0 1.25rem 0 0;
+  border-right: 1px solid rgb(var(--mm-border) / 0.55);
 }
 
 .workflow-workspace-sidebar-controls {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.4rem;
   align-items: center;
   justify-content: space-between;
+  padding-bottom: 0.4rem;
 }
 
-.workflow-workspace-sidebar-controls .button,
-.workflow-workspace-sidebar-controls button {
-  white-space: nowrap;
+/* The sidebar controls are compact icon buttons rather than full-text buttons. */
+.workflow-workspace-close-sidebar,
+.workflow-workspace-expand-list,
+.workflow-workspace-open-sidebar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 0.5rem;
+  flex: 0 0 auto;
 }
 
-.workflow-workspace-close-sidebar {
-  border-style: dashed;
+.workflow-workspace-control-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: 0 0 auto;
 }
 
+/* The expand-to-list control keeps the accent emphasis so it stays visually
+ * distinct from the neutral collapse control. */
 .workflow-workspace-expand-list {
   background: rgb(var(--mm-accent) / 0.16);
-  border-color: rgb(var(--mm-accent) / 0.55);
-  color: rgb(var(--mm-ink));
-  font-weight: 800;
+  border-color: rgb(var(--mm-accent) / 0.45);
+  color: rgb(var(--mm-accent));
+  box-shadow: none;
 }
 
 .workflow-workspace-expand-list:hover,
@@ -6849,12 +6877,28 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .workflow-workspace-sidebar-list {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   list-style: none;
   padding: 0;
   margin: 0;
-  scrollbar-gutter: stable;
+  /* Slimmer, theme-matched scrollbar instead of the default chunky one. */
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--mm-border) / 0.55) transparent;
+}
+
+.workflow-workspace-sidebar-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.workflow-workspace-sidebar-list::-webkit-scrollbar-thumb {
+  background: rgb(var(--mm-border) / 0.55);
+  border-radius: 999px;
+}
+
+.workflow-workspace-sidebar-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .workflow-workspace-sidebar-pinned-list {
@@ -6865,96 +6909,79 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .workflow-workspace-sidebar-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  align-items: center;
   gap: 0.55rem;
-  min-height: 3.75rem;
-  padding: 0.62rem;
-  border: 1px solid rgb(var(--mm-border) / 0.68);
-  border-radius: 0.55rem;
-  background: rgb(var(--mm-panel) / 0.92);
+  padding: 0.5rem 0.45rem;
+  /* Rows are separated by the same hairline dividers used elsewhere, not by
+   * individual bordered cards. */
+  border: 0;
+  border-bottom: 1px solid rgb(var(--mm-border) / 0.4);
+  border-radius: 0.4rem;
+  background: transparent;
   color: rgb(var(--mm-ink));
   text-decoration: none;
   transition:
     background-color 140ms ease,
-    border-color 140ms ease,
     box-shadow 140ms ease;
 }
 
+.workflow-workspace-sidebar-list li:last-child .workflow-workspace-sidebar-row {
+  border-bottom: 0;
+}
+
 .workflow-workspace-sidebar-row-pinned {
-  border-style: dashed;
-  background: rgb(var(--mm-accent) / 0.08);
+  background: rgb(var(--mm-accent) / 0.06);
 }
 
 .workflow-workspace-sidebar-row:hover,
 .workflow-workspace-sidebar-row:focus-visible {
-  border-color: rgb(var(--mm-accent) / 0.62);
-  background: rgb(var(--mm-accent) / 0.10);
+  background: rgb(var(--mm-ink) / 0.06);
 }
 
 .workflow-workspace-sidebar-row[aria-current="page"] {
-  border-color: rgb(var(--mm-accent) / 0.78);
-  box-shadow: inset 4px 0 0 rgb(var(--mm-accent));
-  background: rgb(var(--mm-accent) / 0.14);
+  box-shadow: inset 3px 0 0 rgb(var(--mm-accent));
+  background: rgb(var(--mm-accent) / 0.12);
 }
 
 .workflow-workspace-sidebar-row-main {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.18rem;
+  gap: 0.12rem;
 }
 
 .workflow-workspace-sidebar-kicker {
   color: rgb(var(--mm-accent));
-  font-size: 0.74rem;
-  font-weight: 800;
+  font-size: 0.7rem;
+  font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
+/* The title keeps a steady list size; it must not balloon in the sidebar. */
 .workflow-workspace-sidebar-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 700;
-}
-
-.workflow-workspace-sidebar-meta {
-  color: rgb(var(--mm-muted));
-  font-size: 0.82rem;
-}
-
-.workflow-workspace-sidebar-labels {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  color: rgb(var(--mm-muted));
-  font-size: 0.76rem;
-  line-height: 1.25;
-}
-
-.workflow-workspace-sidebar-labels span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workflow-workspace-sidebar-labels span:not(:last-child)::after {
-  content: "|";
-  margin-left: 0.25rem;
-  color: rgb(var(--mm-muted) / 0.72);
+  font-size: 0.875rem;
+  font-weight: 600;
 }
 
 .workflow-workspace-sidebar-state {
-  border: 1px dashed rgb(var(--mm-border) / 0.75);
-  border-radius: 0.55rem;
-  padding: 0.65rem;
-  background: rgb(var(--mm-panel) / 0.88);
+  padding: 0.5rem 0.45rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.85rem;
 }
 
+/* The detail is a centered, width-bounded container with a gap from the sidebar.
+ * Because its width is capped, collapsing the sidebar only re-centers it; it
+ * never grows wider. */
 .workflow-workspace-detail {
   min-width: 0;
+  width: 100%;
+  max-width: 72rem;
+  margin-inline: auto;
 }
 
 .workflow-workspace-open-sidebar {
