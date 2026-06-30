@@ -42,11 +42,31 @@ function decodeWorkflowIdFromPath(pathname: string): string | null {
   }
 }
 
+type WorkflowsWorkspaceDashboardConfig = {
+  features?: {
+    temporalDashboard?: {
+      listEnabled?: boolean;
+      workspaceShellEnabled?: boolean;
+    };
+  };
+};
+
+function readWorkflowsWorkspaceDashboardConfig(
+  payload: BootPayload,
+): WorkflowsWorkspaceDashboardConfig | undefined {
+  const raw = payload.initialData as { dashboardConfig?: WorkflowsWorkspaceDashboardConfig } | undefined;
+  return raw?.dashboardConfig;
+}
+
 export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const location = useLocation();
   const workflowId = decodeWorkflowIdFromPath(location.pathname);
   const search = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const isDesktop = useIsDesktop();
+  const cfg = readWorkflowsWorkspaceDashboardConfig(payload);
+  const temporalDashboard = cfg?.features?.temporalDashboard;
+  const workspaceShellEnabled = temporalDashboard?.workspaceShellEnabled !== false;
+  const listEnabled = temporalDashboard?.listEnabled !== false;
 
   if (!workflowId) {
     return (
@@ -56,7 +76,7 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
     );
   }
 
-  if (!isDesktop) {
+  if (!isDesktop || !workspaceShellEnabled || !listEnabled) {
     return <WorkflowDetailEntrypoint payload={payload} />;
   }
 

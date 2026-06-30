@@ -240,8 +240,14 @@ function workflowDetailSubrouteHref(
   return `/workflows/${encodeURIComponent(workflowId)}${suffix}${query ? `?${query}` : ''}`;
 }
 
-function useWorkflowDetailSubroute(): [WorkflowDetailSubroute, (next: WorkflowDetailSubroute, href: string) => void] {
-  const [subroute, setSubroute] = useState(() => workflowDetailSubrouteFromPath(window.location.pathname));
+function useWorkflowDetailSubroute(
+  pathname: string,
+): [WorkflowDetailSubroute, (next: WorkflowDetailSubroute, href: string) => void] {
+  const [subroute, setSubroute] = useState(() => workflowDetailSubrouteFromPath(pathname));
+
+  useEffect(() => {
+    setSubroute(workflowDetailSubrouteFromPath(pathname));
+  }, [pathname]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -6149,18 +6155,20 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
   const isDesktop = useWorkflowWorkspaceDesktop();
 
-  const workflowIdMatch = window.location.pathname.match(
+  const currentPathname = window.location.pathname;
+  const currentSearch = window.location.search;
+  const workflowIdMatch = currentPathname.match(
     /^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?$/,
   );
   const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
-  const search = useMemo(() => new URLSearchParams(window.location.search), []);
+  const search = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
   const expandToFullListHref = useMemo(
     () => workflowListHrefFromContext(search, { markDetailReturn: true }),
     [search],
   );
   const showExpandToFullList = isDesktop || expandToFullListHref !== '/workflows';
-  const [detailSubroute, setDetailSubroute] = useWorkflowDetailSubroute();
+  const [detailSubroute, setDetailSubroute] = useWorkflowDetailSubroute(currentPathname);
   const sourceTemporal = search.get('source') === 'temporal';
 
   const [actionError, setActionError] = useState<string | null>(null);

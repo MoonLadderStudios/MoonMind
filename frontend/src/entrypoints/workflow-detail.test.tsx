@@ -1198,6 +1198,24 @@ describe('Workflow Detail Entrypoint', () => {
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBeUndefined();
   });
 
+  it('syncs the active detail tab when the workflow URL changes under a stable parent', async () => {
+    window.history.pushState({}, 'Detail Tab Sync Test', '/workflows/test-123/steps?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    const rendered = renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).toBe('page');
+
+    window.history.pushState({}, 'Detail Tab Sync Test', '/workflows/test-123?source=temporal');
+    rendered.rerender(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
+    });
+    expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).not.toBe('page');
+  });
+
   it('MM-801 renders Overview as a concise summary with stable segmented tabs', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     mockWorkflowDetailSubrouteFetch();
