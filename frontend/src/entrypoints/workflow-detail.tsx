@@ -1,6 +1,21 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Anser from 'anser';
+import {
+  Ban,
+  CalendarClock,
+  Check,
+  GitBranch,
+  Hand,
+  Hourglass,
+  Lightbulb,
+  Map as MapIcon,
+  PackageCheck,
+  Play,
+  Power,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
@@ -246,6 +261,56 @@ function workflowWorkspaceListQuery(search: URLSearchParams): string {
   return params.toString();
 }
 
+const WORKFLOW_STATUS_ICONS = {
+  scheduled: CalendarClock,
+  initializing: Power,
+  waiting_on_dependencies: GitBranch,
+  planning: MapIcon,
+  awaiting_slot: Hourglass,
+  executing: Play,
+  proposals: Lightbulb,
+  awaiting_external: Hand,
+  finalizing: PackageCheck,
+  completed: Check,
+  failed: X,
+  canceled: Ban,
+} as const satisfies Record<string, LucideIcon>;
+
+type WorkflowStatusIconKey = keyof typeof WORKFLOW_STATUS_ICONS;
+
+function workflowStatusIconKey(status: string | null | undefined): WorkflowStatusIconKey {
+  const key = String(status || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '_');
+
+  if (key in WORKFLOW_STATUS_ICONS) {
+    return key as WorkflowStatusIconKey;
+  }
+  if (key === 'succeeded') return 'completed';
+  if (key === 'running') return 'executing';
+  if (key === 'awaiting_action') return 'awaiting_external';
+  return 'executing';
+}
+
+function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefined }) {
+  const label = formatStatusLabel(status);
+  const Icon = WORKFLOW_STATUS_ICONS[workflowStatusIconKey(status)];
+  const pillProps = executionStatusPillProps(status, { enableMotion: false });
+
+  return (
+    <span
+      {...pillProps}
+      className={`${pillProps.className} workflow-workspace-sidebar-status-icon`}
+      aria-label={`Status: ${label}`}
+      title={label}
+      data-testid="workflow-workspace-sidebar-status-icon"
+    >
+      <Icon aria-hidden="true" focusable="false" />
+    </span>
+  );
+}
+
 function WorkflowSidebarRow({
   row,
   activeWorkflowId,
@@ -274,7 +339,7 @@ function WorkflowSidebarRow({
           {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
           <span className="workflow-workspace-sidebar-title">{title}</span>
         </span>
-        <ExecutionStatusPill status={status} />
+        <WorkflowSidebarStatusIcon status={status} />
       </a>
     </li>
   );
