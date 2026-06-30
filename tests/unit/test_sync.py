@@ -6,6 +6,7 @@ import pytest
 from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
 
 from api_service.core.sync import (
+    _artifact_ref_from_memo,
     map_temporal_state_to_projection,
     merged_memo_for_projection,
     merged_parameters_for_projection,
@@ -940,3 +941,33 @@ def test_started_at_persists_through_awaiting_slot_after_work_began():
 
     assert result["state"] == MoonMindWorkflowState.AWAITING_SLOT
     assert _as_utc(result["started_at"]) == semantic_started_at
+
+
+def test_artifact_ref_from_memo_returns_string_ref():
+    memo = {"plan_artifact_ref": {"artifact_id": "artifact://plan/source"}}
+
+    assert _artifact_ref_from_memo(memo, "plan_artifact_ref") == "artifact://plan/source"
+
+
+def test_artifact_ref_from_memo_ignores_non_string_ref_values():
+    """Nested dicts/lists under a ref key must not be stringified into an
+    invalid artifact reference; only genuine string refs are returned."""
+    memo = {
+        "plan_artifact_ref": {
+            "artifact_id": {"nested": "value"},
+            "ref": ["artifact://plan/list"],
+        }
+    }
+
+    assert _artifact_ref_from_memo(memo, "plan_artifact_ref") is None
+
+
+def test_artifact_ref_from_memo_skips_non_string_then_finds_valid_ref():
+    memo = {
+        "plan_artifact_ref": {
+            "artifactId": {"nested": "value"},
+            "id": "artifact://plan/id",
+        }
+    }
+
+    assert _artifact_ref_from_memo(memo, "plan_artifact_ref") == "artifact://plan/id"

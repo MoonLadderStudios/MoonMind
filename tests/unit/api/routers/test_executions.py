@@ -34,7 +34,9 @@ from api_service.api.routers.executions import (
     _hydrate_related_run_metadata,
     _merge_workflow_preserving_artifact_instructions,
     _canonical_recovery_manifest_ref,
+    _recovery_evidence_disabled_reason,
     _recovery_manifest_ref_from_record,
+    _recovery_manifest_summary_allows_resume,
     _recovery_not_available_reason,
     _reject_recovery_manifest_mismatch,
     _reuse_original_task_input_snapshot_from_source,
@@ -966,6 +968,52 @@ def test_recovery_manifest_ref_reads_finish_summary_manifest_ref() -> None:
     }
 
     assert _recovery_manifest_ref_from_record(record) == "artifact://recovery/manifest-1"
+
+
+def _valid_recovery_manifest_summary(*, include_manifest_ref: bool = True) -> dict[str, Any]:
+    manifest: dict[str, Any] = {
+        "schemaVersion": "v1",
+        "resumeAllowed": True,
+        "validationResult": "valid",
+        "failedLogicalStepId": "implement",
+        "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+    }
+    if include_manifest_ref:
+        manifest["manifestRef"] = "artifact://recovery/manifest"
+    return manifest
+
+
+def test_recovery_manifest_summary_requires_manifest_ref() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.memo = {**record.memo, "plan_artifact_ref": {"artifact_id": "artifact://plan/source"}}
+
+    record.finish_summary_json = {"recoveryManifest": _valid_recovery_manifest_summary()}
+    assert _recovery_manifest_summary_allows_resume(record) is True
+
+    record.finish_summary_json = {
+        "recoveryManifest": _valid_recovery_manifest_summary(include_manifest_ref=False)
+    }
+    assert _recovery_manifest_summary_allows_resume(record) is False
+
+
+def test_recovery_evidence_disabled_when_manifest_ref_missing() -> None:
+    """A compact summary that lacks a manifest ref must not advertise resume.
+
+    Without the manifest ref the POST resume path would immediately 409 with
+    ``recovery_manifest_missing``, so the summary fast-path must stop enabling
+    resume and the record must fall back to the full-evidence checks (which it
+    cannot satisfy here), leaving resume disabled.
+    """
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.memo = {**record.memo, "plan_artifact_ref": {"artifact_id": "artifact://plan/source"}}
+
+    record.finish_summary_json = {"recoveryManifest": _valid_recovery_manifest_summary()}
+    assert _recovery_evidence_disabled_reason(record) is None
+
+    record.finish_summary_json = {
+        "recoveryManifest": _valid_recovery_manifest_summary(include_manifest_ref=False)
+    }
+    assert _recovery_evidence_disabled_reason(record) is not None
 
 
 def test_canonical_recovery_manifest_ref_rejects_request_override() -> None:

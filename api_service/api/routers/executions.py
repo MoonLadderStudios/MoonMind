@@ -3300,7 +3300,12 @@ def _nested_recovery_manifest_text(
     return candidate or None
 
 
-def _recovery_manifest_summary_allows_resume(record) -> bool:
+def _recovery_manifest_summary_allows_resume(
+    record,
+    checkpoint_ref: str | None = None,
+    failed_step_id: str | None = None,
+    manifest_ref: str | None = None,
+) -> bool:
     manifest = _recovery_manifest_summary_from_record(record)
     if not manifest:
         return False
@@ -3314,9 +3319,13 @@ def _recovery_manifest_summary_allows_resume(record) -> bool:
     ).strip().lower()
     if validation_result != "valid":
         return False
-    checkpoint_ref = _recovery_checkpoint_ref_from_record(record)
-    failed_step_id = _recovery_failed_step_id_from_record(record)
-    return bool(checkpoint_ref and failed_step_id)
+    if checkpoint_ref is None:
+        checkpoint_ref = _recovery_checkpoint_ref_from_record(record)
+    if failed_step_id is None:
+        failed_step_id = _recovery_failed_step_id_from_record(record)
+    if manifest_ref is None:
+        manifest_ref = _recovery_manifest_ref_from_record(record)
+    return bool(checkpoint_ref and failed_step_id and manifest_ref)
 
 
 def _recovery_manifest_ref_from_record(record) -> str | None:
@@ -3517,13 +3526,19 @@ def _recovery_evidence_marked_stale(record) -> bool:
 def _recovery_evidence_disabled_reason(record) -> str | None:
     if _recovery_evidence_marked_stale(record):
         return "stale_recovery_evidence"
-    if _recovery_manifest_summary_allows_resume(record):
+    checkpoint_ref = _recovery_checkpoint_ref_from_record(record)
+    failed_step_id = _recovery_failed_step_id_from_record(record)
+    if _recovery_manifest_summary_allows_resume(
+        record,
+        checkpoint_ref=checkpoint_ref,
+        failed_step_id=failed_step_id,
+    ):
         if not _recovery_plan_identity_from_record(record):
             return "plan_identity_missing"
         return None
-    if not _recovery_checkpoint_ref_from_record(record):
+    if not checkpoint_ref:
         return "recovery_checkpoint_missing"
-    if not _recovery_failed_step_id_from_record(record):
+    if not failed_step_id:
         return "failed_step_identity_missing"
     if not _recovery_completed_step_refs_from_record(record):
         return "completed_step_refs_missing"

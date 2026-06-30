@@ -108,9 +108,11 @@ def _artifact_ref_from_memo(memo: dict[str, Any], *keys: str) -> str | None:
                 "id",
                 "ref",
             ):
-                candidate = str(value.get(ref_key) or "").strip()
-                if candidate:
-                    return candidate
+                ref_val = value.get(ref_key)
+                if isinstance(ref_val, str):
+                    candidate = ref_val.strip()
+                    if candidate:
+                        return candidate
     return None
 
 def _finish_outcome_code_from_summary(
