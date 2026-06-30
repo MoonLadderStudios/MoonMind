@@ -397,7 +397,7 @@ def test_task_skill_normalization_preserves_input_contract_metadata() -> None:
     steps = _normalize_task_steps(task_payload)
 
     skill = steps[0]["skill"]
-    assert skill["args"] == {"repository": "MoonLadderStudios/MoonMind"}
+    assert skill["inputs"] == {"repository": "MoonLadderStudios/MoonMind"}
     assert skill["inputSchema"]["properties"]["repository"]["type"] == "string"
     assert skill["uiSchema"]["repository"]["widget"] == "github.repository-picker"
     assert skill["defaults"] == {"branch": "main"}
@@ -3321,10 +3321,23 @@ def test_create_task_shaped_execution_rejects_explicit_skill_step_without_skill_
 
 def test_create_task_shaped_execution_normalizes_skill_inputs(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """MM-1058: new Skill authoring payloads emit inputs and preserve digests."""
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
+
+    async def _identity_validate_skill_step_inputs(*, initial_parameters, **_kwargs):
+        return SimpleNamespace(
+            valid=True,
+            parameters=initial_parameters,
+            error_dicts=lambda: [],
+        )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.validate_skill_step_inputs",
+        _identity_validate_skill_step_inputs,
+    )
 
     response = test_client.post(
         "/api/executions",
@@ -3401,10 +3414,23 @@ def test_create_task_shaped_execution_accepts_legacy_skill_args_as_inputs(
 
 def test_create_task_shaped_execution_records_skill_digest_mismatch_diagnostic(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """MM-1058: digest mismatches produce backend diagnostics without values."""
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
+
+    async def _identity_validate_skill_step_inputs(*, initial_parameters, **_kwargs):
+        return SimpleNamespace(
+            valid=True,
+            parameters=initial_parameters,
+            error_dicts=lambda: [],
+        )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.validate_skill_step_inputs",
+        _identity_validate_skill_step_inputs,
+    )
 
     response = test_client.post(
         "/api/executions",
