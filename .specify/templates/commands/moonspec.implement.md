@@ -93,7 +93,7 @@ MoonSpec implements robust behavior from declarative designs through one-story s
    - **REQUIRED**: Read tasks.md for the complete task list and execution plan
    - **REQUIRED**: Read plan.md for tech stack, architecture, and file structure
    - **REQUIRED**: Read spec.md for the single user story, acceptance scenarios, functional requirements, edge cases, success criteria, and the preserved original request in the `**Input**` field
-   - **REQUIRED**: Read `AGENTS.md` for project constraints and TDD expectations
+   - **REQUIRED**: Read `.specify/memory/constitution.md` for project constraints and TDD expectations
    - **IF EXISTS**: Read data-model.md for entities and relationships
    - **IF EXISTS**: Read contracts/ for API specifications and integration/contract test requirements
    - **IF EXISTS**: Read research.md for technical decisions and constraints

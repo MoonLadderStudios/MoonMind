@@ -96,7 +96,7 @@ For shell arguments containing single quotes, use shell-safe escaping such as `'
 Read:
 
 - `FEATURE_SPEC`
-- `AGENTS.md`
+- `.specify/memory/constitution.md`
 - `IMPL_PLAN`
 - Relevant implementation files, tests, contracts, fixtures, migrations, and public interfaces for the story
 
@@ -129,7 +129,7 @@ Fill:
   - Performance goals
   - Constraints
   - Scale/scope
-- `Constitution Check`: derive gates from `AGENTS.md`
+- `Constitution Check`: derive gates from `.specify/memory/constitution.md`
 - `Project Structure`: replace placeholder trees with the actual repository layout for the feature
 - `Complexity Tracking`: fill only when constitution violations are justified
 

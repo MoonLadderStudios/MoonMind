@@ -51,7 +51,7 @@ Parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then derive:
 - `PLAN = FEATURE_DIR/plan.md`
 - `TASKS = FEATURE_DIR/tasks.md`
 - optional docs from `AVAILABLE_DOCS`
-- `CONSTITUTION = AGENTS.md`
+- `CONSTITUTION = .specify/memory/constitution.md`
 
 If shell arguments contain single quotes, use shell-safe escaping such as `'I'\''m Groot'`, or double quotes when possible.
 
@@ -75,7 +75,7 @@ Read:
 - `spec.md`: input/source request, user story, acceptance scenarios, edge cases, functional requirements, success criteria, key entities, assumptions, source design coverage.
 - `plan.md`: technical context, constitution checks, project structure, phase notes, complexity tracking.
 - `tasks.md`: phases, task IDs, dependencies, parallel markers, file paths, tests, implementation tasks.
-- `AGENTS.md`: principles and normative `MUST`/`SHOULD` statements.
+- `.specify/memory/constitution.md`: principles and normative `MUST`/`SHOULD` statements.
 - optional docs listed by the prerequisite script when findings refer to them.
 
 Also inspect relevant repository files when needed to resolve uncertainty, especially test framework configuration, project layout, existing contracts, and naming conventions.
