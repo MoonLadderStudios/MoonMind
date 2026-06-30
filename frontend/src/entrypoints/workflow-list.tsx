@@ -1241,7 +1241,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     if (!focusListOnWorkspaceReturn || didFocusWorkspaceReturnRef.current) return;
     didFocusWorkspaceReturnRef.current = true;
     const frame = window.requestAnimationFrame(() => {
-      workflowListRegionRef.current?.focus();
+      workflowListRegionRef.current?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [focusListOnWorkspaceReturn]);
