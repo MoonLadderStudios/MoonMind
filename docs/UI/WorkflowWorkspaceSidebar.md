@@ -193,6 +193,7 @@ const router = createBrowserRouter([
         element: <WorkflowsWorkspacePage />,
         children: [
           { index: true, element: <WorkflowListSurface mode="full" /> },
+          { path: 'new', element: <StartWorkflowSurface /> },
           { path: ':workflowId', element: <WorkflowDetailSurface tab="overview" /> },
           { path: ':workflowId/steps', element: <WorkflowDetailSurface tab="steps" /> },
           { path: ':workflowId/artifacts', element: <WorkflowDetailSurface tab="artifacts" /> },
@@ -229,6 +230,7 @@ Rules:
 7. The sidebar must not duplicate the Workflow Details primary action bar.
 8. Workflow row actions that mutate executions should remain in existing list/detail action components unless explicitly redesigned for the sidebar.
 9. Client stores may hold transient workspace preferences, but server snapshots remain owned by query hooks and APIs.
+10. The `new` child route is reserved for the Start Workflow page and must be declared before the dynamic `:workflowId` detail children so `/workflows/new` is not matched as a workflow detail for ID `new`. This preserves the existing dashboard reservation of `/workflows/new` for Start Workflow navigation.
 
 ---
 
