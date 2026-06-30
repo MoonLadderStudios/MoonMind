@@ -1184,6 +1184,80 @@ def test_list_executions_temporal_query_includes_target_runtime_filter() -> None
         == temporal_client.count_workflows.await_args.kwargs["query"]
     )
 
+def test_list_executions_source_temporal_degrades_count_failure() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+
+    class _EmptyCanonicalResult:
+        def scalars(self) -> "_EmptyCanonicalResult":
+            return self
+
+        def all(self) -> list[TemporalExecutionCanonicalRecord]:
+            return []
+
+    class _Session:
+        async def execute(self, _stmt: object) -> _EmptyCanonicalResult:
+            return _EmptyCanonicalResult()
+
+    app.dependency_overrides[get_async_session] = lambda: _Session()
+    _override_user_dependencies(app, is_superuser=True)
+
+    async def _memo():
+        return {"title": "Count degraded"}
+
+    workflow = SimpleNamespace(
+        id="mm:wf-count-degraded",
+        run_id="run-temporal",
+        namespace="default",
+        workflow_type="MoonMind.UserWorkflow",
+        status="RUNNING",
+        start_time=datetime(2026, 4, 4, 18, 0, tzinfo=UTC),
+        close_time=None,
+        execution_time=None,
+        search_attributes={
+            "mm_state": "executing",
+            "mm_owner_id": "system",
+            "mm_owner_type": "system",
+            "mm_entry": "run",
+        },
+        memo=_memo,
+    )
+
+    class _WorkflowIterator:
+        current_page = [workflow]
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(custom_attributes={})
+            )
+        ),
+        count_workflows=AsyncMock(side_effect=RuntimeError("count unavailable")),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "ownerType": "system"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["workflowId"] for item in body["items"]] == ["mm:wf-count-degraded"]
+    assert body["count"] is None
+    assert body["countMode"] == "estimated_or_unknown"
+    assert body["degradedCount"] is True
+    temporal_client.list_workflows.assert_called_once()
+    temporal_client.count_workflows.assert_awaited_once()
+
 def test_list_executions_temporal_query_includes_canonical_state_filters() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -1536,7 +1610,11 @@ def test_list_executions_temporal_runtime_skill_filters_degrade_when_unregistere
         )
 
     assert response.status_code == 200
-    assert response.json()["items"] == []
+    body = response.json()
+    assert body["items"] == []
+    assert body["count"] is None
+    assert body["countMode"] == "estimated_or_unknown"
+    assert body["degradedCount"] is True
     temporal_client.count_workflows.assert_not_called()
     temporal_client.list_workflows.assert_not_called()
 
@@ -1683,6 +1761,15 @@ def test_list_executions_temporal_query_includes_canonical_date_bounds() -> None
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_title": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
@@ -1746,6 +1833,15 @@ def test_list_executions_temporal_query_includes_blank_date_filter_semantics() -
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_title": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
@@ -1782,6 +1878,15 @@ def test_list_executions_temporal_query_supports_sort_and_text_filters() -> None
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_title": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
@@ -1873,6 +1978,15 @@ def test_list_executions_temporal_query_title_filter_ands_word_tokens() -> None:
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_title": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
@@ -1900,7 +2014,19 @@ def test_list_executions_temporal_query_rejects_title_filter_without_tokens() ->
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_user_dependencies(app, is_superuser=True)
-    temporal_client = SimpleNamespace(count_workflows=AsyncMock(), list_workflows=Mock())
+    temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_title": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+                    }
+                )
+            )
+        ),
+        count_workflows=AsyncMock(),
+        list_workflows=Mock(),
+    )
     app.dependency_overrides[get_temporal_client] = lambda: temporal_client
 
     with TestClient(app) as test_client:
@@ -2217,7 +2343,7 @@ def test_list_executions_source_temporal_filters_and_sorts_progress_from_bounded
     assert "ORDER BY" not in list_query
 
 
-def test_list_executions_source_temporal_hydrates_live_progress() -> None:
+def test_list_executions_source_temporal_does_not_hydrate_live_progress() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -2298,9 +2424,99 @@ def test_list_executions_source_temporal_hydrates_live_progress() -> None:
     assert response.status_code == 200
     item = response.json()["items"][0]
     assert item["workflowId"] == "mm:wf-live"
-    assert item["runId"] == "run-live"
-    assert item["progress"]["succeeded"] == 2
-    assert item["progress"]["currentStepTitle"] == "Run tests"
+    assert item["runId"] == "run-temporal"
+    assert item["progress"] is None
+    temporal_client.get_workflow_handle.assert_not_called()
+
+
+def test_list_executions_source_temporal_hydrates_live_progress_for_filters() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+
+    class _EmptyCanonicalResult:
+        def scalars(self) -> "_EmptyCanonicalResult":
+            return self
+
+        def all(self) -> list[TemporalExecutionCanonicalRecord]:
+            return []
+
+    class _Session:
+        async def execute(self, _stmt: object) -> _EmptyCanonicalResult:
+            return _EmptyCanonicalResult()
+
+    app.dependency_overrides[get_async_session] = lambda: _Session()
+    _override_user_dependencies(app, is_superuser=True)
+
+    async def _memo():
+        return {
+            "title": "Live workflow",
+            "summary": "Running tests.",
+        }
+
+    workflow = SimpleNamespace(
+        id="mm:wf-live",
+        run_id="run-temporal",
+        namespace="default",
+        workflow_type="MoonMind.UserWorkflow",
+        status="RUNNING",
+        start_time=datetime(2026, 4, 4, 18, 0, tzinfo=UTC),
+        close_time=None,
+        execution_time=None,
+        search_attributes={
+            "mm_state": "executing",
+            "mm_owner_id": "system",
+            "mm_owner_type": "system",
+            "mm_entry": "run",
+        },
+        memo=_memo,
+    )
+
+    class _WorkflowIterator:
+        current_page = [workflow]
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = _override_query_client(
+        app,
+        progress={
+            "total": 3,
+            "pending": 0,
+            "ready": 0,
+            "running": 1,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Run tests",
+            "updatedAt": "2026-04-04T18:11:15Z",
+            "runId": "run-live",
+        },
+    )
+    temporal_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=1))
+    temporal_client.list_workflows = Mock(return_value=_WorkflowIterator())
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "ownerType": "system",
+                "progressPctFrom": "50",
+                "progressStepTitleContains": "tests",
+            },
+        )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [item["workflowId"] for item in items] == ["mm:wf-live"]
+    assert items[0]["runId"] == "run-live"
+    assert items[0]["progress"]["currentStepTitle"] == "Run tests"
     temporal_client.get_workflow_handle.assert_called_once_with("mm:wf-live")
 
 

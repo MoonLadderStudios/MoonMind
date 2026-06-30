@@ -313,8 +313,12 @@ Current staging note:
 | `nextPageToken` | string or `null` | no | Opaque pagination token |
 | `count` | integer or `null` | no | Count for the filtered query |
 | `countMode` | `exact \| estimated_or_unknown` | yes | Count confidence |
+| `degradedCount` | boolean | yes | `true` when an exact count was unavailable |
 
-Current implementation always returns `countMode = "exact"`.
+Temporal-backed list reads return `countMode = "exact"` only when the page read
+and the bounded count query both succeed. If the page read succeeds but the
+count query fails or times out, the response keeps the rows and returns
+`count = null`, `countMode = "estimated_or_unknown"`, and `degradedCount = true`.
 
 ---
 
@@ -476,10 +480,9 @@ Meaningfully newer `updatedAt` values still sort first. Small updated-time diffe
 
 The list response includes:
 
-- `count`: current filtered total,
-- `countMode`: currently always `exact`.
-
-Future implementations may return `estimated_or_unknown` if count behavior changes.
+- `count`: current filtered total when known,
+- `countMode`: `exact` or `estimated_or_unknown`,
+- `degradedCount`: whether exact count enrichment failed.
 
 Client rule:
 
@@ -995,9 +998,11 @@ The current router returns:
 
 - projection-backed pagination tokens,
 - projection-backed exact counts,
-- `countMode = "exact"`.
+- Temporal-backed rows when `source=temporal`, with exact counts treated as
+  bounded best-effort enrichment.
 
-That behavior is honest for the current adapter implementation, but it should not be mistaken for a promise that all future Temporal-backed list implementations can always provide canonical exact counts.
+Temporal-backed list reads preserve rows when count enrichment fails; only the
+page fetch itself is a page-load prerequisite.
 
 ### 17.4 Known cleanup candidates
 
