@@ -2,13 +2,30 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from enum import Enum
 
+from moonmind.schemas.temporal_models import StepExecutionIdentityModel
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
+from moonmind.workflows.temporal.step_checkpoints import (
+    build_step_checkpoint_payload,
+    validate_step_checkpoint_payload,
+)
 
 
 class _Boundary(Enum):
     BEFORE_RECOVERY_RESTORATION = "before_recovery_restoration"
+    BEFORE_EXECUTION = "before_execution"
+    AFTER_EXECUTION = "after_execution"
+
+
+def _identity() -> StepExecutionIdentityModel:
+    return StepExecutionIdentityModel(
+        workflowId="workflow-1",
+        runId="run-1",
+        logicalStepId="checkpoint-story",
+        executionOrdinal=1,
+    )
 
 
 def test_resolve_checkpoint_policy_uses_enum_value() -> None:
@@ -23,3 +40,103 @@ def test_resolve_checkpoint_policy_uses_enum_value() -> None:
 
     assert policy.checkpoint_kind == "worktree_archive"
     assert policy.workspace_policy == "start_from_last_passed_commit"
+
+
+def test_resolve_checkpoint_policy_uses_omnigent_external_state_after_execution() -> None:
+    policy = resolve_checkpoint_policy(
+        boundary=_Boundary.AFTER_EXECUTION,
+        runtime_kind="integration.omnigent.execute",
+    )
+
+    assert policy.workspace_policy == "continue_from_previous_execution"
+    assert policy.checkpoint_kind == "external_state_ref"
+    assert policy.resumable is True
+    assert policy.required_evidence == (
+        "externalStateRef",
+        "diagnosticsRef",
+        "omnigentSessionId",
+    )
+
+
+def test_resolve_checkpoint_policy_uses_omnigent_external_state_before_execution() -> None:
+    policy = resolve_checkpoint_policy(
+        boundary=_Boundary.BEFORE_EXECUTION,
+        runtime_kind="external:omnigent",
+    )
+
+    assert policy.workspace_policy == "continue_from_previous_execution"
+    assert policy.checkpoint_kind == "external_state_ref"
+    assert policy.required_evidence == (
+        "externalStateRef",
+        "idempotencyKey",
+        "omnigentSessionId",
+    )
+
+
+def test_resolve_checkpoint_policy_keeps_local_after_execution_default() -> None:
+    policy = resolve_checkpoint_policy(
+        boundary="after_execution",
+        runtime_kind="codex_cli",
+    )
+
+    assert policy.workspace_policy == "restore_pre_execution"
+    assert policy.checkpoint_kind == "git_patch"
+    assert policy.required_evidence == ("patchRef", "manifestRef")
+
+
+def test_omnigent_runtime_does_not_override_recovery_restoration_policy() -> None:
+    policy = resolve_checkpoint_policy(
+        boundary=_Boundary.BEFORE_RECOVERY_RESTORATION,
+        runtime_kind="omnigent",
+        recovery_source={
+            "recoveryWorkspace": {
+                "workspacePolicy": "start_from_last_passed_commit",
+            }
+        },
+    )
+
+    assert policy.checkpoint_kind == "worktree_archive"
+    assert policy.workspace_policy == "start_from_last_passed_commit"
+
+
+def test_external_state_checkpoint_is_continue_only() -> None:
+    identity = _identity()
+    checkpoint = build_step_checkpoint_payload(
+        identity=identity,
+        boundary="after_execution",
+        task_input_snapshot_ref="artifact-input",
+        plan_digest="sha256:plan",
+        workspace={
+            "kind": "external_state_ref",
+            "externalStateRef": "artifact-omnigent-state",
+        },
+        step_outputs={
+            "diagnosticsRef": "artifact-diagnostics",
+            "resultRef": "artifact-result",
+        },
+        created_at=datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
+    )
+
+    valid = validate_step_checkpoint_payload(
+        checkpoint,
+        expected_source=identity,
+        expected_task_input_snapshot_ref="artifact-input",
+        expected_plan_digest="sha256:plan",
+        workspace_policy="continue_from_previous_execution",
+        required_artifact_refs=[
+            "artifact-omnigent-state",
+            "artifact-diagnostics",
+            "artifact-result",
+        ],
+    )
+    rejected = validate_step_checkpoint_payload(
+        checkpoint,
+        expected_source=identity,
+        expected_task_input_snapshot_ref="artifact-input",
+        expected_plan_digest="sha256:plan",
+        workspace_policy="restore_pre_execution",
+    )
+
+    assert valid.valid is True
+    assert rejected.valid is False
+    assert rejected.failure_code == "policy_incompatible"
