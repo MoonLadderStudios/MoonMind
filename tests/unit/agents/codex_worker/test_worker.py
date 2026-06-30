@@ -8369,6 +8369,71 @@ async def test_resolve_skills_cache_root_uses_worker_workdir_for_relative_paths(
 
     assert resolved == (worker._config.workdir / "var/skill_cache").resolve()
 
+
+async def test_resolve_task_steps_reads_canonical_skill_inputs(
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
+) -> None:
+    worker, _, _ = codex_worker_components
+    payload = {
+        "workflow": {
+            "skill": {
+                "id": "jira-implement",
+                "args": {"issueKey": "MM-OLD"},
+                "inputs": {"issueKey": "MM-1058"},
+            },
+            "steps": [
+                {"id": "inherit", "title": "Inherit task skill"},
+                {
+                    "id": "override",
+                    "title": "Override skill",
+                    "skill": {
+                        "id": "pr-resolver",
+                        "args": {"pr": "1"},
+                        "inputs": {"pr": "2870"},
+                    },
+                },
+            ],
+        }
+    }
+
+    resolved_steps = worker._resolve_task_steps(payload)
+
+    assert resolved_steps[0].effective_skill_id == "jira-implement"
+    assert resolved_steps[0].effective_skill_args == {"issueKey": "MM-1058"}
+    assert resolved_steps[1].effective_skill_id == "pr-resolver"
+    assert resolved_steps[1].effective_skill_args == {"pr": "2870"}
+
+
+async def test_build_skill_payload_reads_canonical_skill_inputs(
+    codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
+) -> None:
+    worker, _, _ = codex_worker_components
+    payload = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "workflow": {
+            "instructions": "Resolve the PR.",
+            "skill": {
+                "id": "pr-resolver",
+                "args": {"pr": "1"},
+                "inputs": {"pr": "2870"},
+            },
+            "runtime": {"mode": "codex"},
+            "git": {"startingBranch": "feature/pr-2870"},
+            "publish": {"mode": "none"},
+        },
+    }
+
+    skill_payload = worker._build_skill_payload(
+        canonical_payload=payload,
+        selected_skill="pr-resolver",
+        source_payload=payload,
+    )
+
+    assert skill_payload["inputs"]["pr"] == "2870"
+    assert skill_payload["inputs"]["repo"] == "MoonLadderStudios/MoonMind"
+    assert skill_payload["inputs"]["instruction"] == "Resolve the PR."
+
+
 async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
