@@ -268,6 +268,37 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     ]);
   });
 
+  it("preserves Skill inputs and saved input contract digest from workflow drafts", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:skill-digest",
+      workflowType: "MoonMind.UserWorkflow",
+      targetRuntime: "codex_cli",
+      inputParameters: {
+        workflow: {
+          instructions: "Run schema skill.",
+          steps: [
+            {
+              id: "schema-step",
+              type: "skill",
+              skill: {
+                id: "schema.skill",
+                inputs: { repository: "MoonLadderStudios/MoonMind" },
+                inputContractDigest: "sha256:pinned-contract",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.steps[0]?.skillArgs).toEqual({
+      repository: "MoonLadderStudios/MoonMind",
+    });
+    expect(draft.steps[0]?.skillInputContractDigest).toBe(
+      "sha256:pinned-contract",
+    );
+  });
+
   it("prefers authoritative draft.workflow when it carries the full preset expansion", () => {
     const draft = buildTemporalSubmissionDraftFromExecution(
       {

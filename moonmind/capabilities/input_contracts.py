@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -12,9 +13,12 @@ from typing import Any, Literal
 
 import yaml
 
+from moonmind.utils.metrics import get_metrics_emitter
+
 CapabilityKind = Literal["tool", "skill", "preset"]
 
 PARSER_VERSION = "capability-input-contracts:v1"
+logger = logging.getLogger(__name__)
 _SECRET_LIKE_VALUE_PATTERN = re.compile(
     r"(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|-----begin [a-z ]*private key)",
     re.IGNORECASE,
@@ -53,40 +57,47 @@ def parse_skill_markdown_frontmatter(content: str) -> tuple[dict[str, Any], list
     """Parse YAML frontmatter from a SKILL.md file with a safe loader."""
 
     if not content.startswith("---"):
+        _emit_input_contract_metric("schema_omitted", kind="skill")
         return {}, []
     marker = "\n---"
     end = content.find(marker, 3)
     if end < 0:
-        return {}, [
-            _diagnostic(
-                code="frontmatter_unclosed",
-                message="Skill frontmatter is not closed; structured metadata was ignored.",
-                severity="warning",
-                path="frontmatter",
-            )
-        ]
+        diagnostic = _diagnostic(
+            code="frontmatter_unclosed",
+            message="Skill frontmatter is not closed; structured metadata was ignored.",
+            severity="warning",
+            path="frontmatter",
+        )
+        _emit_input_contract_metric("parse_failure", kind="skill", code=diagnostic["code"])
+        return {}, [diagnostic]
     raw_frontmatter = content[3:end]
     try:
         parsed = yaml.safe_load(raw_frontmatter) or {}
     except yaml.YAMLError as exc:
-        return {}, [
-            _diagnostic(
-                code="frontmatter_yaml_invalid",
-                message="Skill frontmatter YAML could not be parsed; structured metadata was ignored.",
-                severity="warning",
-                path="frontmatter",
-                details={"error": str(exc)},
-            )
-        ]
+        diagnostic = _diagnostic(
+            code="frontmatter_yaml_invalid",
+            message="Skill frontmatter YAML could not be parsed; structured metadata was ignored.",
+            severity="warning",
+            path="frontmatter",
+            details={"error": str(exc)},
+        )
+        _emit_input_contract_metric("parse_failure", kind="skill", code=diagnostic["code"])
+        return {}, [diagnostic]
     if not isinstance(parsed, Mapping):
-        return {}, [
-            _diagnostic(
-                code="frontmatter_not_object",
-                message="Skill frontmatter must be a YAML mapping; structured metadata was ignored.",
-                severity="warning",
-                path="frontmatter",
-            )
-        ]
+        diagnostic = _diagnostic(
+            code="frontmatter_not_object",
+            message="Skill frontmatter must be a YAML mapping; structured metadata was ignored.",
+            severity="warning",
+            path="frontmatter",
+        )
+        _emit_input_contract_metric("parse_failure", kind="skill", code=diagnostic["code"])
+        return {}, [diagnostic]
+    _emit_input_contract_metric(
+        "parse_success",
+        kind="skill",
+        source_kind="frontmatter",
+        schema="present" if _first_mapping(parsed, "inputSchema", "input_schema") else "omitted",
+    )
     return dict(parsed), []
 
 
@@ -174,6 +185,18 @@ def normalize_capability_input_contract(
                 )
             )
             input_schema = {}
+            _emit_input_contract_metric(
+                "fallback_renderer",
+                kind=owner.kind,
+                source_kind=_source_kind(owner.source),
+                code="input_schema_root_not_object",
+            )
+    else:
+        _emit_input_contract_metric(
+            "schema_omitted",
+            kind=owner.kind,
+            source_kind=_source_kind(owner.source),
+        )
 
     if _contains_secret_like_value(defaults):
         diagnostics.append(
@@ -185,6 +208,30 @@ def normalize_capability_input_contract(
             )
         )
         defaults = {}
+        _emit_input_contract_metric(
+            "strict_policy_rejection",
+            kind=owner.kind,
+            source_kind=_source_kind(owner.source),
+            code="defaults_secret_like_value",
+        )
+
+    widget_counts = _widget_counts(input_schema, ui_schema)
+    for widget, count in widget_counts.items():
+        _emit_input_contract_metric(
+            "generated_fields",
+            value=count,
+            kind=owner.kind,
+            source_kind=_source_kind(owner.source),
+            widget=widget,
+        )
+        if widget.startswith("unsupported:"):
+            _emit_input_contract_metric(
+                "unsupported_widget",
+                value=count,
+                kind=owner.kind,
+                source_kind=_source_kind(owner.source),
+                widget=widget.removeprefix("unsupported:"),
+            )
 
     digest_payload = {
         "parserVersion": PARSER_VERSION,
@@ -311,6 +358,96 @@ def _contains_secret_like_value(value: Any) -> bool:
     return bool(_SECRET_LIKE_VALUE_PATTERN.search(str(value or "")))
 
 
+_SUPPORTED_WIDGETS = frozenset(
+    {
+        "checkbox",
+        "github.issue-picker",
+        "jira.issue-picker",
+        "string",
+        "number",
+        "integer",
+        "boolean",
+        "array",
+        "object",
+        "select",
+        "textarea",
+    }
+)
+
+
+def _bounded_metric_tag(value: object | None, *, fallback: str = "unknown") -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return fallback
+    return re.sub(r"[^a-zA-Z0-9_.-]", "_", normalized)[:80] or fallback
+
+
+def _source_kind(source: Mapping[str, Any] | None) -> str:
+    if not isinstance(source, Mapping):
+        return "unknown"
+    return _bounded_metric_tag(source.get("kind"))
+
+
+def _emit_input_contract_metric(
+    event: str,
+    *,
+    kind: str,
+    value: float = 1,
+    source_kind: str | None = None,
+    code: str | None = None,
+    widget: str | None = None,
+    schema: str | None = None,
+) -> None:
+    tags = {
+        "event": _bounded_metric_tag(event),
+        "kind": _bounded_metric_tag(kind),
+    }
+    if source_kind:
+        tags["source_kind"] = _bounded_metric_tag(source_kind)
+    if code:
+        tags["code"] = _bounded_metric_tag(code)
+    if widget:
+        tags["widget"] = _bounded_metric_tag(widget)
+    if schema:
+        tags["schema"] = _bounded_metric_tag(schema)
+    try:
+        get_metrics_emitter().increment(
+            "capability_input_contract.event",
+            value=value,
+            tags=tags,
+        )
+    except Exception:
+        logger.debug("capability input contract metric emission failed", exc_info=True)
+
+
+def _widget_counts(
+    input_schema: Mapping[str, Any],
+    ui_schema: Mapping[str, Any],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    properties = input_schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return counts
+    for name, raw_field in properties.items():
+        field = raw_field if isinstance(raw_field, Mapping) else {}
+        ui_field = ui_schema.get(str(name))
+        ui_field = ui_field if isinstance(ui_field, Mapping) else {}
+        explicit_widget = field.get("x-moonmind-widget") or ui_field.get("widget")
+        widget = str(
+            explicit_widget
+            or field.get("format")
+            or field.get("type")
+            or "unknown"
+        ).strip() or "unknown"
+        metric_widget = (
+            widget
+            if widget in _SUPPORTED_WIDGETS or not explicit_widget
+            else f"unsupported:{widget}"
+        )
+        counts[metric_widget] = counts.get(metric_widget, 0) + 1
+    return counts
+
+
 def _diagnostic(
     *,
     code: str,
@@ -324,6 +461,7 @@ def _diagnostic(
         "message": message,
         "severity": severity,
         "path": path,
+        "recoverable": severity != "error",
     }
     if details:
         diagnostic["details"] = dict(details)

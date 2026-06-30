@@ -65,6 +65,7 @@ def test_non_object_skill_schema_is_diagnosed_without_invalidating_skill() -> No
     assert contract["kind"] == "skill"
     assert contract["inputSchema"] == {}
     assert contract["diagnostics"][0]["code"] == "input_schema_root_not_object"
+    assert contract["diagnostics"][0]["recoverable"] is True
 
 
 def test_skill_frontmatter_yaml_dates_are_json_compatible() -> None:
@@ -92,6 +93,49 @@ def test_skill_frontmatter_yaml_dates_are_json_compatible() -> None:
     assert contract["inputSchema"]["properties"]["due_date"]["default"] == "2026-06-30"
     assert contract["defaults"] == {"due_date": "2026-06-30"}
     assert contract["contractDigest"].startswith("sha256:")
+
+
+def test_input_contract_metrics_exclude_raw_values(monkeypatch) -> None:
+    emitted: list[tuple[str, dict[str, object] | None, float]] = []
+
+    class Emitter:
+        def increment(
+            self,
+            metric: str,
+            *,
+            value: float = 1,
+            tags: dict[str, object] | None = None,
+        ) -> None:
+            emitted.append((metric, tags, value))
+
+    monkeypatch.setattr(
+        "moonmind.capabilities.input_contracts.get_metrics_emitter",
+        lambda: Emitter(),
+    )
+
+    parse_skill_capability_input_contract(
+        skill_id="demo-skill",
+        label="Demo Skill",
+        markdown=(
+            "---\n"
+            "name: Demo Skill\n"
+            "inputSchema:\n"
+            "  type: object\n"
+            "  properties:\n"
+            "    issue:\n"
+            "      type: string\n"
+            "      x-moonmind-widget: external.lookup\n"
+            "defaults:\n"
+            "  issue: MM-1058\n"
+            "---\n"
+            "# Demo\n"
+        ),
+        source={"kind": "test"},
+    )
+
+    assert any(tags and tags.get("event") == "parse_success" for _, tags, _ in emitted)
+    assert any(tags and tags.get("event") == "unsupported_widget" for _, tags, _ in emitted)
+    assert all("MM-1058" not in str(tags) for _, tags, _ in emitted)
 
 
 def test_equivalent_skill_and_preset_schemas_share_renderer_fields() -> None:
