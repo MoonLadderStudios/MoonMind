@@ -891,6 +891,15 @@ _AUTHORED_STEP_METADATA_KEYS = (
     "storyOutput",
     "story_output",
 )
+_INHERITED_SKILL_CONTEXT_KEYS = (
+    "selectedSkill",
+    "skill",
+    "inputs",
+    "inputContractDigest",
+    "contentDigest",
+    "contentRef",
+    "skillInputWarnings",
+)
 
 def _normalize_required_capability_tokens(value: Any) -> list[str]:
     if not isinstance(value, list):
@@ -1167,6 +1176,11 @@ def _authored_step_metadata_inputs(
     return metadata
 
 
+def _drop_inherited_skill_context(inputs: dict[str, Any]) -> None:
+    for key in _INHERITED_SKILL_CONTEXT_KEYS:
+        inputs.pop(key, None)
+
+
 def _direct_story_tool_context_inputs(
     node_inputs: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1233,12 +1247,15 @@ def _task_uses_only_jira_agent_skill(
         if not all(isinstance(step, Mapping) for step in raw_steps):
             return False
         effective_step_tool_names = [
-            (_selected_step_tool_name(step) or selected_skill_name).lower()
+            _selected_step_tool_name(step).lower()
             for step in raw_steps
         ]
         return bool(effective_step_tool_names) and all(
-            _jira_agent_skill_selected(name)
-            or _story_output_task_tool_selected(name)
+            name
+            and (
+                _jira_agent_skill_selected(name)
+                or _story_output_task_tool_selected(name)
+            )
             for name in effective_step_tool_names
         )
     return _jira_agent_skill_selected(
@@ -1910,6 +1927,8 @@ def _build_runtime_planner():
                         **step_extra_inputs,
                         "instructions": step_instructions,
                     }
+                    if not step_tool_name:
+                        _drop_inherited_skill_context(step_node_inputs)
                     step_node_inputs.update(step_metadata_inputs)
                     if base_runtime_payload or step_runtime_payload:
                         step_node_inputs["runtime"] = {
@@ -1962,9 +1981,7 @@ def _build_runtime_planner():
                     step_tool_name.lower() in _STORY_OUTPUT_TASK_TOOLS
                 )
                 effective_step_skill_name = (
-                    step_tool_name or selected_skill_name
-                    if is_agent_runtime_step
-                    else ""
+                    step_tool_name if is_agent_runtime_step else ""
                 )
                 if step_tool_name and is_agent_runtime_step:
                     step_node_inputs["selectedSkill"] = step_tool_name
