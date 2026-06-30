@@ -256,6 +256,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
+    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(5);
     expect(screen.getByText('vtest-build')).toBeTruthy();
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
@@ -1307,7 +1308,13 @@ describe('Dashboard shared entry', () => {
     expect(desktopLinkBlock).toBeDefined();
     expect(desktopLinkBlock).toContain('display: inline-flex;');
     expect(desktopLinkBlock).toContain('align-items: center;');
+    expect(desktopLinkBlock).toContain('gap: 0.42rem;');
     expect(desktopLinkBlock).not.toMatch(/margin-bottom:\s*-/);
+
+    const iconBlock = cssRuleBlock(dashboardCss, '.route-nav-icon');
+    expect(iconBlock).toContain('width: 1rem;');
+    expect(iconBlock).toContain('height: 1rem;');
+    expect(iconBlock).toContain('flex: 0 0 auto;');
 
     const underlineBlocks = cssRuleBlocks(dashboardCss, '.route-nav a::after');
     expect(

@@ -29,7 +29,12 @@ function cssRuleBlock(selector: string): string {
 
 describe('dashboard masthead brand styles', () => {
   it('keeps Moon white and renders the MoonMind header at the compact size', () => {
+    expect(cssRuleBlock('.masthead-brand')).toContain('color: rgb(var(--mm-ink));');
+    expect(cssRuleBlock('.masthead-brand')).toContain('text-decoration: none;');
+    expect(cssRuleBlock('.masthead-brand:hover')).toContain('text-decoration: none;');
+    expect(cssRuleBlock('.masthead-brand:focus-visible')).toContain('text-decoration: none;');
     expect(cssRuleBlock('.masthead-brand-moon')).toContain('color: rgb(255 255 255);');
+    expect(cssRuleBlock('.masthead-brand-mind')).toContain('color: inherit;');
     expect(cssRuleBlock('.masthead-brand h1')).toContain(
       'font-size: clamp(1.12rem, 1.7vw, 1.52rem);',
     );
