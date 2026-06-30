@@ -16296,6 +16296,47 @@ describe("Task Create schema-driven capability inputs", () => {
     });
   });
 
+  it("offers deployment-only skills in the skill combobox", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: [], deployment: ["deployment.skill"] },
+            legacyItems: [
+              {
+                id: "deployment.skill",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    repository: { type: "string", title: "Deployment repository" },
+                  },
+                },
+                uiSchema: {},
+                defaults: {},
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return mockSchemaCapabilityFetch(input, init);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    const skillInput = within(step).getByLabelText("Skill (optional)");
+    fireEvent.pointerDown(skillInput);
+
+    expect(await screen.findByRole("option", { name: "deployment.skill" })).toBeTruthy();
+    fireEvent.change(skillInput, {
+      target: { value: "deployment.skill" },
+    });
+
+    expect(await within(step).findByLabelText("Deployment repository")).toBeTruthy();
+  });
+
   it("submits direct skill schema inputs in the skill payload", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;

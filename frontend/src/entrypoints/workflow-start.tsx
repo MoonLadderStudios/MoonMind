@@ -524,6 +524,7 @@ export function resolveDefaultProviderProfileId(
 interface SkillsResponse {
   items?: {
     worker?: string[];
+    [source: string]: string[] | undefined;
   };
   legacyItems?: SkillCapabilityDetail[];
 }
@@ -5877,8 +5878,16 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             : {}),
         };
       }
+      const ids = Array.from(
+        new Set(
+          Object.values(data.items || {})
+            .flatMap((items) => items || [])
+            .map((id) => String(id || "").trim())
+            .filter(Boolean),
+        ),
+      );
       return {
-        ids: data.items?.worker || Object.keys(detailsById),
+        ids: ids.length > 0 ? ids : Object.keys(detailsById),
         detailsById,
       };
     },
