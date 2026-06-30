@@ -274,7 +274,7 @@ samp {
 }
 
 .masthead-brand-mind {
-  color: rgb(var(--mm-ink));
+  color: inherit;
 }
 
 .masthead-title-meta {
