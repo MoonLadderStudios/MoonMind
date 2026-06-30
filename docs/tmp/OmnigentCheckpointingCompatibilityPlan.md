@@ -44,10 +44,13 @@ This does not make `workspace.apply_policy` restore Omnigent workspaces. Until a
 
 This also does not introduce intra-session Temporal checkpoints. The Omnigent v1 adapter still owns live-session durability and reattach semantics inside the single execute activity.
 
+This change lands the policy mapping at the `resolve_checkpoint_policy` resolution layer only. It does not yet make the lane fire for the documented Omnigent v1 shape (`agentKind=external`, `agentId=omnigent`, with provider fields under `parameters.omnigent`). The Step Execution call sites in `moonmind/workflows/temporal/workflows/run.py` pass `runtime_kind=self._target_runtime`, and `_target_runtime` is sourced only from `targetRuntime` / `runtime.mode` (see `_runtime_visibility_from_parameters`), never from the per-step `agentId`. For a v1 run that selects Omnigent via `agentId` alone, `runtime_kind` is `None`, the Omnigent branch is skipped, and capture falls back to the local `git_patch` / `worktree_archive` defaults. Activating the lane requires threading the external-agent identity into the checkpoint call sites (see follow-up below); the pure-function mapping is intentionally landed first to keep the deterministic workflow change reviewable and replay-safe.
+
 ## Follow-up work
 
-1. Teach `integration.omnigent.execute` to emit an `externalStateRef` checkpoint artifact alongside diagnostics/result artifacts.
-2. Ensure activity retry looks up the idempotency/session mapping, reconnects to the Omnigent stream, fetches a snapshot, and reconciles first-message state before waiting for terminal completion.
-3. Add an adapter-level terminal harvest step that copies changed files, current files, optional diff/patch, stream mirror, snapshots, and diagnostics into MoonMind artifacts.
-4. Split `ephemeral_workspace_ref` into provider-neutral artifact refs versus local sandbox paths, or introduce explicit fields so capture and policy-apply semantics cannot disagree.
-5. Add end-to-end coverage for Omnigent reattach, terminal harvest, patch-unavailable diagnostics, and blocked local workspace-restore attempts.
+1. Thread the per-step external-agent identity into the `resolve_checkpoint_policy` call sites in `moonmind/workflows/temporal/workflows/run.py` so the Omnigent lane actually fires for the documented v1 shape. Today those call sites pass only `self._target_runtime`, which is `None` for `agentId=omnigent` runs that do not also set `targetRuntime` / `runtime.mode`. The step's `agentId` is already recoverable per `logical_step_id` (see `_step_execution_compact_execution_refs` reading the step-ledger `tool.name`); use that signal rather than overloading runtime visibility. Treat this as a deterministic-workflow change: add workflow-boundary coverage and confirm replay/in-flight safety, and land it together with the `externalStateRef` emission in item 2 so the selected `external_state_ref` capture has real evidence to package.
+2. Teach `integration.omnigent.execute` to emit an `externalStateRef` checkpoint artifact alongside diagnostics/result artifacts.
+3. Ensure activity retry looks up the idempotency/session mapping, reconnects to the Omnigent stream, fetches a snapshot, and reconciles first-message state before waiting for terminal completion.
+4. Add an adapter-level terminal harvest step that copies changed files, current files, optional diff/patch, stream mirror, snapshots, and diagnostics into MoonMind artifacts.
+5. Split `ephemeral_workspace_ref` into provider-neutral artifact refs versus local sandbox paths, or introduce explicit fields so capture and policy-apply semantics cannot disagree.
+6. Add end-to-end coverage for Omnigent reattach, terminal harvest, patch-unavailable diagnostics, and blocked local workspace-restore attempts.

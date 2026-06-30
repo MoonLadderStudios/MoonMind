@@ -36,8 +36,7 @@ def _boundary_token(boundary: Any) -> str:
 def _is_omnigent_runtime(runtime_kind: str | None) -> bool:
     """Return True for Omnigent aliases without making the contract alias-heavy."""
 
-    token = str(runtime_kind or "").strip().replace("_", "-").lower()
-    return "omnigent" in token
+    return "omnigent" in str(runtime_kind or "").lower()
 
 
 def _workspace_policy_from_recovery_source(
