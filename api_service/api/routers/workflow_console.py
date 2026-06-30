@@ -13,6 +13,7 @@ import tempfile
 import uuid
 import zipfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from html import escape
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -48,6 +49,8 @@ from moonmind.config.settings import settings
 from moonmind.capabilities.input_contracts import (
     contract_from_artifact_metadata,
     contract_from_skill_markdown,
+    content_digest_for_text,
+    parse_skill_capability_input_contract,
 )
 from moonmind.services.skill_resolution import (
     extract_required_capabilities_from_skill_markdown,
@@ -92,6 +95,19 @@ _MAX_SKILL_FILE_BYTES = 25 * 1024 * 1024
 _MAX_SKILL_ZIP_ENTRIES = 500
 _MAX_INLINE_SKILL_INPUT_SCHEMA_BYTES = 8 * 1024
 _IMPORTED_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_SKILL_INPUT_CONTRACT_CACHE_MAX = 256
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedSkillInputContract:
+    content_digest: str
+    contract: dict[str, object]
+
+
+_SKILL_INPUT_CONTRACT_CACHE: dict[
+    tuple[str, str, int, int],
+    _CachedSkillInputContract,
+] = {}
 
 _DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
     "code": "dashboard_route_not_found",
@@ -224,6 +240,44 @@ class DashboardUiInfoResponse(BaseModel):
         alias="settingsPermissions",
     )
     worker_pause: dict = Field(default_factory=dict, alias="workerPause")
+
+
+async def _read_file_backed_skill_input_contract(
+    *,
+    skill_id: str,
+    label: str,
+    skill_file: Path,
+    source_kind: str,
+) -> tuple[str, dict[str, object]]:
+    """Read and parse a SKILL.md contract using content evidence as cache proof."""
+
+    stat_result = await asyncio.to_thread(skill_file.stat)
+    cache_key = (
+        str(skill_file.resolve()),
+        skill_id,
+        stat_result.st_mtime_ns,
+        stat_result.st_size,
+    )
+    skill_markdown = await asyncio.to_thread(skill_file.read_text, encoding="utf-8")
+    content_digest = content_digest_for_text(skill_markdown)
+    cached = _SKILL_INPUT_CONTRACT_CACHE.get(cache_key)
+    if cached is not None and cached.content_digest == content_digest:
+        return skill_markdown, dict(cached.contract)
+
+    contract = parse_skill_capability_input_contract(
+        skill_id=skill_id,
+        label=label,
+        markdown=skill_markdown,
+        source={"kind": source_kind, "path": str(skill_file)},
+    )
+    _SKILL_INPUT_CONTRACT_CACHE[cache_key] = _CachedSkillInputContract(
+        content_digest=content_digest,
+        contract=dict(contract),
+    )
+    if len(_SKILL_INPUT_CONTRACT_CACHE) > _SKILL_INPUT_CONTRACT_CACHE_MAX:
+        oldest_key = next(iter(_SKILL_INPUT_CONTRACT_CACHE))
+        _SKILL_INPUT_CONTRACT_CACHE.pop(oldest_key, None)
+    return skill_markdown, dict(contract)
 
 class _ValidatedSkillZip(BaseModel):
     skill_name: str
@@ -387,9 +441,11 @@ async def _file_backed_skill_option(
     source: dict[str, Any] | None = None
     skill_file = resolve_skill_markdown_path(skill_id)
     if skill_file is not None:
-        skill_markdown = await asyncio.to_thread(
-            skill_file.read_text,
-            encoding="utf-8",
+        skill_markdown, contract = await _read_file_backed_skill_input_contract(
+            skill_id=skill_id,
+            label=skill_id,
+            skill_file=skill_file,
+            source_kind="file",
         )
         required_capabilities = list(
             extract_required_capabilities_from_skill_markdown(
@@ -397,11 +453,6 @@ async def _file_backed_skill_option(
                 skill_name=skill_id,
                 source_label=str(skill_file),
             )
-        )
-        contract = contract_from_skill_markdown(
-            skill_markdown,
-            skill_id=skill_id,
-            source_label=str(skill_file),
         )
         source = {
             "kind": "file",
