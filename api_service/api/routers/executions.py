@@ -135,6 +135,7 @@ from moonmind.workflows.executions.runtime_inheritance import (
     apply_inherited_runtime_to_payload,
     resolve_child_runtime_inheritance,
 )
+from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from api_service.api.execution_principal import (
     execution_principal_dependency,
     resolve_execution_principal,
@@ -247,6 +248,7 @@ _EXECUTION_FACET_ATTRS = {
 _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES = {
     "mm_target_runtime": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
     "mm_target_skill": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
+    "mm_title": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
 }
 _UNSORTABLE_TEMPORAL_SEARCH_ATTRIBUTES = frozenset(
     {
@@ -264,6 +266,7 @@ _EXECUTION_FILTER_ATTR_BY_ALIAS = {
     "targetRuntimeNotIn": "mm_target_runtime",
     "targetSkillIn": "mm_target_skill",
     "targetSkillNotIn": "mm_target_skill",
+    "titleContains": "mm_title",
 }
 _EXECUTION_FACET_FILTER_ALIASES = {
     "status": frozenset({"state", "stateIn", "stateNotIn"}),
@@ -1349,7 +1352,7 @@ def _build_temporal_execution_query(
             request.query_params.get("workflowIdContains"),
             alias="workflowIdContains",
         )
-    if not excluded("titleContains"):
+    if attr_available("mm_title") and not excluded("titleContains"):
         _append_word_match_temporal_filter(
             query_parts,
             "mm_title",
@@ -6295,6 +6298,10 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                         raw_args = selected_skill.get("inputs")
                     if isinstance(raw_args, dict):
                         normalized_skill["args"] = dict(raw_args)
+                    _copy_skill_contract_metadata(
+                        source=selected_skill,
+                        target=normalized_skill,
+                    )
                     raw_caps = selected_skill.get("requiredCapabilities")
                     if raw_caps is not None:
                         normalized_caps = _coerce_string_list(
@@ -6329,6 +6336,24 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     task_payload["steps"] = normalized_steps
     return normalized_steps
+
+def _copy_skill_contract_metadata(
+    *,
+    source: Mapping[str, Any],
+    target: dict[str, Any],
+) -> None:
+    for metadata_key in ("inputSchema", "uiSchema", "defaults"):
+        metadata_value = source.get(metadata_key)
+        if isinstance(metadata_value, Mapping):
+            target[metadata_key] = dict(metadata_value)
+    for evidence_key in (
+        "contentRef",
+        "contentDigest",
+        "inputContractDigest",
+    ):
+        evidence_value = source.get(evidence_key)
+        if isinstance(evidence_value, str) and evidence_value.strip():
+            target[evidence_key] = evidence_value.strip()
 
 async def _resolve_step_runtime_selections(
     *,
@@ -6889,6 +6914,7 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
         inline_inputs = selected_payload.get("args")
     if isinstance(inline_inputs, dict) and inline_inputs:
         normalized["inputs"] = dict(inline_inputs)
+    _copy_skill_contract_metadata(source=selected_payload, target=normalized)
     return normalized
 
 _PENTEST_TOOL_NAME = "security.pentest.run"
@@ -8467,6 +8493,20 @@ async def _create_execution_from_workflow_request(
         initial_parameters["instructions"] = instructions
     if normalized_task_for_planner:
         initial_parameters["workflow"] = normalized_task_for_planner
+    skill_validation = await validate_skill_step_inputs(
+        initial_parameters=initial_parameters,
+        session=session,
+    )
+    if not skill_validation.valid:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_skill_step_inputs",
+                "message": "Skill step inputs failed validation.",
+                "errors": skill_validation.error_dicts(),
+            },
+        )
+    initial_parameters = skill_validation.parameters
 
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
@@ -9198,6 +9238,20 @@ async def create_execution(
         if route.recurring_response is not None:
             return route.recurring_response
 
+        skill_validation = await validate_skill_step_inputs(
+            initial_parameters=request.initial_parameters,
+            session=session,
+        )
+        if not skill_validation.valid:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "invalid_skill_step_inputs",
+                    "message": "Skill step inputs failed validation.",
+                    "errors": skill_validation.error_dicts(),
+                },
+            )
+
         record = await service.create_execution(
             workflow_type=request.workflow_type,
             owner_id=user.id,
@@ -9207,7 +9261,7 @@ async def create_execution(
             plan_artifact_ref=request.plan_artifact_ref,
             manifest_artifact_ref=request.manifest_artifact_ref,
             failure_policy=request.failure_policy,
-            initial_parameters=request.initial_parameters,
+            initial_parameters=skill_validation.parameters,
             idempotency_key=request.idempotency_key,
             start_delay=route.start_delay,
             scheduled_for=route.scheduled_for,
@@ -9314,10 +9368,10 @@ async def list_executions(
                 return ExecutionListResponse(
                     items=[],
                     nextPageToken=None,
-                    count=0,
-                    countMode="exact",
+                    count=None,
+                    countMode="estimated_or_unknown",
                     staleState=False,
-                    degradedCount=False,
+                    degradedCount=True,
                     refreshedAt=datetime.now(UTC),
                 )
             count_query, list_query = _build_temporal_execution_query(
@@ -9359,14 +9413,30 @@ async def list_executions(
             import base64
             token_bytes = base64.b64decode(next_page_token) if next_page_token else None
 
-            count_info = await client.count_workflows(query=count_query)
-
             iterator = client.list_workflows(
                 query=list_query,
                 page_size=page_size,
                 next_page_token=token_bytes,
             )
             await iterator.fetch_next_page()
+
+            count_value: int | None = None
+            count_mode = "exact"
+            degraded_count = False
+            try:
+                count_info = await asyncio.wait_for(
+                    client.count_workflows(query=count_query),
+                    timeout=settings.temporal_dashboard.list_count_timeout_seconds,
+                )
+                count_value = count_info.count
+            except Exception as exc:
+                count_mode = "estimated_or_unknown"
+                degraded_count = True
+                logger.warning(
+                    "Temporal execution list count degraded for query_present=%s: %s",
+                    bool(count_query),
+                    exc,
+                )
 
             page = iterator.current_page or []
             canonical_map: dict[str, TemporalExecutionCanonicalRecord] = {}
@@ -9410,7 +9480,13 @@ async def list_executions(
                             getattr(record_obj, "started_at", None) or datetime.now(UTC)
                         )
                     execution = _serialize_execution_list_item(record_obj)
-                    if _execution_uses_live_workflow_queries(execution):
+                    if (
+                        _execution_uses_live_workflow_queries(execution)
+                        and (
+                            _request_has_progress_filters(request)
+                            or sort in {"progress", "progressPct"}
+                        )
+                    ):
                         progress, queried_run_id = await _load_execution_progress(
                             temporal_client=temporal_client,
                             workflow_id=wf.id,
@@ -9461,9 +9537,9 @@ async def list_executions(
             return ExecutionListResponse(
                 items=items,
                 next_page_token=new_token_str,
-                count=count_info.count,
-                count_mode="exact",
-                degraded_count=False,
+                count=count_value,
+                count_mode=count_mode,
+                degraded_count=degraded_count,
                 refreshed_at=datetime.now(UTC),
             )
         except TemporalExecutionValidationError as exc:

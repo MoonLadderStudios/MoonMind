@@ -771,7 +771,7 @@ function snapshotDraftTask(
           },
           skill: {
             id: stringValue(primarySkill.name),
-            args: objectValue(primarySkill.inputs),
+            inputs: objectValue(primarySkill.inputs),
           },
           inputs: objectValue(primarySkill.inputs),
         }
