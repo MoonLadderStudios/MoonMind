@@ -438,6 +438,37 @@ def test_recovery_source_accepts_checkpoint_payload_ref_workspace_evidence() -> 
     assert workflow._recovery_workspace_restored_ref == restored_ref
 
 
+def test_step_execution_exception_records_failed_step_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    now = datetime.now(UTC)
+    workflow = MoonMindRunWorkflow()
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "create-jira", "title": "Create Jira issues"}],
+        dependency_map={"create-jira": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("create-jira", updated_at=now, summary="Running")
+
+    diagnostic = workflow._record_step_execution_exception(
+        RuntimeError("tool activity failed"),
+        logical_step_id="create-jira",
+        tool_name="story.create_jira_issues",
+        source="activity",
+        updated_at=now,
+    )
+
+    row = workflow._step_ledger_row_for("create-jira")
+    assert row is not None
+    assert row["status"] == "failed"
+    assert row["lastError"] == diagnostic["category"]
+    assert workflow._failure_diagnostic is not None
+    assert workflow._failure_diagnostic["stepId"] == "create-jira"
+    assert workflow._failure_diagnostic["source"] == "activity"
+    assert workflow._failure_diagnostic["message"] == "tool activity failed"
+
+
 def test_preserved_outputs_are_available_to_failed_step_dependencies() -> None:
     now = datetime.now(UTC)
     workflow = _workflow_with_resume()

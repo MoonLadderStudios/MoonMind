@@ -101,3 +101,32 @@ def test_result_metadata_preserves_parent_prepared_context_authority(monkeypatch
     ]
     assert "write-report" not in str(moonmind_metadata)
     assert "report-notes" not in str(moonmind_metadata)
+
+
+def test_result_metadata_carries_compact_workspace_capture_input(monkeypatch):
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="corr-workspace",
+        idempotencyKey="idem-workspace",
+        workspaceSpec={
+            "workspacePath": "/work/agent_jobs/job-1/repo",
+            "baseCommit": "abc123",
+            "workspaceCheckpointKind": "git_patch",
+        },
+    )
+
+    result = run._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult(summary="done", metadata={}),
+    )
+
+    assert result is not None
+    assert result.metadata["workspaceSpec"] == {
+        "workspacePath": "/work/agent_jobs/job-1/repo",
+        "baseCommit": "abc123",
+        "workspaceCheckpointKind": "git_patch",
+    }
+    assert result.metadata["workspacePath"] == "/work/agent_jobs/job-1/repo"

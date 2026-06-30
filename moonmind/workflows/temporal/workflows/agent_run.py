@@ -981,6 +981,20 @@ class MoonMindAgentRun:
             request=request,
             metadata=metadata,
         )
+        if request.workspace_spec:
+            workspace_spec = dict(request.workspace_spec)
+            metadata.setdefault("workspaceSpec", workspace_spec)
+            for key in (
+                "workspacePath",
+                "workspaceRootRef",
+                "workspaceRoot",
+                "baseCommit",
+                "workspaceCheckpointKind",
+                "checkpointKind",
+            ):
+                value = workspace_spec.get(key)
+                if value is not None:
+                    metadata.setdefault(key, value)
 
         agent_run_id = ""
         if request.managed_session is not None:
