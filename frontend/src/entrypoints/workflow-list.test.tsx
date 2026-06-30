@@ -2200,19 +2200,17 @@ describe('Workflows Entrypoint', () => {
     const card = detailsLink.closest<HTMLElement>('.queue-card');
     const fields = card?.querySelector<HTMLElement>('.queue-card-fields');
     const fieldValue = fields?.querySelector<HTMLElement>('dd');
-    const taskId = card?.querySelector<HTMLElement>('code');
 
     expect(card).not.toBeNull();
     expect(fields).not.toBeNull();
     expect(fieldValue).not.toBeNull();
-    expect(taskId).not.toBeNull();
+    expect(within(card as HTMLElement).queryByText('ID')).toBeNull();
 
     expect(getComputedStyle(card as HTMLElement).minWidth).toMatch(/^0(px)?$/);
     expect(getComputedStyle(card as HTMLElement).width).toBe('100%');
     expect(getComputedStyle(fields as HTMLElement).display).toBe('grid');
     expect(getComputedStyle(fieldValue as HTMLElement).minWidth).toMatch(/^0(px)?$/);
     expect(getComputedStyle(fieldValue as HTMLElement).overflowWrap).toBe('anywhere');
-    expect(getComputedStyle(taskId as HTMLElement).overflowWrap).toBe('anywhere');
   });
 
   it('keeps the previous-page button enabled on empty pages after pagination', async () => {
@@ -2341,10 +2339,14 @@ describe('Workflows Entrypoint', () => {
     // The scan-first table leads with the Workflow column and one Updated column.
     expect(table?.querySelectorAll('col.queue-table-column-workflow')).toHaveLength(1);
     expect(table?.querySelectorAll('col.queue-table-column-date')).toHaveLength(1);
-    // The compact workflow id stays visible but secondary inside the Workflow cell.
+    // The workflow id is not rendered in the list; the title link carries it to the detail view.
     const workflowCell = table?.querySelector('td.queue-table-cell-workflow');
-    const compactId = workflowCell?.querySelector('code.workflow-list-row-id');
-    expect(compactId?.textContent).toBe(longWorkflowId);
+    expect(workflowCell?.textContent).toContain('Long child workflow id task');
+    expect(workflowCell?.textContent).not.toContain(longWorkflowId);
+    const titleLink = workflowCell?.querySelector('a.workflow-list-row-title');
+    expect(titleLink?.getAttribute('href')).toBe(
+      `/workflows/${encodeURIComponent(longWorkflowId)}?limit=50&source=temporal`,
+    );
   });
 
   it('does not render an Actions column when workflow actions are disabled', async () => {
@@ -2531,9 +2533,7 @@ describe('Workflows Entrypoint', () => {
     expect(titleLink?.getAttribute('href')).toBe(
       '/workflows/mm%3Arun%3Ascan-first-001?limit=50&source=temporal',
     );
-    // The compact workflow id stays present but secondary.
-    const compactId = workflowCell.querySelector('code.workflow-list-row-id');
-    expect(compactId?.textContent).toBe('mm:run:scan-first-001');
+    expect(workflowCell.textContent).not.toContain('mm:run:scan-first-001');
   });
 
   it('renders status supplements and bounded progress without Next action surfaces', async () => {

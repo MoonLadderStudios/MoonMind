@@ -2260,16 +2260,6 @@ tbody tr:hover {
   text-decoration: underline;
 }
 
-.workflow-list-row-id {
-  display: block;
-  margin-top: 0.2rem;
-  font-size: 0.76rem;
-  font-weight: 400;
-  color: rgb(var(--mm-muted));
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
 .workflow-list-status-supplement {
   margin-top: 0.2rem;
   color: rgb(var(--mm-muted));
