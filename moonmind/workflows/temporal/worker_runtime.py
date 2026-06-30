@@ -1082,6 +1082,10 @@ def _selected_step_tool_name(step_entry: Mapping[str, Any]) -> str:
     return str(step_tool.get("name") or step_tool.get("id") or "").strip()
 
 
+def _has_explicit_step_skill_name(tool_name: str) -> bool:
+    return tool_name.strip().lower() not in {"", "auto"}
+
+
 def _selected_step_tool_inputs(step_entry: Mapping[str, Any]) -> dict[str, Any]:
     step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(
         step_entry.get("skill")
@@ -1251,7 +1255,7 @@ def _task_uses_only_jira_agent_skill(
             for step in raw_steps
         ]
         return bool(effective_step_tool_names) and all(
-            name
+            _has_explicit_step_skill_name(name)
             and (
                 _jira_agent_skill_selected(name)
                 or _story_output_task_tool_selected(name)
@@ -1887,6 +1891,9 @@ def _build_runtime_planner():
 
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)
+                has_explicit_step_skill = _has_explicit_step_skill_name(
+                    step_tool_name
+                )
                 tool_type = _selected_step_tool_type(step_entry)
                 is_agent_runtime_step = tool_type == "agent_runtime"
                 step_metadata_inputs = _authored_step_metadata_inputs(
@@ -1927,7 +1934,7 @@ def _build_runtime_planner():
                         **step_extra_inputs,
                         "instructions": step_instructions,
                     }
-                    if not step_tool_name:
+                    if not has_explicit_step_skill:
                         _drop_inherited_skill_context(step_node_inputs)
                     step_node_inputs.update(step_metadata_inputs)
                     if base_runtime_payload or step_runtime_payload:
@@ -1981,9 +1988,11 @@ def _build_runtime_planner():
                     step_tool_name.lower() in _STORY_OUTPUT_TASK_TOOLS
                 )
                 effective_step_skill_name = (
-                    step_tool_name if is_agent_runtime_step else ""
+                    step_tool_name
+                    if is_agent_runtime_step and has_explicit_step_skill
+                    else ""
                 )
-                if step_tool_name and is_agent_runtime_step:
+                if is_agent_runtime_step and has_explicit_step_skill:
                     step_node_inputs["selectedSkill"] = step_tool_name
                     if (
                         _jira_agent_skill_selected(step_tool_name)
