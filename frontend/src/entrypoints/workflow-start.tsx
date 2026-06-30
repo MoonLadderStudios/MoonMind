@@ -8301,7 +8301,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         blueprint.tool = normalizedTool;
         blueprint.skill = {
           id: normalizedTool.name,
-          args: skillArgs,
+          inputs: skillArgs,
           ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
         };
       }
@@ -9003,7 +9003,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     };
     const primaryStepSkill = {
       id: primarySkillId,
-      args: primarySkillArgs,
+      inputs: primarySkillArgs,
       ...(taskSkillRequiredCapabilities.length > 0
         ? { requiredCapabilities: taskSkillRequiredCapabilities }
         : {}),
@@ -9448,7 +9448,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         };
         stepPayload.skill = {
           id: stepSkillId || primarySkillId,
-          args: stepSkillArgs,
+          inputs: stepSkillArgs,
           ...(stepSkillCaps.length > 0
             ? { requiredCapabilities: stepSkillCaps }
             : {}),

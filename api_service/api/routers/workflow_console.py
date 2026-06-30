@@ -105,6 +105,20 @@ class DashboardSkillOption(BaseModel):
     """Serializable skill option exposed to dashboard clients."""
 
     id: str = Field(description="Skill identifier")
+    input_schema: dict[str, object] = Field(
+        default_factory=dict,
+        alias="inputSchema",
+        description="Normalized JSON Schema object for Skill inputs",
+    )
+    ui_schema: dict[str, object] = Field(
+        default_factory=dict,
+        alias="uiSchema",
+        description="Presentation-only Skill input rendering hints",
+    )
+    defaults: dict[str, object] = Field(
+        default_factory=dict,
+        description="Default Skill input values",
+    )
     required_capabilities: list[str] = Field(
         default_factory=list,
         alias="requiredCapabilities",
@@ -119,6 +133,63 @@ class DashboardSkillListResponse(BaseModel):
     legacy_items: list[DashboardSkillOption] = Field(
         default_factory=list, alias="legacyItems"
     )
+
+
+_SECRET_LIKE_DEFAULT_RE = re.compile(
+    r"(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|-----begin [a-z ]*private key)",
+    re.IGNORECASE,
+)
+
+
+def _contains_secret_like_value(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(_SECRET_LIKE_DEFAULT_RE.search(value))
+    if isinstance(value, dict):
+        return any(
+            _contains_secret_like_value(key) or _contains_secret_like_value(nested)
+            for key, nested in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_secret_like_value(item) for item in value)
+    return False
+
+
+def _extract_skill_input_contract_from_markdown(
+    markdown: str,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    lines = markdown.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, {}, {}
+    frontmatter_lines: list[str] = []
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        frontmatter_lines.append(line)
+    else:
+        return {}, {}, {}
+    try:
+        parsed = yaml.safe_load("\n".join(frontmatter_lines)) or {}
+    except yaml.YAMLError:
+        return {}, {}, {}
+    if not isinstance(parsed, dict):
+        return {}, {}, {}
+    input_schema = parsed.get("inputSchema") or parsed.get("input_schema")
+    ui_schema = parsed.get("uiSchema") or parsed.get("ui_schema")
+    defaults = parsed.get("defaults")
+    safe_defaults: dict[str, object] = {}
+    if isinstance(defaults, dict):
+        safe_defaults = {
+            str(key): value
+            for key, value in defaults.items()
+            if not _contains_secret_like_value(key)
+            and not _contains_secret_like_value(value)
+        }
+    return (
+        dict(input_schema) if isinstance(input_schema, dict) else {},
+        dict(ui_schema) if isinstance(ui_schema, dict) else {},
+        safe_defaults,
+    )
+
 
 class DashboardBranchOption(BaseModel):
     """Serializable Git branch option exposed to dashboard clients."""
@@ -914,6 +985,9 @@ async def list_dashboard_skills(
 
     async def _get_skill_option(skill_id: str) -> DashboardSkillOption:
         markdown_content = None
+        input_schema: dict[str, object] = {}
+        ui_schema: dict[str, object] = {}
+        defaults: dict[str, object] = {}
         required_capabilities: list[str] = []
         skill_file = resolve_skill_markdown_path(skill_id)
         if skill_file is not None:
@@ -928,10 +1002,16 @@ async def list_dashboard_skills(
                     source_label=str(skill_file),
                 )
             )
+            input_schema, ui_schema, defaults = _extract_skill_input_contract_from_markdown(
+                skill_markdown
+            )
             if include_content:
                 markdown_content = skill_markdown
         return DashboardSkillOption(
             id=skill_id,
+            inputSchema=input_schema,
+            uiSchema=ui_schema,
+            defaults=defaults,
             requiredCapabilities=required_capabilities,
             markdown=markdown_content,
         )

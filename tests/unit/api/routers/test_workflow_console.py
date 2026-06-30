@@ -606,8 +606,22 @@ def test_skills_api_returns_available_skill_ids(
             "worker": ["speckit", "speckit-orchestrate"],
         },
         "legacyItems": [
-            {"id": "speckit", "requiredCapabilities": [], "markdown": None},
-            {"id": "speckit-orchestrate", "requiredCapabilities": [], "markdown": None},
+            {
+                "id": "speckit",
+                "inputSchema": {},
+                "uiSchema": {},
+                "defaults": {},
+                "requiredCapabilities": [],
+                "markdown": None,
+            },
+            {
+                "id": "speckit-orchestrate",
+                "inputSchema": {},
+                "uiSchema": {},
+                "defaults": {},
+                "requiredCapabilities": [],
+                "markdown": None,
+            },
         ],
     }
 
@@ -621,6 +635,20 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     skill_markdown = (
         "---\n"
         "name: speckit-orchestrate\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  required:\n"
+        "    - issueKey\n"
+        "  properties:\n"
+        "    issueKey:\n"
+        "      type: string\n"
+        "      title: Issue key\n"
+        "uiSchema:\n"
+        "  issueKey:\n"
+        "    widget: jira.issue-picker\n"
+        "defaults:\n"
+        "  issueKey: MM-1047\n"
+        "  unsafeDefault: token=raw-secret\n"
         "metadata:\n"
         "  required-capabilities:\n"
         "    - git\n"
@@ -648,6 +676,24 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     assert response.json()["legacyItems"] == [
         {
             "id": "speckit-orchestrate",
+            "inputSchema": {
+                "type": "object",
+                "required": ["issueKey"],
+                "properties": {
+                    "issueKey": {
+                        "type": "string",
+                        "title": "Issue key",
+                    },
+                },
+            },
+            "uiSchema": {
+                "issueKey": {
+                    "widget": "jira.issue-picker",
+                },
+            },
+            "defaults": {
+                "issueKey": "MM-1047",
+            },
             "requiredCapabilities": ["git"],
             "markdown": skill_markdown,
         },

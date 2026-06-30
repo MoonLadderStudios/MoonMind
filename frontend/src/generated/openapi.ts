@@ -4279,6 +4279,27 @@ export interface components {
              */
             id: string;
             /**
+             * Inputschema
+             * @description Normalized JSON Schema object for Skill inputs
+             */
+            inputSchema?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Uischema
+             * @description Presentation-only Skill input rendering hints
+             */
+            uiSchema?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Defaults
+             * @description Default Skill input values
+             */
+            defaults?: {
+                [key: string]: unknown;
+            };
+            /**
              * Requiredcapabilities
              * @description Default required capabilities declared by Skill metadata
              */

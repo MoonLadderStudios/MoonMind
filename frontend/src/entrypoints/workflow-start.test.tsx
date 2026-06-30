@@ -5427,7 +5427,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(request.payload.task.skill).toEqual({
       id: "moonspec-orchestrate",
-      args: {
+      inputs: {
         issueKey: "MM-564",
         mode: "runtime",
       },
@@ -10705,7 +10705,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(savedStep?.skill).toEqual({
       id: "auto",
-      args: { mode: "advanced" },
+      inputs: { mode: "advanced" },
       requiredCapabilities: ["docker"],
     });
 
@@ -16205,16 +16205,20 @@ describe("Task Create schema-driven capability inputs", () => {
       payload: {
         task: {
           tool?: { inputs?: Record<string, unknown> };
-          skill?: { args?: Record<string, unknown> };
+          skill?: {
+            inputs?: Record<string, unknown>;
+            args?: Record<string, unknown>;
+          };
         };
       };
     };
     expect(request.payload.task.tool?.inputs).toMatchObject({
       repository: "MoonLadderStudios/SchemaRepo",
     });
-    expect(request.payload.task.skill?.args).toMatchObject({
+    expect(request.payload.task.skill?.inputs).toMatchObject({
       repository: "MoonLadderStudios/SchemaRepo",
     });
+    expect(request.payload.task.skill?.args).toBeUndefined();
   });
 
   it("keeps cleared optional numeric schema inputs unset", async () => {
@@ -16666,7 +16670,7 @@ describe("Task Create governed Tool authoring", () => {
     });
     expect(request.payload.task.skill).toEqual({
       id: "moonspec-orchestrate",
-      args: {
+      inputs: {
         issueKey: "MM-577",
         mode: "runtime",
       },
