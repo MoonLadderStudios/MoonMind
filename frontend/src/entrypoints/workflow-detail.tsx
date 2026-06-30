@@ -94,10 +94,6 @@ function workflowWorkspaceRowId(row: WorkflowWorkspaceRow): string {
   return row.workflowId || row.taskId || '';
 }
 
-function workflowWorkspaceRowUpdatedAt(row: WorkflowWorkspaceRow): string | null | undefined {
-  return row.closedAt || row.scheduledFor || row.updatedAt || row.createdAt;
-}
-
 function workflowWorkspaceRowFromDetail(detail: ExecutionDetail): WorkflowWorkspaceRow {
   return {
     taskId: detail.taskId,
@@ -113,32 +109,6 @@ function workflowWorkspaceRowFromDetail(detail: ExecutionDetail): WorkflowWorksp
     repository: detail.repository,
     targetRuntime: detail.targetRuntime,
   };
-}
-
-const WORKFLOW_WORKSPACE_RELATIVE_TIME_UNITS: Array<[string, number]> = [
-  ['y', 31536000],
-  ['mo', 2592000],
-  ['w', 604800],
-  ['d', 86400],
-  ['h', 3600],
-  ['m', 60],
-];
-
-function formatWorkflowWorkspaceRelativeTime(iso: string | null | undefined): string {
-  if (!iso) return 'Updated time unavailable';
-  const date = new Date(iso);
-  const ms = date.getTime();
-  if (Number.isNaN(ms)) return iso;
-  const diffSeconds = Math.round((Date.now() - ms) / 1000);
-  const absSeconds = Math.abs(diffSeconds);
-  if (absSeconds < 45) return 'just now';
-  const suffix = diffSeconds >= 0 ? 'ago' : 'from now';
-  for (const [label, unitSeconds] of WORKFLOW_WORKSPACE_RELATIVE_TIME_UNITS) {
-    if (absSeconds >= unitSeconds) {
-      return `${Math.floor(absSeconds / unitSeconds)}${label} ${suffix}`;
-    }
-  }
-  return `${absSeconds}s ${suffix}`;
 }
 
 function useWorkflowWorkspaceDesktop(): boolean {
@@ -291,8 +261,6 @@ function WorkflowSidebarRow({
   const active = workflowId === activeWorkflowId;
   const status = row.rawState || row.state || row.status || 'unknown';
   const title = row.title?.trim() || workflowId || 'Untitled workflow';
-  const repository = row.repository?.trim();
-  const runtime = formatRuntimeLabel(row.targetRuntime);
   return (
     <li>
       <a
@@ -305,20 +273,46 @@ function WorkflowSidebarRow({
         <span className="workflow-workspace-sidebar-row-main">
           {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
           <span className="workflow-workspace-sidebar-title">{title}</span>
-          <span className="workflow-workspace-sidebar-meta">
-            {formatWorkflowWorkspaceRelativeTime(workflowWorkspaceRowUpdatedAt(row))}
-          </span>
-          <span className="workflow-workspace-sidebar-labels" aria-label="Workflow metadata">
-            {repository ? <span>{repository}</span> : null}
-            {runtime !== '—' ? <span>{runtime}</span> : null}
-            <span>{formatStatusLabel(status)}</span>
-          </span>
         </span>
         <ExecutionStatusPill status={status} />
       </a>
     </li>
   );
 }
+
+function WorkspaceControlIcon({ children }: { children: ReactNode }) {
+  return (
+    <svg
+      className="workflow-workspace-control-icon"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {children}
+    </svg>
+  );
+}
+
+const SIDEBAR_TOGGLE_ICON = (
+  <WorkspaceControlIcon>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M9 4v16" />
+  </WorkspaceControlIcon>
+);
+
+const EXPAND_LIST_ICON = (
+  <WorkspaceControlIcon>
+    <path d="M15 3h6v6" />
+    <path d="M9 21H3v-6" />
+    <path d="M21 3l-7 7" />
+    <path d="M3 21l7-7" />
+  </WorkspaceControlIcon>
+);
 
 function WorkflowSidebarControls({
   fullListHref,
@@ -336,15 +330,19 @@ function WorkflowSidebarControls({
         type="button"
         className="secondary workflow-workspace-close-sidebar"
         onClick={onClose}
+        aria-label="Close sidebar"
+        title="Close sidebar"
       >
-        Close sidebar
+        {SIDEBAR_TOGGLE_ICON}
       </button>
       <a
         className="button workflow-workspace-expand-list"
         href={fullListHref}
         onClick={markWorkflowListReturnFocusIntent}
+        aria-label="Expand to full list"
+        title="Expand to full list"
       >
-        Expand to full list
+        {EXPAND_LIST_ICON}
       </a>
     </div>
   );
@@ -528,8 +526,10 @@ export function WorkflowWorkspaceShell({
             setSidebarOpen(true);
             window.setTimeout(() => closeButtonRef.current?.focus(), 0);
           }}
+          aria-label="Open workflow sidebar"
+          title="Open workflow sidebar"
         >
-          Open workflow sidebar
+          {SIDEBAR_TOGGLE_ICON}
         </button>
       )}
       <main className="workflow-workspace-detail" aria-label="Workflow detail">

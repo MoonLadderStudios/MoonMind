@@ -505,6 +505,31 @@ describe('Dashboard shared entry', () => {
     );
   });
 
+  it('lets edge-to-edge data panels beat the 112rem cap via higher specificity', async () => {
+    // The edge-to-edge `max-width: none` rule and the `.panel.panel--data-wide`
+    // 112rem cap would otherwise have equal specificity, letting the later cap
+    // win on source order and re-center wide layouts. Prefixing the `:has()`
+    // rule with `.panel` raises its specificity so the edge-to-edge intent wins.
+    expect(dashboardCss).toMatch(
+      /\.panel\.panel--data-wide:has\(\.workflow-list-data-slab\),\s*\.panel\.panel--data-wide:has\(\.workflow-workspace-shell\)\s*\{[^}]*max-width:\s*none/s,
+    );
+  });
+
+  it('places workflow sidebar dividers on list items so row radius cannot curve them', async () => {
+    // A `border-bottom` on `.workflow-workspace-sidebar-row` curves at the
+    // corners because the row carries `border-radius`. The divider lives on the
+    // `li` container instead, keeping a straight hairline and rounded hover.
+    const listItemBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-list li');
+    expect(listItemBlock).toContain('border-bottom: 1px solid rgb(var(--mm-border) / 0.4)');
+
+    const lastItemBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-list li:last-child');
+    expect(lastItemBlock).toContain('border-bottom: 0');
+
+    const rowBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-row');
+    expect(rowBlock).toContain('border-radius: 0.4rem');
+    expect(rowBlock).not.toContain('border-bottom');
+  });
+
   it('keeps checkbox label hit areas bounded to visible control text', async () => {
     const checkboxLabelBlock = cssRuleBlock(dashboardCss, 'label.checkbox');
 

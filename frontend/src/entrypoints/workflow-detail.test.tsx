@@ -721,8 +721,6 @@ describe('Workflow Detail Entrypoint', () => {
     expect(pinned.getAttribute('aria-current')).toBe('page');
     expect(pinned.getAttribute('data-pinned')).toBe('true');
     expect(within(pinned).getByLabelText('executing')).toBeTruthy();
-    expect(within(pinned).getByText('scheduled-marker')).toBeTruthy();
-    expect(within(pinned).queryByText('detail-updated-marker')).toBeNull();
     expect(within(sidebar).getByRole('link', { name: /Filtered workflow/i }).getAttribute('aria-current')).toBeNull();
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
@@ -1011,11 +1009,14 @@ describe('Workflow Detail Entrypoint', () => {
     );
 
     const dashboardCss = await readDashboardCss();
-    expect(dashboardCss).toMatch(/\.workflow-workspace-close-sidebar\s*\{[\s\S]*border-style:\s*dashed;/);
-    expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list\s*\{[\s\S]*background:\s*rgb\(var\(--mm-accent\)/);
+    // Both controls are compact icon buttons (fixed square footprint), but only
+    // the expand-to-list control carries the accent emphasis so they stay
+    // visually distinct.
+    expect(dashboardCss).toMatch(/\.workflow-workspace-close-sidebar[\s\S]*?width:\s*2rem;/);
+    expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list\s*\{[\s\S]*?background:\s*rgb\(var\(--mm-accent\)/);
   });
 
-  it('MM-1002 renders sidebar titles, repositories, runtimes, and statuses as React text', async () => {
+  it('MM-1002 renders sidebar titles and statuses as React text', async () => {
     window.history.pushState({}, 'Workspace Sidebar Text Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches({
@@ -1036,10 +1037,10 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
+    // The sidebar row is now just the title and a status pill; both untrusted
+    // fields must render as escaped text rather than live DOM nodes.
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(await within(sidebar).findByText('<img src=x onerror=alert(1)>')).toBeTruthy();
-    expect(within(sidebar).getByText('<b>owner/repo</b>')).toBeTruthy();
-    expect(within(sidebar).getByText('Codex CLI')).toBeTruthy();
     expect(within(sidebar).getAllByText('<script>alert(1)</script>').length).toBeGreaterThan(0);
     expect(within(sidebar).queryByRole('img')).toBeNull();
     expect(sidebar.querySelector('script')).toBeNull();
