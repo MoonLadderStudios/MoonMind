@@ -2249,11 +2249,16 @@ tbody tr:hover {
 }
 
 .workflow-list-row-title {
-  display: block;
-  font-weight: 600;
+  display: -webkit-box;
+  height: 2.5em;
+  overflow: hidden;
   color: inherit;
-  text-decoration: none;
+  font-weight: 600;
+  line-height: 1.25;
   overflow-wrap: anywhere;
+  text-decoration: none;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .workflow-list-row-title:hover {
@@ -6819,7 +6824,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   overflow: hidden;
   /* Not a card: the sidebar is a plain left column separated from the detail by
    * the grid gap and a single hairline divider, like ChatGPT. */
-  padding: 0 1.25rem 0 0;
+  padding: 0 0.125rem 0 0;
   border-right: 1px solid rgb(var(--mm-border) / 0.55);
 }
 
@@ -6873,7 +6878,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   min-height: 0;
   overflow-y: auto;
   list-style: none;
-  padding: 0;
+  padding: 0 0.125rem 0 0;
   margin: 0;
   /* Slimmer, theme-matched scrollbar instead of the default chunky one. */
   scrollbar-width: thin;
@@ -6914,6 +6919,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  min-height: 3.75rem;
   gap: 0.55rem;
   padding: 0.5rem 0.45rem;
   border: 0;
@@ -6957,12 +6963,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 /* The title keeps a steady list size; it must not balloon in the sidebar. */
 .workflow-workspace-sidebar-title {
+  display: -webkit-box;
   min-width: 0;
+  height: 2.5em;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 0.875rem;
   font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .workflow-workspace-sidebar-state {
