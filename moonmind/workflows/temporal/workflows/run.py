@@ -828,6 +828,37 @@ class MoonMindRunWorkflow:
             self._failure_diagnostic = diagnostic
         return diagnostic
 
+    def _record_step_execution_exception(
+        self,
+        exc: BaseException,
+        *,
+        logical_step_id: str,
+        tool_name: str,
+        source: str,
+        updated_at: datetime,
+        child_workflow_id: str | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Record step-scoped terminal failure evidence for raised executions."""
+
+        diagnostic = self._record_failure_diagnostic(
+            exc,
+            stage=self._state,
+            step_id=logical_step_id,
+            step_title=tool_name,
+            source=source,
+            child_workflow_id=child_workflow_id,
+            diagnostics_ref=diagnostics_ref,
+        )
+        self._mark_step_terminal(
+            logical_step_id,
+            status="failed",
+            updated_at=updated_at,
+            summary=diagnostic["message"],
+            last_error=diagnostic["category"],
+        )
+        return diagnostic
+
     def _record_result_failure_diagnostic(
         self,
         *,
@@ -6691,7 +6722,24 @@ class MoonMindRunWorkflow:
                     updated_at=workflow.now(),
                     summary=self._summary,
                 )
-                self._record_step_workspace_capture_input(node_id, node_inputs)
+                capture_input_source = dict(node_inputs)
+                workflow_workspace_spec = self._mapping_value(
+                    parameters,
+                    "workspaceSpec",
+                    "workspace_spec",
+                )
+                if (
+                    isinstance(workflow_workspace_spec, Mapping)
+                    and "workspaceSpec" not in capture_input_source
+                    and "workspace_spec" not in capture_input_source
+                ):
+                    capture_input_source["workspaceSpec"] = dict(
+                        workflow_workspace_spec
+                    )
+                self._record_step_workspace_capture_input(
+                    node_id,
+                    capture_input_source,
+                )
                 current_step_execution = self._step_execution_for(node_id) or 1
                 attempt_reason = (
                     "quality_gate_failed"
@@ -7024,15 +7072,43 @@ class MoonMindRunWorkflow:
                             if step_retry_overrides_enabled
                             else None
                         )
-                        execution_result = await workflow.execute_activity(
-                            route.activity_type,
-                            execute_payload,
-                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                            **self._execute_kwargs_for_route(
-                                route,
-                                max_attempts_override=max_attempts_override,
-                            ),
-                        )
+                        try:
+                            execution_result = await workflow.execute_activity(
+                                route.activity_type,
+                                execute_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                **self._execute_kwargs_for_route(
+                                    route,
+                                    max_attempts_override=max_attempts_override,
+                                ),
+                            )
+                        except Exception as exc:
+                            diagnostic = self._record_step_execution_exception(
+                                exc,
+                                logical_step_id=node_id,
+                                tool_name=tool_name,
+                                source="activity",
+                                updated_at=workflow.now(),
+                            )
+                            if step_execution_manifest_enabled:
+                                await self._record_step_execution_manifest(
+                                    node_id,
+                                    phase="terminal",
+                                    updated_at=workflow.now(),
+                                    reason=attempt_reason,
+                                    status="failed",
+                                    terminal_disposition="failed_unrecoverable",
+                                    summary=diagnostic.get("message"),
+                                    execution={
+                                        "kind": tool_type,
+                                        "toolName": tool_name,
+                                        "activityType": route.activity_type,
+                                    },
+                                )
+                            if failure_mode == "FAIL_FAST":
+                                raise
+                            result_status = "FAILED"
+                            break
 
                     else:
                         raise ValueError(
@@ -12081,6 +12157,29 @@ class MoonMindRunWorkflow:
             idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
 
         workspace_spec: dict[str, Any] = {}
+        for source_label, raw_workspace_spec in (
+            ("workflow.workspaceSpec", (
+                workflow_parameters.get("workspaceSpec")
+                if isinstance(workflow_parameters, Mapping)
+                else None
+            )),
+            ("workflow.workspace_spec", (
+                workflow_parameters.get("workspace_spec")
+                if isinstance(workflow_parameters, Mapping)
+                else None
+            )),
+            ("node.runtime.workspaceSpec", runtime_block.get("workspaceSpec")),
+            ("node.runtime.workspace_spec", runtime_block.get("workspace_spec")),
+            ("node.workspaceSpec", node_inputs.get("workspaceSpec")),
+            ("node.workspace_spec", node_inputs.get("workspace_spec")),
+        ):
+            if isinstance(raw_workspace_spec, Mapping):
+                workspace_spec.update(
+                    self._json_mapping(
+                        raw_workspace_spec,
+                        path=source_label,
+                    )
+                )
         for ws_key in (
             "repository",
             "repo",

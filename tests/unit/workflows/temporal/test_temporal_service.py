@@ -3188,6 +3188,60 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
 
 
 @pytest.mark.asyncio
+async def test_failed_step_recovery_accepts_manifest_checkpoint_without_memo_ref(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="recover source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {"title": "recovery source", "instructions": "Original"},
+            },
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+        }
+        await session.commit()
+
+        result = await service.create_failed_step_recovery_execution(
+            created,
+            recovery_checkpoint_ref=None,
+            idempotency_key="recover-manifest-ref",
+            checkpoint_payload=_valid_recovery_checkpoint_payload(
+                workflow_id=created.workflow_id,
+                run_id=created.run_id,
+                snapshot_ref="artifact://snapshot/source",
+            ),
+            failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+            failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                workflow_id=created.workflow_id,
+                run_id=created.run_id,
+                checkpoint_ref="artifact://checkpoint/source",
+            ),
+        )
+
+        resumed = await service.describe_execution(result["execution"]["workflowId"])
+        assert result["applied"] == "created_resumed_execution"
+        assert (
+            resumed.parameters["workflow"]["resume"]["recoveryCheckpointRef"]
+            == "artifact://checkpoint/source"
+        )
+
+
+@pytest.mark.asyncio
 async def test_failed_step_recovery_accepts_legacy_checkpoint_memo_key(
     tmp_path, mock_client_adapter
 ):

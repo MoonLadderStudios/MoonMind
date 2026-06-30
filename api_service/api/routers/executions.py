@@ -3236,6 +3236,7 @@ def _recovery_checkpoint_ref_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
     params = dict(getattr(record, "parameters", None) or {})
+    recovery_manifest = _recovery_manifest_summary_from_record(record)
     recovery_block = params.get("recoverySource")
     if not isinstance(recovery_block, Mapping):
         recovery_block = params.get("recovery_source")
@@ -3245,6 +3246,28 @@ def _recovery_checkpoint_ref_from_record(record) -> str | None:
         memo.get("recovery_checkpoint_ref"),
         memo.get("recoveryCheckpointRef"),
         search_attributes.get("mm_recovery_checkpoint_ref"),
+        recovery_manifest.get("checkpointRef"),
+        recovery_manifest.get("checkpoint_ref"),
+        _nested_recovery_manifest_text(
+            recovery_manifest,
+            "validation",
+            "checkpointRef",
+        ),
+        _nested_recovery_manifest_text(
+            recovery_manifest,
+            "validation",
+            "checkpoint_ref",
+        ),
+        _nested_recovery_manifest_text(
+            recovery_manifest,
+            "recoveryEligibility",
+            "checkpointRef",
+        ),
+        _nested_recovery_manifest_text(
+            recovery_manifest,
+            "recoveryEligibility",
+            "checkpoint_ref",
+        ),
         recovery_block.get("recoveryCheckpointRef"),
         recovery_block.get("recovery_checkpoint_ref"),
     ):
@@ -3254,16 +3277,53 @@ def _recovery_checkpoint_ref_from_record(record) -> str | None:
     return None
 
 
+def _recovery_manifest_summary_from_record(record) -> Mapping[str, Any]:
+    finish_summary = getattr(record, "finish_summary_json", None)
+    if not isinstance(finish_summary, Mapping):
+        return {}
+    recovery_manifest = finish_summary.get("recoveryManifest")
+    if not isinstance(recovery_manifest, Mapping):
+        recovery_manifest = finish_summary.get("recovery_manifest")
+    return recovery_manifest if isinstance(recovery_manifest, Mapping) else {}
+
+
+def _nested_recovery_manifest_text(
+    manifest: Mapping[str, Any],
+    block_key: str,
+    key: str,
+) -> str | None:
+    block = manifest.get(block_key)
+    if not isinstance(block, Mapping):
+        return None
+    value = block.get(key)
+    candidate = str(value or "").strip()
+    return candidate or None
+
+
+def _recovery_manifest_summary_allows_resume(record) -> bool:
+    manifest = _recovery_manifest_summary_from_record(record)
+    if not manifest:
+        return False
+    if not _coerce_bool(manifest.get("resumeAllowed"), default=False):
+        return False
+    validation_result = str(
+        manifest.get("validationResult")
+        or manifest.get("validation_result")
+        or _nested_recovery_manifest_text(manifest, "validation", "result")
+        or ""
+    ).strip().lower()
+    if validation_result != "valid":
+        return False
+    checkpoint_ref = _recovery_checkpoint_ref_from_record(record)
+    failed_step_id = _recovery_failed_step_id_from_record(record)
+    return bool(checkpoint_ref and failed_step_id)
+
+
 def _recovery_manifest_ref_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
     params = dict(getattr(record, "parameters", None) or {})
-    finish_summary = dict(getattr(record, "finish_summary_json", None) or {})
-    recovery_manifest = finish_summary.get("recoveryManifest")
-    if not isinstance(recovery_manifest, Mapping):
-        recovery_manifest = finish_summary.get("recovery_manifest")
-    if not isinstance(recovery_manifest, Mapping):
-        recovery_manifest = {}
+    recovery_manifest = _recovery_manifest_summary_from_record(record)
     recovery_block = params.get("recoverySource")
     if not isinstance(recovery_block, Mapping):
         recovery_block = params.get("recovery_source")
@@ -3310,6 +3370,7 @@ def _canonical_recovery_manifest_ref(
 def _recovery_failed_step_id_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     params = dict(getattr(record, "parameters", None) or {})
+    recovery_manifest = _recovery_manifest_summary_from_record(record)
     recovery_block = params.get("recoverySource")
     if not isinstance(recovery_block, Mapping):
         recovery_block = params.get("recovery_source")
@@ -3318,6 +3379,8 @@ def _recovery_failed_step_id_from_record(record) -> str | None:
     for value in (
         memo.get("resume_failed_step_id"),
         memo.get("resumeFailedStepId"),
+        recovery_manifest.get("failedLogicalStepId"),
+        recovery_manifest.get("failed_logical_step_id"),
         recovery_block.get("failedStepId"),
         recovery_block.get("failed_step_id"),
     ):
@@ -3418,6 +3481,8 @@ def _recovery_plan_identity_from_record(record) -> str | None:
         memo.get("resumePlanDigest"),
         memo.get("plan_ref"),
         memo.get("plan_digest"),
+        _coerce_artifact_ref(memo.get("plan_artifact_ref")),
+        _coerce_artifact_ref(memo.get("planArtifactRef")),
         search_attributes.get("mm_recovery_plan_ref"),
         search_attributes.get("mm_recovery_plan_digest"),
         recovery_block.get("sourcePlanRef"),
@@ -3452,6 +3517,10 @@ def _recovery_evidence_marked_stale(record) -> bool:
 def _recovery_evidence_disabled_reason(record) -> str | None:
     if _recovery_evidence_marked_stale(record):
         return "stale_recovery_evidence"
+    if _recovery_manifest_summary_allows_resume(record):
+        if not _recovery_plan_identity_from_record(record):
+            return "plan_identity_missing"
+        return None
     if not _recovery_checkpoint_ref_from_record(record):
         return "recovery_checkpoint_missing"
     if not _recovery_failed_step_id_from_record(record):

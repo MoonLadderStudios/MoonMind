@@ -147,6 +147,32 @@ def test_map_temporal_state_to_projection_extracts_finish_summary():
     assert result["finish_summary_json"] == finish_summary
 
 
+def test_map_temporal_state_to_projection_uses_plan_artifact_ref_when_plan_ref_missing():
+    start_time = datetime.now(UTC)
+    desc = Mock(spec=WorkflowExecutionDescription)
+    desc.id = "mm:plan-artifact-ref"
+    desc.run_id = "run-plan-artifact-ref"
+    desc.namespace = "moonmind"
+    desc.workflow_type = "MoonMind.UserWorkflow"
+    desc.status = WorkflowExecutionStatus.FAILED
+    desc.start_time = start_time
+    desc.execution_time = start_time
+    desc.close_time = start_time
+    desc.search_attributes = {}
+
+    async def _memo() -> dict[str, object]:
+        return {
+            "entry": "run",
+            "plan_artifact_ref": {"artifact_id": "artifact://plan/source"},
+        }
+
+    desc.memo = _memo
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
+
+    assert result["plan_ref"] == "artifact://plan/source"
+
+
 def test_map_temporal_state_to_projection_extracts_snake_case_finish_outcome():
     start_time = datetime.now(UTC)
     desc = Mock(spec=WorkflowExecutionDescription)
