@@ -337,6 +337,7 @@ def _skill_option_from_contract(
     input_contract_ref = None
     if (
         has_input_schema
+        and not inline_large_schema
         and _schema_inline_size(input_schema) > _MAX_INLINE_SKILL_INPUT_SCHEMA_BYTES
     ):
         input_contract_ref = _skill_input_contract_ref(
@@ -345,8 +346,14 @@ def _skill_option_from_contract(
 
     return DashboardSkillOption(
         id=skill_id,
-        label=label or skill_id,
-        description=description,
+        label=label or str(contract.get("label") or skill_id),
+        description=description
+        if description is not None
+        else (
+            str(contract.get("description"))
+            if isinstance(contract.get("description"), str)
+            else None
+        ),
         requiredCapabilities=required_capabilities or [],
         markdown=markdown,
         inputSchema=input_schema,
