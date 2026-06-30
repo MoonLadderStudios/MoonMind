@@ -1783,14 +1783,7 @@ describe('Workflows Entrypoint', () => {
       'Workspace return focus',
       '/workflows?stateIn=completed&limit=50&returnFromWorkflowDetail=1',
     );
-    const focusOptions: Array<FocusOptions | undefined> = [];
-    const originalFocus = HTMLElement.prototype.focus;
-    const focusSpy = vi
-      .spyOn(HTMLElement.prototype, 'focus')
-      .mockImplementation(function focusWithOptions(options?: FocusOptions) {
-        focusOptions.push(options);
-        originalFocus.call(this);
-      });
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus');
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
@@ -1798,7 +1791,7 @@ describe('Workflows Entrypoint', () => {
     const listRegion = screen.getByRole('region', { name: 'Workflow list' });
     await waitFor(() => expect(document.activeElement).toBe(listRegion));
     expect(listRegion.getAttribute('tabindex')).toBe('-1');
-    expect(focusOptions).toContainEqual({ preventScroll: true });
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
     focusSpy.mockRestore();
   });
 
