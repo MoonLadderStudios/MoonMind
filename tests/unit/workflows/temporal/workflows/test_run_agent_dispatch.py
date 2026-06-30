@@ -1225,6 +1225,52 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         self.assertEqual(request.agent_id, "codex")
         self.assertEqual(request.resolved_skillset_ref, "skills:snap:12345")
 
+    def test_build_agent_execution_request_passes_compact_skill_payload(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "codex",
+                    "selectedSkill": "issue-implement",
+                    "skill": {
+                        "name": "issue-implement",
+                        "contentRef": "art_skill",
+                        "contentDigest": "sha256:skill",
+                        "inputContractDigest": "sha256:contract",
+                        "inputs": {"issue": "MM-1052"},
+                    },
+                },
+                node_id="node-skills",
+                tool_name="auto",
+                resolved_skillset_ref="skills:snap:12345",
+            )
+
+        self.assertEqual(
+            request.skill,
+            {
+                "name": "issue-implement",
+                "contentRef": "art_skill",
+                "contentDigest": "sha256:skill",
+                "inputContractDigest": "sha256:contract",
+                "inputs": {"issue": "MM-1052"},
+            },
+        )
+        self.assertEqual(request.parameters["skill"], request.skill)
+        self.assertEqual(
+            request.parameters["metadata"]["moonmind"]["selectedSkill"],
+            "issue-implement",
+        )
+
     def test_build_agent_execution_request_uses_provider_profile_as_execution_profile_ref(self) -> None:
         from unittest.mock import patch
 

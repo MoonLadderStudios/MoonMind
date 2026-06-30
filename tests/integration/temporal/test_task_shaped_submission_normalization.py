@@ -36,6 +36,23 @@ def _client() -> tuple[TestClient, AsyncMock]:
     return TestClient(app), service
 
 
+class _SkillContractSession:
+    def __init__(self) -> None:
+        self.execute = AsyncMock(return_value=[])
+        self.get = AsyncMock(
+            return_value=SimpleNamespace(
+                metadata_json={
+                    "input_schema": {
+                        "type": "object",
+                        "required": ["issue"],
+                        "properties": {"issue": {"type": "string"}},
+                    },
+                    "input_contract_digest": "sha256:contract",
+                }
+            )
+        )
+
+
 def test_mm641_task_shaped_submission_boundary_exposes_canonical_task_parameters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -134,6 +151,48 @@ def test_mm641_task_shaped_submission_boundary_exposes_canonical_task_parameters
         }
     ]
     assert task["steps"][0]["jiraOrchestration"] == {"issueKey": "MM-641"}
+
+
+def test_mm1052_task_shaped_submission_rejects_invalid_skill_step_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    test_client, service = _client()
+    test_client.app.dependency_overrides[get_async_session] = _SkillContractSession
+
+    with test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex",
+                    "workflow": {
+                        "instructions": "Validate MM-1052 skill inputs.",
+                        "steps": [
+                            {
+                                "id": "step-1",
+                                "type": "skill",
+                                "skill": {
+                                    "name": "issue-implement",
+                                    "contentRef": "art_skill",
+                                    "contentDigest": "sha256:skill",
+                                    "inputs": {},
+                                },
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_skill_step_inputs"
+    assert response.json()["detail"]["errors"][0]["path"] == (
+        "steps[0].skill.inputs.issue"
+    )
+    service.create_execution.assert_not_awaited()
 
 
 def test_mm842_task_shaped_submission_rejects_stale_step_graph_metadata() -> None:

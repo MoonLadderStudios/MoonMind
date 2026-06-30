@@ -12168,6 +12168,7 @@ class MoonMindRunWorkflow:
                 metadata_payload["moonmind"] = moonmind_payload
                 parameters["metadata"] = metadata_payload
         selected_skill = str(node_inputs.get("selectedSkill") or "").strip()
+        compact_skill_payload: dict[str, Any] = {}
         if selected_skill:
             metadata_payload = (
                 parameters.get("metadata")
@@ -12182,6 +12183,23 @@ class MoonMindRunWorkflow:
             moonmind_payload["selectedSkill"] = selected_skill
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
+            raw_skill_payload = node_inputs.get("skill")
+            if isinstance(raw_skill_payload, Mapping):
+                for key in (
+                    "name",
+                    "contentRef",
+                    "contentDigest",
+                    "inputContractDigest",
+                    "inputs",
+                ):
+                    if key in raw_skill_payload:
+                        compact_skill_payload[key] = self._json_value(
+                            raw_skill_payload[key],
+                            path=f"node[{node_id}].skill.{key}",
+                        )
+            if compact_skill_payload:
+                compact_skill_payload.setdefault("name", selected_skill)
+                parameters["skill"] = dict(compact_skill_payload)
         bundle_payload: dict[str, Any] = {}
         for bundle_key in (
             "bundleId",
@@ -12478,6 +12496,7 @@ class MoonMindRunWorkflow:
             resolved_skillset_ref=resolved_skillset_ref,
             input_refs=input_refs,
             workspace_spec=workspace_spec,
+            skill=compact_skill_payload,
             parameters=parameters,
             timeout_policy=node_inputs.get("timeoutPolicy") or {},
             retry_policy=node_inputs.get("retryPolicy") or {},

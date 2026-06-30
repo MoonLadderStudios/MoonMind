@@ -882,6 +882,7 @@ _DIRECT_STORY_TOOL_CONTEXT_KEYS = (
 _AUTHORED_STEP_METADATA_KEYS = (
     "source",
     "annotations",
+    "skill",
     "jiraOrchestration",
     "jira_orchestration",
     "documentUpdateOrchestration",
@@ -1470,6 +1471,20 @@ def _build_runtime_planner():
             node_inputs["repo"] = repository.strip()
         if selected_skill_name:
             node_inputs["selectedSkill"] = selected_skill_name
+            selected_skill_payload = _coerce_mapping(task_payload.get("skill"))
+            compact_skill_payload = {
+                key: deepcopy(selected_skill_payload[key])
+                for key in (
+                    "name",
+                    "contentRef",
+                    "contentDigest",
+                    "inputContractDigest",
+                    "inputs",
+                )
+                if key in selected_skill_payload
+            }
+            if compact_skill_payload:
+                node_inputs["skill"] = compact_skill_payload
 
         raw_steps = task_payload.get("steps")
         if (
