@@ -2750,9 +2750,9 @@ tr[data-proposal-id].proposal-consuming td {
 .status-queued,
 .status-scheduled,
 .status-awaiting-slot {
-  color: rgb(var(--mm-status-queued, 130 72 246));
-  background: rgb(var(--mm-status-queued, 130 72 246) / 0.14);
-  border-color: rgb(var(--mm-status-queued, 130 72 246) / 0.62);
+  color: rgb(var(--mm-status-queued, 99 102 241));
+  background: rgb(var(--mm-status-queued, 99 102 241) / 0.14);
+  border-color: rgb(var(--mm-status-queued, 99 102 241) / 0.62);
 }
 
 .status-awaiting_action {
@@ -2764,16 +2764,16 @@ tr[data-proposal-id].proposal-consuming td {
 .status-waiting,
 .status-awaiting-dependencies,
 .status-awaiting-external {
-  color: rgb(var(--mm-status-waiting, 236 72 153));
-  background: rgb(var(--mm-status-waiting, 236 72 153) / 0.14);
-  border-color: rgb(var(--mm-status-waiting, 236 72 153) / 0.62);
+  color: rgb(var(--mm-status-waiting, 130 72 246));
+  background: rgb(var(--mm-status-waiting, 130 72 246) / 0.14);
+  border-color: rgb(var(--mm-status-waiting, 130 72 246) / 0.62);
 }
 
 .status-initializing,
 .status-planning {
-  color: rgb(var(--mm-status-setup, 99 102 241));
-  background: rgb(var(--mm-status-setup, 99 102 241) / 0.14);
-  border-color: rgb(var(--mm-status-setup, 99 102 241) / 0.62);
+  color: rgb(var(--mm-status-setup, 37 99 235));
+  background: rgb(var(--mm-status-setup, 37 99 235) / 0.14);
+  border-color: rgb(var(--mm-status-setup, 37 99 235) / 0.62);
 }
 
 .status-finalizing {
