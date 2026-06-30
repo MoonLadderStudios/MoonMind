@@ -19,6 +19,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api_service.api.routers import workflow_console as workflow_console_router
 from api_service.main import app as main_app
 from api_service.api.routers.workflow_console import (
     _get_temporal_service,
@@ -718,6 +719,91 @@ def test_skills_api_parses_skill_input_contract(
     assert item["contentDigest"].startswith("sha256:")
     assert item["source"]["contentDigest"] == item["contentDigest"]
     assert item["diagnostics"] == []
+
+def test_skills_api_caches_file_backed_input_contract_by_content_evidence(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_root = tmp_path / "local"
+    legacy_root = tmp_path / "legacy"
+    skill_dir = legacy_root / "jira-implement"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        (
+            "---\n"
+            "name: Jira Implement\n"
+            "inputSchema:\n"
+            "  type: object\n"
+            "  properties:\n"
+            "    issue_key:\n"
+            "      type: string\n"
+            "---\n"
+            "# Jira Implement\n"
+        ),
+        encoding="utf-8",
+    )
+    workflow_console_router._SKILL_INPUT_CONTRACT_CACHE.clear()
+
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
+        str(local_root),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_legacy_mirror_root",
+        str(legacy_root),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.list_available_skill_names",
+        lambda: ("jira-implement",),
+    )
+    parse_calls = 0
+    real_parse = workflow_console_router.parse_skill_capability_input_contract
+
+    def counting_parse(*args, **kwargs):
+        nonlocal parse_calls
+        parse_calls += 1
+        return real_parse(*args, **kwargs)
+
+    monkeypatch.setattr(
+        workflow_console_router,
+        "parse_skill_capability_input_contract",
+        counting_parse,
+    )
+
+    first_response = client.get("/api/workflows/skills")
+    second_response = client.get("/api/workflows/skills")
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert parse_calls == 1
+    assert first_response.json()["legacyItems"][0]["contractDigest"] == (
+        second_response.json()["legacyItems"][0]["contractDigest"]
+    )
+
+    skill_file.write_text(
+        (
+            "---\n"
+            "name: Jira Implement\n"
+            "inputSchema:\n"
+            "  type: object\n"
+            "  properties:\n"
+            "    issue_key:\n"
+            "      type: string\n"
+            "    repository:\n"
+            "      type: string\n"
+            "---\n"
+            "# Jira Implement\n"
+        ),
+        encoding="utf-8",
+    )
+
+    changed_response = client.get("/api/workflows/skills")
+
+    assert changed_response.status_code == 200
+    assert parse_calls == 2
+    assert "repository" in changed_response.json()["legacyItems"][0]["inputSchema"][
+        "properties"
+    ]
 
 def test_create_dashboard_skill_success(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
