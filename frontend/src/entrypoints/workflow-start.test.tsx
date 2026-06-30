@@ -15569,7 +15569,7 @@ describe("Task Create schema-driven capability inputs", () => {
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          items: { worker: ["schema.skill"] },
+          items: { worker: ["schema.skill", "schema.other"] },
           legacyItems: [
             {
               id: "schema.skill",
@@ -15649,6 +15649,30 @@ describe("Task Create schema-driven capability inputs", () => {
                 priority: "high",
                 labels: ["frontend"],
                 metadata: { source: "skill" },
+              },
+            },
+            {
+              id: "schema.other",
+              inputSchema: {
+                type: "object",
+                required: ["repository"],
+                properties: {
+                  repository: {
+                    type: "string",
+                    title: "Repository name",
+                    "x-moonmind-widget": "repository",
+                  },
+                  branch: {
+                    type: "string",
+                    title: "Branch",
+                    "x-moonmind-widget": "branch",
+                  },
+                },
+              },
+              uiSchema: {},
+              defaults: {
+                repository: "MoonLadderStudios/Other",
+                branch: "develop",
               },
             },
           ],
@@ -16026,6 +16050,12 @@ describe("Task Create schema-driven capability inputs", () => {
         json: async () => ({ workflowId: "mm:schema-create" }),
       } as Response);
     }
+    if (url === "/api/presets/save-from-workflow") {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ title: "Schema Skill Preset" }),
+      } as Response);
+    }
     return Promise.resolve({
       ok: false,
       status: 404,
@@ -16336,6 +16366,107 @@ describe("Task Create schema-driven capability inputs", () => {
       repository: "MoonLadderStudios/SchemaRepo",
     });
     expect(request.payload.task.skill?.args).toBeUndefined();
+  });
+
+  it("saves direct skill schema inputs in preset payloads", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Save schema-backed skill inputs." },
+    });
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    fireEvent.change(await within(step).findByLabelText("Repository name"), {
+      target: { value: "MoonLadderStudios/SavedSchemaRepo" },
+    });
+    fireEvent.change(within(step).getByLabelText("Branch"), {
+      target: { value: "feature/saved-schema" },
+    });
+
+    const presetsSection = await screen.findByLabelText("Preset Management");
+    fireEvent.click(
+      within(presetsSection).getByRole("button", { name: "Save preset" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Save preset" });
+    fireEvent.change(within(dialog).getByLabelText("Preset Name"), {
+      target: { value: "Schema Skill Preset" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm save preset" }),
+    );
+
+    await waitFor(() => {
+      const saveCall = fetchSpy.mock.calls.find(
+        ([url, init]) =>
+          String(url) === "/api/presets/save-from-workflow" &&
+          init?.method === "POST",
+      );
+      expect(saveCall).toBeTruthy();
+      const body = JSON.parse(String(saveCall?.[1]?.body || "{}")) as {
+        steps: Array<{
+          skill?: { inputs?: Record<string, unknown> };
+          tool?: { inputs?: Record<string, unknown> };
+        }>;
+      };
+      expect(body.steps[0]?.tool?.inputs).toMatchObject({
+        repository: "MoonLadderStudios/SavedSchemaRepo",
+        branch: "feature/saved-schema",
+      });
+      expect(body.steps[0]?.skill?.inputs).toMatchObject({
+        repository: "MoonLadderStudios/SavedSchemaRepo",
+        branch: "feature/saved-schema",
+      });
+    });
+  });
+
+  it("clears direct skill schema values when switching skills", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    fireEvent.change(await within(step).findByLabelText("Repository name"), {
+      target: { value: "MoonLadderStudios/StaleRepo" },
+    });
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.other" },
+    });
+
+    await waitFor(() => {
+      expect(
+        (within(step).getByLabelText("Repository name") as HTMLInputElement)
+          .value,
+      ).toBe("MoonLadderStudios/Other");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: {
+        task: {
+          skill?: { inputs?: Record<string, unknown> };
+          tool?: { inputs?: Record<string, unknown> };
+        };
+      };
+    };
+    expect(request.payload.task.tool?.inputs).toMatchObject({
+      repository: "MoonLadderStudios/Other",
+      branch: "develop",
+    });
+    expect(request.payload.task.skill?.inputs).toMatchObject({
+      repository: "MoonLadderStudios/Other",
+      branch: "develop",
+    });
   });
 
   it("keeps cleared optional numeric schema inputs unset", async () => {

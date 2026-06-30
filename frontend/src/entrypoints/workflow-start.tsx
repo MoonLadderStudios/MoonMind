@@ -7386,9 +7386,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         }
         if (
           Object.prototype.hasOwnProperty.call(updates, "skillId") &&
-          !showAdvancedStepOptions
+          updates.skillId !== step.skillId
         ) {
-          nextStep.skillArgs = "";
+          nextStep.presetInputValues = {};
+          nextStep.presetInputErrors = {};
+          if (!showAdvancedStepOptions) {
+            nextStep.skillArgs = "";
+          }
         }
         if (Object.prototype.hasOwnProperty.call(updates, "toolInputValues")) {
           nextStep.toolInputs = serializeToolInputValues(nextStep.toolInputValues);
@@ -8435,7 +8439,29 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       // chip selector, so they persist into presets regardless of Advanced mode.
       const caps = step.explicitRequiredCapabilities;
       const skillArgsRaw = showAdvancedStepOptions ? step.skillArgs.trim() : "";
-      if (skillId || skillArgsRaw || caps.length > 0) {
+      const skillDetail = skillId
+        ? skillsQuery.data?.detailsById[skillId] || null
+        : null;
+      const structuredSkillInputs = schemaSkillInputs(
+        skillDetail,
+        step.presetInputValues,
+      );
+      if (Object.keys(structuredSkillInputs.errors).length > 0) {
+        updateStep(step.localId, {
+          presetInputErrors: structuredSkillInputs.errors,
+        });
+        setTemplateMessage(
+          Object.values(structuredSkillInputs.errors)[0] ||
+            `Complete required Skill input fields before saving Step ${index + 1}.`,
+        );
+        return false;
+      }
+      if (
+        skillId ||
+        skillArgsRaw ||
+        Object.keys(structuredSkillInputs.values).length > 0 ||
+        caps.length > 0
+      ) {
         let skillArgs: Record<string, unknown> = {};
         if (skillArgsRaw) {
           try {
@@ -8455,6 +8481,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             return false;
           }
         }
+        skillArgs = mergeSkillArgsWithSchemaInputs(
+          skillArgs,
+          structuredSkillInputs.values,
+        );
         const normalizedTool = {
           type: "skill",
           name: skillId || "auto",
