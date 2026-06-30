@@ -7004,7 +7004,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .workflow-workspace-detail {
   min-width: 0;
   width: 100%;
-  max-width: 72rem;
+  max-width: 66rem;
   margin-inline: auto;
 }
 

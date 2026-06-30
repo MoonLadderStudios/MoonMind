@@ -7000,14 +7000,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     <div className="stack workflow-detail-page">
       <div className="toolbar">
         <div>
-          <a
-            className="breadcrumb-link"
-            href="/workflows"
-            data-jira-issue="MM-1001"
-            data-source-issue="MM-975"
-          >
-            Back to workflows
-          </a>
           <h2 className="page-title">Workflow Detail</h2>
           <div className="toolbar-identity-row">
             <p className="page-meta">Workflow {taskId || '—'}</p>

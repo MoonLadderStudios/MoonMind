@@ -1146,6 +1146,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.workflow-workspace-shell,[\s\S]*\.workflow-workspace-detail[\s\S]*transition:\s*none !important;[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,
     );
+    expect(dashboardCss).toMatch(
+      /\.workflow-workspace-detail\s*\{[^}]*max-width:\s*66rem;/,
+    );
   });
 
   it('MM-997 keeps workflow detail standalone when the workflow list is disabled', async () => {
@@ -1254,7 +1257,7 @@ describe('Workflow Detail Entrypoint', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Back to workflows' }).getAttribute('href')).toBe('/workflows');
+    expect(screen.queryByRole('link', { name: 'Back to workflows' })).toBeNull();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
