@@ -3064,7 +3064,15 @@ function schemaChoiceOptions(schema: Record<string, unknown>): Array<{
 
 function textInputTypeForSchema(schema: Record<string, unknown>): string {
   const format = String(schema.format || "").trim().toLowerCase();
-  if (format === "email" || format === "uri" || format === "url" || format === "date") {
+  if (format === "date-time") {
+    return "datetime-local";
+  }
+  if (
+    format === "email" ||
+    format === "uri" ||
+    format === "url" ||
+    format === "date"
+  ) {
     return format === "uri" ? "url" : format;
   }
   if (schema.type === "number" || schema.type === "integer") {
@@ -3109,15 +3117,23 @@ function unsupportedCapabilityWidget(
   const supported = new Set([
     "array",
     "boolean",
+    "branch",
     "date",
+    "date-time",
     "email",
     "integer",
     "github.issue-picker",
     "jira.issue-picker",
+    "markdown",
     "number",
     "object",
+    "repository",
+    "repository-picker",
+    "repo",
+    "repo-picker",
     "string",
     "text",
+    "textarea",
     "uri",
     "url",
   ]);
@@ -3177,6 +3193,13 @@ function capabilityInputTextValue(
     return String(record.key || "");
   }
   return value === undefined || value === null ? "" : String(value);
+}
+
+function capabilityInputStringArrayValue(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => String(item)).filter(Boolean);
 }
 
 function normalizeGitHubIssueInput(
@@ -3323,6 +3346,21 @@ function validateSchemaCapabilityValues(
     if (value === undefined || value === null || value === "") {
       continue;
     }
+    if (fieldSchema.type === "array") {
+      if (!Array.isArray(value)) {
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a JSON array.`;
+        continue;
+      }
+      const itemSchema = recordValue(fieldSchema.items);
+      if (Array.isArray(itemSchema.enum)) {
+        const allowed = new Set(itemSchema.enum.map((item) => String(item)));
+        const invalid = value.some((item) => !allowed.has(String(item)));
+        if (invalid) {
+          errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must use available options.`;
+          continue;
+        }
+      }
+    }
     if (Array.isArray(fieldSchema.enum)) {
       const allowed = new Set(fieldSchema.enum.map((item) => String(item)));
       if (!allowed.has(String(value))) {
@@ -3389,6 +3427,20 @@ function mergeSkillArgsWithSchemaInputs(
   schemaInputs: Record<string, unknown>,
 ): Record<string, unknown> {
   return { ...skillArgs, ...schemaInputs };
+}
+
+function skillPayloadWithInputs(
+  skillId: string,
+  inputs: Record<string, unknown>,
+  requiredCapabilities: string[] = [],
+): PresetStepSkill {
+  return {
+    id: skillId,
+    inputs,
+    ...(requiredCapabilities.length > 0
+      ? { requiredCapabilities }
+      : {}),
+  };
 }
 
 function schemaToolInputs(
@@ -3755,6 +3807,8 @@ function SchemaCapabilityFields({
   values,
   errors,
   disabled,
+  repositoryOptions,
+  branchOptions,
   onChange,
 }: {
   fields: Array<[string, unknown]>;
@@ -3762,6 +3816,8 @@ function SchemaCapabilityFields({
   values: Record<string, unknown>;
   errors: Record<string, string>;
   disabled: boolean;
+  repositoryOptions: RepositoryOption[];
+  branchOptions: BranchOption[];
   onChange: (name: string, value: unknown) => void;
 }): ReactElement | null {
   if (fields.length === 0) {
@@ -3787,11 +3843,12 @@ function SchemaCapabilityFields({
                 id={inputId}
                 type="text"
                 value={capabilityInputTextValue(values, detail.defaults, name)}
-                disabled
-                aria-invalid
-                onChange={() => undefined}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                onChange={(event) => onChange(name, event.target.value)}
               />
               <span className="notice small">Unsupported field widget.</span>
+              {error ? <span className="notice small">{error}</span> : null}
             </label>
           );
         }
@@ -3851,6 +3908,54 @@ function SchemaCapabilityFields({
             </label>
           );
         }
+        const itemSchema = recordValue(fieldSchema.items);
+        if (
+          fieldSchema.type === "array" &&
+          (Array.isArray(itemSchema.enum) || schemaChoiceOptions(itemSchema).length > 0)
+        ) {
+          const itemChoices = schemaChoiceOptions(itemSchema);
+          const itemEnumOptions = Array.isArray(itemSchema.enum)
+            ? itemSchema.enum
+            : [];
+          const itemOptions: Array<{ label: string; value: unknown }> =
+            itemChoices.length > 0
+              ? itemChoices
+              : itemEnumOptions.map((option: unknown) => ({
+                  label: String(option),
+                  value: option,
+                }));
+          const selectedValues = capabilityInputStringArrayValue(value);
+          return (
+            <label key={name} htmlFor={inputId}>
+              {label}
+              <select
+                id={inputId}
+                multiple
+                value={selectedValues}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                onChange={(event) => {
+                  const selected = Array.from(event.currentTarget.selectedOptions)
+                    .map((option) => {
+                      const matched = itemOptions.find(
+                        (item) => String(item.value) === option.value,
+                      );
+                      return matched?.value ?? option.value;
+                    });
+                  onChange(name, selected);
+                }}
+              >
+                {itemOptions.map((option) => (
+                  <option key={String(option.value)} value={String(option.value)}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {description ? <span className="small">{description}</span> : null}
+              {error ? <span className="notice small">{error}</span> : null}
+            </label>
+          );
+        }
         if (Array.isArray(fieldSchema.enum) || choices.length > 0) {
           const enumOptions = Array.isArray(fieldSchema.enum)
             ? fieldSchema.enum
@@ -3888,6 +3993,22 @@ function SchemaCapabilityFields({
             </label>
           );
         }
+        if (widget === "textarea" || widget === "markdown") {
+          return (
+            <label key={name} htmlFor={inputId}>
+              {label}
+              <textarea
+                id={inputId}
+                value={capabilityInputTextValue(values, detail.defaults, name)}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                onChange={(event) => onChange(name, event.target.value)}
+              />
+              {description ? <span className="small">{description}</span> : null}
+              {error ? <span className="notice small">{error}</span> : null}
+            </label>
+          );
+        }
         if (fieldSchema.type === "array" || fieldSchema.type === "object") {
           return (
             <label key={name} htmlFor={inputId}>
@@ -3913,6 +4034,15 @@ function SchemaCapabilityFields({
             <input
               id={inputId}
               type={inputType}
+              list={
+                widget === "repository" ||
+                widget === "repository-picker" ||
+                widget === "repo" ||
+                widget === "repo-picker" ||
+                widget === "branch"
+                  ? `${inputId}-options`
+                  : undefined
+              }
               value={capabilityInputTextValue(values, detail.defaults, name)}
               disabled={disabled}
               aria-invalid={Boolean(error)}
@@ -3927,6 +4057,27 @@ function SchemaCapabilityFields({
                 )
               }
             />
+            {widget === "repository" ||
+            widget === "repository-picker" ||
+            widget === "repo" ||
+            widget === "repo-picker" ? (
+              <datalist id={`${inputId}-options`}>
+                {repositoryOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </datalist>
+            ) : null}
+            {widget === "branch" ? (
+              <datalist id={`${inputId}-options`}>
+                {branchOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </datalist>
+            ) : null}
             {description ? <span className="small">{description}</span> : null}
             {error ? <span className="notice small">{error}</span> : null}
           </label>
@@ -8299,11 +8450,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
         };
         blueprint.tool = normalizedTool;
-        blueprint.skill = {
-          id: normalizedTool.name,
-          args: skillArgs,
-          ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
-        };
+        blueprint.skill = skillPayloadWithInputs(
+          normalizedTool.name,
+          skillArgs,
+          caps,
+        );
       }
       presetSteps.push(blueprint);
     }
@@ -9001,13 +9152,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         ? { requiredCapabilities: taskSkillRequiredCapabilities }
         : {}),
     };
-    const primaryStepSkill = {
-      id: primarySkillId,
-      args: primarySkillArgs,
-      ...(taskSkillRequiredCapabilities.length > 0
-        ? { requiredCapabilities: taskSkillRequiredCapabilities }
-        : {}),
-    };
+    const primaryStepSkill = skillPayloadWithInputs(
+      primarySkillId,
+      primarySkillArgs,
+      taskSkillRequiredCapabilities,
+    );
     const primaryStepHasSkillOverride =
       hasExplicitSkillSelection(primarySkillId) ||
       Object.keys(primarySkillArgs).length > 0 ||
@@ -9446,13 +9595,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             ? { requiredCapabilities: stepSkillCaps }
             : {}),
         };
-        stepPayload.skill = {
-          id: stepSkillId || primarySkillId,
-          args: stepSkillArgs,
-          ...(stepSkillCaps.length > 0
-            ? { requiredCapabilities: stepSkillCaps }
-            : {}),
-        };
+        stepPayload.skill = skillPayloadWithInputs(
+          stepSkillId || primarySkillId,
+          stepSkillArgs,
+          stepSkillCaps,
+        );
         stepSkillRequiredCapabilities.push(...stepSkillCaps);
       }
       additionalSteps.push({ sourceIndex, payload: stepPayload });
@@ -10827,6 +10974,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                             values={step.toolInputValues}
                             errors={step.toolInputErrors}
                             disabled={false}
+                            repositoryOptions={repositoryOptions}
+                            branchOptions={branchOptions}
                             onChange={(name, value) =>
                               updateToolInputValue(step.localId, name, value)
                             }
@@ -11122,6 +11271,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                                 values={step.toolInputValues}
                                 errors={step.toolInputErrors}
                                 disabled={false}
+                                repositoryOptions={repositoryOptions}
+                                branchOptions={branchOptions}
                                 onChange={(name, value) =>
                                   updateToolInputValue(step.localId, name, value)
                                 }
@@ -11280,6 +11431,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           values={step.presetInputValues}
                           errors={step.presetInputErrors}
                           disabled={false}
+                          repositoryOptions={repositoryOptions}
+                          branchOptions={branchOptions}
                           onChange={(name, value) =>
                             updateStepPresetInputValue(
                               step.localId,
@@ -11516,6 +11669,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           values={step.presetInputValues}
                           errors={step.presetInputErrors}
                           disabled={isApplyingPreset}
+                          repositoryOptions={repositoryOptions}
+                          branchOptions={branchOptions}
                           onChange={(name, value) =>
                             updateStepPresetInputValue(
                               step.localId,

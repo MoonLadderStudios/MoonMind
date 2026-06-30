@@ -5427,7 +5427,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(request.payload.task.skill).toEqual({
       id: "moonspec-orchestrate",
-      args: {
+      inputs: {
         issueKey: "MM-564",
         mode: "runtime",
       },
@@ -10705,7 +10705,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(savedStep?.skill).toEqual({
       id: "auto",
-      args: { mode: "advanced" },
+      inputs: { mode: "advanced" },
       requiredCapabilities: ["docker"],
     });
 
@@ -15577,14 +15577,78 @@ describe("Task Create schema-driven capability inputs", () => {
                 type: "object",
                 required: ["repository"],
                 properties: {
-                  repository: { type: "string", title: "Repository name" },
+                  repository: {
+                    type: "string",
+                    title: "Repository name",
+                    "x-moonmind-widget": "repository",
+                  },
+                  branch: {
+                    type: "string",
+                    title: "Branch",
+                    "x-moonmind-widget": "branch",
+                  },
+                  notes: {
+                    type: "string",
+                    title: "Notes",
+                    "x-moonmind-widget": "textarea",
+                  },
+                  markdown: {
+                    type: "string",
+                    title: "Markdown",
+                    "x-moonmind-widget": "markdown",
+                  },
                   effort: { type: "number", title: "Effort" },
+                  enabled: { type: "boolean", title: "Enabled" },
+                  priority: {
+                    type: "string",
+                    title: "Priority",
+                    enum: ["low", "high"],
+                  },
+                  labels: {
+                    type: "array",
+                    title: "Labels",
+                    items: {
+                      type: "string",
+                      enum: ["frontend", "backend"],
+                    },
+                  },
+                  homepage: {
+                    type: "string",
+                    format: "uri",
+                    title: "Homepage",
+                  },
+                  email: {
+                    type: "string",
+                    format: "email",
+                    title: "Email",
+                  },
+                  due: {
+                    type: "string",
+                    format: "date",
+                    title: "Due",
+                  },
+                  starts_at: {
+                    type: "string",
+                    format: "date-time",
+                    title: "Starts at",
+                  },
+                  metadata: { type: "object", title: "Metadata" },
+                  unsupported_widget: {
+                    type: "string",
+                    title: "Unsupported widget",
+                    "x-moonmind-widget": "external.lookup",
+                  },
                 },
               },
               uiSchema: {},
               defaults: {
                 repository: "MoonLadderStudios/MoonMind",
+                branch: "main",
                 effort: 2,
+                enabled: true,
+                priority: "high",
+                labels: ["frontend"],
+                metadata: { source: "skill" },
               },
             },
           ],
@@ -16180,6 +16244,62 @@ describe("Task Create schema-driven capability inputs", () => {
     });
 
     expect(await within(step).findByLabelText("Repository name")).toBeTruthy();
+    expect(within(step).getByLabelText("Branch")).toBeTruthy();
+    expect(within(step).getByLabelText("Notes").tagName).toBe("TEXTAREA");
+    expect(within(step).getByLabelText("Markdown").tagName).toBe("TEXTAREA");
+    expect((within(step).getByLabelText("Effort") as HTMLInputElement).type).toBe("number");
+    expect(within(step).getByLabelText("Enabled")).toBeTruthy();
+    expect(within(step).getByLabelText("Priority")).toBeTruthy();
+    expect((within(step).getByLabelText("Labels") as HTMLSelectElement).multiple).toBe(true);
+    expect((within(step).getByLabelText("Homepage") as HTMLInputElement).type).toBe("url");
+    expect((within(step).getByLabelText("Email") as HTMLInputElement).type).toBe("email");
+    expect((within(step).getByLabelText("Due") as HTMLInputElement).type).toBe("date");
+    expect((within(step).getByLabelText("Starts at") as HTMLInputElement).type).toBe("datetime-local");
+    expect(within(step).getByLabelText("Metadata").tagName).toBe("TEXTAREA");
+    expect(within(step).getByText("Unsupported field widget.")).toBeTruthy();
+  });
+
+  it("preserves MM-1056 Skill fallback values under step.skill.inputs for MM-1047 traceability", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    fireEvent.change(await within(step).findByLabelText("Repository name"), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+    fireEvent.change(within(step).getByLabelText("Branch"), {
+      target: { value: "feature/mm-1056" },
+    });
+    fireEvent.change(within(step).getByLabelText("Unsupported widget"), {
+      target: { value: "manual fallback survives" },
+    });
+    fireEvent.change(within(step).getByLabelText("Metadata"), {
+      target: { value: '{"sourceIssue":"MM-1047"}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: {
+        task: {
+          skill?: { inputs?: Record<string, unknown>; args?: Record<string, unknown> };
+        };
+      };
+    };
+    expect(request.payload.task.skill?.inputs).toMatchObject({
+      repository: "MoonLadderStudios/MoonMind",
+      branch: "feature/mm-1056",
+      unsupported_widget: "manual fallback survives",
+      metadata: { sourceIssue: "MM-1047" },
+    });
+    expect(request.payload.task.skill?.args).toBeUndefined();
   });
 
   it("submits direct skill schema inputs in the skill payload", async () => {
@@ -16205,16 +16325,17 @@ describe("Task Create schema-driven capability inputs", () => {
       payload: {
         task: {
           tool?: { inputs?: Record<string, unknown> };
-          skill?: { args?: Record<string, unknown> };
+          skill?: { inputs?: Record<string, unknown>; args?: Record<string, unknown> };
         };
       };
     };
     expect(request.payload.task.tool?.inputs).toMatchObject({
       repository: "MoonLadderStudios/SchemaRepo",
     });
-    expect(request.payload.task.skill?.args).toMatchObject({
+    expect(request.payload.task.skill?.inputs).toMatchObject({
       repository: "MoonLadderStudios/SchemaRepo",
     });
+    expect(request.payload.task.skill?.args).toBeUndefined();
   });
 
   it("keeps cleared optional numeric schema inputs unset", async () => {
@@ -16666,7 +16787,7 @@ describe("Task Create governed Tool authoring", () => {
     });
     expect(request.payload.task.skill).toEqual({
       id: "moonspec-orchestrate",
-      args: {
+      inputs: {
         issueKey: "MM-577",
         mode: "runtime",
       },
