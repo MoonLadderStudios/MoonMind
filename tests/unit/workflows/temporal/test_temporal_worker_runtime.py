@@ -2568,7 +2568,7 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_pr_verify():
     assert "targetBranch" not in node["inputs"]
     assert "commit your work" not in node["inputs"]["instructions"]
 
-def test_runtime_planner_inherits_top_level_jira_skill_for_multi_step_publish():
+def test_runtime_planner_does_not_inherit_top_level_skill_for_blank_multi_step_entries():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -2578,12 +2578,30 @@ def test_runtime_planner_inherits_top_level_jira_skill_for_multi_step_publish():
     plan = planner(
         inputs={
             "task": {
-                "tool": {"type": "skill", "name": "jira-issue-creator"},
+                "tool": {
+                    "type": "skill",
+                    "name": "jira-issue-creator",
+                    "inputs": {"repository": "MoonLadderStudios/MoonMind"},
+                },
+                "skill": {
+                    "name": "jira-issue-creator",
+                    "inputs": {"repository": "MoonLadderStudios/MoonMind"},
+                    "inputContractDigest": "sha256:contract",
+                    "contentDigest": "sha256:content",
+                    "contentRef": "artifact:skill",
+                },
                 "runtime": {"mode": "codex_cli"},
                 "publish": {"mode": "pr"},
                 "steps": [
                     {"id": "one", "instructions": "Create the first Jira story."},
-                    {"id": "two", "instructions": "Create the second Jira story."},
+                    {
+                        "id": "two",
+                        "instructions": "Run a generic follow-up.",
+                        "skill": {
+                            "id": "auto",
+                            "inputs": {"scope": "generic"},
+                        },
+                    },
                 ],
             }
         },
@@ -2592,12 +2610,26 @@ def test_runtime_planner_inherits_top_level_jira_skill_for_multi_step_publish():
     )
 
     assert len(plan["nodes"]) == 2
-    for node in plan["nodes"]:
+    blank_step = plan["nodes"][0]
+    auto_step = plan["nodes"][1]
+    for node in (blank_step, auto_step):
         assert node["tool"]["type"] == "agent_runtime"
-        assert node["inputs"]["selectedSkill"] == "jira-issue-creator"
-        assert node["inputs"]["publishMode"] == "none"
-        assert "targetBranch" not in node["inputs"]
-        assert node["inputs"]["instructions"].startswith("Use $jira-issue-creator.")
+        assert "selectedSkill" not in node["inputs"]
+        assert node["inputs"]["publishMode"] == "pr"
+        assert "targetBranch" in node["inputs"]
+        assert "inputContractDigest" not in node["inputs"]
+        assert "contentDigest" not in node["inputs"]
+        assert "contentRef" not in node["inputs"]
+        assert not node["inputs"]["instructions"].startswith(
+            "Use $jira-issue-creator."
+        )
+    assert "skill" not in blank_step["inputs"]
+    assert "inputs" not in blank_step["inputs"]
+    assert auto_step["inputs"]["skill"] == {
+        "id": "auto",
+        "inputs": {"scope": "generic"},
+    }
+    assert auto_step["inputs"]["inputs"] == {"scope": "generic"}
 
 def test_runtime_planner_single_step_tool_does_not_override_top_level_publish_scope():
     planner = _build_runtime_planner()

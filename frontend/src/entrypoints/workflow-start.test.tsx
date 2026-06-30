@@ -13633,6 +13633,58 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(request.maxAttempts).toBe(3);
   });
 
+  it("does not serialize the primary Skill onto blank added steps", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
+    expect(primaryStep).not.toBeNull();
+    const primary = primaryStep as HTMLElement;
+    fireEvent.change(within(primary).getByLabelText("Instructions"), {
+      target: { value: "Break down docs/Design.md." },
+    });
+    fireEvent.change(within(primary).getByLabelText("Skill (optional)"), {
+      target: { value: "moonspec-orchestrate" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const secondStep = (await screen.findByText("Step 2")).closest("section");
+    expect(secondStep).not.toBeNull();
+    const second = secondStep as HTMLElement;
+    const secondSkillInput = within(second).getByLabelText(
+      "Skill (optional)",
+    ) as HTMLInputElement;
+    expect(secondSkillInput.placeholder).toBe("optional Skill name");
+    expect(
+      within(second).getByText(
+        "Leave skill blank to run this step without a selected Skill.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(within(second).getByLabelText("Instructions"), {
+      target: { value: "Create GitHub issues from the breakdown." },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const request = latestCreateRequest() as {
+      payload?: { task?: { steps?: Array<Record<string, unknown>> } };
+    };
+    const steps = request.payload?.task?.steps || [];
+    expect(steps[0]?.skill).toMatchObject({ id: "moonspec-orchestrate" });
+    expect(steps[1]).toMatchObject({
+      instructions: "Create GitHub issues from the breakdown.",
+    });
+    expect(steps[1]?.skill).toBeUndefined();
+    expect(steps[1]?.tool).toBeUndefined();
+    expect(steps[1]?.type).toBeUndefined();
+  });
+
   it("blocks invalid MM-641 authoring drafts before creating executions", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 

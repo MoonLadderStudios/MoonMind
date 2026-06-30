@@ -9739,22 +9739,24 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           stepPayload.tool = toolPayload;
         }
       } else if (stepSkillId || stepSkillArgsRaw || stepSkillCaps.length > 0) {
+        const effectiveStepSkillId = stepSkillId || "auto";
+        const effectiveStepSkillDetail = stepSkillId ? stepSkillDetail : null;
         stepPayload.tool = {
           type: "skill",
-          name: stepSkillId || primarySkillId,
+          name: effectiveStepSkillId,
           inputs: stepSkillArgs,
-          ...skillInputContractPayload(stepSkillDetail || primarySkillDetail),
+          ...skillInputContractPayload(effectiveStepSkillDetail),
           ...(stepSkillCaps.length > 0
             ? { requiredCapabilities: stepSkillCaps }
             : {}),
         };
         stepPayload.skill = skillPayloadWithInputs({
-          skillId: stepSkillId || primarySkillId,
+          skillId: effectiveStepSkillId,
           inputs: stepSkillArgs,
           savedInputContractDigest: stepSkillInputContractDigest,
           currentInputContractDigest: stepCurrentSkillInputContractDigest,
           requiredCapabilities: stepSkillCaps,
-          detail: stepSkillDetail || primarySkillDetail,
+          detail: effectiveStepSkillDetail,
         });
         stepSkillRequiredCapabilities.push(...stepSkillCaps);
       }
@@ -11550,7 +11552,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           placeholder={
                             isPrimaryStep
                               ? "auto (default), moonspec-orchestrate, ..."
-                              : "inherit primary step skill"
+                              : "optional Skill name"
                           }
                           onChange={(nextValue) =>
                             updateStep(step.localId, {
@@ -11564,7 +11566,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                         />
                         {isPrimaryStep ? null : (
                           <span className="small">
-                            Leave skill blank to inherit primary step defaults.
+                            Leave skill blank to run this step without a selected Skill.
                           </span>
                         )}
                       </div>
