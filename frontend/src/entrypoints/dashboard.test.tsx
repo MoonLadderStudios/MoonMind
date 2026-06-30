@@ -292,6 +292,18 @@ describe('Dashboard shared entry', () => {
     expect(screen.queryByText('Dashboard configuration error')).toBeNull();
   });
 
+  it('routes percent-encoded workflow detail IDs through the shared shell', async () => {
+    const encodedPath = '/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95';
+    window.history.replaceState({}, '', encodedPath);
+
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(
+      await screen.findByText(`Workflow detail initial path: ${encodedPath}`),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Unknown dashboard page:/i)).toBeNull();
+  });
+
   it('recovers from a failed lazy page import when the user retries (MM-960)', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
