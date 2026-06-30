@@ -19,6 +19,21 @@ describe('dashboard route resolution', () => {
     expect(resolveDashboardRoute(path)?.page).toBe('workflow-detail');
   });
 
+  it('resolves reserved-looking workflow IDs as detail pages', () => {
+    for (const path of [
+      '/workflows/settings',
+      '/workflows/schedules',
+      '/workflows/workers',
+      '/workflows/settings/steps',
+    ]) {
+      expect(resolveDashboardRoute(path)?.page).toBe('workflow-detail');
+    }
+  });
+
+  it('keeps the new workflow route on the start page', () => {
+    expect(resolveDashboardRoute('/workflows/new')?.page).toBe('workflow-start');
+  });
+
   it('rejects encoded slashes inside workflow IDs', () => {
     expect(resolveDashboardRoute('/workflows/mm%2Fbad')).toBeNull();
   });

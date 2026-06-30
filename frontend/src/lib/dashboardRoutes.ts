@@ -33,19 +33,6 @@ export type DashboardUiInfo = {
 const DETAIL_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const WORKFLOW_ID_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:{}-]{0,254}$/;
 const WORKFLOW_DETAIL_TABS = new Set(['steps', 'artifacts', 'runs', 'debug']);
-const RESERVED_WORKFLOW_ROUTE_SEGMENTS = new Set([
-  'manifests',
-  'new',
-  'proposals',
-  'queue',
-  'schedules',
-  'secrets',
-  'settings',
-  'skills',
-  'system',
-  'temporal',
-  'workers',
-]);
 
 function withoutTrailingSlash(pathname: string): string {
   return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
@@ -77,18 +64,22 @@ function isWorkflowDetailPath(path: string): boolean {
   if (parts[0] !== 'workflows') {
     return false;
   }
-  const workflowId = decodePathSegment(parts[1]);
-  if (
-    !workflowId ||
-    !WORKFLOW_ID_SEGMENT.test(workflowId) ||
-    RESERVED_WORKFLOW_ROUTE_SEGMENTS.has(workflowId.toLowerCase())
-  ) {
+  const workflowIdSegment = parts[1];
+  if (!workflowIdSegment) {
+    return false;
+  }
+  const workflowId = decodePathSegment(workflowIdSegment);
+  if (!workflowId || !WORKFLOW_ID_SEGMENT.test(workflowId)) {
     return false;
   }
   if (parts.length === 2) {
     return true;
   }
-  const tab = decodePathSegment(parts[2]);
+  const tabSegment = parts[2];
+  if (!tabSegment) {
+    return false;
+  }
+  const tab = decodePathSegment(tabSegment);
   return Boolean(tab && WORKFLOW_DETAIL_TABS.has(tab));
 }
 
@@ -97,7 +88,11 @@ function isDetailPath(path: string, prefix: 'manifests' | 'schedules'): boolean 
   if (parts.length !== 2 || parts[0] !== prefix) {
     return false;
   }
-  const detailId = decodePathSegment(parts[1]);
+  const detailIdSegment = parts[1];
+  if (!detailIdSegment) {
+    return false;
+  }
+  const detailId = decodePathSegment(detailIdSegment);
   return Boolean(detailId && DETAIL_SEGMENT.test(detailId));
 }
 
