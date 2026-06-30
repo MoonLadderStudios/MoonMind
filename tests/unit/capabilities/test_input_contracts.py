@@ -5,6 +5,7 @@ from moonmind.capabilities.input_contracts import (
     capability_contract_from_legacy_inputs,
     normalize_capability_input_contract,
     parse_skill_capability_input_contract,
+    validate_capability_inputs,
 )
 
 
@@ -178,3 +179,94 @@ def test_preset_contract_dates_are_json_compatible() -> None:
     assert contract["inputSchema"]["properties"]["due_date"]["default"] == "2026-06-30"
     assert contract["defaults"] == {"due_date": "2026-06-30"}
     assert contract["contractDigest"].startswith("sha256:")
+
+
+def test_validate_capability_inputs_uses_input_schema_defaults_and_field_paths() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(
+            id="demo-skill",
+            kind="skill",
+            label="Demo Skill",
+            content_digest="sha256:content",
+        ),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["repository", "issue"],
+                    "properties": {
+                        "repository": {
+                            "type": "string",
+                            "x-moonmind-context-default": "repository",
+                        },
+                        "issue": {"type": "integer"},
+                        "branch": {"type": "string", "default": "schema-main"},
+                    },
+                },
+                "uiSchema": {"issue": {"widget": "jira.issue-picker"}},
+                "defaults": {"branch": "default-main"},
+            },
+        ),
+    )
+
+    result = validate_capability_inputs(
+        contract=contract,
+        values={"issue": "MM-1057"},
+        workflow_context={"repository": "MoonLadderStudios/MoonMind"},
+        path_prefix="steps[0].skill.inputs",
+    )
+
+    assert result["values"]["repository"] == "MoonLadderStudios/MoonMind"
+    assert result["values"]["branch"] == "default-main"
+    assert result["errors"] == [
+        {
+            "path": "steps[0].skill.inputs.issue",
+            "message": "Value must be an integer.",
+            "code": "type",
+            "recoverable": True,
+        }
+    ]
+    assert result["contractDigest"] == contract["contractDigest"]
+    assert result["contentDigest"] == "sha256:content"
+
+
+def test_validate_capability_inputs_ignores_secret_defaults_and_remote_code_metadata() -> None:
+    contract = {
+        "inputSchema": {
+            "type": "object",
+            "$ref": "https://example.invalid/schema.json",
+            "x-code": "return secret",
+            "properties": {
+                "token": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "description": "<script>alert(1)</script>Target",
+                },
+            },
+        },
+        "uiSchema": {"target": {"widget": "remote.widget"}},
+        "defaults": {"token": "ghp_not_a_real_token"},
+        "contractDigest": "sha256:contract",
+    }
+
+    normalized = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(id="demo", kind="skill", label="Demo"),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations=contract,
+        ),
+    )
+    result = validate_capability_inputs(
+        contract=normalized,
+        values={"target": "MM-1057"},
+        path_prefix="steps[1].skill.inputs",
+    )
+
+    assert normalized["defaults"] == {}
+    assert normalized["inputSchema"]["properties"]["target"]["description"] == "alert(1)Target"
+    warning_codes = {warning["code"] for warning in result["warnings"]}
+    assert "remote_ref_ignored" in warning_codes
+    assert "schema_code_ignored" in warning_codes
+    assert "unsupported_widget" in warning_codes
+    assert "token" not in result["values"]

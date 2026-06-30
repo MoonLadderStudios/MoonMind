@@ -625,6 +625,148 @@ def test_runtime_planner_maps_explicit_skill_step_with_provenance_to_agent_runti
     }
 
 
+def test_runtime_planner_validates_skill_step_contract_and_carries_evidence():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Run explicit skill step.",
+                "runtime": {"mode": "codex_cli"},
+                "steps": [
+                    {
+                        "id": "implement-mm-1057",
+                        "type": "skill",
+                        "instructions": "Implement MM-1057.",
+                        "skill": {
+                            "id": "jira-implement",
+                            "inputs": {"issueKey": "MM-1057"},
+                            "inputSchema": {
+                                "type": "object",
+                                "required": ["issueKey", "repository"],
+                                "properties": {
+                                    "issueKey": {"type": "string"},
+                                    "repository": {
+                                        "type": "string",
+                                        "x-moonmind-context-default": "repository",
+                                    },
+                                },
+                            },
+                            "inputContractDigest": "sha256:contract",
+                            "contentDigest": "sha256:content",
+                            "contentRef": "artifact:skill",
+                        },
+                    }
+                ],
+            }
+        },
+        parameters={"repository": "MoonLadderStudios/MoonMind"},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["inputs"] == {
+        "issueKey": "MM-1057",
+        "repository": "MoonLadderStudios/MoonMind",
+    }
+    assert node_inputs["issueKey"] == "MM-1057"
+    assert node_inputs["repository"] == "MoonLadderStudios/MoonMind"
+    assert node_inputs["inputContractDigest"] == "sha256:contract"
+    assert node_inputs["contentDigest"] == "sha256:content"
+    assert node_inputs["contentRef"] == "artifact:skill"
+
+
+def test_runtime_planner_validates_primary_skill_contract_and_carries_evidence():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Implement MM-1057.",
+                "runtime": {"mode": "codex_cli"},
+                "skill": {
+                    "id": "jira-implement",
+                    "inputs": {"issueKey": "MM-1057"},
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["issueKey", "repository"],
+                        "properties": {
+                            "issueKey": {"type": "string"},
+                            "repository": {
+                                "type": "string",
+                                "x-moonmind-context-default": "repository",
+                            },
+                        },
+                    },
+                    "inputContractDigest": "sha256:contract",
+                    "contentDigest": "sha256:content",
+                    "contentRef": "artifact:skill",
+                },
+            }
+        },
+        parameters={"repository": "MoonLadderStudios/MoonMind"},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["inputs"] == {
+        "issueKey": "MM-1057",
+        "repository": "MoonLadderStudios/MoonMind",
+    }
+    assert node_inputs["inputContractDigest"] == "sha256:contract"
+    assert node_inputs["contentDigest"] == "sha256:content"
+    assert node_inputs["contentRef"] == "artifact:skill"
+
+
+def test_runtime_planner_reports_field_addressable_skill_input_errors():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        planner(
+            inputs={
+                "task": {
+                    "instructions": "Run explicit skill step.",
+                    "runtime": {"mode": "codex_cli"},
+                    "steps": [
+                        {
+                            "id": "implement-mm-1057",
+                            "type": "skill",
+                            "instructions": "Implement MM-1057.",
+                            "skill": {
+                                "id": "jira-implement",
+                                "inputs": {},
+                                "inputSchema": {
+                                    "type": "object",
+                                    "required": ["issueKey"],
+                                    "properties": {
+                                        "issueKey": {"type": "string"},
+                                    },
+                                },
+                            },
+                        }
+                    ],
+                }
+            },
+            parameters={},
+            snapshot=snapshot,
+        )
+
+    assert "steps[0].skill.inputs.issueKey" in str(excinfo.value)
+    assert "required" in str(excinfo.value)
+
+
 def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

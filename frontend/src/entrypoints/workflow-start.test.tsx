@@ -16205,14 +16205,14 @@ describe("Task Create schema-driven capability inputs", () => {
       payload: {
         task: {
           tool?: { inputs?: Record<string, unknown> };
-          skill?: { args?: Record<string, unknown> };
+          skill?: { inputs?: Record<string, unknown> };
         };
       };
     };
     expect(request.payload.task.tool?.inputs).toMatchObject({
       repository: "MoonLadderStudios/SchemaRepo",
     });
-    expect(request.payload.task.skill?.args).toMatchObject({
+    expect(request.payload.task.skill?.inputs).toMatchObject({
       repository: "MoonLadderStudios/SchemaRepo",
     });
   });
@@ -16666,7 +16666,7 @@ describe("Task Create governed Tool authoring", () => {
     });
     expect(request.payload.task.skill).toEqual({
       id: "moonspec-orchestrate",
-      args: {
+      inputs: {
         issueKey: "MM-577",
         mode: "runtime",
       },
