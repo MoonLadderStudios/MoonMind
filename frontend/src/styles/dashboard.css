@@ -6947,6 +6947,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-sidebar-status-icon {
+  display: inline-flex;
+  align-items: center;
   width: 1.375rem;
   height: 1.375rem;
   min-width: 1.375rem;

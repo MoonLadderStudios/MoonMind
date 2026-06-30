@@ -740,9 +740,12 @@ describe('Workflow Detail Entrypoint', () => {
         ['proposals', 'Proposals workflow'],
         ['awaiting_external', 'External wait workflow'],
         ['finalizing', 'Finalizing workflow'],
+        ['no_commit', 'No commit workflow'],
+        ['no_changes', 'No changes workflow'],
         ['completed', 'Completed workflow'],
         ['failed', 'Failed workflow'],
         ['canceled', 'Canceled workflow'],
+        ['constructor', 'Unknown prototype workflow'],
       ].map(([rawState, title]) => ({
         workflowId: `test-${rawState}`,
         taskId: `test-${rawState}`,
@@ -768,9 +771,12 @@ describe('Workflow Detail Entrypoint', () => {
       ['Proposals workflow', 'Status: proposals', 'status-running', 'lucide-lightbulb'],
       ['External wait workflow', 'Status: awaiting external', 'status-awaiting-external', 'lucide-hand'],
       ['Finalizing workflow', 'Status: finalizing', 'status-finalizing', 'lucide-package-check'],
+      ['No commit workflow', 'Status: No commit', 'status-no-commit', 'lucide-check'],
+      ['No changes workflow', 'Status: no changes', 'status-no-commit', 'lucide-check'],
       ['Completed workflow', 'Status: completed', 'status-completed', 'lucide-check'],
       ['Failed workflow', 'Status: failed', 'status-failed', 'lucide-x'],
       ['Canceled workflow', 'Status: canceled', 'status-canceled', 'lucide-ban'],
+      ['Unknown prototype workflow', 'Status: constructor', 'status-running', 'lucide-play'],
     ] as const;
 
     for (const [title, ariaLabel, statusClass, iconClass] of expectedIcons) {

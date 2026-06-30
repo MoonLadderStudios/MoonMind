@@ -271,6 +271,8 @@ const WORKFLOW_STATUS_ICONS = {
   proposals: Lightbulb,
   awaiting_external: Hand,
   finalizing: PackageCheck,
+  no_commit: Check,
+  no_changes: Check,
   completed: Check,
   failed: X,
   canceled: Ban,
@@ -284,7 +286,7 @@ function workflowStatusIconKey(status: string | null | undefined): WorkflowStatu
     .trim()
     .replace(/\s+/g, '_');
 
-  if (key in WORKFLOW_STATUS_ICONS) {
+  if (Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_ICONS, key)) {
     return key as WorkflowStatusIconKey;
   }
   if (key === 'succeeded') return 'completed';

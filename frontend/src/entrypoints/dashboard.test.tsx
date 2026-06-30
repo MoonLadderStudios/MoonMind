@@ -557,6 +557,8 @@ describe('Dashboard shared entry', () => {
 
   it('MM-1064 keeps workflow sidebar status icons compact inside status-colored containers', async () => {
     const iconBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-status-icon');
+    expect(iconBlock).toContain('display: inline-flex');
+    expect(iconBlock).toContain('align-items: center');
     expect(iconBlock).toContain('width: 1.375rem');
     expect(iconBlock).toContain('height: 1.375rem');
     expect(iconBlock).toContain('min-width: 1.375rem');
