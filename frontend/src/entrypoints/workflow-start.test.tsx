@@ -15574,6 +15574,7 @@ describe("Task Create schema-driven capability inputs", () => {
             {
               id: "schema.skill",
               description: "Schema-backed Skill fixture.",
+              contractDigest: "sha256:current-skill-contract",
               contentDigest: "sha256:current-skill-content",
               contentRef: "artifact://skill/schema.skill",
               inputSchema: {
@@ -15653,7 +15654,6 @@ describe("Task Create schema-driven capability inputs", () => {
                 labels: ["frontend"],
                 metadata: { source: "skill" },
               },
-              contractDigest: "sha256:schema-v1",
             },
             {
               id: "schema.other",
@@ -16542,7 +16542,9 @@ describe("Task Create schema-driven capability inputs", () => {
     expect(request.payload.task.skill?.inputs).toMatchObject({
       repository: "MoonLadderStudios/SchemaRepo",
     });
-    expect(request.payload.task.skill?.inputContractDigest).toBe("sha256:schema-v1");
+    expect(request.payload.task.skill?.inputContractDigest).toBe(
+      "sha256:current-skill-contract",
+    );
     expect(request.payload.task.skill?.args).toBeUndefined();
   });
 
