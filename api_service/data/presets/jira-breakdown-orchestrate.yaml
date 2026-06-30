@@ -1,5 +1,5 @@
 slug: jira-breakdown-orchestrate
-title: Jira Breakdown and Orchestrate
+title: Breakdown and Jira Orchestrate
 description: Break a preferred source input into stories, create Jira issues, then create dependent Jira Orchestrate tasks for each generated issue.
 scope: global
 tags:
@@ -35,11 +35,6 @@ inputs:
     type: text
     required: true
     default: Story
-  - name: jira_board_id
-    label: Jira Board
-    type: jira_board
-    required: false
-    default: ""
   - name: jira_dependency_mode
     label: Jira Dependency Mode
     type: enum
@@ -135,7 +130,6 @@ steps:
       For stories where jiraCreation.action is create_remaining_work_issue, create the Jira issue from the story's remainingWork while preserving the original story traceability.
       {% if inputs.source_issue_key %}Source Jira issue key: {{ inputs.source_issue_key }}.{% endif %}
       {% if inputs.source_issue_key and inputs.jira_issue_type | lower in ["sub-task", "subtask", "sub task"] %}Create each generated Jira issue as a sub-task of {{ inputs.source_issue_key }}.{% endif %}
-      {% if inputs.jira_board_id %}Selected Jira board ID: {{ inputs.jira_board_id }}.{% endif %}
       Dependency mode: {{ inputs.jira_dependency_mode }}.
       If dependency mode is linear_blocker_chain, create an ordered blocker chain so each later story is blocked by the immediately preceding story.
       If dependency mode is none, create the Jira issues without dependency links.
@@ -146,7 +140,6 @@ steps:
       jira:
         projectKey: "{{ inputs.jira_project_key }}"
         issueTypeName: "{{ inputs.jira_issue_type }}"
-        boardId: "{{ inputs.jira_board_id }}"
         sourceIssueKey: "{{ inputs.source_issue_key }}"
         dependencyMode: "{{ inputs.jira_dependency_mode }}"
     skill:
