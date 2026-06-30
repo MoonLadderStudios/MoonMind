@@ -105,6 +105,10 @@ class DashboardSkillOption(BaseModel):
     """Serializable skill option exposed to dashboard clients."""
 
     id: str = Field(description="Skill identifier")
+    description: str = Field(
+        default="",
+        description="Skill description from frontmatter when available",
+    )
     input_schema: dict[str, object] = Field(
         default_factory=dict,
         alias="inputSchema",
@@ -156,26 +160,27 @@ def _contains_secret_like_value(value: object) -> bool:
 
 def _extract_skill_input_contract_from_markdown(
     markdown: str,
-) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+) -> tuple[dict[str, object], dict[str, object], dict[str, object], str]:
     lines = markdown.splitlines()
     if not lines or lines[0].strip() != "---":
-        return {}, {}, {}
+        return {}, {}, {}, ""
     frontmatter_lines: list[str] = []
     for line in lines[1:]:
         if line.strip() == "---":
             break
         frontmatter_lines.append(line)
     else:
-        return {}, {}, {}
+        return {}, {}, {}, ""
     try:
         parsed = yaml.safe_load("\n".join(frontmatter_lines)) or {}
     except yaml.YAMLError:
-        return {}, {}, {}
+        return {}, {}, {}, ""
     if not isinstance(parsed, dict):
-        return {}, {}, {}
+        return {}, {}, {}, ""
     input_schema = parsed.get("inputSchema") or parsed.get("input_schema")
     ui_schema = parsed.get("uiSchema") or parsed.get("ui_schema")
     defaults = parsed.get("defaults")
+    description = str(parsed.get("description") or "").strip()
     safe_defaults: dict[str, object] = {}
     if isinstance(defaults, dict):
         safe_defaults = {
@@ -188,6 +193,7 @@ def _extract_skill_input_contract_from_markdown(
         dict(input_schema) if isinstance(input_schema, dict) else {},
         dict(ui_schema) if isinstance(ui_schema, dict) else {},
         safe_defaults,
+        description,
     )
 
 
@@ -988,6 +994,7 @@ async def list_dashboard_skills(
         input_schema: dict[str, object] = {}
         ui_schema: dict[str, object] = {}
         defaults: dict[str, object] = {}
+        description = ""
         required_capabilities: list[str] = []
         skill_file = resolve_skill_markdown_path(skill_id)
         if skill_file is not None:
@@ -1002,13 +1009,14 @@ async def list_dashboard_skills(
                     source_label=str(skill_file),
                 )
             )
-            input_schema, ui_schema, defaults = _extract_skill_input_contract_from_markdown(
-                skill_markdown
+            input_schema, ui_schema, defaults, description = (
+                _extract_skill_input_contract_from_markdown(skill_markdown)
             )
             if include_content:
                 markdown_content = skill_markdown
         return DashboardSkillOption(
             id=skill_id,
+            description=description,
             inputSchema=input_schema,
             uiSchema=ui_schema,
             defaults=defaults,

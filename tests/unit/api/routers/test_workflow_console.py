@@ -608,6 +608,7 @@ def test_skills_api_returns_available_skill_ids(
         "legacyItems": [
             {
                 "id": "speckit",
+                "description": "",
                 "inputSchema": {},
                 "uiSchema": {},
                 "defaults": {},
@@ -616,6 +617,7 @@ def test_skills_api_returns_available_skill_ids(
             },
             {
                 "id": "speckit-orchestrate",
+                "description": "",
                 "inputSchema": {},
                 "uiSchema": {},
                 "defaults": {},
@@ -635,6 +637,7 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     skill_markdown = (
         "---\n"
         "name: speckit-orchestrate\n"
+        "description: Run the full Moon Spec lifecycle.\n"
         "inputSchema:\n"
         "  type: object\n"
         "  required:\n"
@@ -676,6 +679,7 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     assert response.json()["legacyItems"] == [
         {
             "id": "speckit-orchestrate",
+            "description": "Run the full Moon Spec lifecycle.",
             "inputSchema": {
                 "type": "object",
                 "required": ["issueKey"],

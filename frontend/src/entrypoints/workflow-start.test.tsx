@@ -15569,10 +15569,11 @@ describe("Task Create schema-driven capability inputs", () => {
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          items: { worker: ["schema.skill"] },
+          items: { worker: ["schema.skill", "no-schema.skill"] },
           legacyItems: [
             {
               id: "schema.skill",
+              description: "Schema-backed Skill fixture.",
               inputSchema: {
                 type: "object",
                 required: ["repository"],
@@ -15586,6 +15587,13 @@ describe("Task Create schema-driven capability inputs", () => {
                 repository: "MoonLadderStudios/MoonMind",
                 effort: 2,
               },
+            },
+            {
+              id: "no-schema.skill",
+              description: "Instruction-driven Skill fixture.",
+              inputSchema: {},
+              uiSchema: {},
+              defaults: {},
             },
           ],
         }),
@@ -16180,6 +16188,112 @@ describe("Task Create schema-driven capability inputs", () => {
     });
 
     expect(await within(step).findByLabelText("Repository name")).toBeTruthy();
+  });
+
+  it("renders schema-less skill fallback details and remains executable", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "no-schema.skill" },
+    });
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Run the no-schema Skill with instructions." },
+    });
+
+    const fallbackNote = await within(step).findByTestId("skill-schema-fallback-0");
+    expect(within(fallbackNote).getByText("no-schema.skill")).toBeTruthy();
+    expect(within(fallbackNote).getByText(/Instruction-driven Skill fixture/)).toBeTruthy();
+    expect(
+      within(fallbackNote).getByText(/does not publish structured input fields/),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: {
+        task: {
+          skill?: { id?: string; inputs?: Record<string, unknown> };
+        };
+      };
+    };
+    expect(request.payload.task.skill?.id).toBe("no-schema.skill");
+    expect(request.payload.task.skill?.inputs).toEqual({});
+  });
+
+  it("keeps unsupported skill widgets editable and submits entered values", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: ["schema.skill"] },
+            legacyItems: [
+              {
+                id: "schema.skill",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    externalLookup: {
+                      type: "string",
+                      title: "External lookup",
+                    },
+                  },
+                },
+                uiSchema: {
+                  externalLookup: {
+                    widget: "remote.component",
+                    minimum: 99,
+                  },
+                },
+                defaults: {},
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return mockSchemaCapabilityFetch(input, init);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    const unsupported = (await waitFor(() => {
+      const input = step.querySelector<HTMLInputElement>(
+        "#queue-capability-input-externalLookup",
+      );
+      expect(input).toBeTruthy();
+      return input as HTMLInputElement;
+    })) as HTMLInputElement;
+    expect(unsupported.disabled).toBe(false);
+    fireEvent.change(unsupported, { target: { value: "preserve-me" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: {
+        task: {
+          skill?: { inputs?: Record<string, unknown> };
+        };
+      };
+    };
+    expect(request.payload.task.skill?.inputs).toMatchObject({
+      externalLookup: "preserve-me",
+    });
   });
 
   it("submits direct skill schema inputs in the skill payload", async () => {

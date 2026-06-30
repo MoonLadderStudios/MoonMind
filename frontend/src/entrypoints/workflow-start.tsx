@@ -605,6 +605,7 @@ interface PresetDetail extends PresetSummary {
 
 interface SkillCapabilityDetail {
   id: string;
+  description?: string;
   inputSchema?: Record<string, unknown>;
   uiSchema?: Record<string, unknown>;
   defaults?: Record<string, unknown>;
@@ -3787,9 +3788,9 @@ function SchemaCapabilityFields({
                 id={inputId}
                 type="text"
                 value={capabilityInputTextValue(values, detail.defaults, name)}
-                disabled
+                disabled={disabled}
                 aria-invalid
-                onChange={() => undefined}
+                onChange={(event) => onChange(name, event.target.value)}
               />
               <span className="notice small">Unsupported field widget.</span>
             </label>
@@ -5863,6 +5864,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         }
         detailsById[id] = {
           id,
+          description: String(item.description || "").trim(),
           ...(item.inputSchema ? { inputSchema: item.inputSchema } : {}),
           ...(item.uiSchema ? { uiSchema: item.uiSchema } : {}),
           ...(item.defaults ? { defaults: item.defaults } : {}),
@@ -11252,6 +11254,21 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           </span>
                         )}
                       </div>
+                      {selectedSkillDetail && visibleSkillSchemaFields.length === 0 ? (
+                        <div
+                          className="notice small"
+                          data-testid={`skill-schema-fallback-${index}`}
+                        >
+                          <strong>{selectedSkillDetail.id}</strong>
+                          {selectedSkillDetail.description ? (
+                            <span>{`: ${selectedSkillDetail.description}`}</span>
+                          ) : null}
+                          <span>
+                            {" "}
+                            This Skill does not publish structured input fields.
+                          </span>
+                        </div>
+                      ) : null}
 
                       {showSkillArgsField ? (
                         <label
