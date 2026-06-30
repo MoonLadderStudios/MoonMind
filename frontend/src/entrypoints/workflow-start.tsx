@@ -610,6 +610,9 @@ interface SkillCapabilityDetail {
   inputSchema?: Record<string, unknown>;
   uiSchema?: Record<string, unknown>;
   defaults?: Record<string, unknown>;
+  contractDigest?: string | null;
+  contentDigest?: string | null;
+  contentRef?: string | null;
   requiredCapabilities?: string[];
 }
 
@@ -3424,6 +3427,24 @@ function schemaSkillInputs(
   };
 }
 
+function skillInputContractPayload(
+  detail: SkillCapabilityDetail | null | undefined,
+): Record<string, unknown> {
+  if (!detail) {
+    return {};
+  }
+  return {
+    ...(detail.inputSchema ? { inputSchema: detail.inputSchema } : {}),
+    ...(detail.uiSchema ? { uiSchema: detail.uiSchema } : {}),
+    ...(detail.defaults ? { defaults: detail.defaults } : {}),
+    ...(detail.contractDigest
+      ? { inputContractDigest: detail.contractDigest }
+      : {}),
+    ...(detail.contentDigest ? { contentDigest: detail.contentDigest } : {}),
+    ...(detail.contentRef ? { contentRef: detail.contentRef } : {}),
+  };
+}
+
 function mergeSkillArgsWithSchemaInputs(
   skillArgs: Record<string, unknown>,
   schemaInputs: Record<string, unknown>,
@@ -3435,10 +3456,12 @@ function skillPayloadWithInputs(
   skillId: string,
   inputs: Record<string, unknown>,
   requiredCapabilities: string[] = [],
+  detail?: SkillCapabilityDetail | null,
 ): PresetStepSkill {
   return {
     id: skillId,
     inputs,
+    ...skillInputContractPayload(detail),
     ...(requiredCapabilities.length > 0
       ? { requiredCapabilities }
       : {}),
@@ -9201,6 +9224,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       ...(Object.keys(primarySkillArgs).length > 0
         ? { inputs: primarySkillArgs }
         : {}),
+      ...skillInputContractPayload(primarySkillDetail),
       ...(taskSkillRequiredCapabilities.length > 0
         ? { requiredCapabilities: taskSkillRequiredCapabilities }
         : {}),
@@ -9209,6 +9233,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       primarySkillId,
       primarySkillArgs,
       taskSkillRequiredCapabilities,
+      primarySkillDetail,
     );
     const primaryStepHasSkillOverride =
       hasExplicitSkillSelection(primarySkillId) ||
@@ -9219,6 +9244,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       sourceIndex: number;
       step: StepState;
       skillId: string;
+      skillDetail: SkillCapabilityDetail | null;
       skillArgsRaw: string;
       skillArgs: Record<string, unknown>;
       skillCaps: string[];
@@ -9360,6 +9386,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         sourceIndex: index,
         step,
         skillId: stepSkillId,
+        skillDetail: stepSkillDetail,
         skillArgsRaw: stepSkillArgsRaw,
         skillArgs: stepSkillArgs,
         skillCaps: stepSkillCaps,
@@ -9594,6 +9621,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       sourceIndex,
       step,
       skillId: stepSkillId,
+      skillDetail: stepSkillDetail,
       skillArgsRaw: stepSkillArgsRaw,
       skillArgs: stepSkillArgs,
       skillCaps: stepSkillCaps,
@@ -9644,6 +9672,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           type: "skill",
           name: stepSkillId || primarySkillId,
           inputs: stepSkillArgs,
+          ...skillInputContractPayload(stepSkillDetail || primarySkillDetail),
           ...(stepSkillCaps.length > 0
             ? { requiredCapabilities: stepSkillCaps }
             : {}),
@@ -9652,6 +9681,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           stepSkillId || primarySkillId,
           stepSkillArgs,
           stepSkillCaps,
+          stepSkillDetail || primarySkillDetail,
         );
         stepSkillRequiredCapabilities.push(...stepSkillCaps);
       }

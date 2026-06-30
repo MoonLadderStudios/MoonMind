@@ -42,6 +42,7 @@ from api_service.db.models import (
     TemporalExecutionOwnerType,
     TemporalExecutionRecord,
 )
+from moonmind.capabilities.input_contracts import validate_capability_inputs
 from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_execution import (
@@ -1082,6 +1083,65 @@ def _selected_step_tool_inputs(step_entry: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
+def _validated_step_skill_inputs(
+    *,
+    step_entry: Mapping[str, Any],
+    step_index: int,
+    raw_inputs: Mapping[str, Any],
+    workflow_context: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    skill_payload = _coerce_mapping(step_entry.get("skill")) or _coerce_mapping(
+        step_entry.get("tool")
+    )
+    return _validated_skill_payload_inputs(
+        skill_payload=skill_payload,
+        raw_inputs=raw_inputs,
+        workflow_context=workflow_context,
+        path_prefix=f"steps[{step_index}].skill.inputs",
+    )
+
+
+def _validated_skill_payload_inputs(
+    *,
+    skill_payload: Mapping[str, Any],
+    raw_inputs: Mapping[str, Any],
+    workflow_context: Mapping[str, Any],
+    path_prefix: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    input_schema = _coerce_mapping(skill_payload.get("inputSchema"))
+    if not input_schema:
+        return dict(raw_inputs), {}
+    contract = {
+        "inputSchema": input_schema,
+        "uiSchema": _coerce_mapping(skill_payload.get("uiSchema")),
+        "defaults": _coerce_mapping(skill_payload.get("defaults")),
+        "contractDigest": skill_payload.get("inputContractDigest")
+        or skill_payload.get("contractDigest"),
+        "contentDigest": skill_payload.get("contentDigest"),
+        "contentRef": skill_payload.get("contentRef"),
+    }
+    result = validate_capability_inputs(
+        contract=contract,
+        values=raw_inputs,
+        workflow_context=workflow_context,
+        path_prefix=path_prefix,
+    )
+    errors = result.get("errors") if isinstance(result, Mapping) else []
+    if errors:
+        raise RuntimeError(json.dumps({"skillInputErrors": errors}, sort_keys=True))
+    evidence = {
+        key: value
+        for key, value in {
+            "inputContractDigest": result.get("contractDigest"),
+            "contentDigest": result.get("contentDigest"),
+            "contentRef": result.get("contentRef"),
+            "skillInputWarnings": result.get("warnings"),
+        }.items()
+        if value
+    }
+    return _coerce_mapping(result.get("values")), evidence
+
+
 def _merge_story_output_inputs(
     existing: Mapping[str, Any] | None,
     override: Any,
@@ -1332,6 +1392,20 @@ def _build_runtime_planner():
                 selected_skill_payload.get("inputs")
                 or selected_skill_payload.get("args")
             )
+        selected_skill_evidence: dict[str, Any] = {}
+        if selected_skill_payload:
+            selected_skill_inputs, selected_skill_evidence = (
+                _validated_skill_payload_inputs(
+                    skill_payload=selected_skill_payload,
+                    raw_inputs=selected_skill_inputs,
+                    workflow_context={
+                        **parameter_payload,
+                        **_coerce_mapping(parameter_payload.get("context")),
+                        **git_payload,
+                    },
+                    path_prefix="steps[0].skill.inputs",
+                )
+            )
 
         # --- Resolve instructions ---
         instructions = (
@@ -1431,6 +1505,9 @@ def _build_runtime_planner():
             "instructions": instructions,
             "runtime": runtime_node,
         }
+        if selected_skill_inputs:
+            node_inputs["inputs"] = dict(selected_skill_inputs)
+        node_inputs.update(selected_skill_evidence)
 
         step_count = task_payload.get("stepCount") or parameter_payload.get("stepCount")
         if step_count is not None:
@@ -1799,6 +1876,18 @@ def _build_runtime_planner():
                     step_entry,
                     include_type=is_agent_runtime_step or "source" in step_entry,
                 )
+                step_skill_evidence: dict[str, Any] = {}
+                if is_agent_runtime_step:
+                    step_tool_inputs, step_skill_evidence = _validated_step_skill_inputs(
+                        step_entry=step_entry,
+                        step_index=idx,
+                        raw_inputs=step_tool_inputs,
+                        workflow_context={
+                            **parameter_payload,
+                            **_coerce_mapping(parameter_payload.get("context")),
+                            **git_payload,
+                        },
+                    )
                 step_extra_inputs = {
                     k: v
                     for k, v in step_entry.items()
@@ -1838,6 +1927,9 @@ def _build_runtime_planner():
                         }
                     for key, value in step_tool_inputs.items():
                         step_node_inputs.setdefault(key, value)
+                    if step_tool_inputs:
+                        step_node_inputs["inputs"] = dict(step_tool_inputs)
+                    step_node_inputs.update(step_skill_evidence)
                 else:
                     step_node_inputs = (
                         _direct_story_tool_context_inputs(node_inputs)

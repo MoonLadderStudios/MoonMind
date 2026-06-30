@@ -6298,14 +6298,10 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                         raw_args = selected_skill.get("inputs")
                     if isinstance(raw_args, dict):
                         normalized_skill["args"] = dict(raw_args)
-                    for evidence_key in (
-                        "contentRef",
-                        "contentDigest",
-                        "inputContractDigest",
-                    ):
-                        evidence_value = selected_skill.get(evidence_key)
-                        if isinstance(evidence_value, str) and evidence_value.strip():
-                            normalized_skill[evidence_key] = evidence_value.strip()
+                    _copy_skill_contract_metadata(
+                        source=selected_skill,
+                        target=normalized_skill,
+                    )
                     raw_caps = selected_skill.get("requiredCapabilities")
                     if raw_caps is not None:
                         normalized_caps = _coerce_string_list(
@@ -6340,6 +6336,24 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     task_payload["steps"] = normalized_steps
     return normalized_steps
+
+def _copy_skill_contract_metadata(
+    *,
+    source: Mapping[str, Any],
+    target: dict[str, Any],
+) -> None:
+    for metadata_key in ("inputSchema", "uiSchema", "defaults"):
+        metadata_value = source.get(metadata_key)
+        if isinstance(metadata_value, Mapping):
+            target[metadata_key] = dict(metadata_value)
+    for evidence_key in (
+        "contentRef",
+        "contentDigest",
+        "inputContractDigest",
+    ):
+        evidence_value = source.get(evidence_key)
+        if isinstance(evidence_value, str) and evidence_value.strip():
+            target[evidence_key] = evidence_value.strip()
 
 async def _resolve_step_runtime_selections(
     *,
@@ -6900,6 +6914,7 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
         inline_inputs = selected_payload.get("args")
     if isinstance(inline_inputs, dict) and inline_inputs:
         normalized["inputs"] = dict(inline_inputs)
+    _copy_skill_contract_metadata(source=selected_payload, target=normalized)
     return normalized
 
 _PENTEST_TOOL_NAME = "security.pentest.run"

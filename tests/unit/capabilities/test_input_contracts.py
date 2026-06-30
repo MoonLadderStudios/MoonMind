@@ -397,3 +397,231 @@ def test_validate_capability_inputs_reports_field_errors() -> None:
         "format",
     ]
     assert result["contractDigest"] == contract["contractDigest"]
+
+
+def test_validate_capability_inputs_uses_input_schema_defaults_and_field_paths() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(
+            id="demo-skill",
+            kind="skill",
+            label="Demo Skill",
+            content_digest="sha256:content",
+        ),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["repository", "issue"],
+                    "properties": {
+                        "repository": {
+                            "type": "string",
+                            "x-moonmind-context-default": "repository",
+                        },
+                        "issue": {"type": "integer"},
+                        "branch": {"type": "string", "default": "schema-main"},
+                    },
+                },
+                "uiSchema": {"issue": {"widget": "jira.issue-picker"}},
+                "defaults": {"branch": "default-main"},
+            },
+        ),
+    )
+
+    result = validate_capability_inputs(
+        contract=contract,
+        values={"issue": "MM-1057"},
+        workflow_context={"repository": "MoonLadderStudios/MoonMind"},
+        path_prefix="steps[0].skill.inputs",
+    )
+
+    assert result["values"]["repository"] == "MoonLadderStudios/MoonMind"
+    assert result["values"]["branch"] == "default-main"
+    assert result["errors"] == [
+        {
+            "path": "steps[0].skill.inputs.issue",
+            "message": "Value must be an integer.",
+            "code": "type",
+            "recoverable": True,
+        }
+    ]
+    assert result["contractDigest"] == contract["contractDigest"]
+    assert result["contentDigest"] == "sha256:content"
+
+
+def test_validate_capability_inputs_ignores_secret_defaults_and_remote_code_metadata() -> None:
+    contract = {
+        "inputSchema": {
+            "type": "object",
+            "$ref": "https://example.invalid/schema.json",
+            "x-code": "return secret",
+            "properties": {
+                "token": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "description": "<script>alert(1)</script>Target",
+                },
+            },
+        },
+        "uiSchema": {"target": {"widget": "remote.widget"}},
+        "defaults": {"token": "ghp_not_a_real_token"},
+        "contractDigest": "sha256:contract",
+    }
+
+    normalized = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(id="demo", kind="skill", label="Demo"),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations=contract,
+        ),
+    )
+    result = validate_capability_inputs(
+        contract=normalized,
+        values={"target": "MM-1057"},
+        path_prefix="steps[1].skill.inputs",
+    )
+
+    assert normalized["defaults"] == {}
+    assert (
+        normalized["inputSchema"]["properties"]["target"]["description"]
+        == "alert(1)Target"
+    )
+    warning_codes = {warning["code"] for warning in result["warnings"]}
+    assert "remote_ref_ignored" in warning_codes
+    assert "schema_code_ignored" in warning_codes
+    assert "unsupported_widget" in warning_codes
+    assert "token" not in result["values"]
+
+
+def test_validate_capability_inputs_applies_json_schema_constraints() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(id="demo", kind="skill", label="Demo"),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["title"],
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "minLength": 3,
+                            "pattern": "^MM-",
+                        },
+                        "priority": {"type": "integer", "minimum": 1, "maximum": 5},
+                        "labels": {
+                            "type": "array",
+                            "minItems": 1,
+                            "uniqueItems": True,
+                            "items": {"type": "string", "enum": ["bug", "docs"]},
+                        },
+                    },
+                }
+            },
+        ),
+    )
+
+    result = validate_capability_inputs(
+        contract=contract,
+        values={
+            "title": "no",
+            "priority": 10,
+            "labels": ["bug", "bug", "other"],
+            "extra": True,
+        },
+        path_prefix="steps[2].skill.inputs",
+    )
+
+    errors_by_code = {error["code"]: error["path"] for error in result["errors"]}
+    assert errors_by_code["additionalProperties"] == "steps[2].skill.inputs.extra"
+    assert errors_by_code["minLength"] == "steps[2].skill.inputs.title"
+    assert errors_by_code["pattern"] == "steps[2].skill.inputs.title"
+    assert errors_by_code["maximum"] == "steps[2].skill.inputs.priority"
+    assert errors_by_code["uniqueItems"] == "steps[2].skill.inputs.labels"
+    assert "steps[2].skill.inputs.labels[2]" in [
+        error["path"] for error in result["errors"] if error["code"] == "enum"
+    ]
+
+
+def test_validate_capability_inputs_checks_registered_reference_fields() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(id="demo", kind="skill", label="Demo"),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "issue": {
+                            "type": "object",
+                            "x-moonmind-semantic-type": "issue-reference",
+                        },
+                        "repository": {
+                            "type": "string",
+                            "x-moonmind-semantic-type": "repository",
+                        },
+                        "branch": {
+                            "type": "string",
+                            "x-moonmind-semantic-type": "branch",
+                        },
+                    },
+                },
+                "uiSchema": {
+                    "issue": {"widget": "jira.issue-picker"},
+                    "repository": {"widget": "github.repository-picker"},
+                    "branch": {"widget": "github.branch-picker"},
+                },
+            },
+        ),
+    )
+
+    result = validate_capability_inputs(
+        contract=contract,
+        values={"issue": {}, "repository": "MoonMind", "branch": ""},
+        path_prefix="steps[3].skill.inputs",
+    )
+
+    assert [
+        (error["path"], error["code"])
+        for error in result["errors"]
+        if error["code"] == "reference"
+    ] == [
+        ("steps[3].skill.inputs.issue", "reference"),
+        ("steps[3].skill.inputs.repository", "reference"),
+        ("steps[3].skill.inputs.branch", "reference"),
+    ]
+
+
+def test_validate_capability_inputs_handles_object_without_properties() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(id="demo", kind="skill", label="Demo"),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "emptyObject": {
+                            "type": "object",
+                            "additionalProperties": False,
+                        }
+                    },
+                }
+            },
+        ),
+    )
+
+    result = validate_capability_inputs(
+        contract=contract,
+        values={"emptyObject": {"unexpected": True}},
+    )
+
+    assert result["errors"] == [
+        {
+            "path": "inputs.emptyObject.unexpected",
+            "message": "Additional properties are not allowed.",
+            "code": "additionalProperties",
+            "recoverable": True,
+        }
+    ]
