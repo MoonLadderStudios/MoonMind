@@ -23,7 +23,6 @@ import {
   readDashboardPreferences,
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
-import { WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY } from '../lib/workflowListContext';
 
 declare const __dirname: string;
 
@@ -817,9 +816,7 @@ describe('Workflow Detail Entrypoint', () => {
     const pinned = within(pinnedGroup).getByRole('link', { name: /MM-997 selected workflow/i });
     expect(pinned.getAttribute('aria-current')).toBe('page');
     expect(pinned.getAttribute('data-pinned')).toBe('true');
-    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe(
-      '/workflows?stateIn=failed&returnFromWorkflowDetail=1',
-    );
+    expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&stateIn=failed&pageSize=25');
   });
@@ -896,7 +893,7 @@ describe('Workflow Detail Entrypoint', () => {
     );
   });
 
-  it('MM-1002 keeps sidebar API and full-list navigation within allowlisted workflow context', async () => {
+  it('MM-1002 keeps sidebar API and workflow links within allowlisted workflow context', async () => {
     window.history.pushState(
       {},
       'Workspace Sidebar Security Test',
@@ -915,14 +912,10 @@ describe('Workflow Detail Entrypoint', () => {
     expect(anotherWorkflow.getAttribute('href')).toBe(
       '/workflows/test-456?source=temporal&limit=10&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira',
     );
-    const expandLink = within(sidebar).getByRole('link', { name: 'Expand to full list' });
-    expect(expandLink.getAttribute('href')).toBe(
-      '/workflows?limit=10&repoContains=moon%2Frepo&integration=jira&returnFromWorkflowDetail=1',
-    );
+    expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('selectedWorkflowId=');
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('sort=');
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('token=');
-    expect(expandLink.getAttribute('href')).not.toContain('token=');
   });
 
   it('preserves API-style pageSize state when fetching the workspace sidebar', async () => {
@@ -1029,7 +1022,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
   });
 
-  it('MM-1000 expands to the full list with preserved context and focusable list target', async () => {
+  it('MM-1000 keeps the workspace sidebar free of full-list navigation', async () => {
     window.history.pushState(
       {},
       'Workspace Expand Test',
@@ -1041,23 +1034,13 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    const expand = within(sidebar).getByRole('link', { name: 'Expand to full list' });
-    expect(expand.getAttribute('href')).toBe(
-      '/workflows?stateIn=completed&repoContains=moon%2Frepo&limit=10&returnFromWorkflowDetail=1',
-    );
-    expect(expand.getAttribute('href')).not.toContain('source=');
-    expect(expand.getAttribute('href')).not.toContain('nextPageToken=');
-    expect(expand.getAttribute('href')).not.toContain('sort=');
-    expect(expand.getAttribute('href')).not.toContain('selectedWorkflowId=');
-    expect(expand.getAttribute('href')).not.toContain('unsafe=');
-    expect(expand.getAttribute('class') || '').toContain('button');
-    expect(expand.getAttribute('class') || '').toContain('workflow-workspace-expand-list');
+    expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
     expect(within(sidebar).getByRole('button', { name: 'Close sidebar' }).getAttribute('class') || '').toContain(
       'workflow-workspace-close-sidebar',
     );
   });
 
-  it('MM-1008 keeps close-sidebar and expand-list controls visually distinct', async () => {
+  it('MM-1008 keeps the close-sidebar control compact', async () => {
     window.history.pushState({}, 'Workspace Controls Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -1068,16 +1051,11 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(sidebar).getByRole('button', { name: 'Close sidebar' }).getAttribute('class') || '').toContain(
       'workflow-workspace-close-sidebar',
     );
-    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('class') || '').toContain(
-      'workflow-workspace-expand-list',
-    );
+    expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
 
     const dashboardCss = await readDashboardCss();
-    // Both controls are compact icon buttons (fixed square footprint), but only
-    // the expand-to-list control carries the accent emphasis so they stay
-    // visually distinct.
     expect(dashboardCss).toMatch(/\.workflow-workspace-close-sidebar[\s\S]*?width:\s*2rem;/);
-    expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list\s*\{[\s\S]*?background:\s*rgb\(var\(--mm-accent\)/);
+    expect(dashboardCss).not.toMatch(/\.workflow-workspace-expand-list/);
   });
 
   it('MM-1002 renders sidebar titles and statuses as React text', async () => {
@@ -1111,7 +1089,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(sidebar.querySelector('script')).toBeNull();
   });
 
-  it('MM-1005 expands to the plain workflow list from the desktop workspace when no list context exists', async () => {
+  it('MM-1005 does not render full-list navigation from the desktop workspace when no list context exists', async () => {
     window.history.pushState({}, 'Workspace Plain Expand Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -1119,11 +1097,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    const expandLink = within(sidebar).getByRole('link', { name: 'Expand to full list' });
-    expect(expandLink.getAttribute('href')).toBe('/workflows');
-
-    fireEvent.click(expandLink);
-    expect(window.sessionStorage.getItem(WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY)).toBe('1');
+    expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
   });
 
   it('MM-1000 uses a single-column collapsed workspace layout and reduced-motion guard', async () => {
@@ -1328,7 +1302,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(fetchSpy.mock.calls.filter(([input]) => String(input).includes('/executions/test-123/steps')).length).toBeGreaterThan(0);
   });
 
-  it('reconstructs the full workflow list from allowlisted detail-route context (MM-998, MM-975)', async () => {
+  it('keeps the standalone detail toolbar free of full-list navigation while preserving tab context (MM-998, MM-975)', async () => {
     window.history.pushState(
       {},
       'Detail Context Test',
@@ -1339,28 +1313,20 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await screen.findByText('Focused route summary');
-    const expandLink = screen.getByRole('link', { name: 'Expand to full list' });
-    expect(expandLink.getAttribute('href')).toBe(
-      '/workflows?stateIn=completed&repoContains=moon%2Frepo&limit=25&returnFromWorkflowDetail=1',
-    );
-    expect(expandLink.getAttribute('href')).not.toContain('source=');
-    expect(expandLink.getAttribute('href')).not.toContain('sort=');
-    expect(expandLink.getAttribute('href')).not.toContain('nextPageToken=');
-    expect(expandLink.getAttribute('href')).not.toContain('selectedWorkflowId=');
-    expect(expandLink.getAttribute('href')).not.toContain('unsafe=');
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('href')).toBe(
       '/workflows/test-123/steps?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
     );
   });
 
-  it('expands to plain workflow list when no preserved list context exists (MM-998, MM-975)', async () => {
+  it('does not render standalone full-list navigation when no preserved list context exists (MM-998, MM-975)', async () => {
     window.history.pushState({}, 'Plain Detail Test', '/workflows/test-123?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await screen.findByText('Focused route summary');
-    expect(screen.getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe('/workflows');
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
   });
 
   it('renders recovery evidence from the failed step execution detail payload', async () => {

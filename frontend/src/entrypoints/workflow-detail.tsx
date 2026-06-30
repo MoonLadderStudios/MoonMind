@@ -36,10 +36,8 @@ import {
   taskEditHref,
 } from '../lib/temporalTaskEditing';
 import {
-  markWorkflowListReturnFocusIntent,
   workflowDetailHref,
   workflowListContextParams,
-  workflowListHrefFromContext,
 } from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
@@ -372,21 +370,10 @@ const SIDEBAR_TOGGLE_ICON = (
   </WorkspaceControlIcon>
 );
 
-const EXPAND_LIST_ICON = (
-  <WorkspaceControlIcon>
-    <path d="M15 3h6v6" />
-    <path d="M9 21H3v-6" />
-    <path d="M21 3l-7 7" />
-    <path d="M3 21l7-7" />
-  </WorkspaceControlIcon>
-);
-
 function WorkflowSidebarControls({
-  fullListHref,
   closeButtonRef,
   onClose,
 }: {
-  fullListHref: string;
   closeButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
 }) {
@@ -402,15 +389,6 @@ function WorkflowSidebarControls({
       >
         {SIDEBAR_TOGGLE_ICON}
       </button>
-      <a
-        className="button workflow-workspace-expand-list"
-        href={fullListHref}
-        onClick={markWorkflowListReturnFocusIntent}
-        aria-label="Expand to full list"
-        title="Expand to full list"
-      >
-        {EXPAND_LIST_ICON}
-      </a>
     </div>
   );
 }
@@ -455,7 +433,6 @@ function WorkflowSidebar({
   workflowsQuery,
   filteredRows,
   pinnedCurrentRow,
-  fullListHref,
   search,
   closeButtonRef,
   onClose,
@@ -464,7 +441,6 @@ function WorkflowSidebar({
   workflowsQuery: UseQueryResult<z.infer<typeof WorkflowWorkspaceListResponseSchema>, Error>;
   filteredRows: WorkflowWorkspaceRow[];
   pinnedCurrentRow: WorkflowWorkspaceRow | null;
-  fullListHref: string;
   search: URLSearchParams;
   closeButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
@@ -472,7 +448,6 @@ function WorkflowSidebar({
   return (
     <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
       <WorkflowSidebarControls
-        fullListHref={fullListHref}
         closeButtonRef={closeButtonRef}
         onClose={onClose}
       />
@@ -559,7 +534,6 @@ export function WorkflowWorkspaceShell({
   const pinnedCurrentRow = selectedWorkflowQuery.data && !activeInList
     ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
     : null;
-  const fullListHref = workflowListHrefFromContext(search, { markDetailReturn: true });
 
   return (
     <div
@@ -574,7 +548,6 @@ export function WorkflowWorkspaceShell({
           workflowsQuery={workflowsQuery}
           filteredRows={filteredRows}
           pinnedCurrentRow={pinnedCurrentRow}
-          fullListHref={fullListHref}
           search={search}
           closeButtonRef={closeButtonRef}
           onClose={() => {
@@ -6218,8 +6191,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const debugVisible = debugFieldsPref;
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
   const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
-  const isDesktop = useWorkflowWorkspaceDesktop();
-
   const currentPathname = window.location.pathname;
   const currentSearch = window.location.search;
   const workflowIdMatch = currentPathname.match(
@@ -6228,11 +6199,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
   const search = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
-  const expandToFullListHref = useMemo(
-    () => workflowListHrefFromContext(search, { markDetailReturn: true }),
-    [search],
-  );
-  const showExpandToFullList = isDesktop || expandToFullListHref !== '/workflows';
   const [detailSubroute, setDetailSubroute] = useWorkflowDetailSubroute(currentPathname);
   const sourceTemporal = search.get('source') === 'temporal';
 
@@ -7009,21 +6975,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           </div>
         </div>
         <div className="toolbar-controls">
-          {!isTerminalExecution ? (
-            <span className="td-live-indicator" aria-label="Live updates enabled">
-              <span aria-hidden="true" />
-              Live
-            </span>
-          ) : null}
-          {showExpandToFullList ? (
-            <a
-              className="button secondary"
-              href={expandToFullListHref}
-              onClick={markWorkflowListReturnFocusIntent}
-            >
-              Expand to full list
-            </a>
-          ) : null}
           {taskId ? (
             <IconMenuButton
               items={toolbarMenuItems}

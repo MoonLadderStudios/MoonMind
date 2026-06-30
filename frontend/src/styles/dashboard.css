@@ -6838,7 +6838,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 /* The sidebar controls are compact icon buttons rather than full-text buttons. */
 .workflow-workspace-close-sidebar,
-.workflow-workspace-expand-list,
 .workflow-workspace-open-sidebar {
   display: inline-flex;
   align-items: center;
@@ -6854,21 +6853,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 1.05rem;
   height: 1.05rem;
   flex: 0 0 auto;
-}
-
-/* The expand-to-list control keeps the accent emphasis so it stays visually
- * distinct from the neutral collapse control. */
-.workflow-workspace-expand-list {
-  background: rgb(var(--mm-accent) / 0.16);
-  border-color: rgb(var(--mm-accent) / 0.45);
-  color: rgb(var(--mm-accent));
-  box-shadow: none;
-}
-
-.workflow-workspace-expand-list:hover,
-.workflow-workspace-expand-list:focus-visible {
-  background: rgb(var(--mm-accent) / 0.24);
-  border-color: rgb(var(--mm-accent) / 0.82);
 }
 
 .workflow-workspace-sidebar-list {
@@ -7381,24 +7365,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   height: 2rem;
   padding: 0;
   border-radius: 0.45rem;
-}
-
-.td-live-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: rgb(var(--mm-muted));
-  font-size: 0.78rem;
-  font-weight: 650;
-  white-space: nowrap;
-}
-
-.td-live-indicator > span {
-  width: 0.48rem;
-  height: 0.48rem;
-  border-radius: 999px;
-  background: rgb(var(--mm-success));
-  box-shadow: 0 0 0 3px rgb(var(--mm-success) / 0.14);
 }
 
 .td-workflow-actions-trigger-icon {
