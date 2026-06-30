@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -9,11 +9,38 @@ from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 
 
 class _ArtifactMetadataSession:
-    def __init__(self, metadata: dict[str, object] | None) -> None:
+    def __init__(
+        self,
+        metadata: dict[str, object] | None,
+        *,
+        artifact_id: str = "art_skill",
+        skill_slug: str = "issue-implement",
+        content_digest: str = "sha256:skill",
+    ) -> None:
+        self._artifact_id = artifact_id
         self._artifact = (
-            SimpleNamespace(metadata_json=metadata) if metadata is not None else None
+            SimpleNamespace(artifact_id=artifact_id, metadata_json=metadata)
+            if metadata is not None
+            else None
         )
-        self.get = AsyncMock(return_value=self._artifact)
+        self._definition = SimpleNamespace(
+            slug=skill_slug,
+            artifact_ref=artifact_id,
+            content_digest=content_digest,
+        )
+        self.get = AsyncMock(side_effect=self._get)
+        self.execute = AsyncMock(return_value=self._execute_result(self._definition))
+
+    async def _get(self, _model, artifact_id: str):
+        if artifact_id != self._artifact_id:
+            return None
+        return self._artifact
+
+    @staticmethod
+    def _execute_result(definition):
+        result = MagicMock()
+        result.scalars.return_value.first.return_value = definition
+        return result
 
 
 def _parameters(skill_payload: dict[str, object]) -> dict[str, object]:
@@ -139,6 +166,30 @@ async def test_validate_skill_step_inputs_normalizes_legacy_args() -> None:
 
 
 @pytest.mark.asyncio
+async def test_validate_skill_step_inputs_replaces_client_supplied_evidence() -> None:
+    session = _ArtifactMetadataSession(_metadata())
+    result = await validate_skill_step_inputs(
+        initial_parameters=_parameters(
+            {
+                "name": "issue-implement",
+                "contentRef": "art_bogus",
+                "contentDigest": "sha256:bogus",
+                "inputs": {"issue": "MM-1052"},
+            }
+        ),
+        session=session,
+    )
+
+    assert result.valid
+    skill = result.parameters["workflow"]["steps"][0]["skill"]
+    assert skill["contentRef"] == "art_skill"
+    assert skill["contentDigest"] == "sha256:skill"
+    assert skill["inputContractDigest"] == "sha256:contract"
+    session.get.assert_awaited_once()
+    assert session.get.await_args.args[1] == "art_skill"
+
+
+@pytest.mark.asyncio
 async def test_validate_skill_step_inputs_rejects_missing_content_evidence() -> None:
     result = await validate_skill_step_inputs(
         initial_parameters=_parameters(
@@ -158,7 +209,7 @@ async def test_validate_skill_step_inputs_rejects_missing_content_evidence() -> 
             "path": "steps[0].skill.inputs",
             "message": (
                 "Selected Skill content evidence could not be loaded for "
-                "contentRef 'missing_art_skill'."
+                "contentRef 'art_skill'."
             ),
             "code": "content_evidence_not_found",
             "recoverable": True,

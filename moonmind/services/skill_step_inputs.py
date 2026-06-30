@@ -196,22 +196,12 @@ async def _resolve_skill_entry(
     skill_payload: Mapping[str, Any],
     session: AsyncSession | None,
 ) -> ResolvedSkillEntry | None:
-    content_ref = str(skill_payload.get("contentRef") or "").strip() or None
-    content_digest = str(skill_payload.get("contentDigest") or "").strip() or None
-    if content_ref or content_digest:
-        from moonmind.schemas.agent_skill_models import (
-            AgentSkillProvenance,
-            AgentSkillSourceKind,
-        )
-
-        return ResolvedSkillEntry(
-            skill_name=skill_name,
-            content_ref=content_ref,
-            content_digest=content_digest,
-            provenance=AgentSkillProvenance(
-                source_kind=AgentSkillSourceKind.DEPLOYMENT
-            ),
-        )
+    deployment_entry = await _resolve_deployment_skill_entry(
+        skill_name=skill_name,
+        session=session,
+    )
+    if deployment_entry is not None:
+        return deployment_entry
 
     context = SkillResolutionContext(
         snapshot_id=f"validate-{skill_name}",
@@ -229,6 +219,37 @@ async def _resolve_skill_entry(
             return entry
 
     return None
+
+
+async def _resolve_deployment_skill_entry(
+    *,
+    skill_name: str,
+    session: AsyncSession | None,
+) -> ResolvedSkillEntry | None:
+    if session is None:
+        return None
+
+    from sqlalchemy import select
+
+    from api_service.db.models import AgentSkillDefinition
+    from moonmind.schemas.agent_skill_models import (
+        AgentSkillProvenance,
+        AgentSkillSourceKind,
+    )
+
+    result = await session.execute(
+        select(AgentSkillDefinition).where(AgentSkillDefinition.slug == skill_name)
+    )
+    definition = result.scalars().first()
+    if definition is None or not definition.artifact_ref:
+        return None
+
+    return ResolvedSkillEntry(
+        skill_name=definition.slug,
+        content_ref=definition.artifact_ref,
+        content_digest=definition.content_digest,
+        provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.DEPLOYMENT),
+    )
 
 
 async def _load_input_contract(
