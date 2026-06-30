@@ -433,7 +433,7 @@ function WorkflowSidebar({
   );
 }
 
-function WorkflowWorkspaceShell({
+export function WorkflowWorkspaceShell({
   payload,
   workflowId,
   search,

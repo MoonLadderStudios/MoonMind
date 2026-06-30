@@ -7,8 +7,8 @@ describe('dashboard route resolution', () => {
     const path = '/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95';
 
     expect(resolveDashboardRoute(path)).toEqual({
-      page: 'workflow-detail',
-      dataWidePanel: false,
+      page: 'workflows-workspace',
+      dataWidePanel: true,
       currentPath: path,
     });
   });
@@ -16,7 +16,7 @@ describe('dashboard route resolution', () => {
   it('resolves encoded workflow IDs with detail tabs', () => {
     const path = '/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95/steps';
 
-    expect(resolveDashboardRoute(path)?.page).toBe('workflow-detail');
+    expect(resolveDashboardRoute(path)?.page).toBe('workflows-workspace');
   });
 
   it('resolves reserved-looking workflow IDs as detail pages', () => {
@@ -26,7 +26,7 @@ describe('dashboard route resolution', () => {
       '/workflows/workers',
       '/workflows/settings/steps',
     ]) {
-      expect(resolveDashboardRoute(path)?.page).toBe('workflow-detail');
+      expect(resolveDashboardRoute(path)?.page).toBe('workflows-workspace');
     }
   });
 

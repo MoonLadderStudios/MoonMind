@@ -43,6 +43,7 @@ const PAGE_IMPORTS = {
   settings: () => import('./settings'),
   skills: () => import('./skills'),
   'workflow-start': () => import('./workflow-start'),
+  'workflows-workspace': () => import('./workflows-workspace'),
   'workflow-detail': () => import('./workflow-detail'),
   'workflows-home': () => import('./workflows-home'),
   'workflow-list': () => import('./workflow-list'),
@@ -454,7 +455,9 @@ function RoutedDashboardPage({
 
   const routedPayload = payloadForDashboardRoute(payload, route, uiInfo);
   const layout = readSharedLayout(routedPayload);
-  const routeKey = `${route.page}:${route.currentPath}${location.search}${location.hash}`;
+  const routeKey = route.page === 'workflows-workspace'
+    ? 'workflows-workspace'
+    : `${route.page}:${route.currentPath}${location.search}${location.hash}`;
 
   return (
     <AppShell dataWidePanel={layout.dataWidePanel === true} uiInfo={uiInfo}>
