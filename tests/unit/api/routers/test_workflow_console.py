@@ -771,7 +771,7 @@ inputSchema:
 
     assert response.status_code == 200
     item = response.json()["legacyItems"][0]
-    assert item["inputSchema"] == {}
+    assert "field_69" in item["inputSchema"]["properties"]
     assert item["hasInputSchema"] is True
     assert item["inputContractRef"].startswith(
         "/api/workflows/skills/large-schema-skill/input-contract?digest=sha256%3A"

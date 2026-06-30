@@ -19,6 +19,10 @@ _SECRET_LIKE_VALUE_PATTERN = re.compile(
     r"(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|-----begin [a-z ]*private key)",
     re.IGNORECASE,
 )
+_SECRET_LIKE_KEY_PATTERN = re.compile(
+    r"(token|password|secret|private[_-]?key|api[_-]?key)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,7 +434,7 @@ def _contains_secret_like_value(value: Any) -> bool:
         return False
     if isinstance(value, Mapping):
         return any(
-            _SECRET_LIKE_VALUE_PATTERN.search(str(key or ""))
+            _SECRET_LIKE_KEY_PATTERN.search(str(key or ""))
             or _contains_secret_like_value(item)
             for key, item in value.items()
         )
