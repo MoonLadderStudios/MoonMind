@@ -1,0 +1,1 @@
+"""Shared capability contract helpers."""

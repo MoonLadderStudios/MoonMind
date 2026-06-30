@@ -601,15 +601,19 @@ def test_skills_api_returns_available_skill_ids(
     response = client.get("/api/workflows/skills")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "items": {
-            "worker": ["speckit", "speckit-orchestrate"],
-        },
-        "legacyItems": [
-            {"id": "speckit", "requiredCapabilities": [], "markdown": None},
-            {"id": "speckit-orchestrate", "requiredCapabilities": [], "markdown": None},
-        ],
-    }
+    payload = response.json()
+    assert payload["items"] == {"worker": ["speckit", "speckit-orchestrate"]}
+    assert [item["id"] for item in payload["legacyItems"]] == [
+        "speckit",
+        "speckit-orchestrate",
+    ]
+    assert payload["legacyItems"][0]["kind"] == "skill"
+    assert payload["legacyItems"][0]["inputSchema"] == {}
+    assert payload["legacyItems"][0]["uiSchema"] == {}
+    assert payload["legacyItems"][0]["defaults"] == {}
+    assert payload["legacyItems"][0]["requiredCapabilities"] == []
+    assert payload["legacyItems"][0]["markdown"] is None
+    assert payload["legacyItems"][0]["contractDigest"].startswith("sha256:")
 
 def test_skills_api_include_content_reads_legacy_skill_markdown(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -645,13 +649,75 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     response = client.get("/api/workflows/skills?includeContent=true")
 
     assert response.status_code == 200
-    assert response.json()["legacyItems"] == [
-        {
-            "id": "speckit-orchestrate",
-            "requiredCapabilities": ["git"],
-            "markdown": skill_markdown,
-        },
-    ]
+    item = response.json()["legacyItems"][0]
+    assert item["id"] == "speckit-orchestrate"
+    assert item["kind"] == "skill"
+    assert item["requiredCapabilities"] == ["git"]
+    assert item["markdown"] == skill_markdown
+    assert item["inputSchema"] == {}
+    assert item["uiSchema"] == {}
+    assert item["defaults"] == {}
+    assert item["contentDigest"].startswith("sha256:")
+    assert item["source"]["kind"] == "local"
+
+
+def test_skills_api_parses_skill_input_contract(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_root = tmp_path / "local"
+    legacy_root = tmp_path / "legacy"
+    skill_dir = legacy_root / "jira-implement"
+    skill_dir.mkdir(parents=True)
+    skill_markdown = (
+        "---\n"
+        "name: Jira Implement\n"
+        "description: Implement a Jira issue.\n"
+        "input_schema:\n"
+        "  type: object\n"
+        "  required:\n"
+        "    - issue_key\n"
+        "  properties:\n"
+        "    issue_key:\n"
+        "      type: string\n"
+        "      title: Issue key\n"
+        "ui_schema:\n"
+        "  issue_key:\n"
+        "    widget: jira.issue-picker\n"
+        "defaults:\n"
+        "  issue_key: MM-1047\n"
+        "---\n"
+        "# Jira Implement\n"
+    )
+    (skill_dir / "SKILL.md").write_text(skill_markdown, encoding="utf-8")
+
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
+        str(local_root),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_legacy_mirror_root",
+        str(legacy_root),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.list_available_skill_names",
+        lambda: ("jira-implement",),
+    )
+
+    response = client.get("/api/workflows/skills")
+
+    assert response.status_code == 200
+    item = response.json()["legacyItems"][0]
+    assert item["id"] == "jira-implement"
+    assert item["kind"] == "skill"
+    assert item["label"] == "Jira Implement"
+    assert item["description"] == "Implement a Jira issue."
+    assert item["inputSchema"]["required"] == ["issue_key"]
+    assert item["uiSchema"]["issue_key"]["widget"] == "jira.issue-picker"
+    assert item["defaults"] == {"issue_key": "MM-1047"}
+    assert item["contractDigest"].startswith("sha256:")
+    assert item["contentDigest"].startswith("sha256:")
+    assert item["source"]["contentDigest"] == item["contentDigest"]
+    assert item["diagnostics"] == []
 
 def test_create_dashboard_skill_success(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

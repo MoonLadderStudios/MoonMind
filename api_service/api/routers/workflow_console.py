@@ -41,6 +41,7 @@ from api_service.api.routers.workflow_console_view_model import (
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from api_service.services.settings_catalog import settings_permissions_for_user
+from moonmind.capabilities.input_contracts import parse_skill_capability_input_contract
 from moonmind.config.settings import settings
 from moonmind.services.skill_resolution import (
     extract_required_capabilities_from_skill_markdown,
@@ -105,6 +106,16 @@ class DashboardSkillOption(BaseModel):
     """Serializable skill option exposed to dashboard clients."""
 
     id: str = Field(description="Skill identifier")
+    kind: Literal["skill"] = "skill"
+    label: str | None = None
+    description: str | None = None
+    input_schema: dict[str, object] = Field(default_factory=dict, alias="inputSchema")
+    ui_schema: dict[str, object] = Field(default_factory=dict, alias="uiSchema")
+    defaults: dict[str, object] = Field(default_factory=dict)
+    contract_digest: str | None = Field(None, alias="contractDigest")
+    content_digest: str | None = Field(None, alias="contentDigest")
+    source: dict[str, object] | None = None
+    diagnostics: list[dict[str, object]] = Field(default_factory=list)
     required_capabilities: list[str] = Field(
         default_factory=list,
         alias="requiredCapabilities",
@@ -921,6 +932,12 @@ async def list_dashboard_skills(
                 skill_file.read_text,
                 encoding="utf-8",
             )
+            contract = parse_skill_capability_input_contract(
+                skill_id=skill_id,
+                label=skill_id,
+                markdown=skill_markdown,
+                source={"kind": "local", "path": str(skill_file)},
+            )
             required_capabilities = list(
                 extract_required_capabilities_from_skill_markdown(
                     skill_markdown,
@@ -930,8 +947,38 @@ async def list_dashboard_skills(
             )
             if include_content:
                 markdown_content = skill_markdown
+        else:
+            contract = parse_skill_capability_input_contract(
+                skill_id=skill_id,
+                label=skill_id,
+                markdown="",
+                source={"kind": "configured"},
+            )
         return DashboardSkillOption(
             id=skill_id,
+            label=str(contract.get("label") or skill_id),
+            description=contract.get("description")
+            if isinstance(contract.get("description"), str)
+            else None,
+            inputSchema=contract.get("inputSchema")
+            if isinstance(contract.get("inputSchema"), dict)
+            else {},
+            uiSchema=contract.get("uiSchema")
+            if isinstance(contract.get("uiSchema"), dict)
+            else {},
+            defaults=contract.get("defaults")
+            if isinstance(contract.get("defaults"), dict)
+            else {},
+            contractDigest=contract.get("contractDigest")
+            if isinstance(contract.get("contractDigest"), str)
+            else None,
+            contentDigest=contract.get("contentDigest")
+            if isinstance(contract.get("contentDigest"), str)
+            else None,
+            source=contract.get("source") if isinstance(contract.get("source"), dict) else None,
+            diagnostics=contract.get("diagnostics")
+            if isinstance(contract.get("diagnostics"), list)
+            else [],
             requiredCapabilities=required_capabilities,
             markdown=markdown_content,
         )

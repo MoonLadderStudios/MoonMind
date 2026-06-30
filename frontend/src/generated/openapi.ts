@@ -4279,6 +4279,40 @@ export interface components {
              */
             id: string;
             /**
+             * Kind
+             * @default skill
+             * @constant
+             */
+            kind: "skill";
+            /** Label */
+            label?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Inputschema */
+            inputSchema?: {
+                [key: string]: unknown;
+            };
+            /** Uischema */
+            uiSchema?: {
+                [key: string]: unknown;
+            };
+            /** Defaults */
+            defaults?: {
+                [key: string]: unknown;
+            };
+            /** Contractdigest */
+            contractDigest?: string | null;
+            /** Contentdigest */
+            contentDigest?: string | null;
+            /** Source */
+            source?: {
+                [key: string]: unknown;
+            } | null;
+            /** Diagnostics */
+            diagnostics?: {
+                [key: string]: unknown;
+            }[];
+            /**
              * Requiredcapabilities
              * @description Default required capabilities declared by Skill metadata
              */
