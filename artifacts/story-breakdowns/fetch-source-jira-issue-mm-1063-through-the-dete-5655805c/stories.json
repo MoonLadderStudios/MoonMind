@@ -1,0 +1,601 @@
+{
+  "source": {
+    "title": "MM-1063: Update Presets",
+    "path": null,
+    "referencePath": null,
+    "sourceDocumentClass": "imperative-input",
+    "jiraIssueKey": "MM-1063",
+    "jiraIssueUrl": "https://moonladder.atlassian.net/browse/MM-1063",
+    "summary": "Update Presets",
+    "originalDesignText": "MM-1063: Update Presets\n\nNormalize Breakdown preset naming, add GitHub Issue breakdown/orchestration presets, remove Jira Board input, and extend issue verification.\n\nProblem: breakdown-related presets are named inconsistently and incomplete across Jira and GitHub Issue workflows. Jira Breakdown and Implement already uses jira_project_key without jira_board_id, while Jira Breakdown and Jira Breakdown and Orchestrate still expose jira_board_id and pass boardId into Jira story creation. Existing GitHub support includes GitHub Issue Implement plus trusted GitHub issue brief, blocker, and status-update tools, but story-output tooling is currently Jira-specific for issue creation and downstream workflow creation. Jira Orchestrate already runs moonspec-verify, remediates on ADDITIONAL_WORK_NEEDED, re-runs verification, and blocks PR/Jira transitions unless the controlling verdict is FULLY_IMPLEMENTED. Current moonspec-verify assumes MoonSpec feature artifacts and Markdown-only reporting unless asked to write a file.\n\nGoals: rename breakdown presets to Breakdown and Jira Create, Breakdown and Jira Implement, Breakdown and Jira Orchestrate, Breakdown and GitHub Issue Implement, and Breakdown and GitHub Issue Orchestrate. Add GitHub Issue Orchestrate, Breakdown and GitHub Issue Implement, and Breakdown and GitHub Issue Orchestrate. Simplify Jira breakdown inputs to Jira Project Key, issue type, dependency mode, source issue key, source design path, and feature request; remove Jira Board and boardId. Use workflow/workflow execution terminology for MoonMind queue entries and MoonSpec spelling. Add final moonspec-verify support to Jira Implement, GitHub Issue Implement, GitHub Issue Orchestrate, and GitHub Issue breakdown composites.\n\nRequired behavior: GitHub Issue Orchestrate mirrors Jira Orchestrate with trusted GitHub issue brief loading, blocker checks, status updates, MoonSpec specify/plan/tasks/align/implement, moonspec-verify, bounded remediation and re-verification on ADDITIONAL_WORK_NEEDED, terminal verifier stops, doc reconciliation only after FULLY_IMPLEMENTED, non-draft PR creation only after FULLY_IMPLEMENTED, and GitHub issue review/done updates. GitHub story output creates GitHub issues from breakdowns, preserves source traceability, supports explicit conservative dependency behavior, and creates dependent downstream workflow executions for GitHub Issue Implement or GitHub Issue Orchestrate. Jira Implement and GitHub Issue Implement use moonspec-verify in issue-brief mode before PR creation and final lifecycle transitions. moonspec-verify supports moonspec_feature, issue_brief, and auto modes; issue brief inputs; optional JSON output; structured gaps and remainingWork; expanded verdict vocabulary; and read-only behavior except explicit verification artifact writing.\n\nAcceptance criteria: the five breakdown-related titles are exact; Jira breakdown presets use Jira Project Key and do not expose Jira Board; GitHub Issue Orchestrate exists; Breakdown and GitHub Issue Implement and Orchestrate create GitHub issues plus dependent MoonMind workflow executions; Jira Implement and GitHub Issue Implement run moonspec-verify before PR/final issue transition; issue-brief verification works without a MoonSpec feature directory; verification failures produce structured remaining work; PR/review/done transitions require FULLY_IMPLEMENTED except already-implemented no-code-change paths; copy uses workflow terminology and MoonSpec spelling; tests cover preset seeding, expansion, Jira input simplification, GitHub issue story output, downstream workflow creation, verification gating, remediation loops, and terminology guardrails.\n"
+  },
+  "sourceDocumentClass": "imperative-input",
+  "storyOutputMode": "jira",
+  "extractedAt": "2026-06-30T22:50:39Z",
+  "designSummary": "The trusted Jira brief describes a product-facing preset and verification upgrade: normalize breakdown preset naming, remove Jira Board input from Jira breakdowns, add GitHub Issue orchestration and breakdown composites, add GitHub story-output tooling, gate issue implementation flows with moonspec-verify, extend moonspec-verify for issue briefs, and enforce workflow/MoonSpec terminology. The work should remain provider-boundary aware, preserve source traceability, avoid inline implementation in breakdown composites, and prove behavior with targeted tests.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Normalize breakdown preset identities",
+      "type": "requirement",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "Preset catalog entries use the requested user-facing titles and descriptions while preserving existing slugs unless a deliberate migration is added."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Remove Jira Board from Jira breakdown presets",
+      "type": "requirement",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "Jira breakdown presets expose Jira Project Key and issue type but no jira_board_id input, Jira Board label, selected board copy, or storyOutput.jira.boardId."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Preserve Jira Breakdown and Implement behavior",
+      "type": "constraint",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "The existing Jira Breakdown and Implement project-key strategy remains behaviorally intact while title and copy are normalized."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Add GitHub Issue Orchestrate preset",
+      "type": "integration",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "A GitHub issue can drive MoonSpec orchestration, verification, remediation, doc reconciliation, PR creation, and issue status update."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Add GitHub breakdown implement preset",
+      "type": "integration",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "Breakdown can create GitHub issues and enqueue dependent GitHub Issue Implement workflow executions."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Add GitHub breakdown orchestrate preset",
+      "type": "integration",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "Breakdown can create GitHub issues and enqueue dependent GitHub Issue Orchestrate workflow executions with source traceability."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Create GitHub story-output tools",
+      "type": "integration",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "Trusted story-output handlers create GitHub issues and downstream GitHub Issue Implement or Orchestrate workflow executions with stable mappings."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Preserve story order and dependency edges",
+      "type": "state-model",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "GitHub issue mappings and downstream workflow executions preserve generated story order and dependsOn relationships."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Issue implement flows use moonspec-verify gate",
+      "type": "requirement",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "Jira Implement and GitHub Issue Implement run moonspec-verify before PR creation or final issue lifecycle transition."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Verification remediation loop gates transitions",
+      "type": "state-model",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "ADDITIONAL_WORK_NEEDED triggers bounded remediation and re-verification; terminal outcomes stop; PR/review/done transitions require FULLY_IMPLEMENTED except already-implemented no-code-change paths."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "moonspec-verify supports issue-brief mode",
+      "type": "requirement",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "moonspec-verify can verify Jira or GitHub issue briefs without requiring spec.md, plan.md, tasks.md, or constitution.md."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "moonspec-verify emits structured JSON when requested",
+      "type": "artifact",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "When verification_artifact_path is supplied, verification writes structured JSON with verdict, gaps, remainingWork, tests, and drift while still returning Markdown."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Verifier verdict vocabulary is workflow-consumable",
+      "type": "contract",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "FULLY_IMPLEMENTED, ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, and FAILED_UNRECOVERABLE are consistently documented; skill projection contamination remains diagnostic."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Terminology uses workflows and MoonSpec consistently",
+      "type": "constraint",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "User-facing copy uses workflow/workflow execution for MoonMind queue entries, avoids invalid task terminology, and spells MoonSpec consistently."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Tests cover presets, tools, gating, remediation, and terminology",
+      "type": "requirement",
+      "source_section": "MM-1063 trusted Jira brief",
+      "explanation": "Tests validate seeding, expansion, Jira input simplification, GitHub story output, downstream workflow creation, verification gating, remediation loops, and terminology guardrails."
+    }
+  ],
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Normalize breakdown preset catalog and Jira inputs",
+      "description": "As an operator choosing a breakdown workflow, I need the preset catalog to show the new Breakdown and Jira names and collect only Jira Project Key based inputs so Jira story creation is consistent across breakdown flows.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-1063: Update Presets",
+        "sections": [
+          "Goals",
+          "Simplify Jira breakdown inputs",
+          "Acceptance criteria"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "independentTest": "Seed and expand the three Jira breakdown presets and assert exact titles, no jira_board_id or boardId, projectKey/issueTypeName story output, and unchanged Jira Breakdown and Implement downstream behavior.",
+      "acceptanceCriteria": [
+        "jira-breakdown title is exactly Breakdown and Jira Create.",
+        "jira-breakdown-implement title is exactly Breakdown and Jira Implement.",
+        "jira-breakdown-orchestrate title is exactly Breakdown and Jira Orchestrate.",
+        "No Jira breakdown preset exposes Jira Board or storyOutput.jira.boardId.",
+        "Jira issue creation uses projectKey and issueTypeName while existing Jira Breakdown and Implement behavior is preserved."
+      ],
+      "requirements": [
+        "Update preset YAML/seed metadata for existing Jira breakdown slugs.",
+        "Remove Jira Board inputs and boardId output from Jira breakdown presets.",
+        "Keep jira_project_key, jira_issue_type, jira_dependency_mode, source_issue_key, source_design_path, and feature_request inputs."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-001",
+          "ownership": "STORY-001 owns normalize breakdown preset identities."
+        },
+        {
+          "coverageId": "DESIGN-REQ-002",
+          "ownership": "STORY-001 owns remove jira board from jira breakdown presets."
+        },
+        {
+          "coverageId": "DESIGN-REQ-003",
+          "ownership": "STORY-001 owns preserve jira breakdown and implement behavior."
+        },
+        {
+          "coverageId": "DESIGN-REQ-015",
+          "ownership": "STORY-001 owns tests cover presets, tools, gating, remediation, and terminology."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Existing Jira breakdown slugs remain stable because the source prefers preserving slugs."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Add GitHub Issue Orchestrate preset",
+      "description": "As an operator starting from a GitHub issue, I need a GitHub Issue Orchestrate preset that runs the full MoonSpec lifecycle with GitHub lifecycle updates and verification-gated PR creation.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-1063: Update Presets",
+        "sections": [
+          "Add GitHub Issue Orchestrate",
+          "Acceptance criteria"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "independentTest": "Seed and expand github-issue-orchestrate with a GitHub issue picker payload and assert it loads the brief, checks blockers, updates status, runs MoonSpec phases, gates remediation/PR/status transitions on verifier outcomes, and writes expected artifacts.",
+      "acceptanceCriteria": [
+        "github-issue-orchestrate exists with GitHub issue picker and manual reference fallback inputs.",
+        "The preset runs issue brief loading, blocker checks, status updates, MoonSpec orchestration, verification, remediation, doc reconciliation, PR creation, and final GitHub status update in the required order.",
+        "Terminal verifier outcomes stop before doc reconciliation, PR creation, or review updates.",
+        "The already-implemented no-code-change path can complete consistently with GitHub Issue Implement."
+      ],
+      "requirements": [
+        "Create api_service/data/presets/github-issue-orchestrate.yaml.",
+        "Use trusted GitHub issue brief, blocker, and status-update tools.",
+        "Mirror Jira Orchestrate verification/remediation semantics for GitHub issues."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-004",
+          "ownership": "STORY-002 owns add github issue orchestrate preset."
+        },
+        {
+          "coverageId": "DESIGN-REQ-010",
+          "ownership": "STORY-002 owns verification remediation loop gates transitions."
+        },
+        {
+          "coverageId": "DESIGN-REQ-014",
+          "ownership": "STORY-002 owns terminology uses workflows and moonspec consistently."
+        },
+        {
+          "coverageId": "DESIGN-REQ-015",
+          "ownership": "STORY-002 owns tests cover presets, tools, gating, remediation, and terminology."
+        }
+      ],
+      "dependencies": [
+        "STORY-005"
+      ],
+      "assumptions": [
+        "Existing trusted GitHub tools remain the provider boundary."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Create GitHub issue story-output tools",
+      "description": "As a breakdown workflow, I need trusted story-output tools that turn eligible story candidates into GitHub issues and create downstream MoonMind workflow executions with stable mappings and conservative dependency semantics.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-1063: Update Presets",
+        "sections": [
+          "Add GitHub Issue creation from MoonSpec breakdowns"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "independentTest": "Call the new GitHub story-output handlers with reconciled stories and assert eligible issues, skipped stories, issue mappings, explicit dependencyMode, and ordered dependsOn downstream workflow executions.",
+      "acceptanceCriteria": [
+        "story.create_github_issues is registered and creates one GitHub issue per eligible story.",
+        "story.create_github_issue_implement_workflows creates GitHub Issue Implement workflow executions from issue mappings.",
+        "story.create_github_issue_orchestrate_workflows creates GitHub Issue Orchestrate workflow executions from issue mappings.",
+        "Outputs use workflow terminology and do not claim GitHub dependencies unless a trusted API result proves them."
+      ],
+      "requirements": [
+        "Read runtime story breakdown JSON.",
+        "Reuse reconciliation behavior for fully implemented, partially implemented, and unverifiable stories.",
+        "Preserve source path/title/claim/source issue traceability in GitHub issue bodies.",
+        "Return stable issue and workflow mappings plus dependency mode/count."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-007",
+          "ownership": "STORY-003 owns create github story-output tools."
+        },
+        {
+          "coverageId": "DESIGN-REQ-008",
+          "ownership": "STORY-003 owns preserve story order and dependency edges."
+        },
+        {
+          "coverageId": "DESIGN-REQ-014",
+          "ownership": "STORY-003 owns terminology uses workflows and moonspec consistently."
+        },
+        {
+          "coverageId": "DESIGN-REQ-015",
+          "ownership": "STORY-003 owns tests cover presets, tools, gating, remediation, and terminology."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [],
+      "needsClarification": [
+        "Choose the first GitHub dependency mode: no dependency mode or body-based Blocked by/Blocks traceability."
+      ]
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Add GitHub issue breakdown composite presets",
+      "description": "As an operator with a broad source issue or design, I need Breakdown and GitHub Issue Implement and Breakdown and GitHub Issue Orchestrate presets that create GitHub issues from story candidates and enqueue dependent downstream workflows without implementing inline.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-1063: Update Presets",
+        "sections": [
+          "Add Breakdown and GitHub Issue Implement",
+          "Add Breakdown and GitHub Issue Orchestrate"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "independentTest": "Seed and expand both GitHub breakdown composite presets and assert source loading, moonspec-breakdown input preference, reconciliation, GitHub issue creation, ordered dependent workflow creation, downstream preset selection, source_design_path propagation, and partial outcome reporting.",
+      "acceptanceCriteria": [
+        "github-issue-breakdown-implement title is exactly Breakdown and GitHub Issue Implement.",
+        "github-issue-breakdown-orchestrate title is exactly Breakdown and GitHub Issue Orchestrate.",
+        "The implement composite creates downstream GitHub Issue Implement workflow executions.",
+        "The orchestrate composite creates downstream GitHub Issue Orchestrate workflow executions.",
+        "Neither composite performs implementation inline."
+      ],
+      "requirements": [
+        "Create api_service/data/presets/github-issue-breakdown-implement.yaml.",
+        "Create api_service/data/presets/github-issue-breakdown-orchestrate.yaml.",
+        "Preserve story order, dependencies, source issue, source document path, and traceability in downstream inputs."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-001",
+          "ownership": "STORY-004 owns normalize breakdown preset identities."
+        },
+        {
+          "coverageId": "DESIGN-REQ-005",
+          "ownership": "STORY-004 owns add github breakdown implement preset."
+        },
+        {
+          "coverageId": "DESIGN-REQ-006",
+          "ownership": "STORY-004 owns add github breakdown orchestrate preset."
+        },
+        {
+          "coverageId": "DESIGN-REQ-008",
+          "ownership": "STORY-004 owns preserve story order and dependency edges."
+        },
+        {
+          "coverageId": "DESIGN-REQ-014",
+          "ownership": "STORY-004 owns terminology uses workflows and moonspec consistently."
+        },
+        {
+          "coverageId": "DESIGN-REQ-015",
+          "ownership": "STORY-004 owns tests cover presets, tools, gating, remediation, and terminology."
+        }
+      ],
+      "dependencies": [
+        "STORY-003",
+        "STORY-005"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Gate issue implementation with moonspec-verify",
+      "description": "As an operator relying on Jira or GitHub Issue Implement, I need implementation, PR creation, and final issue lifecycle transitions to be gated by moonspec-verify with bounded remediation and re-verification when the verifier reports additional work.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-1063: Update Presets",
+        "sections": [
+          "Update Jira Implement and GitHub Issue Implement to use moonspec-verify"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "independentTest": "Expand Jira Implement and GitHub Issue Implement and simulate FULLY_IMPLEMENTED, ADDITIONAL_WORK_NEEDED, exhausted remediation, and terminal environment verifier outcomes to assert PR/status gating behavior.",
+      "acceptanceCriteria": [
+        "Jira Implement writes artifacts/jira-implement-verify.json.",
+        "GitHub Issue Implement writes artifacts/github-issue-implement-verify.json.",
+        "issue-implement-work-pr includes verification_target defaulting to issue_brief and bounded remediation_max_attempts.",
+        "PR creation and review transitions require the latest controlling FULLY_IMPLEMENTED verifier result except already-implemented no-code-change paths.",
+        "ADDITIONAL_WORK_NEEDED remediation uses the verification report remainingWork as authoritative input."
+      ],
+      "requirements": [
+        "Replace or augment auto verification in issue-implement-work-pr with moonspec-verify issue-brief verification.",
+        "Thread verification artifact paths through Jira and GitHub provider mappings.",
+        "Block PR creation and final issue status changes on terminal verifier failures or exhausted remediation."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-009",
+          "ownership": "STORY-005 owns issue implement flows use moonspec-verify gate."
+        },
+        {
+          "coverageId": "DESIGN-REQ-010",
+          "ownership": "STORY-005 owns verification remediation loop gates transitions."
+        },
+        {
+          "coverageId": "DESIGN-REQ-012",
+          "ownership": "STORY-005 owns moonspec-verify emits structured json when requested."
+        },
+        {
+          "coverageId": "DESIGN-REQ-013",
+          "ownership": "STORY-005 owns verifier verdict vocabulary is workflow-consumable."
+        },
+        {
+          "coverageId": "DESIGN-REQ-015",
+          "ownership": "STORY-005 owns tests cover presets, tools, gating, remediation, and terminology."
+        }
+      ],
+      "dependencies": [
+        "STORY-006"
+      ],
+      "assumptions": [
+        "Default remediation attempts remain a product decision; 2 is the recommended issue-implement default."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Extend moonspec-verify for issue briefs",
+      "description": "As a verification step running without a full MoonSpec feature directory, I need moonspec-verify to verify Jira and GitHub issue briefs, produce Markdown plus optional structured JSON, and provide bounded remediation handoff data.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-1063: Update Presets",
+        "sections": [
+          "Make moonspec-verify flexible enough for issue workflows"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "independentTest": "Run moonspec-verify in issue_brief and auto modes against Jira and GitHub brief artifacts without spec.md/plan.md/tasks.md and assert missing feature artifacts do not fail by themselves, missing brief artifacts produce the documented outcome, JSON writes only when requested, remainingWork is structured, and verdicts are documented.",
+      "acceptanceCriteria": [
+        "moonspec-verify supports moonspec_feature, issue_brief, and auto target modes.",
+        "issue_brief mode requires the issue brief artifact and treats MoonSpec feature files as optional context.",
+        "The inventory derives from issue title, body, acceptance criteria, labels, normalized brief, and assessment artifacts.",
+        "The skill remains read-only except explicit verification artifact writing.",
+        "The requested JSON shape is written when verification_artifact_path is supplied and Markdown is still returned."
+      ],
+      "requirements": [
+        "Update moonspec-verify source and regenerated bundle through the established skill path.",
+        "Document all workflow-consumed verdicts consistently.",
+        "Preserve skill projection contamination as diagnostic.",
+        "Distinguish implementation gaps from verification gaps and emit concrete remainingWork."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-011",
+          "ownership": "STORY-006 owns moonspec-verify supports issue-brief mode."
+        },
+        {
+          "coverageId": "DESIGN-REQ-012",
+          "ownership": "STORY-006 owns moonspec-verify emits structured json when requested."
+        },
+        {
+          "coverageId": "DESIGN-REQ-013",
+          "ownership": "STORY-006 owns verifier verdict vocabulary is workflow-consumable."
+        },
+        {
+          "coverageId": "DESIGN-REQ-010",
+          "ownership": "STORY-006 owns verification remediation loop gates transitions."
+        },
+        {
+          "coverageId": "DESIGN-REQ-015",
+          "ownership": "STORY-006 owns tests cover presets, tools, gating, remediation, and terminology."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Enforce workflow terminology and MoonSpec spelling",
+      "description": "As a user reading preset, UI, or result copy, I need MoonMind queue entries described as workflows or workflow executions and MoonSpec spelled consistently, while valid domain-specific uses of task remain allowed.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-1063: Update Presets",
+        "sections": [
+          "Terminology cleanup"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "independentTest": "Run terminology guard tests over preset YAML and public UI copy, asserting prohibited MoonMind task phrases and Moon Spec spelling are absent while allowed domain phrases such as tasks.md, Generate TDD task breakdown, Temporal Task, Workflow Task, Activity Task, and Jira task issue type remain permitted.",
+      "acceptanceCriteria": [
+        "User-facing copy uses workflow or workflow execution for MoonMind queue entries.",
+        "Public copy does not use MoonMind task terminology except explicit allowed domain terms.",
+        "Public copy spells MoonSpec consistently.",
+        "Workflow-native aliases such as createdWorkflowCount, workflows, workflowMappings, and dependencyCount are added where legacy task-shaped result fields still have consumers."
+      ],
+      "requirements": [
+        "Update affected preset titles, descriptions, UI labels, step instructions, and docs.",
+        "Extend terminology guardrails for preset YAML and public UI copy.",
+        "Keep valid uses of task where the domain requires it."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-014",
+          "ownership": "STORY-007 owns terminology uses workflows and moonspec consistently."
+        },
+        {
+          "coverageId": "DESIGN-REQ-015",
+          "ownership": "STORY-007 owns tests cover presets, tools, gating, remediation, and terminology."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-003",
+        "STORY-004",
+        "STORY-005"
+      ],
+      "assumptions": [
+        "Temporary task-shaped compatibility aliases are acceptable only where existing consumers still depend on them."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-002",
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005",
+      "STORY-006",
+      "STORY-007"
+    ]
+  },
+  "outOfScope": [
+    "Creating Jira or GitHub issues during this breakdown step.",
+    "Creating spec.md files or specs/ directories during this breakdown step.",
+    "Implementing preset, workflow, tool, or verifier changes during this breakdown step.",
+    "Changing existing preset slugs unless a later implementation story deliberately chooses and tests a migration."
+  ]
+}
