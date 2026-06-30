@@ -530,6 +530,33 @@ describe('Dashboard shared entry', () => {
     expect(rowBlock).not.toContain('border-bottom');
   });
 
+  it('keeps workflow titles clamped to two consistent lines in the list and sidebar', async () => {
+    const tableTitleBlock = cssRuleBlock(dashboardCss, '.workflow-list-row-title');
+    expect(tableTitleBlock).toContain('display: -webkit-box');
+    expect(tableTitleBlock).toContain('min-height: 2.5em');
+    expect(tableTitleBlock).toContain('max-height: 2.5em');
+    expect(tableTitleBlock).toContain('-webkit-line-clamp: 2');
+
+    const sidebarRowBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-row');
+    expect(sidebarRowBlock).toContain('min-height: 3.75rem');
+
+    const sidebarTitleBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-title');
+    expect(sidebarTitleBlock).toContain('display: -webkit-box');
+    expect(sidebarTitleBlock).toContain('min-height: 2.5em');
+    expect(sidebarTitleBlock).toContain('max-height: 2.5em');
+    expect(sidebarTitleBlock).toContain('-webkit-line-clamp: 2');
+    expect(sidebarTitleBlock).not.toContain('white-space: nowrap');
+  });
+
+  it('keeps the workflow sidebar scrollbar close to its divider', async () => {
+    const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
+    expect(sidebarBlock).toContain('padding: 0 0.125rem 0 0');
+
+    const sidebarListBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-list');
+    expect(sidebarListBlock).toContain('padding: 0 0.125rem 0 0');
+    expect(sidebarListBlock).toContain('scrollbar-width: thin');
+  });
+
   it('keeps checkbox label hit areas bounded to visible control text', async () => {
     const checkboxLabelBlock = cssRuleBlock(dashboardCss, 'label.checkbox');
 
