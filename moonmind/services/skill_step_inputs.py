@@ -97,6 +97,8 @@ async def validate_skill_step_inputs(
         ).strip()
         if not skill_name or skill_name.lower() == "auto":
             continue
+        if not _has_skill_contract_evidence(skill_payload):
+            continue
 
         entry = await _resolve_skill_entry(
             skill_name=skill_name,
@@ -188,6 +190,13 @@ def _skill_inputs(skill_payload: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(value, Mapping):
             return deepcopy(dict(value))
     return {}
+
+
+def _has_skill_contract_evidence(skill_payload: Mapping[str, Any]) -> bool:
+    return any(
+        str(skill_payload.get(key) or "").strip()
+        for key in ("contentRef", "contentDigest", "inputContractDigest")
+    )
 
 
 async def _resolve_skill_entry(

@@ -166,6 +166,26 @@ async def test_validate_skill_step_inputs_normalizes_legacy_args() -> None:
 
 
 @pytest.mark.asyncio
+async def test_validate_skill_step_inputs_resolves_digest_only_deployment_skill() -> None:
+    result = await validate_skill_step_inputs(
+        initial_parameters=_parameters(
+            {
+                "name": "issue-implement",
+                "inputContractDigest": "sha256:client-contract",
+                "inputs": {"issue": "MM-1052"},
+            }
+        ),
+        session=_ArtifactMetadataSession(_metadata()),
+    )
+
+    assert result.valid
+    skill = result.parameters["workflow"]["steps"][0]["skill"]
+    assert skill["contentRef"] == "art_skill"
+    assert skill["contentDigest"] == "sha256:skill"
+    assert skill["inputContractDigest"] == "sha256:contract"
+
+
+@pytest.mark.asyncio
 async def test_validate_skill_step_inputs_replaces_client_supplied_evidence() -> None:
     session = _ArtifactMetadataSession(_metadata())
     result = await validate_skill_step_inputs(
