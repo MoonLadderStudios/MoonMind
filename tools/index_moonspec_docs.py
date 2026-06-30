@@ -37,7 +37,7 @@ from check_documentation_architecture import (
 ISSUE = "MM-930"
 IMPLEMENTATION_ISSUE = "MM-938"
 DEFAULT_OUTPUT = Path("artifacts/moonspec-doc-index/index.json")
-CONSTITUTION_PATH = ".specify/memory/constitution.md"
+CONSTITUTION_PATH = "AGENTS.md"
 CLAIM_PREFIX_CLASS = {
     "DOC-REQ": "requirement",
     "CONTRACT": "contract",

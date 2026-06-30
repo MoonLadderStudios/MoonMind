@@ -621,6 +621,8 @@ def test_skills_api_returns_available_skill_ids(
     assert payload["legacyItems"][0]["uiSchema"] == {}
     assert payload["legacyItems"][0]["defaults"] == {}
     assert payload["legacyItems"][0]["hasInputSchema"] is False
+    assert payload["legacyItems"][0]["requiredCapabilities"] == []
+    assert payload["legacyItems"][0]["markdown"] is None
 
 def test_skills_api_include_content_reads_legacy_skill_markdown(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -658,8 +660,12 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     assert response.status_code == 200
     item = response.json()["legacyItems"][0]
     assert item["id"] == "speckit-orchestrate"
+    assert item["kind"] == "skill"
     assert item["requiredCapabilities"] == ["git"]
     assert item["markdown"] == skill_markdown
+    assert item["inputSchema"] == {}
+    assert item["uiSchema"] == {}
+    assert item["defaults"] == {}
     assert item["source"]["kind"] == "file"
     assert item["source"]["path"].endswith("speckit-orchestrate/SKILL.md")
     assert item["contentDigest"].startswith("sha256:")
@@ -713,11 +719,16 @@ defaults:
     assert response.status_code == 200
     item = response.json()["legacyItems"][0]
     assert item["id"] == "schema-skill"
+    assert item["kind"] == "skill"
+    assert item["label"] == "schema-skill"
+    assert item["description"] == "Schema Skill"
     assert item["inputSchema"]["required"] == ["issue"]
     assert item["inputSchema"]["properties"]["issue"]["title"] == "Issue"
     assert item["uiSchema"] == {"issue": {"widget": "textarea"}}
     assert item["defaults"] == {"issue": "MM-1050"}
     assert item["contractDigest"].startswith("sha256:")
+    assert item["contentDigest"].startswith("sha256:")
+    assert item["source"]["contentDigest"] == item["contentDigest"]
     assert item["diagnostics"] == []
     assert item["hasInputSchema"] is True
     assert item["inputContractRef"] is None
