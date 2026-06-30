@@ -33,6 +33,11 @@ from api_service.db.models import (
     PresetReleaseStatus,
     PresetScopeType,
 )
+from moonmind.capabilities.input_contracts import (
+    CapabilityInputOwner,
+    capability_contract_from_legacy_inputs,
+    normalize_capability_input_contract,
+)
 from moonmind.config.settings import settings
 
 _FORBIDDEN_STEP_KEYS = frozenset(
@@ -1042,70 +1047,30 @@ def _contains_secret_like_value(value: Any) -> bool:
         return any(_contains_secret_like_value(item) for item in value)
     return bool(_SECRET_LIKE_VALUE_PATTERN.search(str(value or "")))
 
-def _legacy_input_to_json_schema(definition: Mapping[str, Any]) -> dict[str, Any]:
-    explicit_schema = definition.get("schema")
-    if isinstance(explicit_schema, Mapping):
-        return dict(explicit_schema)
-
-    input_type = str(definition.get("type") or "text").strip().lower()
-    title = str(definition.get("label") or definition.get("name") or "").strip()
-    schema: dict[str, Any]
-    if input_type == "boolean":
-        schema = {"type": "boolean"}
-    elif input_type == "enum":
-        schema = {
-            "type": "string",
-            "enum": [str(item) for item in definition.get("options") or []],
-        }
-    else:
-        schema = {"type": "string"}
-    if title:
-        schema["title"] = title
-    placeholder = str(definition.get("placeholder") or "").strip()
-    if placeholder:
-        schema["description"] = placeholder
-    return schema
-
 def _capability_contract_from_inputs(
     *,
     inputs_schema: list[dict[str, Any]],
     annotations: Mapping[str, Any] | None,
+    slug: str,
+    title: str,
+    description: str | None,
+    preset_digest: str | None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    annotations = annotations or {}
-    annotated_schema = annotations.get("inputSchema") or annotations.get("input_schema")
-    annotated_ui_schema = annotations.get("uiSchema") or annotations.get("ui_schema")
-    annotated_defaults = annotations.get("defaults")
-    if isinstance(annotated_schema, Mapping):
-        return (
-            dict(annotated_schema),
-            dict(annotated_ui_schema) if isinstance(annotated_ui_schema, Mapping) else {},
-            dict(annotated_defaults) if isinstance(annotated_defaults, Mapping) else {},
-        )
-
-    properties: dict[str, Any] = {}
-    required: list[str] = []
-    ui_schema: dict[str, Any] = {}
-    defaults: dict[str, Any] = {}
-    for definition in inputs_schema:
-        name = str(definition.get("name") or "").strip()
-        if not name:
-            continue
-        properties[name] = _legacy_input_to_json_schema(definition)
-        if bool(definition.get("required", False)):
-            required.append(name)
-        default = definition.get("default")
-        if default not in (None, ""):
-            defaults[name] = default
-        field_ui_schema = definition.get("uiSchema") or definition.get("ui_schema")
-        if isinstance(field_ui_schema, Mapping):
-            ui_schema[name] = dict(field_ui_schema)
-    schema: dict[str, Any] = {
-        "type": "object",
-        "properties": properties,
-    }
-    if required:
-        schema["required"] = required
-    return schema, ui_schema, defaults
+    parts = capability_contract_from_legacy_inputs(
+        inputs_schema=inputs_schema,
+        annotations=annotations,
+    )
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(
+            id=slug,
+            kind="preset",
+            label=title,
+            description=description,
+            content_digest=preset_digest,
+        ),
+        parts=parts,
+    )
+    return contract["inputSchema"], contract["uiSchema"], contract["defaults"]
 
 def _schema_contract_input_definitions(
     *,
@@ -1186,9 +1151,14 @@ def _serialize_template(
     recent_applied_at: datetime | None,
     include_detail: bool,
 ) -> dict[str, Any]:
+    preset_digest = _preset_digest(template)
     input_schema, ui_schema, defaults = _capability_contract_from_inputs(
         inputs_schema=template.inputs_schema or [],
         annotations=template.annotations or {},
+        slug=template.slug,
+        title=template.title,
+        description=template.description,
+        preset_digest=preset_digest,
     )
     serialized = {
         "slug": template.slug,
@@ -1208,7 +1178,7 @@ def _serialize_template(
             list(template.required_capabilities or [])
         ),
         "releaseStatus": template.release_status.value,
-        "presetDigest": _preset_digest(template),
+        "presetDigest": preset_digest,
         "isFavorite": is_favorite,
         "recentAppliedAt": (
             recent_applied_at.astimezone(UTC).isoformat() if recent_applied_at else None
