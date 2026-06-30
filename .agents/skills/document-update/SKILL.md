@@ -66,7 +66,7 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
 5. Determine if the document is out-of-date or not fully implemented.
    - Compare the drift ledger against the current codebase. If all claims are `accurate` and nothing is `missing`, the document is up-to-date; stop and report that no update is needed.
    - If the document is `stale` or `missing`, check whether the needed update aligns with the project's declared direction.
-   - Read the constitution (`.specify/memory/constitution.md`), `README.md`, and the main architecture document under `docs/`.
+   - Read the constitution (`AGENTS.md`), `README.md`, and the main architecture document under `docs/`.
    - Assess whether the drift-correcting update would move the document toward or away from those canonical sources.
    - If the update is clearly aligned with the constitution, README, and architecture, proceed to edit the document.
    - If the update appears to contradict the project's declared direction, or if the correct direction is uncertain, do **not** edit the document. Instead, proceed to step 8 (Jira fallback).

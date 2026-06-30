@@ -34,29 +34,31 @@ def _parameters(skill_payload: dict[str, object]) -> dict[str, object]:
 
 def _metadata() -> dict[str, object]:
     return {
-        "input_schema": {
-            "type": "object",
-            "required": ["issue"],
-            "properties": {
-                "issue": {"type": "string"},
-                "repository": {
-                    "type": "string",
-                    "x-moonmind-context-default": "repository",
+        "input_contract": {
+            "input_schema": {
+                "type": "object",
+                "required": ["issue"],
+                "properties": {
+                    "issue": {"type": "string"},
+                    "repository": {
+                        "type": "string",
+                        "x-moonmind-context-default": "repository",
+                    },
+                    "branch": {
+                        "type": "string",
+                        "x-moonmind-context-default": "branch",
+                        "default": "main",
+                    },
+                    "dryRun": {"type": "boolean"},
                 },
-                "branch": {
-                    "type": "string",
-                    "x-moonmind-context-default": "branch",
-                    "default": "main",
-                },
-                "dryRun": {"type": "boolean"},
             },
+            "ui_schema": {
+                "issue": {"required": False},
+                "uiOnlyRequired": {"widget": "text"},
+            },
+            "defaults": {"dryRun": True},
+            "contract_digest": "sha256:contract",
         },
-        "ui_schema": {
-            "issue": {"required": False},
-            "uiOnlyRequired": {"widget": "text"},
-        },
-        "defaults": {"dryRun": True},
-        "input_contract_digest": "sha256:contract",
     }
 
 

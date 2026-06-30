@@ -275,15 +275,24 @@ async def _load_input_contract(
                 }
             )
 
-    input_schema = _mapping(metadata.get("input_schema") or metadata.get("inputSchema"))
-    defaults = _mapping(metadata.get("defaults"))
+    contract_metadata = metadata.get("input_contract")
+    if not isinstance(contract_metadata, Mapping):
+        contract_metadata = metadata
+    input_schema = _mapping(
+        contract_metadata.get("input_schema") or contract_metadata.get("inputSchema")
+    )
+    defaults = _mapping(contract_metadata.get("defaults"))
     digest = str(
-        metadata.get("input_contract_digest")
+        contract_metadata.get("contract_digest")
+        or contract_metadata.get("contractDigest")
+        or metadata.get("input_contract_digest")
         or metadata.get("inputContractDigest")
         or skill_payload.get("inputContractDigest")
         or ""
     ).strip()
-    ui_schema = _mapping(metadata.get("ui_schema") or metadata.get("uiSchema"))
+    ui_schema = _mapping(
+        contract_metadata.get("ui_schema") or contract_metadata.get("uiSchema")
+    )
     if not input_schema and markdown is not None:
         frontmatter = _frontmatter(markdown)
         input_schema = _mapping(

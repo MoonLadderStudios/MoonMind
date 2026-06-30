@@ -40,8 +40,8 @@ def test_build_index_emits_documents_claims_and_advisory_warnings(tmp_path: Path
         "## CONTRACT-001 Payload\n\nThe payload has one field.\n",
     )
     _write(
-        tmp_path / ".specify" / "memory" / "constitution.md",
-        "# Constitution\n\n## Principle\n\nDo the thing.\n",
+        tmp_path / "AGENTS.md",
+        "# Agent Instructions\n\n## Principle\n\nDo the thing.\n",
     )
 
     payload = mod.build_index(root=tmp_path)

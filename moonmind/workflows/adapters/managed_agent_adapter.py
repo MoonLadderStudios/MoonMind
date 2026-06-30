@@ -15,7 +15,7 @@ Key responsibilities:
    cooldown reports on 429 responses.
  - Maintain the ``slot_assigned`` wait loop internally (DOC-REQ-004).
 
-Design constraints (from constitution.md / spec):
+Design constraints (from AGENTS.md / spec):
  - No raw credential values in durable Temporal state.
  - No OAuth env vars leaked into the child environment beyond the expected
    ``BROWSER_AUTH``-style keys.
