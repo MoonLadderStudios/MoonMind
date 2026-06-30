@@ -6293,15 +6293,54 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 ).strip()
                 if skill_id:
                     normalized_skill: dict[str, Any] = {"id": skill_id}
-                    raw_args = selected_skill.get("args")
-                    if not isinstance(raw_args, dict):
-                        raw_args = selected_skill.get("inputs")
-                    if isinstance(raw_args, dict):
-                        normalized_skill["args"] = dict(raw_args)
+                    raw_inputs = selected_skill.get("inputs")
+                    if not isinstance(raw_inputs, dict):
+                        raw_inputs = selected_skill.get("args")
+                    if isinstance(raw_inputs, dict):
+                        normalized_skill["inputs"] = dict(raw_inputs)
                     _copy_skill_contract_metadata(
                         source=selected_skill,
                         target=normalized_skill,
                     )
+                    saved_digest = str(
+                        selected_skill.get("inputContractDigest") or ""
+                    ).strip()
+                    current_digest = str(
+                        selected_skill.get("currentInputContractDigest") or ""
+                    ).strip()
+                    if current_digest and current_digest != saved_digest:
+                        normalized_skill["currentInputContractDigest"] = current_digest
+                        normalized_step.setdefault("diagnostics", []).append(
+                            {
+                                "code": "skill_input_contract_digest_mismatch",
+                                "severity": "warning",
+                                "path": (
+                                    f"payload.workflow.steps[{index}]."
+                                    "skill.inputContractDigest"
+                                ),
+                                "message": (
+                                    "Skill input contract changed since this "
+                                    "draft was saved; submitted values were "
+                                    "preserved and revalidated against the "
+                                    "current contract."
+                                ),
+                                "recoverable": True,
+                            }
+                        )
+                        try:
+                            get_metrics_emitter().increment(
+                                "capability_input_contract.event",
+                                tags={
+                                    "event": "digest_mismatch",
+                                    "kind": "skill",
+                                    "skill": _bounded_metric_tag(skill_id),
+                                },
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Failed to emit skill input contract digest mismatch metric",
+                                exc_info=True,
+                            )
                     raw_caps = selected_skill.get("requiredCapabilities")
                     if raw_caps is not None:
                         normalized_caps = _coerce_string_list(
@@ -6324,6 +6363,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "inputAttachments",
                 "input_attachments",
                 "runtime",
+                "diagnostics",
                 "skill",
                 "skills",
                 "tool",

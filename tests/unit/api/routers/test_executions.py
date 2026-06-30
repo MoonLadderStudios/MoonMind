@@ -397,7 +397,7 @@ def test_task_skill_normalization_preserves_input_contract_metadata() -> None:
     steps = _normalize_task_steps(task_payload)
 
     skill = steps[0]["skill"]
-    assert skill["args"] == {"repository": "MoonLadderStudios/MoonMind"}
+    assert skill["inputs"] == {"repository": "MoonLadderStudios/MoonMind"}
     assert skill["inputSchema"]["properties"]["repository"]["type"] == "string"
     assert skill["uiSchema"]["repository"]["widget"] == "github.repository-picker"
     assert skill["defaults"] == {"branch": "main"}
@@ -3319,14 +3319,25 @@ def test_create_task_shaped_execution_rejects_explicit_skill_step_without_skill_
     service.create_execution.assert_not_awaited()
 
 
-def test_create_task_shaped_execution_preserves_empty_skill_args(
+def test_create_task_shaped_execution_normalizes_skill_inputs(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MM-569: empty `skill.args` dictionaries must be preserved through normalization,
-    matching the tool-step `inputs` behavior so downstream contract validation sees
-    the same shape regardless of step type."""
+    """MM-1058: new Skill authoring payloads emit inputs and preserve digests."""
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
+
+    async def _identity_validate_skill_step_inputs(*, initial_parameters, **_kwargs):
+        return SimpleNamespace(
+            valid=True,
+            parameters=initial_parameters,
+            error_dicts=lambda: [],
+        )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.validate_skill_step_inputs",
+        _identity_validate_skill_step_inputs,
+    )
 
     response = test_client.post(
         "/api/executions",
@@ -3338,9 +3349,13 @@ def test_create_task_shaped_execution_preserves_empty_skill_args(
                     "steps": [
                         {
                             "id": "skill-empty-args",
-                            "title": "Skill with empty args",
+                            "title": "Skill with inputs",
                             "type": "skill",
-                            "skill": {"id": "noop", "args": {}},
+                            "skill": {
+                                "id": "noop",
+                                "inputs": {},
+                                "inputContractDigest": "sha256:saved",
+                            },
                         }
                     ],
                 },
@@ -3353,7 +3368,116 @@ def test_create_task_shaped_execution_preserves_empty_skill_args(
     initial_parameters = create_kwargs["initial_parameters"]
     normalized_steps = initial_parameters["workflow"]["steps"]
     assert len(normalized_steps) == 1
-    assert normalized_steps[0]["skill"] == {"id": "noop", "args": {}}
+    assert normalized_steps[0]["skill"] == {
+        "id": "noop",
+        "inputs": {},
+        "inputContractDigest": "sha256:saved",
+    }
+
+
+def test_create_task_shaped_execution_accepts_legacy_skill_args_as_inputs(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """MM-1058: legacy Skill args remain accepted but normalize to inputs."""
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Run a legacy skill step.",
+                    "steps": [
+                        {
+                            "id": "skill-legacy-args",
+                            "type": "skill",
+                            "skill": {"id": "noop", "args": {"issueKey": "MM-1047"}},
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    normalized_steps = initial_parameters["workflow"]["steps"]
+    assert normalized_steps[0]["skill"] == {
+        "id": "noop",
+        "inputs": {"issueKey": "MM-1047"},
+    }
+
+
+def test_create_task_shaped_execution_records_skill_digest_mismatch_diagnostic(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MM-1058: digest mismatches produce backend diagnostics without values."""
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    async def _identity_validate_skill_step_inputs(*, initial_parameters, **_kwargs):
+        return SimpleNamespace(
+            valid=True,
+            parameters=initial_parameters,
+            error_dicts=lambda: [],
+        )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.validate_skill_step_inputs",
+        _identity_validate_skill_step_inputs,
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Run a stale draft skill step.",
+                    "steps": [
+                        {
+                            "id": "skill-stale-digest",
+                            "type": "skill",
+                            "skill": {
+                                "id": "noop",
+                                "inputs": {"issueKey": "MM-1058"},
+                                "inputContractDigest": "sha256:old",
+                                "currentInputContractDigest": "sha256:new",
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    normalized_step = initial_parameters["workflow"]["steps"][0]
+    assert normalized_step["skill"] == {
+        "id": "noop",
+        "inputs": {"issueKey": "MM-1058"},
+        "inputContractDigest": "sha256:old",
+        "currentInputContractDigest": "sha256:new",
+    }
+    assert normalized_step["diagnostics"][0] == {
+        "code": "skill_input_contract_digest_mismatch",
+        "severity": "warning",
+        "path": "payload.workflow.steps[0].skill.inputContractDigest",
+        "message": (
+            "Skill input contract changed since this draft was saved; submitted "
+            "values were preserved and revalidated against the current contract."
+        ),
+        "recoverable": True,
+    }
+    assert "MM-1058" not in str(normalized_step["diagnostics"])
 
 
 def test_create_task_shaped_execution_rejects_attachments_when_policy_disabled(
@@ -5550,7 +5674,7 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
             "instructions": "Audit the regression and list the missing controls.",
             "skill": {
                 "id": "speckit-clarify",
-                "args": {"feature": "workflow-start"},
+                "inputs": {"feature": "workflow-start"},
                 "requiredCapabilities": ["git", "github"],
             },
         },

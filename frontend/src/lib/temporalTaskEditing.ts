@@ -88,6 +88,8 @@ export type TemporalSubmissionDraftSkillPayload = {
   name?: string;
   inputs?: Record<string, unknown>;
   args?: Record<string, unknown>;
+  inputContractDigest?: string;
+  currentInputContractDigest?: string;
   requiredCapabilities?: unknown;
   [key: string]: unknown;
 };
@@ -541,8 +543,8 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     skillId: stringValue(tool.name, tool.id, skill.id, skill.name),
     skillArgs: firstObjectValue(tool.inputs, tool.args, skill.inputs, skill.args),
     skillInputContractDigest: stringValue(
-      tool.inputContractDigest,
       skill.inputContractDigest,
+      tool.inputContractDigest,
     ),
     skillRequiredCapabilities: stringArrayValue(
       tool.requiredCapabilities,
@@ -586,6 +588,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.stepType !== 'skill' ||
     result.skillId ||
     Object.keys(result.skillArgs).length > 0 ||
+    result.skillInputContractDigest ||
     result.skillRequiredCapabilities.length > 0 ||
     Boolean(result.runtime && Object.keys(result.runtime).length > 0) ||
     result.templateStepId ||

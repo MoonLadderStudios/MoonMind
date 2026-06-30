@@ -16530,6 +16530,7 @@ describe("Task Create schema-driven capability inputs", () => {
           tool?: { inputs?: Record<string, unknown> };
           skill?: {
             inputs?: Record<string, unknown>;
+            inputContractDigest?: string;
             args?: Record<string, unknown>;
           };
         };
@@ -16541,6 +16542,9 @@ describe("Task Create schema-driven capability inputs", () => {
     expect(request.payload.task.skill?.inputs).toMatchObject({
       repository: "MoonLadderStudios/SchemaRepo",
     });
+    expect(request.payload.task.skill?.inputContractDigest).toBe(
+      "sha256:current-skill-contract",
+    );
     expect(request.payload.task.skill?.args).toBeUndefined();
   });
 

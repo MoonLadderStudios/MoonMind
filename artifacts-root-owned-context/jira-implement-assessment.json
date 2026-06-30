@@ -1,0 +1,64 @@
+{
+  "issue_provider": "jira",
+  "issue_ref": "MM-1058",
+  "issue_url": "https://moonladder.atlassian.net/browse/MM-1058",
+  "verdict": "PARTIALLY_IMPLEMENTED",
+  "branch": "run-jira-implement-for-mm-1058-finish-dr-7d859fd2",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "HEAD equals origin/main with no commits ahead, and recent history has no MM-1058 commit reference. Current repository state includes shared Skill/Preset input contract parsing, contractDigest exposure, frontend schema rendering/validation for Skill fields, legacy args/input normalization, and schema-less/equivalence coverage. Core MM-1058 draft lifecycle work is not implemented: no inputContractDigest is stored in draft Skill steps, no saved-vs-current or pinned digest comparison exists on reload/submit, no digest mismatch notice/backend validation result is present, pinned Skill snapshot validation is not present for drafts, and no dedicated metrics/traces for parser/renderer/validation/fallback/digest/strict-policy outcomes were found.",
+  "requirements": [
+    {
+      "description": "Drafts preserve entered values when a Skill input contract changes and revalidate against the current or pinned contract.",
+      "status": "not_met"
+    },
+    {
+      "description": "A digest mismatch produces a user-visible notice and backend validation result without losing values.",
+      "status": "not_met"
+    },
+    {
+      "description": "Legacy Skill-step payload readers accept older argument fields and normalize to inputs; updated authoring surfaces emit inputs.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Diagnostics have code, severity, path, message, and recoverable fields across parser, validation, renderer, and policy outcomes.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Metrics and traces cover parse success/failure, schema omitted, generated fields by widget, fallback usage, unsupported widgets, validation failures, digest mismatches, and strict-policy rejections without raw user values.",
+      "status": "not_met"
+    },
+    {
+      "description": "Preset rendering remains API-compatible and equivalent Skill/Preset schemas generate equivalent fields.",
+      "status": "met"
+    },
+    {
+      "description": "Store inputContractDigest in draft Skill steps.",
+      "status": "not_met"
+    },
+    {
+      "description": "Compare saved and current/pinned Skill input contract digests on draft reload and submit.",
+      "status": "not_met"
+    },
+    {
+      "description": "Preserve entered values and revalidate safely when contracts change.",
+      "status": "not_met"
+    },
+    {
+      "description": "Validate pinned workflow snapshots against their pinned contract rather than latest catalog version.",
+      "status": "not_met"
+    },
+    {
+      "description": "Expose user-safe diagnostics in Create page surfaces and richer diagnostics in admin/developer surfaces.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Add observability for parser, renderer, validation, fallback, digest mismatch, and strict-policy outcomes without raw user values.",
+      "status": "not_met"
+    },
+    {
+      "description": "Add end-to-end or integration-style conformance coverage for Skill/Preset rendering equivalence and schema-less Skill selection.",
+      "status": "partially_met"
+    }
+  ]
+}

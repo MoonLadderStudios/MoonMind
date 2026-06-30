@@ -3757,12 +3757,7 @@ class CodexWorker:
         task_skill_node = task.get("skill")
         task_skill = task_skill_node if isinstance(task_skill_node, Mapping) else {}
         task_skill_id = str(task_skill.get("id") or "auto").strip() or "auto"
-        task_skill_args_node = task_skill.get("args")
-        task_skill_args = (
-            dict(task_skill_args_node)
-            if isinstance(task_skill_args_node, Mapping)
-            else {}
-        )
+        task_skill_args = self._skill_inputs_from_node(task_skill)
 
         def _augment_skill_args(
             skill_id: str, skill_args: Mapping[str, Any]
@@ -3844,12 +3839,9 @@ class CodexWorker:
                 explicit_step_skill = str(step_skill.get("id") or "").strip()
                 if explicit_step_skill:
                     effective_skill_id = explicit_step_skill
-                    step_skill_args_node = step_skill.get("args")
                     effective_skill_args = _augment_skill_args(
                         effective_skill_id,
-                        step_skill_args_node
-                        if isinstance(step_skill_args_node, Mapping)
-                        else {},
+                        self._skill_inputs_from_node(step_skill),
                     )
                 else:
                     effective_skill_id = task_skill_id
@@ -8393,8 +8385,7 @@ class CodexWorker:
         if isinstance(skill_args_override, Mapping):
             args = dict(skill_args_override)
         else:
-            raw_args = skill.get("args")
-            args = dict(raw_args) if isinstance(raw_args, Mapping) else {}
+            args = self._skill_inputs_from_node(skill)
 
         repository = str(canonical_payload.get("repository") or "").strip()
         instructions = (
@@ -8448,6 +8439,14 @@ class CodexWorker:
         if codex_overrides:
             payload["codex"] = codex_overrides
         return payload
+
+    @staticmethod
+    def _skill_inputs_from_node(skill: Mapping[str, Any]) -> dict[str, Any]:
+        raw_inputs = skill.get("inputs")
+        if isinstance(raw_inputs, Mapping):
+            return dict(raw_inputs)
+        raw_args = skill.get("args")
+        return dict(raw_args) if isinstance(raw_args, Mapping) else {}
 
     @staticmethod
     def _proposal_hook_skill_ids(*, include_continuation: bool) -> tuple[str, ...]:
