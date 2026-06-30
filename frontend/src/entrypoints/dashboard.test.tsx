@@ -555,6 +555,21 @@ describe('Dashboard shared entry', () => {
     expect(sidebarListBlock).toContain('scrollbar-width: thin');
   });
 
+  it('MM-1064 keeps workflow sidebar status icons compact inside status-colored containers', async () => {
+    const iconBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-status-icon');
+    expect(iconBlock).toContain('display: inline-flex');
+    expect(iconBlock).toContain('align-items: center');
+    expect(iconBlock).toContain('width: 1.375rem');
+    expect(iconBlock).toContain('height: 1.375rem');
+    expect(iconBlock).toContain('min-width: 1.375rem');
+    expect(iconBlock).toContain('border-radius: 0.375rem');
+    expect(iconBlock).toContain('justify-content: center');
+
+    const svgBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-status-icon svg');
+    expect(svgBlock).toContain('width: 0.8125rem');
+    expect(svgBlock).toContain('height: 0.8125rem');
+  });
+
   it('keeps checkbox label hit areas bounded to visible control text', async () => {
     const checkboxLabelBlock = cssRuleBlock(dashboardCss, 'label.checkbox');
 

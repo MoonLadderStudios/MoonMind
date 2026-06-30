@@ -720,10 +720,74 @@ describe('Workflow Detail Entrypoint', () => {
     const pinned = within(pinnedGroup).getByRole('link', { name: /MM-999 selected workflow outside filters/i });
     expect(pinned.getAttribute('aria-current')).toBe('page');
     expect(pinned.getAttribute('data-pinned')).toBe('true');
-    expect(within(pinned).getByLabelText('executing')).toBeTruthy();
+    expect(within(pinned).getByLabelText('Status: executing')).toBeTruthy();
     expect(within(sidebar).getByRole('link', { name: /Filtered workflow/i }).getAttribute('aria-current')).toBeNull();
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+  });
+
+  it('MM-1064 renders compact sidebar status icons for canonical lifecycle states', async () => {
+    window.history.pushState({}, 'Workspace Sidebar Icons Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches({
+      rows: [
+        ['scheduled', 'Scheduled workflow'],
+        ['initializing', 'Initializing workflow'],
+        ['waiting_on_dependencies', 'Dependency wait workflow'],
+        ['planning', 'Planning workflow'],
+        ['awaiting_slot', 'Slot wait workflow'],
+        ['executing', 'Executing workflow'],
+        ['proposals', 'Proposals workflow'],
+        ['awaiting_external', 'External wait workflow'],
+        ['finalizing', 'Finalizing workflow'],
+        ['no_commit', 'No commit workflow'],
+        ['no_changes', 'No changes workflow'],
+        ['completed', 'Completed workflow'],
+        ['failed', 'Failed workflow'],
+        ['canceled', 'Canceled workflow'],
+        ['constructor', 'Unknown prototype workflow'],
+      ].map(([rawState, title]) => ({
+        workflowId: `test-${rawState}`,
+        taskId: `test-${rawState}`,
+        source: 'temporal',
+        title,
+        status: rawState,
+        state: rawState,
+        rawState,
+        createdAt: '2026-04-09T00:00:00Z',
+      })),
+    });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const expectedIcons = [
+      ['Scheduled workflow', 'Status: scheduled', 'status-scheduled', 'lucide-calendar-clock'],
+      ['Initializing workflow', 'Status: initializing', 'status-initializing', 'lucide-power'],
+      ['Dependency wait workflow', 'Status: AWAITING DEP', 'status-awaiting-dependencies', 'lucide-git-branch'],
+      ['Planning workflow', 'Status: planning', 'status-planning', 'lucide-map'],
+      ['Slot wait workflow', 'Status: AWAITING SLOT', 'status-awaiting-slot', 'lucide-hourglass'],
+      ['Executing workflow', 'Status: executing', 'status-running', 'lucide-play'],
+      ['Proposals workflow', 'Status: proposals', 'status-running', 'lucide-lightbulb'],
+      ['External wait workflow', 'Status: awaiting external', 'status-awaiting-external', 'lucide-hand'],
+      ['Finalizing workflow', 'Status: finalizing', 'status-finalizing', 'lucide-package-check'],
+      ['No commit workflow', 'Status: No commit', 'status-no-commit', 'lucide-check'],
+      ['No changes workflow', 'Status: No commit', 'status-no-commit', 'lucide-check'],
+      ['Completed workflow', 'Status: completed', 'status-completed', 'lucide-check'],
+      ['Failed workflow', 'Status: failed', 'status-failed', 'lucide-x'],
+      ['Canceled workflow', 'Status: canceled', 'status-canceled', 'lucide-ban'],
+      ['Unknown prototype workflow', 'Status: constructor', 'status-neutral', 'lucide-play'],
+    ] as const;
+
+    for (const [title, ariaLabel, statusClass, iconClass] of expectedIcons) {
+      const row = await within(sidebar).findByRole('link', { name: new RegExp(title, 'i') });
+      const iconContainer = within(row).getByLabelText(ariaLabel);
+      expect(iconContainer.classList.contains('workflow-workspace-sidebar-status-icon')).toBe(true);
+      expect(iconContainer.classList.contains(statusClass)).toBe(true);
+      expect(iconContainer.getAttribute('data-effect')).toBeNull();
+      expect(iconContainer.querySelector(`svg.${iconClass}`)).toBeTruthy();
+      expect(within(row).queryByText(ariaLabel.replace('Status: ', ''))).toBeNull();
+    }
   });
 
   it('MM-999 does not show a pinned current row when the selected workflow is in the normal sidebar list', async () => {
@@ -1037,11 +1101,12 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    // The sidebar row is now just the title and a status pill; both untrusted
-    // fields must render as escaped text rather than live DOM nodes.
+    // The sidebar row is now just the title and a status icon; untrusted fields
+    // must not become live DOM nodes.
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(await within(sidebar).findByText('<img src=x onerror=alert(1)>')).toBeTruthy();
-    expect(within(sidebar).getAllByText('<script>alert(1)</script>').length).toBeGreaterThan(0);
+    const statusIcon = within(sidebar).getByLabelText('Status: <script>alert(1)</script>');
+    expect(statusIcon.getAttribute('title')).toBe('<script>alert(1)</script>');
     expect(within(sidebar).queryByRole('img')).toBeNull();
     expect(sidebar.querySelector('script')).toBeNull();
   });

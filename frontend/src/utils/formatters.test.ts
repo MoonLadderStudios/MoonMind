@@ -17,6 +17,7 @@ describe('formatStatusLabel', () => {
   it('replaces status underscores with spaces without changing raw filter values', () => {
     expect(formatStatusLabel('awaiting_external')).toBe('awaiting external');
     expect(formatStatusLabel('validating_token')).toBe('validating token');
+    expect(formatStatusLabel('constructor')).toBe('constructor');
     expect(formatStatusLabel(null)).toBe('—');
   });
 });

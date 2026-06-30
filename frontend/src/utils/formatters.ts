@@ -23,7 +23,10 @@ export function formatStatusLabel(status: string | null | undefined, fallback = 
   const raw = String(status || fallback).trim();
   if (!raw) return fallback;
   const key = raw.toLowerCase().replace(/[\s_]+/g, '_');
-  return STATUS_DISPLAY_NAMES[key] || raw.replace(/_/g, ' ').replace(/\s+/g, ' ');
+  if (Object.prototype.hasOwnProperty.call(STATUS_DISPLAY_NAMES, key)) {
+    return STATUS_DISPLAY_NAMES[key]!;
+  }
+  return raw.replace(/_/g, ' ').replace(/\s+/g, ' ');
 }
 
 const RUNTIME_DISPLAY_NAMES: Record<string, string> = {
