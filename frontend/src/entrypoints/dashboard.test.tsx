@@ -122,6 +122,25 @@ vi.mock('./workflow-list', () => ({
   default: () => <div>Workflow list route loaded</div>,
 }));
 
+vi.mock('./workflows-workspace', () => ({
+  default: () => {
+    const isDetailRoute =
+      window.location.pathname.startsWith('/workflows/') && window.location.pathname !== '/workflows/new';
+    return (
+      <div data-testid="workflows-workspace-route">
+        <a href="/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95?source=temporal">
+          Mock workflow title
+        </a>
+        {isDetailRoute ? (
+          <div>Workflow detail route loaded: {window.location.pathname}</div>
+        ) : (
+          <div>Workflow list route loaded</div>
+        )}
+      </div>
+    );
+  },
+}));
+
 const workflowDetailMock = vi.hoisted(() => ({
   initialPathByNode: new WeakMap<HTMLElement, string>(),
 }));
@@ -299,9 +318,10 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(
-      await screen.findByText(`Workflow detail initial path: ${encodedPath}`),
+      await screen.findByText(`Workflow detail route loaded: ${encodedPath}`),
     ).toBeTruthy();
     expect(screen.queryByText(/Unknown dashboard page:/i)).toBeNull();
+    expect(document.querySelector('.panel--data-wide')).toBeTruthy();
   });
 
   it('recovers from a failed lazy page import when the user retries (MM-960)', async () => {
@@ -388,6 +408,25 @@ describe('Dashboard shared entry', () => {
     expect(window.location.search).toBe('?source=temporal');
   });
 
+  it('MM-1061 keeps the workflows workspace parent mounted across list-to-detail SPA navigation', async () => {
+    window.history.replaceState({}, '', '/workflows?source=temporal');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    const workspace = screen.getByTestId('workflows-workspace-route');
+
+    fireEvent.click(screen.getByRole('link', { name: 'Mock workflow title' }));
+
+    expect(
+      await screen.findByText(
+        'Workflow detail route loaded: /workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByTestId('workflows-workspace-route')).toBe(workspace);
+    expect(window.location.pathname).toBe('/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95');
+    expect(window.location.search).toBe('?source=temporal');
+  });
+
   it('MM-1029 loads Settings permissions during SPA navigation', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -422,17 +461,17 @@ describe('Dashboard shared entry', () => {
     );
   });
 
-  it('MM-1029 remounts same-component route pages on SPA navigation', async () => {
+  it('MM-1061 updates workflow detail routes inside the shared workspace component', async () => {
     window.history.replaceState({}, '', '/workflows/first/debug');
 
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByText('Workflow detail initial path: /workflows/first/debug')).toBeTruthy();
+    expect(await screen.findByText('Workflow detail route loaded: /workflows/first/debug')).toBeTruthy();
 
     navigateTo('/workflows/second');
 
-    expect(await screen.findByText('Workflow detail initial path: /workflows/second')).toBeTruthy();
-    expect(screen.queryByText('Workflow detail initial path: /workflows/first/debug')).toBeNull();
+    expect(await screen.findByText('Workflow detail route loaded: /workflows/second')).toBeTruthy();
+    expect(screen.queryByText('Workflow detail route loaded: /workflows/first/debug')).toBeNull();
   });
 
   it('does not render operational metrics on the workflows home dashboard', async () => {

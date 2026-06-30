@@ -8,6 +8,7 @@ export type DashboardPage =
   | 'settings'
   | 'skills'
   | 'workflow-start'
+  | 'workflows-workspace'
   | 'workflow-detail'
   | 'workflows-home'
   | 'workflow-list';
@@ -102,13 +103,13 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
     return null;
   }
   if (path === '/workflows') {
-    return { page: 'workflow-list', dataWidePanel: true, currentPath: path };
+    return { page: 'workflows-workspace', dataWidePanel: true, currentPath: path };
   }
   if (path === '/workflows/new') {
     return { page: 'workflow-start', dataWidePanel: false, currentPath: path };
   }
   if (isWorkflowDetailPath(path) && path !== '/workflows/new') {
-    return { page: 'workflow-detail', dataWidePanel: false, currentPath: path };
+    return { page: 'workflows-workspace', dataWidePanel: true, currentPath: path };
   }
   if (path === '/settings' || path.startsWith('/settings/')) {
     return { page: 'settings', dataWidePanel: true, currentPath: path };
