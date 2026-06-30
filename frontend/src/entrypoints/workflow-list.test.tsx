@@ -1783,6 +1783,7 @@ describe('Workflows Entrypoint', () => {
       'Workspace return focus',
       '/workflows?stateIn=completed&limit=50&returnFromWorkflowDetail=1',
     );
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus');
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
@@ -1790,6 +1791,8 @@ describe('Workflows Entrypoint', () => {
     const listRegion = screen.getByRole('region', { name: 'Workflow list' });
     await waitFor(() => expect(document.activeElement).toBe(listRegion));
     expect(listRegion.getAttribute('tabindex')).toBe('-1');
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    focusSpy.mockRestore();
   });
 
   it('MM-1008 does not make the workflow list region focusable on normal list visits', async () => {
