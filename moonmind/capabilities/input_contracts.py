@@ -98,6 +98,10 @@ _SECRET_LIKE_VALUE_PATTERN = re.compile(
     ),
     re.IGNORECASE,
 )
+_SECRET_LIKE_KEY_PATTERN = re.compile(
+    r"(token|password|secret|private[_-]?key|api[_-]?key)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +195,17 @@ def parse_skill_markdown_frontmatter(
     return dict(parsed), []
 
 
+def extract_frontmatter(
+    markdown: str, *, source_label: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Parse YAML frontmatter from Skill markdown, keeping discovery non-blocking."""
+
+    metadata, diagnostics = parse_skill_markdown_frontmatter(markdown)
+    if source_label:
+        diagnostics = [dict(item) for item in diagnostics]
+    return metadata, diagnostics
+
+
 def parse_capability_input_contract(
     raw_metadata: Mapping[str, Any] | None,
 ) -> CapabilityInputContractParts:
@@ -282,8 +297,9 @@ def normalize_capability_input_contract(
 
     if input_schema:
         root_type = input_schema.get("type")
-        properties = input_schema.get("properties", {})
-        if root_type != "object" or not isinstance(properties, Mapping):
+        if root_type != "object" or not isinstance(
+            input_schema.get("properties", {}), Mapping
+        ):
             diagnostics.append(
                 _diagnostic(
                     code="input_schema_root_not_object",
@@ -326,11 +342,9 @@ def normalize_capability_input_contract(
         "defaults": defaults,
     }
     contract_digest = "sha256:" + hashlib.sha256(
-        json.dumps(
-            digest_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
+        json.dumps(digest_payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
     ).hexdigest()
 
     contract: dict[str, Any] = {
@@ -342,6 +356,7 @@ def normalize_capability_input_contract(
         "defaults": defaults,
         "contractDigest": contract_digest,
         "diagnostics": diagnostics,
+        "hasInputSchema": bool(input_schema.get("properties")),
     }
     if owner.description:
         contract["description"] = owner.description
@@ -425,6 +440,91 @@ def validate_capability_inputs(
     }
 
 
+def contract_from_skill_markdown(
+    markdown: str,
+    *,
+    skill_id: str,
+    source_label: str,
+    content_digest: str | None = None,
+) -> dict[str, Any]:
+    """Return the normalized input contract parsed from one Skill markdown body."""
+
+    contract = parse_skill_capability_input_contract(
+        skill_id=skill_id,
+        label=skill_id,
+        markdown=markdown,
+        source={"kind": "file", "path": source_label},
+    )
+    if content_digest:
+        contract["contentDigest"] = content_digest
+        source = contract.get("source")
+        if isinstance(source, dict):
+            source["contentDigest"] = content_digest
+        contract["contractDigest"] = _contract_digest(
+            owner_id=skill_id,
+            owner_kind="skill",
+            content_digest=content_digest,
+            input_schema=contract.get("inputSchema") or {},
+            ui_schema=contract.get("uiSchema") or {},
+            defaults=contract.get("defaults") or {},
+        )
+    return contract
+
+
+def contract_metadata_for_artifact(contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Return compact artifact metadata fields for a normalized input contract."""
+
+    return {
+        "input_schema": dict(contract.get("inputSchema") or {}),
+        "ui_schema": dict(contract.get("uiSchema") or {}),
+        "defaults": dict(contract.get("defaults") or {}),
+        "contract_digest": contract.get("contractDigest"),
+        "diagnostics": list(contract.get("diagnostics") or []),
+        "has_input_schema": bool(contract.get("hasInputSchema")),
+        "parser_version": PARSER_VERSION,
+    }
+
+
+def contract_from_artifact_metadata(
+    metadata: Mapping[str, Any] | None,
+    *,
+    skill_id: str,
+    content_digest: str | None,
+) -> dict[str, Any]:
+    """Load a normalized Skill input contract from persisted artifact metadata."""
+
+    metadata = metadata or {}
+    input_schema = dict(metadata.get("input_schema") or {})
+    ui_schema = dict(metadata.get("ui_schema") or {})
+    defaults = dict(metadata.get("defaults") or {})
+    diagnostics = list(metadata.get("diagnostics") or [])
+    contract_digest = metadata.get("contract_digest")
+    if not contract_digest:
+        contract_digest = _contract_digest(
+            owner_id=skill_id,
+            owner_kind="skill",
+            content_digest=content_digest,
+            input_schema=input_schema,
+            ui_schema=ui_schema,
+            defaults=defaults,
+        )
+    return {
+        "id": skill_id,
+        "kind": "skill",
+        "label": skill_id,
+        "inputSchema": input_schema,
+        "uiSchema": ui_schema,
+        "defaults": defaults,
+        "contractDigest": contract_digest,
+        "diagnostics": diagnostics,
+        "contentDigest": content_digest,
+        "hasInputSchema": bool(
+            isinstance(input_schema.get("properties"), Mapping)
+            and input_schema.get("properties")
+        ),
+    }
+
+
 def parse_skill_capability_input_contract(
     *,
     skill_id: str,
@@ -448,7 +548,8 @@ def parse_skill_capability_input_contract(
         owner=CapabilityInputOwner(
             id=skill_id,
             kind="skill",
-            label=str(frontmatter.get("name") or label or skill_id).strip() or skill_id,
+            label=str(frontmatter.get("name") or label or skill_id).strip()
+            or skill_id,
             description=description,
             content_digest=content_digest,
             source={
@@ -458,6 +559,27 @@ def parse_skill_capability_input_contract(
         ),
         parts=parts,
     )
+
+
+def _contract_digest(
+    *,
+    owner_id: str,
+    owner_kind: CapabilityKind,
+    content_digest: str | None,
+    input_schema: Mapping[str, Any],
+    ui_schema: Mapping[str, Any],
+    defaults: Mapping[str, Any],
+) -> str:
+    payload = {
+        "parserVersion": PARSER_VERSION,
+        "owner": {"id": owner_id, "kind": owner_kind},
+        "contentDigest": content_digest,
+        "inputSchema": input_schema,
+        "uiSchema": ui_schema,
+        "defaults": defaults,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _legacy_input_to_json_schema(definition: Mapping[str, Any]) -> dict[str, Any]:
@@ -482,7 +604,6 @@ def _legacy_input_to_json_schema(definition: Mapping[str, Any]) -> dict[str, Any
     if placeholder:
         schema["description"] = placeholder
     return schema
-
 
 
 def _json_compatible_mapping(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -513,7 +634,11 @@ def _contains_secret_like_value(value: Any) -> bool:
     if value is None:
         return False
     if isinstance(value, Mapping):
-        return any(_contains_secret_like_value(item) for item in value.values())
+        return any(
+            _SECRET_LIKE_KEY_PATTERN.search(str(key or ""))
+            or _contains_secret_like_value(item)
+            for key, item in value.items()
+        )
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return any(_contains_secret_like_value(item) for item in value)
     return bool(_SECRET_LIKE_VALUE_PATTERN.search(str(value or "")))
@@ -698,7 +823,9 @@ def _remove_secret_like_defaults(
     diagnostics: list[dict[str, Any]] = []
     sanitized: dict[str, Any] = {}
     for key, value in defaults.items():
-        if _contains_secret_like_value(value):
+        if _SECRET_LIKE_KEY_PATTERN.search(
+            str(key or "")
+        ) or _contains_secret_like_value(value):
             diagnostics.append(
                 _diagnostic(
                     code="defaults_secret_like_value",

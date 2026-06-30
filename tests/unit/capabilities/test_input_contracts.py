@@ -68,6 +68,31 @@ def test_non_object_skill_schema_is_diagnosed_without_invalidating_skill() -> No
     assert contract["diagnostics"][0]["code"] == "input_schema_root_not_object"
 
 
+def test_skill_defaults_with_secret_like_keys_are_omitted() -> None:
+    markdown = (
+        "---\n"
+        "name: Demo Skill\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    apiToken:\n"
+        "      type: string\n"
+        "defaults:\n"
+        "  apiToken: example-value\n"
+        "---\n"
+        "# Demo\n"
+    )
+
+    contract = parse_skill_capability_input_contract(
+        skill_id="demo-skill",
+        label="Demo Skill",
+        markdown=markdown,
+    )
+
+    assert contract["defaults"] == {}
+    assert contract["diagnostics"][0]["code"] == "defaults_secret_like_value"
+
+
 def test_skill_frontmatter_yaml_dates_are_json_compatible() -> None:
     markdown = (
         "---\n"

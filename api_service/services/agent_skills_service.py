@@ -14,10 +14,13 @@ from api_service.db.models import (
     AgentSkillFormat,
     SkillSet,
 )
-from moonmind.capabilities.input_contracts import parse_skill_capability_input_contract
 from moonmind.services.skill_resolution import (
     extract_required_capabilities_from_skill_markdown,
     extract_required_skill_names_from_skill_markdown,
+)
+from moonmind.capabilities.input_contracts import (
+    contract_from_skill_markdown,
+    contract_metadata_for_artifact,
 )
 from moonmind.workflows.temporal import TemporalArtifactService
 
@@ -111,11 +114,11 @@ class AgentSkillsService:
             skill_name=skill_slug,
             source_label=f"deployment skill '{skill_slug}'",
         )
-        input_contract = parse_skill_capability_input_contract(
+        input_contract = contract_from_skill_markdown(
+            content,
             skill_id=skill_slug,
-            label=skill.title or skill_slug,
-            markdown=content,
-            source={"kind": "deployment"},
+            source_label=f"deployment skill '{skill_slug}'",
+            content_digest=content_digest,
         )
 
         try:
@@ -134,12 +137,7 @@ class AgentSkillsService:
                 "format": format_str,
                 "required_skills": list(required_skills),
                 "required_capabilities": list(required_capabilities),
-                "input_schema": input_contract.get("inputSchema", {}),
-                "ui_schema": input_contract.get("uiSchema", {}),
-                "defaults": input_contract.get("defaults", {}),
-                "input_contract_digest": input_contract.get("contractDigest"),
-                "input_schema_diagnostics": input_contract.get("diagnostics", []),
-                "content_digest": input_contract.get("contentDigest"),
+                "input_contract": contract_metadata_for_artifact(input_contract),
             },
         )
         artifact = await self._artifact_service.write_complete(
