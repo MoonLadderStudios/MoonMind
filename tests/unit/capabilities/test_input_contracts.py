@@ -68,6 +68,31 @@ def test_non_object_skill_schema_is_diagnosed_without_invalidating_skill() -> No
     assert contract["diagnostics"][0]["code"] == "input_schema_root_not_object"
 
 
+def test_skill_defaults_with_secret_like_keys_are_omitted() -> None:
+    markdown = (
+        "---\n"
+        "name: Demo Skill\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    apiToken:\n"
+        "      type: string\n"
+        "defaults:\n"
+        "  apiToken: example-value\n"
+        "---\n"
+        "# Demo\n"
+    )
+
+    contract = parse_skill_capability_input_contract(
+        skill_id="demo-skill",
+        label="Demo Skill",
+        markdown=markdown,
+    )
+
+    assert contract["defaults"] == {}
+    assert contract["diagnostics"][0]["code"] == "defaults_secret_like_value"
+
+
 def test_skill_frontmatter_yaml_dates_are_json_compatible() -> None:
     markdown = (
         "---\n"
@@ -181,6 +206,199 @@ def test_preset_contract_dates_are_json_compatible() -> None:
     assert contract["contractDigest"].startswith("sha256:")
 
 
+def test_one_of_const_options_are_preserved_for_renderer_choices() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(
+            id="demo-preset",
+            kind="preset",
+            label="Demo Preset",
+        ),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "title": "Mode",
+                            "oneOf": [
+                                {"const": "safe", "title": "Safe"},
+                                {"const": "fast", "title": "Fast"},
+                            ],
+                        }
+                    },
+                }
+            },
+        ),
+    )
+
+    assert contract["inputSchema"]["properties"]["mode"]["oneOf"] == [
+        {"const": "safe", "title": "Safe"},
+        {"const": "fast", "title": "Fast"},
+    ]
+    assert contract["diagnostics"] == []
+
+
+def test_schema_object_defaults_are_preserved_as_values() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(
+            id="demo-preset",
+            kind="preset",
+            label="Demo Preset",
+        ),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "issue": {
+                            "type": "object",
+                            "title": "Issue",
+                            "default": {"key": "MM-1"},
+                        }
+                    },
+                }
+            },
+        ),
+    )
+
+    assert contract["inputSchema"]["properties"]["issue"]["default"] == {"key": "MM-1"}
+    assert contract["diagnostics"] == []
+
+
+def test_unsupported_safe_schema_and_widget_metadata_are_diagnosed() -> None:
+    markdown = (
+        "---\n"
+        "name: Demo Skill\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    target:\n"
+        "      type: string\n"
+        "      allOf:\n"
+        "        - minLength: 3\n"
+        "      x-moonmind-unknown-hint: true\n"
+        "      customWidget: no\n"
+        "uiSchema:\n"
+        "  target:\n"
+        "    widget: deployment.secret-picker\n"
+        "---\n"
+        "# Demo\n"
+    )
+
+    contract = parse_skill_capability_input_contract(
+        skill_id="demo-skill",
+        label="Demo Skill",
+        markdown=markdown,
+    )
+
+    diagnostics = {item["code"]: item for item in contract["diagnostics"]}
+    assert contract["inputSchema"]["properties"]["target"]["allOf"] == [
+        {"minLength": 3}
+    ]
+    assert "customWidget" not in contract["inputSchema"]["properties"]["target"]
+    assert diagnostics["unsupported_keyword"]["path"].startswith("inputSchema")
+    assert diagnostics["ignored_hint"]["path"].endswith("x-moonmind-unknown-hint")
+    assert diagnostics["unsupported_widget"]["path"] == "uiSchema.target.widget"
+
+
+def test_secret_like_defaults_are_removed_from_schema_and_defaults() -> None:
+    markdown = (
+        "---\n"
+        "name: Demo Skill\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    api_token:\n"
+        "      type: string\n"
+        "      default: ghp_thisShouldNotReachTheContract\n"
+        "    branch:\n"
+        "      type: string\n"
+        "      default: main\n"
+        "defaults:\n"
+        "  api_token: password=hidden\n"
+        "  branch: main\n"
+        "---\n"
+        "# Demo\n"
+    )
+
+    contract = parse_skill_capability_input_contract(
+        skill_id="demo-skill",
+        label="Demo Skill",
+        markdown=markdown,
+    )
+
+    properties = contract["inputSchema"]["properties"]
+    assert "default" not in properties["api_token"]
+    assert properties["branch"]["default"] == "main"
+    assert contract["defaults"] == {"branch": "main"}
+    assert [
+        item["code"] for item in contract["diagnostics"]
+    ].count("defaults_secret_like_value") == 2
+
+
+def test_oversized_skill_frontmatter_is_omitted_with_diagnostic() -> None:
+    markdown = (
+        "---\n"
+        "name: Demo Skill\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        f"    target:\n      type: string\n      description: {'x' * 140000}\n"
+        "---\n"
+        "# Demo\n"
+    )
+
+    contract = parse_skill_capability_input_contract(
+        skill_id="demo-skill",
+        label="Demo Skill",
+        markdown=markdown,
+    )
+
+    assert contract["inputSchema"] == {}
+    assert contract["diagnostics"][0]["code"] == "frontmatter_too_large"
+    assert contract["diagnostics"][0]["path"] == "frontmatter"
+
+
+def test_validate_capability_inputs_reports_field_errors() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(
+            id="demo-skill",
+            kind="skill",
+            label="Demo Skill",
+        ),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["issue_key", "due_date"],
+                    "properties": {
+                        "issue_key": {"type": "string"},
+                        "priority": {"type": "string", "enum": ["low", "high"]},
+                        "due_date": {"type": "string", "format": "date"},
+                    },
+                },
+                "defaults": {"priority": "low"},
+            },
+        ),
+    )
+
+    result = validate_capability_inputs(
+        contract=contract,
+        values={"priority": "urgent", "due_date": "not-a-date"},
+    )
+
+    assert result["values"]["priority"] == "urgent"
+    assert [error["code"] for error in result["errors"]] == [
+        "required",
+        "enum",
+        "format",
+    ]
+    assert result["contractDigest"] == contract["contractDigest"]
+
+
 def test_validate_capability_inputs_uses_input_schema_defaults_and_field_paths() -> None:
     contract = normalize_capability_input_contract(
         owner=CapabilityInputOwner(
@@ -264,7 +482,10 @@ def test_validate_capability_inputs_ignores_secret_defaults_and_remote_code_meta
     )
 
     assert normalized["defaults"] == {}
-    assert normalized["inputSchema"]["properties"]["target"]["description"] == "alert(1)Target"
+    assert (
+        normalized["inputSchema"]["properties"]["target"]["description"]
+        == "alert(1)Target"
+    )
     warning_codes = {warning["code"] for warning in result["warnings"]}
     assert "remote_ref_ignored" in warning_codes
     assert "schema_code_ignored" in warning_codes

@@ -104,6 +104,57 @@ async def test_update_skill_content_success(tmp_path, mock_artifact_service: Asy
             mock_artifact_service.create.assert_awaited_once()
             mock_artifact_service.write_complete.assert_awaited_once()
 
+
+@pytest.mark.asyncio
+async def test_update_skill_content_persists_input_contract_metadata(
+    tmp_path, mock_artifact_service: AsyncMock
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as db_session:
+            svc = AgentSkillsService(
+                session=db_session, artifact_service=mock_artifact_service
+            )
+            await svc.create_skill(slug="jira-skill", title="Jira Skill")
+
+            await svc.update_skill_content(
+                skill_slug="jira-skill",
+                content="""---
+name: jira-skill
+metadata:
+  required-capabilities:
+    - jira
+inputSchema:
+  type: object
+  required:
+    - issue
+  properties:
+    issue:
+      type: string
+      title: Jira issue
+uiSchema:
+  issue:
+    widget: jira.issue-picker
+defaults:
+  issue: MM-1050
+---
+# Jira Skill
+""",
+            )
+
+            metadata = mock_artifact_service.create.await_args.kwargs["metadata_json"]
+            assert metadata["required_capabilities"] == ["jira"]
+            contract = metadata["input_contract"]
+            assert contract["has_input_schema"] is True
+            assert contract["input_schema"]["required"] == ["issue"]
+            assert (
+                contract["input_schema"]["properties"]["issue"]["title"]
+                == "Jira issue"
+            )
+            assert contract["ui_schema"] == {"issue": {"widget": "jira.issue-picker"}}
+            assert contract["defaults"] == {"issue": "MM-1050"}
+            assert contract["contract_digest"].startswith("sha256:")
+            assert contract["diagnostics"] == []
+
 @pytest.mark.asyncio
 async def test_update_skill_content_replaces_current_content(
     tmp_path, mock_artifact_service: AsyncMock

@@ -19,6 +19,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api_service.api.routers import workflow_console as workflow_console_router
+from api_service.db.base import get_async_session
 from api_service.main import app as main_app
 from api_service.api.routers.workflow_console import (
     _get_temporal_service,
@@ -100,9 +102,14 @@ def _client_with_mock_service(
         page_size=50,
         next_cursor=None,
     )
+    mock_session = AsyncMock()
+    mock_session.execute.return_value = SimpleNamespace(
+        all=lambda: [], first=lambda: None
+    )
     for dependency in _resolve_user_dependency_overrides():
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
     app.dependency_overrides[_get_temporal_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: mock_session
 
     original_manifest = os.environ.get("VITE_MANIFEST_PATH")
     tmpdir: tempfile.TemporaryDirectory[str] | None = None
@@ -608,12 +615,15 @@ def test_skills_api_returns_available_skill_ids(
         "speckit-orchestrate",
     ]
     assert payload["legacyItems"][0]["kind"] == "skill"
-    assert payload["legacyItems"][0]["inputSchema"] == {}
+    assert payload["legacyItems"][0]["inputSchema"] == {
+        "type": "object",
+        "properties": {},
+    }
     assert payload["legacyItems"][0]["uiSchema"] == {}
     assert payload["legacyItems"][0]["defaults"] == {}
+    assert payload["legacyItems"][0]["hasInputSchema"] is False
     assert payload["legacyItems"][0]["requiredCapabilities"] == []
     assert payload["legacyItems"][0]["markdown"] is None
-    assert payload["legacyItems"][0]["contractDigest"].startswith("sha256:")
 
 def test_skills_api_include_content_reads_legacy_skill_markdown(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -625,6 +635,21 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     skill_markdown = (
         "---\n"
         "name: speckit-orchestrate\n"
+        "description: Run the full Moon Spec lifecycle.\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  required:\n"
+        "    - issueKey\n"
+        "  properties:\n"
+        "    issueKey:\n"
+        "      type: string\n"
+        "      title: Issue key\n"
+        "uiSchema:\n"
+        "  issueKey:\n"
+        "    widget: jira.issue-picker\n"
+        "defaults:\n"
+        "  issueKey: MM-1047\n"
+        "  unsafeDefault: token=raw-secret\n"
         "metadata:\n"
         "  required-capabilities:\n"
         "    - git\n"
@@ -652,43 +677,161 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     item = response.json()["legacyItems"][0]
     assert item["id"] == "speckit-orchestrate"
     assert item["kind"] == "skill"
+    assert item["description"] == "Run the full Moon Spec lifecycle."
     assert item["requiredCapabilities"] == ["git"]
     assert item["markdown"] == skill_markdown
-    assert item["inputSchema"] == {}
-    assert item["uiSchema"] == {}
-    assert item["defaults"] == {}
+    assert item["inputSchema"] == {
+        "type": "object",
+        "required": ["issueKey"],
+        "properties": {
+            "issueKey": {
+                "type": "string",
+                "title": "Issue key",
+            },
+        },
+    }
+    assert item["uiSchema"] == {"issueKey": {"widget": "jira.issue-picker"}}
+    assert item["defaults"] == {"issueKey": "MM-1047"}
+    assert item["source"]["kind"] == "file"
+    assert item["source"]["path"].endswith("speckit-orchestrate/SKILL.md")
     assert item["contentDigest"].startswith("sha256:")
-    assert item["source"]["kind"] == "local"
 
+def test_skills_api_exposes_file_backed_input_contract(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_root = tmp_path / "local"
+    legacy_root = tmp_path / "legacy"
+    skill_dir = legacy_root / "schema-skill"
+    skill_dir.mkdir(parents=True)
+    skill_markdown = """---
+name: schema-skill
+description: Schema Skill
+metadata:
+  required-capabilities:
+    - git
+inputSchema:
+  type: object
+  required:
+    - issue
+  properties:
+    issue:
+      type: string
+      title: Issue
+uiSchema:
+  issue:
+    widget: textarea
+defaults:
+  issue: MM-1050
+---
+# Schema Skill
+"""
+    (skill_dir / "SKILL.md").write_text(skill_markdown, encoding="utf-8")
 
-def test_skills_api_parses_skill_input_contract(
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
+        str(local_root),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_legacy_mirror_root",
+        str(legacy_root),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.list_available_skill_names",
+        lambda: ("schema-skill",),
+    )
+
+    response = client.get("/api/workflows/skills")
+
+    assert response.status_code == 200
+    item = response.json()["legacyItems"][0]
+    assert item["id"] == "schema-skill"
+    assert item["kind"] == "skill"
+    assert item["label"] == "schema-skill"
+    assert item["description"] == "Schema Skill"
+    assert item["inputSchema"]["required"] == ["issue"]
+    assert item["inputSchema"]["properties"]["issue"]["title"] == "Issue"
+    assert item["uiSchema"] == {"issue": {"widget": "textarea"}}
+    assert item["defaults"] == {"issue": "MM-1050"}
+    assert item["contractDigest"].startswith("sha256:")
+    assert item["contentDigest"].startswith("sha256:")
+    assert item["source"]["contentDigest"] == item["contentDigest"]
+    assert item["diagnostics"] == []
+    assert item["hasInputSchema"] is True
+    assert item["inputContractRef"] is None
+
+def test_skills_api_large_schema_uses_input_contract_ref(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_root = tmp_path / "legacy"
+    skill_dir = legacy_root / "large-schema-skill"
+    skill_dir.mkdir(parents=True)
+    properties = "\n".join(
+        f"    field_{idx}:\n      type: string\n      description: {'x' * 200}"
+        for idx in range(70)
+    )
+    skill_markdown = f"""---
+name: large-schema-skill
+inputSchema:
+  type: object
+  properties:
+{properties}
+---
+# Large Schema Skill
+"""
+    (skill_dir / "SKILL.md").write_text(skill_markdown, encoding="utf-8")
+
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
+        str(tmp_path / "local"),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_legacy_mirror_root",
+        str(legacy_root),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.list_available_skill_names",
+        lambda: ("large-schema-skill",),
+    )
+
+    response = client.get("/api/workflows/skills")
+
+    assert response.status_code == 200
+    item = response.json()["legacyItems"][0]
+    assert "field_69" in item["inputSchema"]["properties"]
+    assert item["hasInputSchema"] is True
+    assert item["inputContractRef"].startswith(
+        "/api/workflows/skills/large-schema-skill/input-contract?digest=sha256%3A"
+    )
+
+    detail = client.get(item["inputContractRef"])
+    assert detail.status_code == 200
+    detail_item = detail.json()
+    assert "field_69" in detail_item["inputSchema"]["properties"]
+    assert detail_item["inputContractRef"] is None
+
+def test_skills_api_caches_file_backed_input_contract_by_content_evidence(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     local_root = tmp_path / "local"
     legacy_root = tmp_path / "legacy"
     skill_dir = legacy_root / "jira-implement"
     skill_dir.mkdir(parents=True)
-    skill_markdown = (
-        "---\n"
-        "name: Jira Implement\n"
-        "description: Implement a Jira issue.\n"
-        "input_schema:\n"
-        "  type: object\n"
-        "  required:\n"
-        "    - issue_key\n"
-        "  properties:\n"
-        "    issue_key:\n"
-        "      type: string\n"
-        "      title: Issue key\n"
-        "ui_schema:\n"
-        "  issue_key:\n"
-        "    widget: jira.issue-picker\n"
-        "defaults:\n"
-        "  issue_key: MM-1047\n"
-        "---\n"
-        "# Jira Implement\n"
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        (
+            "---\n"
+            "name: Jira Implement\n"
+            "inputSchema:\n"
+            "  type: object\n"
+            "  properties:\n"
+            "    issue_key:\n"
+            "      type: string\n"
+            "---\n"
+            "# Jira Implement\n"
+        ),
+        encoding="utf-8",
     )
-    (skill_dir / "SKILL.md").write_text(skill_markdown, encoding="utf-8")
+    workflow_console_router._SKILL_INPUT_CONTRACT_CACHE.clear()
 
     monkeypatch.setattr(
         "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
@@ -702,22 +845,54 @@ def test_skills_api_parses_skill_input_contract(
         "api_service.api.routers.workflow_console.list_available_skill_names",
         lambda: ("jira-implement",),
     )
+    parse_calls = 0
+    real_parse = workflow_console_router.parse_skill_capability_input_contract
 
-    response = client.get("/api/workflows/skills")
+    def counting_parse(*args, **kwargs):
+        nonlocal parse_calls
+        parse_calls += 1
+        return real_parse(*args, **kwargs)
 
-    assert response.status_code == 200
-    item = response.json()["legacyItems"][0]
-    assert item["id"] == "jira-implement"
-    assert item["kind"] == "skill"
-    assert item["label"] == "Jira Implement"
-    assert item["description"] == "Implement a Jira issue."
-    assert item["inputSchema"]["required"] == ["issue_key"]
-    assert item["uiSchema"]["issue_key"]["widget"] == "jira.issue-picker"
-    assert item["defaults"] == {"issue_key": "MM-1047"}
-    assert item["contractDigest"].startswith("sha256:")
-    assert item["contentDigest"].startswith("sha256:")
-    assert item["source"]["contentDigest"] == item["contentDigest"]
-    assert item["diagnostics"] == []
+    monkeypatch.setattr(
+        workflow_console_router,
+        "parse_skill_capability_input_contract",
+        counting_parse,
+    )
+
+    first_response = client.get("/api/workflows/skills")
+    second_response = client.get("/api/workflows/skills")
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert parse_calls == 1
+    assert first_response.json()["legacyItems"][0]["contractDigest"] == (
+        second_response.json()["legacyItems"][0]["contractDigest"]
+    )
+
+    skill_file.write_text(
+        (
+            "---\n"
+            "name: Jira Implement\n"
+            "inputSchema:\n"
+            "  type: object\n"
+            "  properties:\n"
+            "    issue_key:\n"
+            "      type: string\n"
+            "    repository:\n"
+            "      type: string\n"
+            "---\n"
+            "# Jira Implement\n"
+        ),
+        encoding="utf-8",
+    )
+
+    changed_response = client.get("/api/workflows/skills")
+
+    assert changed_response.status_code == 200
+    assert parse_calls == 2
+    assert "repository" in changed_response.json()["legacyItems"][0]["inputSchema"][
+        "properties"
+    ]
 
 def test_create_dashboard_skill_success(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
