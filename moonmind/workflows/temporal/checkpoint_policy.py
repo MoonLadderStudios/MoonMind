@@ -1,4 +1,4 @@
-"""Shared checkpoint policy selection for MM-996 failed-step recovery."""
+"""Shared checkpoint policy selection for Step Execution recovery."""
 
 from __future__ import annotations
 
@@ -15,6 +15,29 @@ class ResolvedCheckpointPolicy:
     checkpoint_kind: str
     resumable: bool
     required_evidence: tuple[str, ...]
+
+
+_OMNIGENT_EXTERNAL_STATE_BOUNDARIES = frozenset(
+    {
+        "after_prepare",
+        "before_execution",
+        "after_execution",
+        "after_gate",
+        "before_publication",
+    }
+)
+
+
+def _boundary_token(boundary: Any) -> str:
+    boundary_value = boundary.value if hasattr(boundary, "value") else boundary
+    return str(boundary_value or "").strip()
+
+
+def _is_omnigent_runtime(runtime_kind: str | None) -> bool:
+    """Return True for Omnigent aliases without making the contract alias-heavy."""
+
+    token = str(runtime_kind or "").strip().replace("_", "-").lower()
+    return "omnigent" in token
 
 
 def _workspace_policy_from_recovery_source(
@@ -37,6 +60,27 @@ def _workspace_policy_from_recovery_source(
     return "restore_pre_execution"
 
 
+def _omnigent_required_evidence(boundary_token: str) -> tuple[str, ...]:
+    if boundary_token == "before_execution":
+        return ("externalStateRef", "idempotencyKey", "omnigentSessionId")
+    if boundary_token == "after_execution":
+        return ("externalStateRef", "diagnosticsRef", "omnigentSessionId")
+    return ("externalStateRef", "omnigentSessionId")
+
+
+def _omnigent_checkpoint_policy(
+    boundary_token: str,
+) -> ResolvedCheckpointPolicy | None:
+    if boundary_token not in _OMNIGENT_EXTERNAL_STATE_BOUNDARIES:
+        return None
+    return ResolvedCheckpointPolicy(
+        workspace_policy="continue_from_previous_execution",
+        checkpoint_kind="external_state_ref",
+        resumable=True,
+        required_evidence=_omnigent_required_evidence(boundary_token),
+    )
+
+
 def resolve_checkpoint_policy(
     *,
     boundary: str,
@@ -45,9 +89,12 @@ def resolve_checkpoint_policy(
 ) -> ResolvedCheckpointPolicy:
     """Return the shared policy used for capture, manifests, and recovery apply."""
 
-    del runtime_kind
-    boundary_value = boundary.value if hasattr(boundary, "value") else boundary
-    boundary_token = str(boundary_value or "").strip()
+    boundary_token = _boundary_token(boundary)
+    if _is_omnigent_runtime(runtime_kind):
+        external_policy = _omnigent_checkpoint_policy(boundary_token)
+        if external_policy is not None:
+            return external_policy
+
     if boundary_token == "before_recovery_restoration":
         return ResolvedCheckpointPolicy(
             workspace_policy=_workspace_policy_from_recovery_source(recovery_source),
