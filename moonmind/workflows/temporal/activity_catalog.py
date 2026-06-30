@@ -506,7 +506,7 @@ def build_default_activity_catalog(
             capability_class="llm",
             task_queue=cfg.activity_llm_task_queue,
             fleet=LLM_FLEET,
-            timeouts=TemporalActivityTimeouts(600, 600),
+            timeouts=TemporalActivityTimeouts(300, 900),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
         ),
         TemporalActivityDefinition(

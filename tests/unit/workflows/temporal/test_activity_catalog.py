@@ -124,6 +124,19 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
     assert "deployment_control" in fleets[DEPLOYMENT_FLEET].capabilities
     assert "docker_workload" in fleets[AGENT_RUNTIME_FLEET].capabilities
 
+def test_plan_generate_timeout_budget_allows_retry_after_attempt_timeout():
+    catalog = build_default_activity_catalog()
+
+    route = catalog.resolve_activity("plan.generate")
+
+    assert route.timeouts.start_to_close_seconds == 300
+    assert route.timeouts.schedule_to_close_seconds == 900
+    assert (
+        route.timeouts.schedule_to_close_seconds
+        > route.timeouts.start_to_close_seconds
+    )
+    assert route.retries.max_attempts == 3
+
 def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     catalog = build_default_activity_catalog()
 

@@ -30,9 +30,22 @@ export type DashboardUiInfo = {
   workerPause?: unknown;
 };
 
-const WORKFLOW_DETAIL_PATH = /^\/workflows\/[A-Za-z0-9][A-Za-z0-9._:{}-]{0,254}(?:\/(?:steps|artifacts|runs|debug))?$/;
-const MANIFEST_DETAIL_PATH = /^\/manifests\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const SCHEDULE_DETAIL_PATH = /^\/schedules\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const DETAIL_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const WORKFLOW_ID_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:{}-]{0,254}$/;
+const WORKFLOW_DETAIL_TABS = new Set(['steps', 'artifacts', 'runs', 'debug']);
+const RESERVED_WORKFLOW_ROUTE_SEGMENTS = new Set([
+  'manifests',
+  'new',
+  'proposals',
+  'queue',
+  'schedules',
+  'secrets',
+  'settings',
+  'skills',
+  'system',
+  'temporal',
+  'workers',
+]);
 
 function withoutTrailingSlash(pathname: string): string {
   return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
@@ -41,6 +54,51 @@ function withoutTrailingSlash(pathname: string): string {
 function hasExtension(pathname: string): boolean {
   const leaf = pathname.split('/').pop() ?? '';
   return /\.[A-Za-z0-9]+$/.test(leaf);
+}
+
+function decodePathSegment(segment: string): string | null {
+  try {
+    const decoded = decodeURIComponent(segment);
+    return decoded.includes('/') ? null : decoded;
+  } catch {
+    return null;
+  }
+}
+
+function pathParts(path: string): string[] {
+  return path.split('/').slice(1);
+}
+
+function isWorkflowDetailPath(path: string): boolean {
+  const parts = pathParts(path);
+  if (parts.length !== 2 && parts.length !== 3) {
+    return false;
+  }
+  if (parts[0] !== 'workflows') {
+    return false;
+  }
+  const workflowId = decodePathSegment(parts[1]);
+  if (
+    !workflowId ||
+    !WORKFLOW_ID_SEGMENT.test(workflowId) ||
+    RESERVED_WORKFLOW_ROUTE_SEGMENTS.has(workflowId.toLowerCase())
+  ) {
+    return false;
+  }
+  if (parts.length === 2) {
+    return true;
+  }
+  const tab = decodePathSegment(parts[2]);
+  return Boolean(tab && WORKFLOW_DETAIL_TABS.has(tab));
+}
+
+function isDetailPath(path: string, prefix: 'manifests' | 'schedules'): boolean {
+  const parts = pathParts(path);
+  if (parts.length !== 2 || parts[0] !== prefix) {
+    return false;
+  }
+  const detailId = decodePathSegment(parts[1]);
+  return Boolean(detailId && DETAIL_SEGMENT.test(detailId));
 }
 
 export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
@@ -54,7 +112,7 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
   if (path === '/workflows/new') {
     return { page: 'workflow-start', dataWidePanel: false, currentPath: path };
   }
-  if (WORKFLOW_DETAIL_PATH.test(path) && path !== '/workflows/new') {
+  if (isWorkflowDetailPath(path) && path !== '/workflows/new') {
     return { page: 'workflow-detail', dataWidePanel: false, currentPath: path };
   }
   if (path === '/settings' || path.startsWith('/settings/')) {
@@ -63,10 +121,10 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
   if (path === '/skills' || path.startsWith('/skills/')) {
     return { page: 'skills', dataWidePanel: false, currentPath: path };
   }
-  if (path === '/schedules' || SCHEDULE_DETAIL_PATH.test(path)) {
+  if (path === '/schedules' || isDetailPath(path, 'schedules')) {
     return { page: 'schedules', dataWidePanel: false, currentPath: path };
   }
-  if (path === '/manifests' || MANIFEST_DETAIL_PATH.test(path)) {
+  if (path === '/manifests' || isDetailPath(path, 'manifests')) {
     return { page: 'manifests', dataWidePanel: false, currentPath: path };
   }
   if (path === '/index-health') {
