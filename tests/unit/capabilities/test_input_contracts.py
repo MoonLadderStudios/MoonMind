@@ -591,3 +591,37 @@ def test_validate_capability_inputs_checks_registered_reference_fields() -> None
         ("steps[3].skill.inputs.repository", "reference"),
         ("steps[3].skill.inputs.branch", "reference"),
     ]
+
+
+def test_validate_capability_inputs_handles_object_without_properties() -> None:
+    contract = normalize_capability_input_contract(
+        owner=CapabilityInputOwner(id="demo", kind="skill", label="Demo"),
+        parts=capability_contract_from_legacy_inputs(
+            inputs_schema=[],
+            annotations={
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "emptyObject": {
+                            "type": "object",
+                            "additionalProperties": False,
+                        }
+                    },
+                }
+            },
+        ),
+    )
+
+    result = validate_capability_inputs(
+        contract=contract,
+        values={"emptyObject": {"unexpected": True}},
+    )
+
+    assert result["errors"] == [
+        {
+            "path": "inputs.emptyObject.unexpected",
+            "message": "Additional properties are not allowed.",
+            "code": "additionalProperties",
+            "recoverable": True,
+        }
+    ]

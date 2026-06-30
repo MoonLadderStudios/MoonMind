@@ -40,6 +40,7 @@ from api_service.api.routers.executions import (
     _reuse_original_task_input_snapshot_from_source,
     _workflow_input_snapshot_descriptor_from_record,
     _normalize_task_steps,
+    _normalize_task_tool,
     _resolve_step_runtime_selections,
     _step_execution_detail_payload,
     _detect_optional_temporal_search_attributes,
@@ -367,6 +368,77 @@ def test_mm842_task_steps_accept_ordered_steps_without_graph_metadata() -> None:
     assert all("dependsOn" not in step for step in steps)
     assert all("depends_on" not in step for step in steps)
     assert all("dependencies" not in step for step in steps)
+
+
+def test_task_skill_normalization_preserves_input_contract_metadata() -> None:
+    task_payload = {
+        "steps": [
+            {
+                "id": "validate",
+                "skill": {
+                    "id": "schema.skill",
+                    "inputs": {"repository": "MoonLadderStudios/MoonMind"},
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"repository": {"type": "string"}},
+                    },
+                    "uiSchema": {
+                        "repository": {"widget": "github.repository-picker"},
+                    },
+                    "defaults": {"branch": "main"},
+                    "inputContractDigest": "sha256:contract",
+                    "contentDigest": "sha256:content",
+                    "contentRef": "artifact:skill-contract",
+                },
+            }
+        ]
+    }
+
+    steps = _normalize_task_steps(task_payload)
+
+    skill = steps[0]["skill"]
+    assert skill["args"] == {"repository": "MoonLadderStudios/MoonMind"}
+    assert skill["inputSchema"]["properties"]["repository"]["type"] == "string"
+    assert skill["uiSchema"]["repository"]["widget"] == "github.repository-picker"
+    assert skill["defaults"] == {"branch": "main"}
+    assert skill["inputContractDigest"] == "sha256:contract"
+    assert skill["contentDigest"] == "sha256:content"
+    assert skill["contentRef"] == "artifact:skill-contract"
+
+
+def test_task_tool_normalization_preserves_skill_input_contract_metadata() -> None:
+    normalized = _normalize_task_tool(
+        {
+            "skill": {
+                "id": "schema.skill",
+                "inputs": {"issue": "MM-1057"},
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"issue": {"type": "string"}},
+                },
+                "uiSchema": {"issue": {"widget": "jira.issue-picker"}},
+                "defaults": {"repository": "MoonLadderStudios/MoonMind"},
+                "inputContractDigest": "sha256:contract",
+                "contentDigest": "sha256:content",
+                "contentRef": "artifact:skill-contract",
+            },
+        }
+    )
+
+    assert normalized == {
+        "type": "skill",
+        "name": "schema.skill",
+        "inputs": {"issue": "MM-1057"},
+        "inputSchema": {
+            "type": "object",
+            "properties": {"issue": {"type": "string"}},
+        },
+        "uiSchema": {"issue": {"widget": "jira.issue-picker"}},
+        "defaults": {"repository": "MoonLadderStudios/MoonMind"},
+        "inputContractDigest": "sha256:contract",
+        "contentDigest": "sha256:content",
+        "contentRef": "artifact:skill-contract",
+    }
 
 
 @pytest.mark.parametrize("field_name", ["dependsOn", "depends_on", "dependencies"])

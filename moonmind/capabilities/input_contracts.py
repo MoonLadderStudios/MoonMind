@@ -826,7 +826,11 @@ def _validate_schema_value(
                     )
         additional_properties = schema.get("additionalProperties")
         if additional_properties is False:
-            allowed = {str(key) for key in properties}
+            allowed = (
+                {str(key) for key in properties}
+                if isinstance(properties, Mapping)
+                else set()
+            )
             for key in value:
                 if str(key) not in allowed:
                     errors.append(
