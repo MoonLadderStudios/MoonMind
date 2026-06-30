@@ -3841,6 +3841,7 @@ function SchemaCapabilityFields({
               {label}
               <input
                 id={inputId}
+                aria-label={label}
                 type="text"
                 value={capabilityInputTextValue(values, detail.defaults, name)}
                 disabled={disabled}
@@ -3864,6 +3865,7 @@ function SchemaCapabilityFields({
               {label}
               <input
                 id={inputId}
+                aria-label={label}
                 type="text"
                 value={issuePickerTextValue(value, provider)}
                 placeholder={placeholder}
@@ -3897,6 +3899,7 @@ function SchemaCapabilityFields({
               {label}
               <input
                 id={inputId}
+                aria-label={label}
                 type="checkbox"
                 checked={Boolean(value)}
                 disabled={disabled}
@@ -3930,6 +3933,7 @@ function SchemaCapabilityFields({
               {label}
               <select
                 id={inputId}
+                aria-label={label}
                 multiple
                 value={selectedValues}
                 disabled={disabled}
@@ -3972,6 +3976,7 @@ function SchemaCapabilityFields({
               {label}
               <select
                 id={inputId}
+                aria-label={label}
                 value={capabilityInputTextValue(values, detail.defaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
@@ -3999,6 +4004,7 @@ function SchemaCapabilityFields({
               {label}
               <textarea
                 id={inputId}
+                aria-label={label}
                 value={capabilityInputTextValue(values, detail.defaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
@@ -4015,6 +4021,7 @@ function SchemaCapabilityFields({
               {label}
               <textarea
                 id={inputId}
+                aria-label={label}
                 value={complexCapabilityTextValue(value)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
@@ -4033,6 +4040,7 @@ function SchemaCapabilityFields({
             {label}
             <input
               id={inputId}
+              aria-label={label}
               type={inputType}
               list={
                 widget === "repository" ||
@@ -4063,18 +4071,22 @@ function SchemaCapabilityFields({
             widget === "repo-picker" ? (
               <datalist id={`${inputId}-options`}>
                 {repositoryOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
+                  <option
+                    key={option.value}
+                    value={option.value}
+                    label={option.label}
+                  />
                 ))}
               </datalist>
             ) : null}
             {widget === "branch" ? (
               <datalist id={`${inputId}-options`}>
                 {branchOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
+                  <option
+                    key={option.value}
+                    value={option.value}
+                    label={option.label}
+                  />
                 ))}
               </datalist>
             ) : null}
