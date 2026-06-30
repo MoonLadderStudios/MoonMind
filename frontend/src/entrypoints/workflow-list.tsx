@@ -2543,7 +2543,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             >
                               {row.title}
                             </a>
-                            <code className="workflow-list-row-id">{rowWorkflowId(row)}</code>
                           </td>
                           {isColumnVisible('status') ? (
                             <td className="queue-table-cell-status">
@@ -2619,12 +2618,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <dt>Progress</dt>
                         <dd title={progress.title}>
                           <span className="workflow-list-progress">{progress.text}</span>
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>ID</dt>
-                        <dd>
-                          <code>{rowWorkflowId(row)}</code>
                         </dd>
                       </div>
                       <div>
