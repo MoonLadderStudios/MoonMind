@@ -772,11 +772,11 @@ describe('Workflow Detail Entrypoint', () => {
       ['External wait workflow', 'Status: awaiting external', 'status-awaiting-external', 'lucide-hand'],
       ['Finalizing workflow', 'Status: finalizing', 'status-finalizing', 'lucide-package-check'],
       ['No commit workflow', 'Status: No commit', 'status-no-commit', 'lucide-check'],
-      ['No changes workflow', 'Status: no changes', 'status-no-commit', 'lucide-check'],
+      ['No changes workflow', 'Status: No commit', 'status-no-commit', 'lucide-check'],
       ['Completed workflow', 'Status: completed', 'status-completed', 'lucide-check'],
       ['Failed workflow', 'Status: failed', 'status-failed', 'lucide-x'],
       ['Canceled workflow', 'Status: canceled', 'status-canceled', 'lucide-ban'],
-      ['Unknown prototype workflow', 'Status: constructor', 'status-running', 'lucide-play'],
+      ['Unknown prototype workflow', 'Status: constructor', 'status-neutral', 'lucide-play'],
     ] as const;
 
     for (const [title, ariaLabel, statusClass, iconClass] of expectedIcons) {
