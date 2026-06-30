@@ -278,6 +278,37 @@ def test_skill_contract_omits_secret_like_schema_default() -> None:
     }
 
 
+def test_strict_contract_records_remote_ref_rejection(caplog: pytest.LogCaptureFixture) -> None:
+    markdown = (
+        "---\n"
+        "name: Demo Skill\n"
+        "inputSchema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    target:\n"
+        "      type: string\n"
+        "      $ref: https://example.invalid/schema.json\n"
+        "---\n"
+        "# Demo\n"
+    )
+
+    caplog.set_level("INFO", logger="moonmind.capabilities.input_contracts")
+
+    with pytest.raises(CapabilityInputContractError, match="Remote schema references"):
+        parse_skill_capability_input_contract(
+            skill_id="demo-skill",
+            label="Demo Skill",
+            markdown=markdown,
+            strict=True,
+        )
+
+    assert any(
+        getattr(record, "event", None) == "skill_input_schema_strict_policy_rejection"
+        and getattr(record, "attributes", None) == {"code": "remote_ref_disabled"}
+        for record in caplog.records
+    )
+
+
 def test_strict_contract_rejects_schema_size_limit() -> None:
     huge_description = "a" * (128 * 1024)
 

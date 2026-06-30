@@ -82,6 +82,10 @@ _UNSUPPORTED_SCHEMA_KEYWORDS = frozenset(
         "unevaluatedproperties",
     }
 )
+_DESCRIPTION_SCRIPT_BLOCK_RE = re.compile(
+    r"<(script|style)\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
 _DESCRIPTION_MARKDOWN_RE = re.compile(
     r"(<[^>]+>|!\[[^\]]*]\([^)]+\)|\[[^\]]+]\((?:javascript:|data:)[^)]+\))",
     re.IGNORECASE,
@@ -546,6 +550,10 @@ def _sanitize_schema_metadata(
             )
             diagnostics.append(diagnostic)
             if strict:
+                _record_contract_event(
+                    "skill_input_schema_strict_policy_rejection",
+                    code=diagnostic["code"],
+                )
                 raise CapabilityInputContractError(diagnostic["message"])
             continue
         if key_lower in _EXECUTABLE_METADATA_KEYS:
@@ -577,6 +585,10 @@ def _sanitize_schema_metadata(
             )
             diagnostics.append(diagnostic)
             if strict:
+                _record_contract_event(
+                    "skill_input_schema_strict_policy_rejection",
+                    code=diagnostic["code"],
+                )
                 raise CapabilityInputContractError(diagnostic["message"])
             continue
         if key_text == "x-moonmind-widget":
@@ -703,7 +715,8 @@ def _sanitize_description(
                 path=path,
             )
         )
-    sanitized = _DESCRIPTION_MARKDOWN_RE.sub("", value).strip()
+    sanitized = _DESCRIPTION_SCRIPT_BLOCK_RE.sub("", value)
+    sanitized = _DESCRIPTION_MARKDOWN_RE.sub("", sanitized).strip()
     if sanitized != value.strip():
         diagnostics.append(
             _diagnostic(

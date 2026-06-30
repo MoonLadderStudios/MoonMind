@@ -348,7 +348,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
       workflowId: "mm:skill-contract-digest",
       workflowType: "MoonMind.UserWorkflow",
       inputParameters: {
-        task: {
+        workflow: {
           instructions: "Edit a saved Skill draft.",
           steps: [
             {
