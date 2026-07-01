@@ -770,6 +770,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             binding=binding,
                             new_thread_id=reset_thread_id,
                             reason="retry_after_empty_assistant_output",
+                            locator=previous_locator,
                             request_id=(
                                 f"{binding.agent_run_id}:empty-assistant-clear:"
                                 f"{previous_locator.session_epoch}:"
@@ -1262,8 +1263,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         new_thread_id: str,
         reason: str | None = None,
         request_id: str | None = None,
+        locator: CodexManagedSessionLocator | None = None,
     ) -> CodexManagedSessionHandle:
-        locator = await self._current_locator(binding)
+        locator = locator or await self._current_locator(binding)
         try:
             handle = await self._clear_session_with_locator(
                 locator=locator,

@@ -2028,6 +2028,10 @@ async def test_start_marks_empty_assistant_retry_exhausted(
 
     async def _clear_remote_session(request: Any) -> CodexManagedSessionHandle:
         clear_calls.append(request)
+        assert request.session_epoch == len(clear_calls)
+        assert request.thread_id == (
+            "thread-1" if len(clear_calls) == 1 else reset_thread_id
+        )
         expected_thread_id = (
             reset_thread_id if len(clear_calls) == 1 else second_reset_thread_id
         )
@@ -2149,6 +2153,10 @@ async def test_start_recovers_after_second_empty_assistant_clear(
 
     async def _clear_remote_session(request: Any) -> CodexManagedSessionHandle:
         clear_calls.append(request)
+        assert request.session_epoch == len(clear_calls)
+        assert request.thread_id == (
+            "thread-1" if len(clear_calls) == 1 else reset_thread_id
+        )
         expected_thread_id = (
             reset_thread_id if len(clear_calls) == 1 else second_reset_thread_id
         )
