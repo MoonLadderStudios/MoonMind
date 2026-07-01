@@ -1,0 +1,621 @@
+{
+  "source": {
+    "title": "Workflow Status Model",
+    "path": "docs/Workflows/WorkflowStatus.md",
+    "referencePath": "docs/Workflows/WorkflowStatus.md",
+    "sourceDocumentClass": "canonical-declarative",
+    "jiraIssueKey": "MM-1073",
+    "jiraSummary": "Status Cleanup",
+    "originalDesignText": "# Workflow Status Model\n\nStatus: Archived pointer  \nOwners: MoonMind Engineering  \nLast Updated: 2026-04-04\n\nThis file is no longer the canonical source for MoonMind Workflow status design.\n\nUse these docs instead:\n\n- `docs/Temporal/VisibilityAndUiQueryModel.md` for execution-level `mm_state`, dashboard-status mapping, Memo/Search Attribute rules, and `mm_updated_at`\n- `docs/Temporal/WorkflowExecutionProductModel.md` for the canonical Workflow Execution product model\n- `docs/Temporal/StepLedgerAndProgressModel.md` for step-level statuses, attempts, checks, and latest-run rules\n\nWhy this file was archived:\n\n- it proposed a separate `1:1 DB \u2194 dashboard` status strategy that no longer matches the active exact-vs-compatibility model\n- it did not separate Workflow status from step status\n- it treated `mm_phase` and related state simplification as the primary direction, which is not the current canonical contract\n\nRetention rule:\n\n- keep this file only as a migration pointer during doc cleanup\n- do not use it as a source document for new implementation or product decisions\n",
+    "classificationRationale": "The selected input is a readable repo path under docs/ outside docs/tmp, so the breakdown records it as canonical-declarative per the run instruction. Its content is an archived pointer, so stories preserve that source path while deriving status-cleanup behavior from the active canonical documents named by the pointer and the trusted Jira brief.",
+    "relatedCanonicalSources": [
+      "docs/Temporal/VisibilityAndUiQueryModel.md",
+      "docs/Temporal/WorkflowExecutionProductModel.md",
+      "docs/Temporal/StepLedgerAndProgressModel.md"
+    ],
+    "canonicalClaims": [
+      {
+        "id": "docs/Workflows/WorkflowStatus.md#archived-pointer-001",
+        "path": "docs/Workflows/WorkflowStatus.md",
+        "sections": [
+          "Workflow Status Model"
+        ],
+        "summary": "WorkflowStatus.md is an archived pointer and is no longer the canonical workflow status design source."
+      },
+      {
+        "id": "docs/Workflows/WorkflowStatus.md#archived-pointer-002",
+        "path": "docs/Workflows/WorkflowStatus.md",
+        "sections": [
+          "Use these docs instead"
+        ],
+        "summary": "Workflow status decisions belong in VisibilityAndUiQueryModel, WorkflowExecutionProductModel, and StepLedgerAndProgressModel."
+      },
+      {
+        "id": "docs/Workflows/WorkflowStatus.md#archived-pointer-003",
+        "path": "docs/Workflows/WorkflowStatus.md",
+        "sections": [
+          "Why this file was archived"
+        ],
+        "summary": "The archived design failed to separate workflow status from step status and no longer matches the active exact-vs-compatibility model."
+      },
+      {
+        "id": "docs/Workflows/WorkflowStatus.md#archived-pointer-004",
+        "path": "docs/Workflows/WorkflowStatus.md",
+        "sections": [
+          "Retention rule"
+        ],
+        "summary": "The archived file should remain only as a migration pointer during documentation cleanup and must not drive new product decisions."
+      }
+    ],
+    "coveragePoints": [
+      {
+        "id": "DESIGN-REQ-001",
+        "title": "Status domains stay separate and named by owner",
+        "type": "state-model",
+        "source_section": "Workflow instructions / current diagnosis / domain matrix",
+        "explanation": "Workflow lifecycle state, Temporal close status, derived temporalStatus, step ledger status, step execution artifact status, and provider normalized status must be distinct domains with explicit owners."
+      },
+      {
+        "id": "DESIGN-REQ-002",
+        "title": "Canonical formatting by surface",
+        "type": "contract",
+        "source_section": "Workflow instructions / standard to adopt",
+        "explanation": "Stored/API machine values use lowercase snake_case, JSON fields use camelCase, Python enum names use UPPER_SNAKE_CASE with lowercase values, finish outcome codes use UPPER_SNAKE_CASE, labels use product case, and CSS classes use kebab-case."
+      },
+      {
+        "id": "DESIGN-REQ-003",
+        "title": "Backend status modules own canonical values and mappings",
+        "type": "requirement",
+        "source_section": "Workflow instructions / create canonical backend modules",
+        "explanation": "Small domain modules should own workflow, close, temporal, step ledger, step execution, integration, and compatibility constants and conversion helpers rather than a global status enum."
+      },
+      {
+        "id": "DESIGN-REQ-004",
+        "title": "Legacy aliases are accepted only at compatibility boundaries",
+        "type": "migration",
+        "source_section": "Workflow instructions / quarantine legacy support",
+        "explanation": "no_changes and NO_CHANGES remain inbound compatibility aliases only; new workflow histories, DB rows, API responses, UI strings, tests, and docs emit no_commit / NO_COMMIT."
+      },
+      {
+        "id": "DESIGN-REQ-005",
+        "title": "Provider aliases remain inside adapter normalizers",
+        "type": "integration",
+        "source_section": "Workflow instructions / current diagnosis / backend modules",
+        "explanation": "Provider-specific statuses such as Jules done, cancelled, in-progress, processing, and awaiting_user_feedback are valid adapter-boundary input but must not leak into MoonMind workflow state vocabulary."
+      },
+      {
+        "id": "DESIGN-REQ-006",
+        "title": "Step ledger and step execution artifact vocabularies are explicit",
+        "type": "state-model",
+        "source_section": "Workflow instructions / duplicated step terminology",
+        "explanation": "StepLedgerRowModel.status owns the operator step ledger vocabulary. Any retained StepExecutionStatus vocabulary must be renamed to clarify artifact/projection semantics and mapped explicitly to ledger status."
+      },
+      {
+        "id": "DESIGN-REQ-007",
+        "title": "Frontend status helpers are domain-specific",
+        "type": "requirement",
+        "source_section": "Workflow instructions / clean frontend status system",
+        "explanation": "Dashboard helpers should split workflow, step, and integration status labeling/pill behavior, normalize tokens consistently, generate CSS class names from canonical values, and keep legacy aliases explicit."
+      },
+      {
+        "id": "DESIGN-REQ-008",
+        "title": "Audit tooling categorizes status-shaped tokens by domain",
+        "type": "observability",
+        "source_section": "Workflow instructions / run a status inventory",
+        "explanation": "A status-token audit tool should report token, guessed domain, files, canonicality, and action so valid provider or historical statuses are not flattened into workflow lifecycle cleanup."
+      },
+      {
+        "id": "DESIGN-REQ-009",
+        "title": "Persisted legacy values are repaired deliberately",
+        "type": "migration",
+        "source_section": "Workflow instructions / backfill persisted data",
+        "explanation": "Persisted search attributes, state fields, finish summaries, and related JSON should be inventoried and repaired from legacy no_changes / NO_CHANGES forms to no_commit / NO_COMMIT where applicable."
+      },
+      {
+        "id": "DESIGN-REQ-010",
+        "title": "Documentation points to canonical status sources",
+        "type": "artifact",
+        "source_section": "docs/Workflows/WorkflowStatus.md and workflow instructions / fix documentation drift",
+        "explanation": "References to archived WorkflowStatus.md should be replaced with the active canonical Temporal Visibility, Workflow Execution Product, and Step Ledger documents, with examples using canonical values."
+      },
+      {
+        "id": "DESIGN-REQ-011",
+        "title": "Regression tests and static checks prevent status drift",
+        "type": "constraint",
+        "source_section": "Workflow instructions / add guardrails",
+        "explanation": "Backend, frontend, mapper, and audit tests should fail when canonical status domains drift or new raw status strings appear outside approved modules and compatibility allowlists."
+      },
+      {
+        "id": "DESIGN-REQ-012",
+        "title": "Archived pointer remains non-authoritative",
+        "type": "non-goal",
+        "source_section": "docs/Workflows/WorkflowStatus.md / retention rule",
+        "explanation": "WorkflowStatus.md should not regain authority over status product decisions; durable status rules live in the active canonical documents."
+      }
+    ]
+  },
+  "sourceDocumentClass": "canonical-declarative",
+  "extractedAt": "2026-07-01T08:37:15Z",
+  "outputMode": "jira",
+  "designSummary": "The selected source is an archived workflow-status pointer that directs new status decisions to active Temporal Visibility, Workflow Execution Product, and Step Ledger documents. The broader Jira cleanup asks MoonMind to keep legitimate status domains separate, standardize value formatting, centralize backend/frontend ownership, quarantine legacy no_changes aliases, repair persisted legacy values, and add audit/test guardrails against future cross-domain drift.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Define canonical status domains and audit inventory",
+      "shortName": "status-domain-inventory",
+      "description": "As a MoonMind maintainer, I want a canonical status-domain matrix and inventory tool so workflow, step, provider, close-status, and compatibility tokens have clear ownership before behavior changes land.",
+      "why": "This creates the shared contract needed to avoid replacing many ambiguous strings with a different ambiguous global enum.",
+      "sourceReference": {
+        "path": "docs/Workflows/WorkflowStatus.md",
+        "title": "Workflow Status Model",
+        "sections": [
+          "Use these docs instead",
+          "Why this file was archived"
+        ],
+        "claimIds": [
+          "docs/Workflows/WorkflowStatus.md#archived-pointer-002",
+          "docs/Workflows/WorkflowStatus.md#archived-pointer-003",
+          "docs/Workflows/WorkflowStatus.md#archived-pointer-004"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-012"
+        ]
+      },
+      "scope": [
+        "Add or update a canonical status-domain documentation section that names each status domain, owner, values, and conversion boundary.",
+        "Add a status-token audit command that categorizes findings by domain and action instead of emitting a flat raw-string list.",
+        "Document the formatting standard for machine values, enum names, JSON fields, finish outcome codes, UI labels, and CSS classes.",
+        "Update references away from archived WorkflowStatus.md where active docs are the authority."
+      ],
+      "outOfScope": [
+        "Replacing backend or frontend call sites beyond changes needed to wire the audit command.",
+        "Deleting historical migrations or provider-specific statuses that the audit classifies as valid outside workflow lifecycle state."
+      ],
+      "independentTest": "Run the audit command against the repository and verify it emits domain, files, canonicality, and action columns while the new domain matrix names every status domain from the design.",
+      "acceptanceCriteria": [
+        "A reader can identify the owner and canonical value set for workflow lifecycle state, Temporal close status, temporalStatus, step ledger status, step execution artifact status, and provider normalized status.",
+        "The audit report categorizes seeded tokens including mm_state, closeStatus, temporalStatus, no_changes, awaiting_action, queued, in-progress, and StepExecutionStatus by domain/action.",
+        "Archived WorkflowStatus.md is not cited as the source for new status decisions except as an archival pointer.",
+        "Formatting rules are documented using lowercase snake_case machine values, camelCase JSON fields, UPPER_SNAKE_CASE finish outcome codes, and kebab-case CSS classes."
+      ],
+      "requirements": [
+        "Provide a domain matrix with values, owner, storage/API surface, and notes for each status domain.",
+        "Provide audit actions keep_canonical, move_to_provider_boundary, move_to_legacy_alias_map, rename_domain_specific, delete_unused, and historical_migration_only.",
+        "Keep the audit non-destructive for this story."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "Defines the explicit status-domain matrix."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Documents the cross-surface formatting standard."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "Adds the categorized status-token audit."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "Updates docs references away from archived status guidance."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "Preserves WorkflowStatus.md as a non-authoritative pointer."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "The audit command can begin in report mode and become fail-on-unknown in a later guardrail story."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Centralize backend workflow and step status contracts",
+      "shortName": "backend-status-contracts",
+      "description": "As a backend maintainer, I want domain-specific status modules and explicit mapping helpers so workflow lifecycle, close status, temporalStatus, step ledger, step execution artifact, and integration statuses cannot be mixed accidentally.",
+      "why": "Backend ownership is the highest-risk boundary because persisted workflow state, API serialization, Temporal visibility, and step ledgers all depend on these values.",
+      "sourceReference": {
+        "path": "docs/Workflows/WorkflowStatus.md",
+        "title": "Workflow Status Model",
+        "sections": [
+          "Use these docs instead",
+          "Why this file was archived"
+        ],
+        "claimIds": [
+          "docs/Workflows/WorkflowStatus.md#archived-pointer-002",
+          "docs/Workflows/WorkflowStatus.md#archived-pointer-003"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006"
+        ]
+      },
+      "scope": [
+        "Create domain modules for workflow, step ledger, step execution artifact or equivalent retained domain, integration, and compatibility statuses.",
+        "Move active backend workflow lifecycle constants and mappings behind those modules.",
+        "Replace active backend raw workflow lifecycle and step ledger strings with canonical imports where safe in one cohesive change.",
+        "Keep provider alias normalization inside provider or integration adapters."
+      ],
+      "outOfScope": [
+        "Frontend helper changes.",
+        "Data backfill for persisted legacy values.",
+        "Introducing a single global Status enum."
+      ],
+      "independentTest": "Targeted backend tests import the new modules, assert canonical value sets match the Temporal Visibility and Step Ledger docs, and verify close-status mapping completeness.",
+      "acceptanceCriteria": [
+        "Workflow lifecycle state values exactly match the active Temporal Visibility mm_state value set.",
+        "Temporal close status remains a separate domain and workflow_state_to_close_status covers every terminal workflow lifecycle state.",
+        "Step ledger status values exactly match the active Step Ledger document.",
+        "Provider-specific aliases are absent from workflow lifecycle canonical modules and remain in adapter normalizers.",
+        "Any retained StepExecutionStatus vocabulary is renamed or sourced from one place and has an explicit mapping to ledger status."
+      ],
+      "requirements": [
+        "Use UPPER_SNAKE_CASE enum member names with lowercase snake_case values.",
+        "Expose canonical value collections for tests and callers.",
+        "Fail fast for unsupported canonical-domain values except at explicit compatibility boundaries."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "Implements separate backend domains."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Applies enum and machine-value formatting."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Adds canonical backend modules and mappings."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "Keeps provider aliases outside workflow state code."
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "Consolidates or renames step execution artifact status."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Historical migration files may keep literal legacy values when explicitly classified as historical_migration_only."
+      ],
+      "needsClarification": [
+        "Whether StepExecutionStatus is still an active artifact/projection domain or can be removed entirely must be decided from audit evidence."
+      ]
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Quarantine no_changes compatibility and repair persisted values",
+      "shortName": "legacy-status-quarantine",
+      "description": "As an operator, I want legacy no_changes / NO_CHANGES values accepted only where old histories or artifacts enter the system so new state, APIs, and UI consistently emit no_commit / NO_COMMIT.",
+      "why": "The cleanup needs compatibility for durable histories without letting legacy aliases continue to spread through active product surfaces.",
+      "sourceReference": {
+        "path": "docs/Workflows/WorkflowStatus.md",
+        "title": "Workflow Status Model",
+        "sections": [
+          "Why this file was archived",
+          "Retention rule"
+        ],
+        "claimIds": [
+          "docs/Workflows/WorkflowStatus.md#archived-pointer-003",
+          "docs/Workflows/WorkflowStatus.md#archived-pointer-004"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012"
+        ]
+      },
+      "scope": [
+        "Move no_changes and NO_CHANGES alias handling into explicit compatibility maps or functions.",
+        "Accept legacy aliases only at inbound Temporal history/search-attribute decoding, old artifact/finish-summary decoding, and intentionally documented frontend parsing boundaries.",
+        "Add structured observation when a legacy alias is encountered.",
+        "Add a data repair/migration path for persisted no_changes / NO_CHANGES values after distinct-value inventory."
+      ],
+      "outOfScope": [
+        "Provider alias normalization unrelated to no_changes.",
+        "Removing all compatibility handling before a release window proves it is unused."
+      ],
+      "independentTest": "Seed legacy no_changes / NO_CHANGES inputs at each compatibility boundary and verify outputs, stored new values, and API responses canonicalize to no_commit / NO_COMMIT while direct canonical-domain callers reject aliases.",
+      "acceptanceCriteria": [
+        "New workflow histories, DB rows, API responses, UI labels, tests, and docs emit no_commit / NO_COMMIT only.",
+        "Legacy aliases are accepted only through named compatibility functions or documented inbound parsing surfaces.",
+        "Alias observation includes domain, alias, and canonical value without logging secrets or large payloads.",
+        "Persisted search attributes, state fields, and finish-summary JSON have an explicit inventory and repair path."
+      ],
+      "requirements": [
+        "Provide LEGACY_WORKFLOW_STATE_ALIASES and LEGACY_FINISH_OUTCOME_ALIASES or equivalent explicit maps.",
+        "Do not silently translate provider, billing, model, effort, or publish-policy values.",
+        "Document any replay/in-flight safety considerations for Temporal-facing payloads."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Quarantines legacy alias acceptance."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "Owns persisted legacy value repair."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Adds tests that prove aliases do not leak."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "Keeps archived compatibility rationale from becoming new behavior."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Temporal-facing compatibility may need versioned tests rather than immediate deletion because old histories can still be replayed."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Split frontend workflow, step, and integration status helpers",
+      "shortName": "frontend-status-helpers",
+      "description": "As a dashboard user, I want workflow and step statuses rendered with domain-correct labels and classes so execution-level state, step progress, and provider statuses are not visually or semantically conflated.",
+      "why": "The dashboard is where mixed status domains become operator confusion; helper boundaries should mirror backend status domains.",
+      "sourceReference": {
+        "path": "docs/Workflows/WorkflowStatus.md",
+        "title": "Workflow Status Model",
+        "sections": [
+          "Use these docs instead",
+          "Why this file was archived"
+        ],
+        "claimIds": [
+          "docs/Workflows/WorkflowStatus.md#archived-pointer-002",
+          "docs/Workflows/WorkflowStatus.md#archived-pointer-003"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "scope": [
+        "Replace generic status formatting/pill helpers with domain-specific workflow, step, and integration helpers.",
+        "Normalize status tokens consistently before compatibility matching.",
+        "Render workflow labels such as Awaiting slot, Awaiting dependencies, and No commit using canonical values.",
+        "Generate CSS classes as status- plus canonical value with underscores converted to hyphens.",
+        "Keep legacy aliases explicit and scoped to compatibility rendering for old payloads."
+      ],
+      "outOfScope": [
+        "Backend status module migration beyond consuming API values.",
+        "Changing color roles outside the status-domain cleanup."
+      ],
+      "independentTest": "Run focused frontend tests proving every workflow and step status has a label and pill class, legacy no_changes renders as No commit, and workflow-only states are rejected by step helper tests.",
+      "acceptanceCriteria": [
+        "Workflow state labels and pill props are generated from the workflow lifecycle domain only.",
+        "Step status labels and pill props are generated from the step ledger domain only.",
+        "Integration/provider statuses are handled by integration helpers and do not appear as workflow lifecycle values.",
+        "Unknown statuses render neutral and expose a developer warning or equivalent diagnostic without crashing.",
+        "CSS class names use kebab-case derived from canonical lowercase snake_case values."
+      ],
+      "requirements": [
+        "Use sentence/title case labels rather than all-caps machine tokens.",
+        "Preserve documented color roles for completed, failed, executing, running, canceled, initializing, planning, scheduled, awaiting_slot, waiting_on_dependencies, awaiting_external, finalizing, and no_commit.",
+        "Do not infer mm_entry or workflow status by parsing raw workflow type strings in UI code."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "Mirrors separate status domains in UI code."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Applies UI label and CSS formatting."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Scopes no_changes rendering compatibility."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Owns frontend status helper split."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Adds frontend regression tests."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Frontend helpers can share generated or duplicated canonical lists only if ownership remains explicit and tested against backend/API contracts."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Enforce status-domain guardrails in tests and CI",
+      "shortName": "status-guardrails",
+      "description": "As a maintainer, I want automated backend, frontend, and static checks so new raw status strings or cross-domain aliases cannot re-enter active code unnoticed.",
+      "why": "Once the cleanup lands, regression pressure will come from small unrelated changes adding convenient string literals or generic helpers.",
+      "sourceReference": {
+        "path": "docs/Workflows/WorkflowStatus.md",
+        "title": "Workflow Status Model",
+        "sections": [
+          "Retention rule"
+        ],
+        "claimIds": [
+          "docs/Workflows/WorkflowStatus.md#archived-pointer-004"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012"
+        ]
+      },
+      "scope": [
+        "Add backend tests for workflow state values, close-status mapping completeness, legacy compatibility boundaries, step ledger status values, and step execution artifact mapping if retained.",
+        "Add frontend tests for workflow labels/classes, step labels/classes, legacy alias rendering, unknown neutral rendering, and step helper rejection of workflow-only states.",
+        "Add a fail-on-unknown mode to the status-token audit and wire it into the appropriate targeted test or CI path with allowlists for canonical modules, migrations, fixtures, and explicit compatibility maps.",
+        "Update API/doc examples that still show non-canonical status-shaped values."
+      ],
+      "outOfScope": [
+        "Large unrelated doc rewrites.",
+        "Provider verification tests requiring live credentials."
+      ],
+      "independentTest": "Introduce a temporary unallowlisted raw status token in active code and verify the audit fail-on-unknown mode fails, then remove it and verify targeted backend/frontend tests pass.",
+      "acceptanceCriteria": [
+        "CI or the targeted required suite fails when a new raw status string appears outside approved locations.",
+        "Tests prove canonical backend value sets match the active docs.",
+        "Tests prove frontend helpers cover all canonical workflow and step statuses.",
+        "Docs and API examples no longer point implementers at archived WorkflowStatus.md as the status authority.",
+        "The coverage explicitly protects against recreating a generic global status vocabulary."
+      ],
+      "requirements": [
+        "Allow historical migrations and fixtures only through explicit allowlist entries with a domain/action reason.",
+        "Keep provider statuses valid inside provider/integration normalizers.",
+        "Keep the archived pointer as migration context, not as an implementation source."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "Turns audit reporting into enforcement."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "Guards docs/examples against drift."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Owns backend, frontend, mapper, and static regression tests."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "Prevents archived status guidance from regaining authority."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "The first CI integration may run in report-only mode if the initial inventory uncovers too many pre-existing exceptions, but the story is complete only when new unknowns can fail."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "docs/Workflows/WorkflowStatus.md#archived-pointer-001": [
+      "STORY-001"
+    ],
+    "docs/Workflows/WorkflowStatus.md#archived-pointer-002": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-004"
+    ],
+    "docs/Workflows/WorkflowStatus.md#archived-pointer-003": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004"
+    ],
+    "docs/Workflows/WorkflowStatus.md#archived-pointer-004": [
+      "STORY-001",
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-001": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-001",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-001",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-001",
+      "STORY-003",
+      "STORY-005"
+    ]
+  },
+  "dependencies": {
+    "STORY-001": [],
+    "STORY-002": [
+      "STORY-001"
+    ],
+    "STORY-003": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "STORY-004": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "STORY-005": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004"
+    ]
+  },
+  "outOfScope": [
+    "Creating one global Status enum.",
+    "Using archived WorkflowStatus.md as the source for new product decisions.",
+    "Running /moonspec.specify, generating spec.md, creating specs/ directories, implementing code, creating Jira issues, or opening a pull request in this breakdown step."
+  ]
+}
