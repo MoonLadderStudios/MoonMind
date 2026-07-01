@@ -5500,6 +5500,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding-inline-end: 2.25rem;
 }
 
+.skill-combobox-input-row--with-description > input {
+  padding-inline-end: 4.5rem;
+}
+
 .skill-combobox-toggle {
   position: absolute;
   inset-block: 0;
@@ -5531,6 +5535,19 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .skill-combobox-toggle svg {
   transition: transform 0.15s ease;
+}
+
+.skill-combobox-description-toggle {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  min-width: 44px;
+  min-height: 44px;
+  touch-action: manipulation;
 }
 
 .skill-combobox-listbox {

@@ -64,6 +64,8 @@ export function SkillCombobox({
   const [hasLinkedDescription, setHasLinkedDescription] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const linkedDescriptionRef = useRef<HTMLElement | null>(null);
+  const isDescriptionOpenRef = useRef<boolean>(isDescriptionOpen);
   const generatedListId = useId();
   const listboxId = `${generatedListId}-listbox`;
   const linkedDescriptionId = `${generatedListId}-description`;
@@ -77,11 +79,27 @@ export function SkillCombobox({
     setIsDescriptionOpen(false);
   }, [value]);
 
-  const syncLinkedDescription = useCallback((): HTMLElement | null => {
+  const restoreLinkedDescription = useCallback(
+    (linkedDescription: HTMLElement | null): void => {
+      if (!linkedDescription) {
+        return;
+      }
+      linkedDescription.hidden = false;
+      linkedDescription.removeAttribute("aria-live");
+      if (linkedDescription.id === linkedDescriptionId) {
+        linkedDescription.removeAttribute("id");
+      }
+    },
+    [linkedDescriptionId],
+  );
+
+  const syncLinkedDescription = useCallback((): void => {
     const container = containerRef.current;
     if (!container) {
       setHasLinkedDescription(false);
-      return null;
+      restoreLinkedDescription(linkedDescriptionRef.current);
+      linkedDescriptionRef.current = null;
+      return;
     }
     const field = container.closest(".field");
     const candidate = field?.nextElementSibling;
@@ -93,30 +111,31 @@ export function SkillCombobox({
 
     if (!linkedDescription) {
       setHasLinkedDescription(false);
-      return null;
+      restoreLinkedDescription(linkedDescriptionRef.current);
+      linkedDescriptionRef.current = null;
+      return;
     }
 
+    if (
+      linkedDescriptionRef.current &&
+      linkedDescriptionRef.current !== linkedDescription
+    ) {
+      restoreLinkedDescription(linkedDescriptionRef.current);
+    }
+
+    linkedDescriptionRef.current = linkedDescription;
     linkedDescription.id = linkedDescriptionId;
-    linkedDescription.hidden = !isDescriptionOpen;
+    linkedDescription.hidden = !isDescriptionOpenRef.current;
     linkedDescription.setAttribute("aria-live", "polite");
     setHasLinkedDescription(true);
-    return linkedDescription;
-  }, [isDescriptionOpen, linkedDescriptionId]);
+  }, [linkedDescriptionId, restoreLinkedDescription]);
 
   useEffect(() => {
-    const linkedDescription = syncLinkedDescription();
+    syncLinkedDescription();
     const field = containerRef.current?.closest(".field");
     const panel = field?.parentElement;
     if (!panel) {
-      return () => {
-        if (linkedDescription) {
-          linkedDescription.hidden = false;
-          linkedDescription.removeAttribute("aria-live");
-          if (linkedDescription.id === linkedDescriptionId) {
-            linkedDescription.removeAttribute("id");
-          }
-        }
-      };
+      return undefined;
     }
 
     const observer = new MutationObserver(() => {
@@ -126,15 +145,22 @@ export function SkillCombobox({
 
     return () => {
       observer.disconnect();
-      if (linkedDescription) {
-        linkedDescription.hidden = false;
-        linkedDescription.removeAttribute("aria-live");
-        if (linkedDescription.id === linkedDescriptionId) {
-          linkedDescription.removeAttribute("id");
-        }
-      }
     };
-  }, [linkedDescriptionId, syncLinkedDescription, value]);
+  }, [syncLinkedDescription]);
+
+  useEffect(() => {
+    isDescriptionOpenRef.current = isDescriptionOpen;
+    if (linkedDescriptionRef.current) {
+      linkedDescriptionRef.current.hidden = !isDescriptionOpen;
+    }
+  }, [isDescriptionOpen]);
+
+  useEffect(() => {
+    return () => {
+      restoreLinkedDescription(linkedDescriptionRef.current);
+      linkedDescriptionRef.current = null;
+    };
+  }, [restoreLinkedDescription]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -285,7 +311,13 @@ export function SkillCombobox({
       className="skill-combobox"
       style={{ position: "relative" }}
     >
-      <div className="skill-combobox-input-row">
+      <div
+        className={
+          hasLinkedDescription
+            ? "skill-combobox-input-row skill-combobox-input-row--with-description"
+            : "skill-combobox-input-row"
+        }
+      >
         <input
           ref={inputRef}
           id={inputId}

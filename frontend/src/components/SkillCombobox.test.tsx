@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { fireEvent, render, screen, waitFor, within } from "../utils/test-utils";
 import { SkillCombobox } from "./SkillCombobox";
@@ -111,5 +111,39 @@ describe("SkillCombobox", () => {
     fireEvent.keyDown(hideToggle, { key: "Escape" });
 
     expect(description.hidden).toBe(true);
+  });
+
+  it("does not recreate the linked description observer while toggling or typing", async () => {
+    const OriginalMutationObserver = globalThis.MutationObserver;
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    const mutationObserver = vi.fn(function MutationObserver() {
+      return { disconnect, observe };
+    });
+    vi.stubGlobal("MutationObserver", mutationObserver);
+
+    try {
+      render(<HarnessWithLinkedDescription />);
+
+      const description = screen.getByTestId("skill-schema-fallback-0") as HTMLElement;
+      await waitFor(() => expect(description.hidden).toBe(true));
+
+      const showToggle = screen.getByRole("button", { name: "Show skill description" });
+      expect(
+        showToggle.parentElement?.classList.contains(
+          "skill-combobox-input-row--with-description",
+        ),
+      ).toBe(true);
+
+      fireEvent.click(showToggle);
+      fireEvent.change(screen.getByRole("combobox", { name: "Step 1 skill" }), {
+        target: { value: "moon" },
+      });
+
+      expect(mutationObserver).toHaveBeenCalledTimes(1);
+      expect(disconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.stubGlobal("MutationObserver", OriginalMutationObserver);
+    }
   });
 });
