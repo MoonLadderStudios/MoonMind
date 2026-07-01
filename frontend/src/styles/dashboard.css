@@ -6879,6 +6879,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 /* The sidebar controls are compact icon buttons rather than full-text buttons. */
+.workflow-workspace-expand-list,
 .workflow-workspace-close-sidebar,
 .workflow-workspace-open-sidebar {
   display: inline-flex;
@@ -6891,7 +6892,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   flex: 0 0 auto;
 }
 
-.workflow-workspace-control-icon {
+.workflow-workspace-control-icon,
+.workflow-workspace-expand-list svg {
   width: 1.05rem;
   height: 1.05rem;
   flex: 0 0 auto;
