@@ -763,7 +763,7 @@ describe('Workflow Detail Entrypoint', () => {
     const expectedIcons = [
       ['Scheduled workflow', 'Status: scheduled', 'status-scheduled', 'lucide-calendar-clock'],
       ['Initializing workflow', 'Status: initializing', 'status-initializing', 'lucide-power'],
-      ['Dependency wait workflow', 'Status: AWAITING DEP', 'status-awaiting-dependencies', 'lucide-git-branch'],
+      ['Dependency wait workflow', 'Status: AWAITING DEP', 'status-awaiting-dependencies', 'lucide-link'],
       ['Planning workflow', 'Status: planning', 'status-planning', 'lucide-map'],
       ['Slot wait workflow', 'Status: AWAITING SLOT', 'status-awaiting-slot', 'lucide-hourglass'],
       ['Executing workflow', 'Status: executing', 'status-running', 'lucide-play'],
