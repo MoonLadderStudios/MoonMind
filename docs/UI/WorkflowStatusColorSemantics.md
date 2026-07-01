@@ -95,10 +95,10 @@ Rationale: `awaiting_slot` represents a workflow that is waiting for capacity, n
 | `planning` | Planning | Near-execution blue | `#2563EB` | `#2563EB` | Active planning/preparation and conceptually near execution. |
 | `scheduled` | Scheduled | Pre-execution indigo | `#6366F1` | `#6366F1` | Deferred or future work; farther from execution than setup/planning. |
 | `awaiting_slot` | Awaiting slot | Pre-execution indigo | `#6366F1` | `#6366F1` | Waiting before execution capacity is acquired; same distance family as scheduled. |
-| `awaiting_action` | Awaiting action | Blocked yellow | `#CA8A04` | `#FACC15` | Furthest non-terminal distance from active execution; waiting for operator or external action and kept legible against purple dashboard backgrounds. |
-| `waiting` | Waiting | Blocked yellow compatibility | `#CA8A04` | `#FACC15` | Compatibility wait alias that shares the blocked yellow group. |
-| `waiting_on_dependencies` | Awaiting dep | Blocked yellow | `#CA8A04` | `#FACC15` | Furthest non-terminal distance from active execution; blocked on prerequisite workflow state and kept legible against purple dashboard backgrounds. |
-| `awaiting_external` | Awaiting external | Blocked yellow | `#CA8A04` | `#FACC15` | Furthest non-terminal distance from active execution; waiting on an external system, provider, or human and kept legible against purple dashboard backgrounds. |
+| `awaiting_action` | Awaiting action | Blocked yellow | `#92400E` | `#FACC15` | Furthest non-terminal distance from active execution; waiting for operator or external action and kept legible against purple dashboard backgrounds. |
+| `waiting` | Waiting | Blocked yellow compatibility | `#92400E` | `#FACC15` | Compatibility wait alias that shares the blocked yellow group. |
+| `waiting_on_dependencies` | Awaiting dep | Blocked yellow | `#92400E` | `#FACC15` | Furthest non-terminal distance from active execution; blocked on prerequisite workflow state and kept legible against purple dashboard backgrounds. |
+| `awaiting_external` | Awaiting external | Blocked yellow | `#92400E` | `#FACC15` | Furthest non-terminal distance from active execution; waiting on an external system, provider, or human and kept legible against purple dashboard backgrounds. |
 | `finalizing` | Finalizing | Finalization slate | `#64748B` | `#64748B` | Wrap-up, recording, publish summary, and terminalization work. |
 | `no_commit` | No commit | No-commit teal | `#159376` | `#1A997B` | Successful or side-effectful completion with no repository commit/publish artifact. |
 
