@@ -300,7 +300,7 @@ _TEMPORAL_STATUS_VALUES = (
 _PROGRESS_BUCKET_VALUES = frozenset({"not_started", "in_progress", "complete"})
 _PROGRESS_SIGNAL_VALUES = frozenset(
     {
-        "running",
+        "executing",
         "awaiting_external",
         "reviewing",
         "has_failed_steps",
@@ -791,22 +791,22 @@ def _execution_progress_pct(execution: ExecutionModel) -> float | None:
     progress = execution.progress
     if progress is None or progress.total <= 0:
         return None
-    return max(0.0, min(100.0, (progress.succeeded / progress.total) * 100.0))
+    return max(0.0, min(100.0, (progress.completed / progress.total) * 100.0))
 
 
 def _execution_progress_bucket(execution: ExecutionModel) -> str | None:
     progress = execution.progress
     if progress is None or progress.total <= 0:
         return None
-    if progress.succeeded >= progress.total:
+    if progress.completed >= progress.total:
         return "complete"
     active = (
-        progress.running > 0
+        progress.executing > 0
         or progress.awaiting_external > 0
         or progress.reviewing > 0
     )
     terminal = progress.failed > 0 or progress.skipped > 0 or progress.canceled > 0
-    if progress.succeeded > 0 or active or terminal:
+    if progress.completed > 0 or active or terminal:
         return "in_progress"
     return "not_started"
 
@@ -816,8 +816,8 @@ def _execution_progress_signals(execution: ExecutionModel) -> set[str]:
     if progress is None:
         return set()
     signals: set[str] = set()
-    if progress.running > 0:
-        signals.add("running")
+    if progress.executing > 0:
+        signals.add("executing")
     if progress.awaiting_external > 0:
         signals.add("awaiting_external")
     if progress.reviewing > 0:
@@ -920,7 +920,7 @@ def _sort_executions_by_progress(
         return (
             1 if pct is None else 0,
             pct or 0.0,
-            progress.succeeded if progress else 0,
+            progress.completed if progress else 0,
             progress.total if progress else 0,
             updated_at.timestamp() if updated_at else 0.0,
             item.workflow_id,
@@ -2178,12 +2178,12 @@ def _bounded_execution_progress_from_sources(
             "total": source.get("total"),
             "pending": source.get("pending"),
             "ready": source.get("ready"),
-            "running": source.get("running"),
+            "executing": source.get("executing"),
             "awaitingExternal": source.get("awaitingExternal")
             if source.get("awaitingExternal") is not None
             else source.get("awaiting_external"),
             "reviewing": source.get("reviewing"),
-            "succeeded": source.get("succeeded"),
+            "completed": source.get("completed"),
             "failed": source.get("failed"),
             "skipped": source.get("skipped"),
             "canceled": source.get("canceled"),
@@ -4787,7 +4787,7 @@ def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | 
                 int(row.get("executionOrdinal") or row.get("attempt") or 0),
                 1,
             )
-            row["status"] = "awaiting_external" if waiting_reason else "running"
+            row["status"] = "awaiting_external" if waiting_reason else "executing"
             row["executionOrdinal"] = execution_ordinal
             row["startedAt"] = row.get("startedAt") or updated_at.isoformat()
             row["updatedAt"] = updated_at.isoformat()

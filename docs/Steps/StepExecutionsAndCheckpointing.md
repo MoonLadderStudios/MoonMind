@@ -178,7 +178,7 @@ Broad Temporal workflow retries are not a substitute for Step Executions when wo
 8. The context bundle is immutable once the Step Execution starts and must be digest-addressed.
 9. Side effects must be classified before the workflow advances.
 10. Failed Step Execution artifacts are retained as evidence even when their workspace changes are discarded.
-11. A logical implementation step is not succeeded until its accepted output is a committed/published code ref, an accepted artifact output, or an explicit accepted no-change disposition.
+11. A logical implementation step is not completed until its accepted output is a committed/published code ref, an accepted artifact output, or an explicit accepted no-change disposition.
 12. Passing a gate is the only normal path from repeated implementation work to publication or external handoff.
 13. Publication, Jira movement, merge automation, and other external handoff steps must be gated by structured workflow state, not only by agent self-discipline.
 14. Downstream steps that depend on changed upstream Step Execution outputs must be invalidated or revalidated before reuse.
@@ -308,7 +308,7 @@ Retries may log Temporal activity attempt numbers, but activity attempt numbers 
 
 A Step Execution manifest is an immutable artifact-backed record of one semantic execution. The workflow keeps only a compact projection of this record.
 
-Manifest evidence is written at least twice per Step Execution: once at start (status `running`, or `blocked` with `terminalDisposition = "blocked"` when workspace-policy launch validation rejects the attempt) and once at terminal classification (terminal status plus terminal disposition, git effect, output refs, checks, and dependency effects). Each write is a new immutable manifest artifact under the same step execution identity and `manifest` idempotency key scope; the step ledger tracks the latest ref and the ref history. There must be exactly one manifest write path in the workflow; parallel manifest builders for the same identity are a contract violation.
+Manifest evidence is written at least twice per Step Execution: once at start (status `executing`, or `blocked` with `terminalDisposition = "blocked"` when workspace-policy launch validation rejects the attempt) and once at terminal classification (terminal status plus terminal disposition, git effect, output refs, checks, and dependency effects). Each write is a new immutable manifest artifact under the same step execution identity and `manifest` idempotency key scope; the step ledger tracks the latest ref and the ref history. There must be exactly one manifest write path in the workflow; parallel manifest builders for the same identity are a contract violation.
 
 Representative shape:
 
@@ -329,7 +329,7 @@ Representative shape:
     "lineageExecutionOrdinal": 3
   },
   "reason": "quality_gate_failed",
-  "status": "running",
+  "status": "executing",
   "terminalDisposition": null,
   "startedAt": "2026-05-16T18:00:00Z",
   "updatedAt": "2026-05-16T18:02:30Z",
@@ -425,9 +425,9 @@ Step Execution reasons must be bounded metadata, not free-form transcripts. Rich
 | --- | --- |
 | `pending` | Step Execution record exists but execution has not started. |
 | `preparing` | Inputs, context, or workspace are being prepared. |
-| `running` | Agent/tool execution is active. |
+| `executing` | Agent/tool execution is active. |
 | `checking` | Quality gates or verification are active. |
-| `succeeded` | Step Execution succeeded and required checks passed. |
+| `completed` | Step Execution completed and required checks passed. |
 | `failed` | Step Execution failed or checks failed. |
 | `blocked` | Step Execution cannot continue without external prerequisites or approval. |
 | `canceled` | Attempt was canceled. |
@@ -738,7 +738,7 @@ MoonMind must not treat an uncommitted dirty workspace as an accepted state.
 
 ### 10.2 Accepted output rule
 
-A logical implementation step may be marked `succeeded` only when its accepted output is one of:
+A logical implementation step may be marked `completed` only when its accepted output is one of:
 
 1. a commit SHA;
 2. a pushed branch/ref;
@@ -1001,7 +1001,7 @@ Representative Resume step row text:
 ```text
 Step 1: Prepare repo — completed, preserved from source run
 Step 2: Implement API — completed, preserved from source run
-Step 3: Run tests — resumed attempt 2, local attempt 1 running now
+Step 3: Run tests — resumed attempt 2, local attempt 1 executing now
 ```
 
 ---
@@ -1116,7 +1116,7 @@ Representative attempt list response:
     },
     {
       "executionOrdinal": 3,
-      "status": "succeeded",
+      "status": "completed",
       "reason": "quality_gate_failed",
       "gitDisposition": "accepted",
       "gateVerdict": "FULLY_IMPLEMENTED",
@@ -1182,8 +1182,8 @@ Desired behavior:
 
 ```text
 source run:
-  step 1 succeeded, local attempt 1
-  step 2 succeeded, local attempt 1
+  step 1 completed, local attempt 1
+  step 2 completed, local attempt 1
   step 3 failed, local attempt 1
 
 resume run:

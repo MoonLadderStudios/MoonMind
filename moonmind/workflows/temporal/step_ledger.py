@@ -8,9 +8,9 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
-ACTIVE_STEP_STATUSES = ("running", "reviewing", "awaiting_external")
-TERMINAL_STEP_STATUSES = {"succeeded", "failed", "skipped", "canceled"}
-READY_DEPENDENCY_STATUSES = {"succeeded", "skipped"}
+ACTIVE_STEP_STATUSES = ("executing", "reviewing", "awaiting_external")
+TERMINAL_STEP_STATUSES = {"completed", "failed", "skipped", "canceled"}
+READY_DEPENDENCY_STATUSES = {"completed", "skipped"}
 _UNSET = object()
 
 def default_step_refs() -> dict[str, Any]:
@@ -494,7 +494,7 @@ def materialize_preserved_steps(
             )
         except (TypeError, ValueError):
             source_execution_ordinal = 1
-        row["status"] = str(preserved.get("status") or "succeeded")
+        row["status"] = str(preserved.get("status") or "completed")
         terminal_disposition = str(
             preserved.get("terminalDisposition")
             or preserved.get("terminal_disposition")
@@ -594,7 +594,7 @@ def mark_step_checkpoint_evidence(
             row["refs"] = refs
         existing_checkpoint = str(row.get("stateCheckpointRef") or "").strip()
         status = str(row.get("status") or "").strip()
-        if status not in {"succeeded", "skipped"}:
+        if status not in {"completed", "skipped"}:
             preservation = _recovery_preservation(
                 eligible=False,
                 reason="not_completed",
@@ -695,10 +695,10 @@ def build_progress_summary(
         "total": len(rows),
         "pending": 0,
         "ready": 0,
-        "running": 0,
+        "executing": 0,
         "awaitingExternal": 0,
         "reviewing": 0,
-        "succeeded": 0,
+        "completed": 0,
         "failed": 0,
         "skipped": 0,
         "canceled": 0,

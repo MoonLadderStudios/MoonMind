@@ -861,7 +861,7 @@ def test_first_step_running_stamps_mm_started_at_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``_mark_step_running`` is the closest existing semantic boundary for
-    "real work began" — when a logical step first transitions to running, the
+    "real work began" — when a logical step first transitions to executing, the
     workflow must stamp ``mm_started_at``. Subsequent step transitions and
     retries must not move the timestamp."""
     _configure_workflow_runtime(monkeypatch)
@@ -900,7 +900,7 @@ def test_first_step_running_stamps_mm_started_at_once(
     assert len(started_at_upserts) == 1
 
     workflow._mark_step_terminal(
-        "prepare", status="succeeded", updated_at=first_now, summary="Done"
+        "prepare", status="completed", updated_at=first_now, summary="Done"
     )
     workflow._refresh_step_readiness(updated_at=later)
     workflow._mark_step_running(
@@ -931,7 +931,7 @@ def test_run_tracks_status_transitions_and_attempts(monkeypatch: pytest.MonkeyPa
     workflow._mark_step_running("prepare", updated_at=now, summary="Preparing workspace")
     workflow._mark_step_terminal(
         "prepare",
-        status="succeeded",
+        status="completed",
         updated_at=now,
         summary="Workspace ready",
     )
@@ -974,7 +974,7 @@ def test_run_tracks_status_transitions_and_attempts(monkeypatch: pytest.MonkeyPa
     assert step["status"] == "canceled"
     assert step["waitingReason"] is None
     assert step["lastError"] == "pytest failed"
-    assert progress["succeeded"] == 1
+    assert progress["completed"] == 1
     assert progress["canceled"] == 1
 
 def test_run_terminal_success_clears_previous_last_error(
@@ -1000,7 +1000,7 @@ def test_run_terminal_success_clears_previous_last_error(
     workflow._mark_step_running("prepare", updated_at=now, summary="Retrying workspace")
     workflow._mark_step_terminal(
         "prepare",
-        status="succeeded",
+        status="completed",
         updated_at=now,
         summary="Workspace ready",
         last_error=None,
@@ -1008,7 +1008,7 @@ def test_run_terminal_success_clears_previous_last_error(
 
     step = workflow.get_step_ledger()["steps"][0]
 
-    assert step["status"] == "succeeded"
+    assert step["status"] == "completed"
     assert step["lastError"] is None
 
 def test_run_missing_step_ledger_updates_do_not_raise(
@@ -1043,7 +1043,7 @@ def test_run_missing_step_ledger_updates_do_not_raise(
     progress = workflow.get_progress()
     assert progress["ready"] == 1
     assert progress["pending"] == 1
-    assert progress["running"] == 0
+    assert progress["executing"] == 0
 
 def test_plan_dependency_map_rewrites_bundled_dependencies(
     monkeypatch: pytest.MonkeyPatch,
@@ -1880,7 +1880,7 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
     )
     workflow._mark_step_terminal(
         "run-tests",
-        status="succeeded",
+        status="completed",
         updated_at=now,
         summary="Done",
     )
@@ -1897,14 +1897,14 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
         phase="terminal",
         updated_at=now,
         reason="initial_execution",
-        status="succeeded",
+        status="completed",
         terminal_disposition="accepted",
     )
 
-    assert writes[0]["payload"]["status"] == "running"
+    assert writes[0]["payload"]["status"] == "executing"
     assert writes[0]["payload"]["execution"] == {}
     assert writes[0]["payload"]["outputs"] == {}
-    assert writes[1]["payload"]["status"] == "succeeded"
+    assert writes[1]["payload"]["status"] == "completed"
     assert writes[1]["payload"]["terminalDisposition"] == "accepted"
     assert writes[1]["payload"]["execution"] == {
         "agentRunId": "agent-run-1",
@@ -2218,7 +2218,7 @@ def test_run_records_prepared_refs_and_idempotent_checkpoint_evidence(
     )
     workflow._mark_step_terminal(
         "implement",
-        status="succeeded",
+        status="completed",
         updated_at=now,
         summary="Implemented",
     )
@@ -3092,7 +3092,7 @@ def test_run_marks_completed_step_without_checkpoint_ineligible(
     )
     workflow._mark_step_terminal(
         "plan",
-        status="succeeded",
+        status="completed",
         updated_at=now,
         summary="Planned",
     )
@@ -3159,7 +3159,7 @@ def test_run_clears_stale_checkpoint_ref_before_successful_retry(
     )
     workflow._mark_step_terminal(
         "implement",
-        status="succeeded",
+        status="completed",
         updated_at=now,
         summary="Implemented",
     )
@@ -3345,7 +3345,7 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
         }
     ]
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["status"] == "succeeded"
+    assert step["status"] == "completed"
     assert step["checks"][0] == {
         "kind": "approval_policy",
         "status": "passed",
@@ -3527,7 +3527,7 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     assert "Tests still fail because the import is missing." in skill_inputs[1]["instructions"]
     step = workflow.get_step_ledger()["steps"][0]
     assert step["executionOrdinal"] == 2
-    assert step["status"] == "succeeded"
+    assert step["status"] == "completed"
     assert step["checks"][0] == {
         "kind": "approval_policy",
         "status": "passed",
@@ -4013,7 +4013,7 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
     assert invoked_skills == ["implement", "publish"]
     ledger = workflow.get_step_ledger()["steps"]
     assert ledger[0]["status"] == "failed"
-    assert ledger[1]["status"] == "succeeded"
+    assert ledger[1]["status"] == "completed"
     assert workflow._publish_status == "not_required"
     assert workflow._publish_reason == (
         "Structured gate stopped before downstream handoff."
@@ -4181,7 +4181,7 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     )
     step = workflow.get_step_ledger()["steps"][0]
     assert step["executionOrdinal"] == 2
-    assert step["status"] == "succeeded"
+    assert step["status"] == "completed"
     assert step["checks"][0] == {
         "kind": "approval_policy",
         "status": "passed",

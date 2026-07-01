@@ -58,7 +58,7 @@ def test_manifest_serializes_versioned_artifact_contract() -> None:
         logicalStepId="implement",
         executionOrdinal=1,
         reason="initial_execution",
-        status="running",
+        status="executing",
         startedAt=now,
         updatedAt=now,
         input={"preparedInputRefs": ["artifact://prepared"]},
@@ -96,7 +96,7 @@ def test_manifest_rejects_unsupported_reason_status_and_disposition(
         "logicalStepId": "implement",
         "executionOrdinal": 1,
         "reason": "initial_execution",
-        "status": "running",
+        "status": "executing",
         "startedAt": now,
         "updatedAt": now,
     }
@@ -125,7 +125,7 @@ def test_execution_contract_keeps_retry_reexecution_and_recovery_terms_distinct(
         logicalStepId="implement",
         executionOrdinal=1,
         reason="recover_from_failed_step",
-        status="running",
+        status="executing",
         startedAt=datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
         updatedAt=datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
         lineage={
