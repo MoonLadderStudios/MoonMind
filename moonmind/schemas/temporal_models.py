@@ -23,6 +23,8 @@ from moonmind.statuses.step_execution import (
     StepExecutionStatus,
     StepExecutionTerminalDisposition,
 )
+from moonmind.statuses.step_ledger import StepLedgerStatusValue
+from moonmind.statuses.temporal_status import TemporalStatusValue
 
 SUPPORTED_WORKFLOW_TYPES = (
     "MoonMind.UserWorkflow",
@@ -2776,17 +2778,7 @@ class StepLedgerRowModel(BaseModel):
     title: str = Field(..., alias="title", min_length=1)
     tool: dict[str, Any] = Field(default_factory=dict, alias="tool")
     depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
-    status: Literal[
-        "pending",
-        "ready",
-        "running",
-        "awaiting_external",
-        "reviewing",
-        "succeeded",
-        "failed",
-        "skipped",
-        "canceled",
-    ] = Field(..., alias="status")
+    status: StepLedgerStatusValue = Field(..., alias="status")
     waiting_reason: str | None = Field(None, alias="waitingReason")
     attention_required: bool = Field(False, alias="attentionRequired")
     execution_ordinal: int = Field(
@@ -3119,7 +3111,7 @@ class ExecutionModel(BaseModel):
     ] = Field(..., alias="dashboardStatus")
     state: str = Field(..., alias="state")
     raw_state: str = Field(..., alias="rawState")
-    temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
+    temporal_status: TemporalStatusValue = Field(
         ..., alias="temporalStatus"
     )
     close_status: Optional[str] = Field(None, alias="closeStatus")
@@ -3290,7 +3282,7 @@ class ExecutionListItemModel(BaseModel):
     ] = Field(..., alias="dashboardStatus")
     state: str = Field(..., alias="state")
     raw_state: str = Field(..., alias="rawState")
-    temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
+    temporal_status: TemporalStatusValue = Field(
         ..., alias="temporalStatus"
     )
     close_status: Optional[str] = Field(None, alias="closeStatus")

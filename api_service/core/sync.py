@@ -23,6 +23,10 @@ from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     canonicalize_workflow_state_alias,
 )
+from moonmind.statuses.workflow import (
+    PRE_WORKFLOW_STATES,
+    WORKFLOW_STATE_TO_CLOSE_STATUS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,22 +63,8 @@ LOCAL_ONLY_EXECUTION_FIELDS = (
 # scheduled, even while it is awaiting capacity. ``mm_started_at`` is the
 # canonical source for "real work began"; see
 # moonmind.workflows.temporal.workflows.run.MoonMindRunWorkflow._mark_real_work_started.
-PRE_WORK_STATES = frozenset(
-    {
-        MoonMindWorkflowState.SCHEDULED,
-        MoonMindWorkflowState.INITIALIZING,
-        MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,
-        MoonMindWorkflowState.PLANNING,
-        MoonMindWorkflowState.AWAITING_SLOT,
-    }
-)
-
-TERMINAL_DOMAIN_STATE_TO_CLOSE_STATUS = {
-    MoonMindWorkflowState.NO_COMMIT: TemporalExecutionCloseStatus.COMPLETED,
-    MoonMindWorkflowState.COMPLETED: TemporalExecutionCloseStatus.COMPLETED,
-    MoonMindWorkflowState.FAILED: TemporalExecutionCloseStatus.FAILED,
-    MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
-}
+PRE_WORK_STATES = PRE_WORKFLOW_STATES
+TERMINAL_DOMAIN_STATE_TO_CLOSE_STATUS = WORKFLOW_STATE_TO_CLOSE_STATUS
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)

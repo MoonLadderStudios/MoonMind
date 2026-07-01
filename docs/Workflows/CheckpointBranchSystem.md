@@ -1,7 +1,7 @@
 # Checkpoint Branch System
 
-Status: Proposed design  
-Owners: MoonMind Platform + Workflow Runtime + Dashboard  
+Status: Proposed design
+Owners: MoonMind Platform + Workflow Runtime + Dashboard
 Last updated: 2026-07-01
 
 **Implementation tracking:** rollout notes, spikes, temporary handoffs, and migration checklists should live under `docs/tmp/` or gitignored local-only artifacts, not as mutable checklists in this canonical design document.

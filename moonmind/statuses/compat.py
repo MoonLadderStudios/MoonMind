@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
-LEGACY_WORKFLOW_STATE_ALIASES = {
+
+WORKFLOW_STATE_COMPATIBILITY_ALIASES: dict[str, str] = {
     "no_changes": "no_commit",
 }
+LEGACY_WORKFLOW_STATE_ALIASES = WORKFLOW_STATE_COMPATIBILITY_ALIASES
 
 LEGACY_FINISH_OUTCOME_ALIASES = {
     "NO_CHANGES": "NO_COMMIT",
@@ -24,6 +26,13 @@ _NO_COMMIT_LEGACY_REASONS = {
 }
 
 
+def normalize_workflow_state_alias(raw: str) -> str:
+    """Normalize legacy workflow state aliases before canonical parsing."""
+
+    candidate = str(raw).strip().lower()
+    return WORKFLOW_STATE_COMPATIBILITY_ALIASES.get(candidate, candidate)
+
+
 def canonicalize_workflow_state_alias(
     value: Any,
     *,
@@ -32,7 +41,7 @@ def canonicalize_workflow_state_alias(
     candidate = str(value or "").strip().lower()
     if not candidate:
         return None
-    canonical = LEGACY_WORKFLOW_STATE_ALIASES.get(candidate, candidate)
+    canonical = WORKFLOW_STATE_COMPATIBILITY_ALIASES.get(candidate, candidate)
     if canonical != candidate and logger is not None:
         logger.warning(
             "Observed legacy workflow state alias '%s'; canonicalized to '%s'",
@@ -108,3 +117,16 @@ def normalize_no_commit_finish_summary(
             )
         normalized["publish"] = publish_payload
     return normalized
+
+
+__all__ = [
+    "LEGACY_FINISH_OUTCOME_ALIASES",
+    "LEGACY_PUBLISH_REASON_ALIASES",
+    "LEGACY_WORKFLOW_STATE_ALIASES",
+    "WORKFLOW_STATE_COMPATIBILITY_ALIASES",
+    "canonicalize_finish_outcome_code_alias",
+    "canonicalize_publish_reason_alias",
+    "canonicalize_workflow_state_alias",
+    "normalize_no_commit_finish_summary",
+    "normalize_workflow_state_alias",
+]

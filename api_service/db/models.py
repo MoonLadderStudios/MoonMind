@@ -842,6 +842,8 @@ from moonmind.core.artifacts import (
     TemporalArtifactRedactionLevel,
     TemporalArtifactUploadMode,
 )
+from moonmind.statuses.close_status import TemporalExecutionCloseStatus
+from moonmind.statuses.workflow import MoonMindWorkflowState
 
 class TemporalWorkflowType(str, enum.Enum):
     """Supported root workflow type catalog entries."""
@@ -849,33 +851,6 @@ class TemporalWorkflowType(str, enum.Enum):
     USER_WORKFLOW = "MoonMind.UserWorkflow"
     MANIFEST_INGEST = "MoonMind.ManifestIngest"
     PROVIDER_PROFILE_MANAGER = "MoonMind.ProviderProfileManager"
-
-class MoonMindWorkflowState(str, enum.Enum):
-    """Domain lifecycle states exposed for dashboard filtering."""
-
-    SCHEDULED = "scheduled"
-    INITIALIZING = "initializing"
-    WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"
-    PLANNING = "planning"
-    AWAITING_SLOT = "awaiting_slot"
-    EXECUTING = "executing"
-    PROPOSALS = "proposals"
-    AWAITING_EXTERNAL = "awaiting_external"
-    FINALIZING = "finalizing"
-    NO_COMMIT = "no_commit"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELED = "canceled"
-
-class TemporalExecutionCloseStatus(str, enum.Enum):
-    """Terminal Temporal close statuses tracked for invariant checks."""
-
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELED = "canceled"
-    TERMINATED = "terminated"
-    TIMED_OUT = "timed_out"
-    CONTINUED_AS_NEW = "continued_as_new"
 
 class TemporalExecutionOwnerType(str, enum.Enum):
     """Owner class mirrored into the execution projection and Visibility model."""

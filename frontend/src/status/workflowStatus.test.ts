@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-
 import {
   WORKFLOW_STATUS_TRACEABILITY,
   formatWorkflowStatusLabel,
@@ -56,4 +55,3 @@ describe('workflow status helpers', () => {
     expect(WORKFLOW_STATUS_TRACEABILITY.relatedJiraIssues).toContain('MM-1073');
   });
 });
-
