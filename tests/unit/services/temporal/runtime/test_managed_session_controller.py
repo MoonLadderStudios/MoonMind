@@ -1539,7 +1539,7 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
         workspaceSpec={
             "repository": "MoonLadderStudios/MoonMind",
-            "startingBranch": "dependabot/pip/requests-2.33.1",
+            "startingBranch": "origin/dependabot/pip/requests-2.33.1",
             "targetBranch": "codex/session-fix",
         },
     )
@@ -1637,7 +1637,13 @@ async def test_controller_launch_clones_workspace_before_starting_container(
 
     await controller.launch_session(request)
 
-    assert commands[0][:2] == ("git", "clone")
+    assert commands[0][:5] == (
+        "git",
+        "clone",
+        "--branch",
+        "dependabot/pip/requests-2.33.1",
+        "--single-branch",
+    )
     assert (
         "https://github.com/MoonLadderStudios/MoonMind.git" in commands[0]
     )
