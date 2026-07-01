@@ -102,6 +102,21 @@ def test_bind_child_inputs_jira_verify_auto_binds_issue_object_and_key():
     assert inputs["constraints"] == "Be careful"
 
 
+def test_bind_child_inputs_jira_verify_uses_fallback_repository_when_missing():
+    module = _load_module()
+    no_repo_target = dict(_JIRA_TARGET)
+    no_repo_target.pop("repository", None)
+    inputs = module["bind_child_inputs"](
+        no_repo_target,
+        "skill",
+        "jira-verify",
+        "Be careful",
+        fallback_repository="MoonLadderStudios/Tactics",
+    )
+    assert inputs is not None
+    assert inputs["repository"] == "MoonLadderStudios/Tactics"
+
+
 def test_bind_child_inputs_jira_implement_preset_auto_binds_issue_object_and_key():
     module = _load_module()
     inputs = module["bind_child_inputs"](
@@ -168,6 +183,19 @@ def test_child_goal_routes_to_selected_run_capability():
     assert github_goal is not None
 
 
+def test_load_parent_repository_reads_task_context(tmp_path):
+    module = _load_module()
+    load_parent_repository = module["_load_parent_repository"]
+
+    task_context = tmp_path / "task_context.json"
+    task_context.write_text('{"repository":"MoonLadderStudios/Tactics"}', encoding="utf-8")
+
+    assert (
+        load_parent_repository(str(task_context))
+        == "MoonLadderStudios/Tactics"
+    )
+
+
 def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     module = _load_module()
     runtime = module["RuntimeSelection"](
@@ -207,6 +235,23 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     key = payload["idempotencyKey"]
     assert key.startswith("batch-workflows:jira:THOR-123:sha256:")
     assert len(key) <= module["IDEMPOTENCY_KEY_MAX_LENGTH"]
+
+
+def test_build_child_request_uses_default_repository_when_target_missing():
+    module = _load_module()
+    target = dict(_JIRA_TARGET)
+    target.pop("repository", None)
+    request = module["build_child_request"](
+        target,
+        config=_jira_config(module),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+        default_repository="MoonLadderStudios/Alternate",
+    )
+    assert request is not None
+    assert request["payload"]["repository"] == "MoonLadderStudios/Alternate"
+    assert request["payload"]["task"]["inputs"]["repository"] == "MoonLadderStudios/Alternate"
 
 
 def test_idempotency_key_includes_target_kind_and_slug():

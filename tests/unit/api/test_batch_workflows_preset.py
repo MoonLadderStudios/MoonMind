@@ -238,6 +238,35 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             assert "jira" not in expanded["capabilities"]
 
 
+async def test_batch_workflows_expands_repository_from_context_when_not_provided(tmp_path):
+    async with _catalog_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+
+            expanded = await service.expand_template(
+                slug="batch-workflows",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "jira_project_key": "MM",
+                    "jira_status": "In Progress",
+                    "run_ref": "skill:jira-verify",
+                    "publish_mode": "none",
+                    "constraints": "Be careful",
+                    "additional_jql": "assignee = currentUser()",
+                    "max_workflows": "10",
+                },
+                context={"repository": "MoonLadderStudios/MoonMind"},
+            )
+
+            orchestration = expanded["steps"][0]["batchOrchestration"]
+            assert (
+                orchestration["source"]["jiraStatus"]["repository"]
+                == "MoonLadderStudios/MoonMind"
+            )
+
+
 async def test_batch_workflows_ignores_removed_target_preset_version_input(tmp_path):
     async with _catalog_db(tmp_path) as session_maker:
         async with session_maker() as session:
