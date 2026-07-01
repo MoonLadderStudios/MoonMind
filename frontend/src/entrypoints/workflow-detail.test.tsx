@@ -1054,9 +1054,11 @@ describe('Workflow Detail Entrypoint', () => {
     expect(expand.getAttribute('class') || '').toContain('secondary');
     expect(expand.getAttribute('class') || '').not.toContain('button');
     expect(expand.querySelector('svg.lucide-arrow-right')).toBeTruthy();
-    expect(within(sidebar).getByRole('button', { name: 'Close sidebar' }).getAttribute('class') || '').toContain(
+    const closeSidebar = within(sidebar).getByRole('button', { name: 'Close sidebar' });
+    expect(closeSidebar.getAttribute('class') || '').toContain(
       'workflow-workspace-close-sidebar',
     );
+    expect(closeSidebar.compareDocumentPosition(expand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('MM-1008 keeps the close-sidebar control compact', async () => {

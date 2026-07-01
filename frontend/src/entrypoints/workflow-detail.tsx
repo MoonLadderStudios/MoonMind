@@ -384,15 +384,6 @@ function WorkflowSidebarControls({
 }) {
   return (
     <div className="workflow-workspace-sidebar-controls">
-      <a
-        href={workflowListHrefFromContext(search, { markDetailReturn: true })}
-        className="secondary workflow-workspace-expand-list"
-        onClick={markWorkflowListReturnFocusIntent}
-        aria-label="Expand to full list"
-        title="Expand to full list"
-      >
-        <ArrowRight aria-hidden="true" focusable="false" />
-      </a>
       <button
         ref={closeButtonRef}
         type="button"
@@ -403,6 +394,15 @@ function WorkflowSidebarControls({
       >
         {SIDEBAR_TOGGLE_ICON}
       </button>
+      <a
+        href={workflowListHrefFromContext(search, { markDetailReturn: true })}
+        className="secondary workflow-workspace-expand-list"
+        onClick={markWorkflowListReturnFocusIntent}
+        aria-label="Expand to full list"
+        title="Expand to full list"
+      >
+        <ArrowRight aria-hidden="true" focusable="false" />
+      </a>
     </div>
   );
 }
