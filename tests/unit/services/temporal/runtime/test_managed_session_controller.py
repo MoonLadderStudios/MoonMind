@@ -1596,14 +1596,14 @@ async def test_controller_launch_clones_workspace_before_starting_container(
             "checkout",
             "-B",
             "codex/session-fix",
-            "FETCH_HEAD",
+            "origin/codex/session-fix",
         ):
             return 0, "", ""
         if command == _workspace_git_command(
             request.workspace_path,
             "fetch",
             "origin",
-            "codex/session-fix",
+            "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
         ):
             return 0, "", ""
         if command[:2] == ("docker", "run"):
@@ -1651,14 +1651,14 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         request.workspace_path,
         "fetch",
         "origin",
-        "codex/session-fix",
+        "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
     )
     assert commands[3] == _workspace_git_command(
         request.workspace_path,
         "checkout",
         "-B",
         "codex/session-fix",
-        "FETCH_HEAD",
+        "origin/codex/session-fix",
     )
     assert git_envs == [
         {"LC_ALL": "C", "LANG": "C"},
@@ -2017,13 +2017,17 @@ async def test_controller_reuses_resolved_git_environment_for_target_branch(
             return 0, "true\n", ""
         if command[-2:] == ("checkout", "feature/mm-320"):
             return 1, "", "pathspec 'feature/mm-320' did not match"
-        if command[-3:] == ("fetch", "origin", "feature/mm-320"):
+        if command[-3:] == (
+            "fetch",
+            "origin",
+            "+refs/heads/feature/mm-320:refs/remotes/origin/feature/mm-320",
+        ):
             return 0, "", ""
         if command[-4:] == (
             "checkout",
             "-B",
             "feature/mm-320",
-            "FETCH_HEAD",
+            "origin/feature/mm-320",
         ):
             return 0, "", ""
         raise AssertionError(f"unexpected git command: {command}")
@@ -2204,9 +2208,13 @@ async def test_controller_launch_creates_target_branch_when_remote_branch_missin
             request.workspace_path,
             "fetch",
             "origin",
-            "codex/session-fix",
+            "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
         ):
-            return 128, "", "fatal: couldn't find remote ref codex/session-fix"
+            return (
+                128,
+                "",
+                "fatal: couldn't find remote ref refs/heads/codex/session-fix",
+            )
         if command[:2] == ("docker", "run"):
             return 0, "ctr-1\n", ""
         if "ready" in command:
@@ -2240,7 +2248,7 @@ async def test_controller_launch_creates_target_branch_when_remote_branch_missin
         request.workspace_path,
         "fetch",
         "origin",
-        "codex/session-fix",
+        "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
     )
     assert commands[3] == _workspace_git_command(
         request.workspace_path,
@@ -2376,7 +2384,7 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
 
 
 @pytest.mark.asyncio
-async def test_controller_launch_uses_fetch_head_for_fetched_target_branch(
+async def test_controller_launch_fetches_branch_refspec_for_target_branch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2436,7 +2444,7 @@ async def test_controller_launch_uses_fetch_head_for_fetched_target_branch(
             request.workspace_path,
             "fetch",
             "origin",
-            "codex/session-fix",
+            "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
         ):
             return 0, "", ""
         if command == _workspace_git_command(
@@ -2444,7 +2452,7 @@ async def test_controller_launch_uses_fetch_head_for_fetched_target_branch(
             "checkout",
             "-B",
             "codex/session-fix",
-            "FETCH_HEAD",
+            "origin/codex/session-fix",
         ):
             return 0, "", ""
         if command[:2] == ("docker", "run"):
@@ -2490,14 +2498,14 @@ async def test_controller_launch_uses_fetch_head_for_fetched_target_branch(
         request.workspace_path,
         "fetch",
         "origin",
-        "codex/session-fix",
+        "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
     )
     assert commands[3] == _workspace_git_command(
         request.workspace_path,
         "checkout",
         "-B",
         "codex/session-fix",
-        "FETCH_HEAD",
+        "origin/codex/session-fix",
     )
 
 

@@ -2091,7 +2091,7 @@ class DockerCodexManagedSessionController:
             workspace_path,
             "fetch",
             "origin",
-            target_branch,
+            f"+refs/heads/{target_branch}:refs/remotes/origin/{target_branch}",
         )
         fetch_returncode, fetch_stdout, fetch_stderr = await self._git_command_result(
             fetch_command,
@@ -2105,7 +2105,7 @@ class DockerCodexManagedSessionController:
                     "checkout",
                     "-B",
                     target_branch,
-                    "FETCH_HEAD",
+                    f"origin/{target_branch}",
                 ),
                 request=request,
                 git_env=git_env,
