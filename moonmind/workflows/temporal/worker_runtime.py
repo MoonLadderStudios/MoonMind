@@ -140,9 +140,7 @@ from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_r
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 from moonmind.workflows.temporal.story_output_tools import (
     DOCUMENT_UPDATE_TASKS_TOOL_NAME,
-    GITHUB_CREATE_ISSUES_TOOL_NAME,
-    GITHUB_ISSUE_IMPLEMENT_TASKS_TOOL_NAME,
-    GITHUB_ISSUE_ORCHESTRATE_TASKS_TOOL_NAME,
+    GITHUB_STORY_TOOL_NAMES,
     JIRA_STORY_TOOL_NAMES,
     register_story_output_tool_handlers,
 )
@@ -869,9 +867,7 @@ _JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _STORY_OUTPUT_TASK_TOOLS = frozenset(
     {
         *JIRA_STORY_TOOL_NAMES,
-        GITHUB_CREATE_ISSUES_TOOL_NAME,
-        GITHUB_ISSUE_IMPLEMENT_TASKS_TOOL_NAME,
-        GITHUB_ISSUE_ORCHESTRATE_TASKS_TOOL_NAME,
+        *GITHUB_STORY_TOOL_NAMES,
         DOCUMENT_UPDATE_TASKS_TOOL_NAME,
     }
 )
@@ -892,8 +888,6 @@ _AUTHORED_STEP_METADATA_KEYS = (
     "skill",
     "jiraOrchestration",
     "jira_orchestration",
-    "githubOrchestration",
-    "github_orchestration",
     "documentUpdateOrchestration",
     "document_update_orchestration",
     "storyOutput",
@@ -1846,7 +1840,7 @@ def _build_runtime_planner():
             )
             node_inputs.update(story_paths)
             if (
-                story_output_mode in {"jira", "github"}
+                story_output_mode == "jira"
                 and creates_story_breakdown_artifact
                 and not node_inputs.get("targetBranch")
             ):
@@ -1860,10 +1854,7 @@ def _build_runtime_planner():
                 node_inputs["targetBranch"] = _generate_runtime_pr_branch(prefix)
             story_output_payload = dict(story_output_payload)
             story_output_payload.setdefault("mode", story_output_mode or "docs_tmp")
-            if (
-                story_output_mode in {"jira", "github"}
-                and creates_story_breakdown_artifact
-            ):
+            if story_output_mode == "jira" and creates_story_breakdown_artifact:
                 story_output_payload.setdefault("handoff", "artifact")
                 story_output_payload.setdefault(
                     "requiresStoryBreakdownArtifactRef",
@@ -2017,7 +2008,7 @@ def _build_runtime_planner():
                     )
                 if step_tool_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
                     if (
-                        story_output_mode in {"jira", "github"}
+                        story_output_mode == "jira"
                         and _requires_branch_publish_for_story_output(
                             step_node_inputs.get("publishMode")
                         )
@@ -2061,7 +2052,7 @@ def _build_runtime_planner():
                 expanded_inputs = dict(node_inputs)
                 if selected_skill_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
                     if (
-                        story_output_mode in {"jira", "github"}
+                        story_output_mode == "jira"
                         and _requires_branch_publish_for_story_output(
                             expanded_inputs.get("publishMode")
                         )
@@ -2103,7 +2094,7 @@ def _build_runtime_planner():
             is_story_output_tool = selected_skill_lower in _STORY_OUTPUT_TASK_TOOLS
             if selected_skill_lower in _MOONSPEC_BREAKDOWN_TOOLS:
                 if (
-                    story_output_mode in {"jira", "github"}
+                    story_output_mode == "jira"
                     and _requires_branch_publish_for_story_output(
                         node_inputs.get("publishMode")
                     )
@@ -2149,8 +2140,8 @@ def _build_runtime_planner():
             and publish_mode.strip().lower() in ("pr", "branch")
             and publish_uses_git
         )
-        if publish_requested or story_output_mode in {"jira", "github"}:
-            if story_output_mode in {"jira", "github"}:
+        if publish_requested or story_output_mode == "jira":
+            if story_output_mode == "jira":
                 publish_node = next(
                     (
                         node
@@ -2200,7 +2191,7 @@ def _build_runtime_planner():
             ):
                 publish_inputs = publish_node["inputs"]
                 if (
-                    story_output_mode in {"jira", "github"}
+                    story_output_mode == "jira"
                     and _requires_branch_publish_for_story_output(
                         publish_inputs.get("publishMode")
                     )

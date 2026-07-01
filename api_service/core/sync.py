@@ -92,6 +92,29 @@ def _finish_summary_from_memo(memo: dict[str, Any]) -> dict[str, Any] | None:
         return sanitized if isinstance(sanitized, dict) else None
     return None
 
+def _artifact_ref_from_memo(memo: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = memo.get(key)
+        if isinstance(value, str):
+            candidate = value.strip()
+            if candidate:
+                return candidate
+        if isinstance(value, dict):
+            for ref_key in (
+                "artifactRef",
+                "artifact_ref",
+                "artifactId",
+                "artifact_id",
+                "id",
+                "ref",
+            ):
+                ref_val = value.get(ref_key)
+                if isinstance(ref_val, str):
+                    candidate = ref_val.strip()
+                    if candidate:
+                        return candidate
+    return None
+
 def _finish_outcome_code_from_summary(
     finish_summary: dict[str, Any] | None,
 ) -> str | None:
@@ -342,9 +365,24 @@ async def map_temporal_state_to_projection(
         "artifact_refs": artifact_refs,
         "finish_outcome_code": _finish_outcome_code_from_summary(finish_summary),
         "finish_summary_json": finish_summary,
-        "input_ref": memo.get("input_ref"),
-        "plan_ref": memo.get("plan_ref"),
-        "manifest_ref": memo.get("manifest_ref"),
+        "input_ref": _artifact_ref_from_memo(
+            memo,
+            "input_ref",
+            "input_artifact_ref",
+            "inputArtifactRef",
+        ),
+        "plan_ref": _artifact_ref_from_memo(
+            memo,
+            "plan_ref",
+            "plan_artifact_ref",
+            "planArtifactRef",
+        ),
+        "manifest_ref": _artifact_ref_from_memo(
+            memo,
+            "manifest_ref",
+            "manifest_artifact_ref",
+            "manifestArtifactRef",
+        ),
         "parameters": _sanitize_for_json(memo.get("parameters", {}) or {}),
         "integration_state": _sanitize_for_json(memo.get("integration_state")),
         "pending_parameters_patch": _sanitize_for_json(

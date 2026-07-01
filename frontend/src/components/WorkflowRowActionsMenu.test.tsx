@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import { renderWithClient } from '../utils/test-utils';
 import { WorkflowRowActionsMenu } from './WorkflowRowActionsMenu';
@@ -20,6 +20,7 @@ describe('WorkflowRowActionsMenu', () => {
   };
 
   beforeEach(() => {
+    vi.useRealTimers();
     window.history.pushState({}, 'Workflows', '/workflows?source=temporal');
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -31,6 +32,10 @@ describe('WorkflowRowActionsMenu', () => {
       }
       return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   const renderMenu = () =>
@@ -178,7 +183,7 @@ describe('WorkflowRowActionsMenu', () => {
   });
 
   it('requests a rerun from the row menu without navigating away from the workflow list', async () => {
-    renderWithClient(
+    const { container } = renderWithClient(
       <WorkflowRowActionsMenu
         workflowId="wf-123"
         apiBase="/api"
@@ -204,10 +209,143 @@ describe('WorkflowRowActionsMenu', () => {
     expect(window.location.pathname).toBe('/workflows');
     expect(window.location.search).toBe('?source=temporal');
     expect(
-      await screen.findByText('Rerun was requested and the latest execution view is ready.'),
-    ).toBeTruthy();
-    expect(screen.getByRole('status').className).toContain('notice');
-    expect(screen.getByRole('status').className).toContain('ok');
+      within(container).queryByText('Rerun was requested and the latest execution view is ready.'),
+    ).toBeNull();
+    const toast = await screen.findByRole('status');
+    expect(within(toast).getByText('Rerun requested')).toBeTruthy();
+    expect(within(toast).getByText('Example workflow has been queued.')).toBeTruthy();
+    const action = within(toast).getByRole('link', { name: 'View workflow' });
+    expect(action.getAttribute('href')).toBe('/workflows/wf-123?source=temporal');
+  });
+
+  it('links rerun success to the returned execution when a separate workflow is created', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => detailResponse,
+        } as Response);
+      }
+      if (url === '/api/executions/wf-123/update') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            execution: {
+              workflowId: 'mm:rerun-created',
+              redirectPath: '/workflows/mm:rerun-created?source=temporal',
+            },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderWithClient(
+      <WorkflowRowActionsMenu
+        workflowId="wf-123"
+        apiBase="/api"
+        actionsEnabled
+        taskEditingEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    await waitForActionAvailability();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+
+    const toast = await screen.findByRole('status');
+    const action = within(toast).getByRole('link', { name: 'View workflow' });
+    expect(action.getAttribute('href')).toBe('/workflows/mm:rerun-created?source=temporal');
+  });
+
+  it('dismisses rerun success toasts manually', async () => {
+    renderWithClient(
+      <WorkflowRowActionsMenu
+        workflowId="wf-123"
+        apiBase="/api"
+        actionsEnabled
+        taskEditingEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    await waitForActionAvailability();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+
+    const toast = await screen.findByRole('status');
+    fireEvent.click(within(toast).getByRole('button', { name: 'Dismiss Rerun requested' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('status')).toBeNull();
+    });
+  });
+
+  it('shows rerun request failures in an accessible toast', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => detailResponse,
+        } as Response);
+      }
+      if (url === '/api/executions/wf-123/update') {
+        return Promise.resolve({
+          ok: false,
+          statusText: 'Conflict',
+          text: async () => JSON.stringify({ detail: 'Workflow no longer accepts rerun requests.' }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderWithClient(
+      <WorkflowRowActionsMenu
+        workflowId="wf-123"
+        apiBase="/api"
+        actionsEnabled
+        taskEditingEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    await waitForActionAvailability();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+
+    const viewport = await screen.findByLabelText('Dashboard notifications');
+    const toast = within(viewport).getByRole('alert');
+    expect(within(toast).getByText('Workflow action failed')).toBeTruthy();
+    expect(within(toast).getByText('Workflow no longer accepts rerun requests.')).toBeTruthy();
+  });
+
+  it('shows non-Error mutation failures without crashing the error toast', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => detailResponse,
+        } as Response);
+      }
+      if (url === '/api/executions/wf-123/update') {
+        return Promise.reject({ message: '  Custom action failure.  ' });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderWithClient(
+      <WorkflowRowActionsMenu
+        workflowId="wf-123"
+        apiBase="/api"
+        actionsEnabled
+        taskEditingEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    await waitForActionAvailability();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+
+    const viewport = await screen.findByLabelText('Dashboard notifications');
+    const toast = within(viewport).getByRole('alert');
+    expect(within(toast).getByText('Workflow action failed')).toBeTruthy();
+    expect(within(toast).getByText('Custom action failure.')).toBeTruthy();
   });
 
   it('posts a graceful cancel request directly from the row menu', async () => {

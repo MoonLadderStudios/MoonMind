@@ -1,5 +1,5 @@
 slug: jira-breakdown-implement
-title: Jira Breakdown and Implement
+title: Breakdown and Jira Implement
 description: Break a preferred source input into stories, create Jira issues, then create dependent Jira Implement tasks for each generated issue.
 scope: global
 tags:

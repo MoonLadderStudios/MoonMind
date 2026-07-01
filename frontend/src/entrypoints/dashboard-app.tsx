@@ -306,8 +306,8 @@ function DashboardLiveUpdateProvider({
 function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
   const [open, setOpen] = useState(false);
   const location = useLocation();
-  const isWorkflowDetail =
-    location.pathname.startsWith('/workflows/') && location.pathname !== '/workflows/new';
+  const isWorkflowStart = location.pathname.replace(/\/$/, '') === '/workflows/new';
+  const isWorkflowDetail = location.pathname.startsWith('/workflows/') && !isWorkflowStart;
   const buildId = typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim() ? uiInfo.buildId : null;
 
   useEffect(() => {
@@ -349,6 +349,7 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
         >
           <NavLink
             to="/workflows"
+            end
             className={({ isActive }) => (isActive || isWorkflowDetail ? 'active' : undefined)}
           >
             <WorkflowsNavIcon className="route-nav-icon" />

@@ -828,6 +828,37 @@ class MoonMindRunWorkflow:
             self._failure_diagnostic = diagnostic
         return diagnostic
 
+    def _record_step_execution_exception(
+        self,
+        exc: BaseException,
+        *,
+        logical_step_id: str,
+        tool_name: str,
+        source: str,
+        updated_at: datetime,
+        child_workflow_id: str | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Record step-scoped terminal failure evidence for raised executions."""
+
+        diagnostic = self._record_failure_diagnostic(
+            exc,
+            stage=self._state,
+            step_id=logical_step_id,
+            step_title=tool_name,
+            source=source,
+            child_workflow_id=child_workflow_id,
+            diagnostics_ref=diagnostics_ref,
+        )
+        self._mark_step_terminal(
+            logical_step_id,
+            status="failed",
+            updated_at=updated_at,
+            summary=diagnostic["message"],
+            last_error=diagnostic["category"],
+        )
+        return diagnostic
+
     def _record_result_failure_diagnostic(
         self,
         *,
@@ -6691,7 +6722,24 @@ class MoonMindRunWorkflow:
                     updated_at=workflow.now(),
                     summary=self._summary,
                 )
-                self._record_step_workspace_capture_input(node_id, node_inputs)
+                capture_input_source = dict(node_inputs)
+                workflow_workspace_spec = self._mapping_value(
+                    parameters,
+                    "workspaceSpec",
+                    "workspace_spec",
+                )
+                if (
+                    isinstance(workflow_workspace_spec, Mapping)
+                    and "workspaceSpec" not in capture_input_source
+                    and "workspace_spec" not in capture_input_source
+                ):
+                    capture_input_source["workspaceSpec"] = dict(
+                        workflow_workspace_spec
+                    )
+                self._record_step_workspace_capture_input(
+                    node_id,
+                    capture_input_source,
+                )
                 current_step_execution = self._step_execution_for(node_id) or 1
                 attempt_reason = (
                     "quality_gate_failed"
@@ -7024,15 +7072,43 @@ class MoonMindRunWorkflow:
                             if step_retry_overrides_enabled
                             else None
                         )
-                        execution_result = await workflow.execute_activity(
-                            route.activity_type,
-                            execute_payload,
-                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                            **self._execute_kwargs_for_route(
-                                route,
-                                max_attempts_override=max_attempts_override,
-                            ),
-                        )
+                        try:
+                            execution_result = await workflow.execute_activity(
+                                route.activity_type,
+                                execute_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                **self._execute_kwargs_for_route(
+                                    route,
+                                    max_attempts_override=max_attempts_override,
+                                ),
+                            )
+                        except Exception as exc:
+                            diagnostic = self._record_step_execution_exception(
+                                exc,
+                                logical_step_id=node_id,
+                                tool_name=tool_name,
+                                source="activity",
+                                updated_at=workflow.now(),
+                            )
+                            if step_execution_manifest_enabled:
+                                await self._record_step_execution_manifest(
+                                    node_id,
+                                    phase="terminal",
+                                    updated_at=workflow.now(),
+                                    reason=attempt_reason,
+                                    status="failed",
+                                    terminal_disposition="failed_unrecoverable",
+                                    summary=diagnostic.get("message"),
+                                    execution={
+                                        "kind": tool_type,
+                                        "toolName": tool_name,
+                                        "activityType": route.activity_type,
+                                    },
+                                )
+                            if failure_mode == "FAIL_FAST":
+                                raise
+                            result_status = "FAILED"
+                            break
 
                     else:
                         raise ValueError(
@@ -7706,9 +7782,10 @@ class MoonMindRunWorkflow:
                         require_pull_request_url = False
                         self._publish_status = "published"
                         self._publish_reason = (
-                            "Jira issue output succeeded; no PR output required"
+                            f"{story_output_mode.title()} issue output succeeded; "
+                            "no PR output required"
                         )
-                        self._publish_context["storyOutputMode"] = "jira"
+                        self._publish_context["storyOutputMode"] = story_output_mode
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
 
@@ -10040,11 +10117,19 @@ class MoonMindRunWorkflow:
 
     @staticmethod
     def _is_successful_jira_story_output(*, mode: str, status: str) -> bool:
-        return mode == "jira" and status in {
-            "jira_created",
-            "jira_partial",
-            "jira_noop",
-        }
+        if mode == "jira":
+            return status in {
+                "jira_created",
+                "jira_partial",
+                "jira_noop",
+            }
+        if mode == "github":
+            return status in {
+                "github_created",
+                "github_partial",
+                "github_noop",
+            }
+        return False
 
     @staticmethod
     def _trusted_jira_output_summary(outputs: Mapping[str, Any]) -> str | None:
@@ -10068,9 +10153,35 @@ class MoonMindRunWorkflow:
                     parts.append(f"dependencyMode={dependency_mode}")
                 return "; ".join(parts) + "."
             reason = str(story_output.get("reason") or "").strip()
-            if status:
+            if status and (status.startswith("jira_") or status == "fallback"):
                 suffix = f": {reason}" if reason else ""
                 return f"Jira story output finished with status {status}{suffix}."
+
+        if isinstance(story_output, Mapping):
+            status = str(story_output.get("status") or "").strip()
+            created_count = story_output.get("createdCount")
+            story_count = story_output.get("storyCount")
+            eligible_count = story_output.get("eligibleStoryCount")
+            dependency_mode = str(story_output.get("dependencyMode") or "").strip()
+            dependency_count = story_output.get("dependencyCount")
+            if status in {"github_created", "github_partial", "github_noop"}:
+                verb = "Created" if status != "github_noop" else "Created no"
+                parts = [f"{verb} GitHub issues"]
+                if isinstance(created_count, int):
+                    parts.append(f"created={created_count}")
+                if isinstance(eligible_count, int):
+                    parts.append(f"eligible={eligible_count}")
+                if isinstance(story_count, int):
+                    parts.append(f"stories={story_count}")
+                if dependency_mode:
+                    parts.append(f"dependencyMode={dependency_mode}")
+                if isinstance(dependency_count, int):
+                    parts.append(f"dependencyCount={dependency_count}")
+                return "; ".join(parts) + "."
+            reason = str(story_output.get("reason") or "").strip()
+            if status and status.startswith("github_"):
+                suffix = f": {reason}" if reason else ""
+                return f"GitHub story output finished with status {status}{suffix}."
 
         orchestration = outputs.get("jiraOrchestration") or outputs.get(
             "jira_orchestration"
@@ -10101,6 +10212,36 @@ class MoonMindRunWorkflow:
             if status:
                 suffix = f" ({'; '.join(parts)})" if parts else ""
                 return f"Jira downstream task creation {status}{suffix}."
+
+        github_orchestration = outputs.get("githubWorkflowOrchestration") or outputs.get(
+            "github_workflow_orchestration"
+        )
+        if isinstance(github_orchestration, Mapping):
+            status = str(github_orchestration.get("status") or "").strip()
+            created_count = github_orchestration.get("createdWorkflowCount")
+            story_count = github_orchestration.get("storyCount")
+            dependency_count = github_orchestration.get("dependencyCount")
+            parts = []
+            if isinstance(created_count, int):
+                parts.append(f"createdWorkflows={created_count}")
+            if isinstance(story_count, int):
+                parts.append(f"stories={story_count}")
+            if isinstance(dependency_count, int):
+                parts.append(f"workflowDependencies={dependency_count}")
+            failures = github_orchestration.get("failures")
+            if isinstance(failures, list) and failures:
+                first_failure = failures[0] if isinstance(failures[0], Mapping) else {}
+                message = str(first_failure.get("message") or "").strip()
+                error_code = str(first_failure.get("errorCode") or "").strip()
+                if error_code or message:
+                    message = message.rstrip(".")
+                    parts.append(
+                        "firstFailure="
+                        + ": ".join(part for part in (error_code, message) if part)
+                    )
+            if status:
+                suffix = f" ({'; '.join(parts)})" if parts else ""
+                return f"GitHub downstream workflow creation {status}{suffix}."
         return None
 
     def _record_execution_context(self, *, node_id: str, execution_result: Any) -> None:
@@ -12081,6 +12222,29 @@ class MoonMindRunWorkflow:
             idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
 
         workspace_spec: dict[str, Any] = {}
+        for source_label, raw_workspace_spec in (
+            ("workflow.workspaceSpec", (
+                workflow_parameters.get("workspaceSpec")
+                if isinstance(workflow_parameters, Mapping)
+                else None
+            )),
+            ("workflow.workspace_spec", (
+                workflow_parameters.get("workspace_spec")
+                if isinstance(workflow_parameters, Mapping)
+                else None
+            )),
+            ("node.runtime.workspaceSpec", runtime_block.get("workspaceSpec")),
+            ("node.runtime.workspace_spec", runtime_block.get("workspace_spec")),
+            ("node.workspaceSpec", node_inputs.get("workspaceSpec")),
+            ("node.workspace_spec", node_inputs.get("workspace_spec")),
+        ):
+            if isinstance(raw_workspace_spec, Mapping):
+                workspace_spec.update(
+                    self._json_mapping(
+                        raw_workspace_spec,
+                        path=source_label,
+                    )
+                )
         for ws_key in (
             "repository",
             "repo",

@@ -233,7 +233,7 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     const createLink = await screen.findByRole("link", {
-      name: "Create from workflow page",
+      name: "Create recurring schedule",
     });
     expect(createLink.getAttribute("href")).toBe(
       "/workflows/new?scheduleMode=recurring",

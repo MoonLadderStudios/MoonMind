@@ -353,14 +353,19 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
     const shellPanel = document.querySelector('.panel');
     const startLink = screen.getByRole('link', { name: 'Start Workflow' });
+    const workflowsLink = screen.getByRole('link', { name: 'Workflows' });
     expect(startLink.getAttribute('aria-current')).toBe('page');
+    expect(workflowsLink.getAttribute('aria-current')).toBeNull();
+    expect(startLink.classList.contains('active')).toBe(true);
+    expect(workflowsLink.classList.contains('active')).toBe(false);
 
-    fireEvent.click(screen.getByRole('link', { name: 'Workflows' }));
+    fireEvent.click(workflowsLink);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     expect(document.querySelector('.panel')).toBe(shellPanel);
     expect(window.location.pathname).toBe('/workflows');
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Workflows' }).classList.contains('active')).toBe(true);
   });
 
   it('waits for UI info before mounting the workflow start route', async () => {
@@ -1005,10 +1010,12 @@ describe('Dashboard shared entry', () => {
 
     const waitBlock = cssRuleBlocks(
       dashboardCss,
-      '.status-waiting, .status-awaiting-dependencies, .status-awaiting-external',
+      '.status-awaiting_action, .status-waiting, .status-awaiting-dependencies, .status-awaiting-external',
     ).join('\n');
-    expect(waitBlock).toContain('color: rgb(var(--mm-status-waiting, 130 72 246))');
-    expect(waitBlock).toContain('rgb(var(--mm-status-waiting, 130 72 246) / 0.14)');
+    expect(dashboardCss).toContain('--mm-status-waiting: 146 64 14');
+    expect(dashboardCss).toContain('--mm-status-waiting: 250 204 21');
+    expect(waitBlock).toContain('color: rgb(var(--mm-status-waiting))');
+    expect(waitBlock).toContain('rgb(var(--mm-status-waiting) / 0.14)');
 
     const setupBlock = cssRuleBlocks(dashboardCss, '.status-initializing, .status-planning').join('\n');
     expect(setupBlock).toContain('color: rgb(var(--mm-status-setup, 37 99 235))');

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Queue MoonMind Workflows"
+  short_description: "Submit and verify durable child MoonMind workflow executions."
+  default_prompt: "Use $queue-moonmind-workflows to submit child MoonMind workflow requests from a manifest and verify each workflowId before reporting success."

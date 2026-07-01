@@ -2043,7 +2043,10 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
                 scope=PresetScopeType.GLOBAL,
                 scope_ref=None,
             )
-            assert template.title == "Jira Breakdown"
+            assert template.title == "Breakdown and Jira Create"
+            assert "jira_board_id" not in {
+                item["name"] for item in template.inputs_schema
+            }
             assert [
                 (step.get("skill") or step.get("tool"))["id"]
                 for step in template.steps
@@ -2079,10 +2082,10 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
                 "jira": {
                     "projectKey": "MM",
                     "issueTypeName": "Story",
-                    "boardId": "",
                     "dependencyMode": "linear_blocker_chain",
                 },
             }
+            assert "Selected Jira board" not in expanded["steps"][1]["instructions"]
             assert expanded["appliedTemplate"]["inputs"]["jira_dependency_mode"] == (
                 "linear_blocker_chain"
             )
@@ -2433,7 +2436,6 @@ async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
             assert expanded["steps"][1]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
-                "boardId": "",
                 "dependencyMode": "none",
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
@@ -2505,7 +2507,6 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 "jira": {
                     "projectKey": "GAME",
                     "issueTypeName": "Story",
-                    "boardId": "",
                     "sourceIssueKey": "GAME-404",
                     "dependencyMode": "linear_blocker_chain",
                 },
@@ -2564,7 +2565,6 @@ async def test_jira_breakdown_replaces_legacy_placeholder_with_single_allowed_pr
             assert expanded["steps"][1]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
-                "boardId": "",
                 "dependencyMode": "none",
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
@@ -2965,9 +2965,7 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     )
 
 
-async def test_seed_catalog_github_issue_orchestrate_expands_moonspec_include(
-    tmp_path,
-):
+async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_path):
     seed_dir = (
         Path(__file__).resolve().parents[3]
         / "api_service"
@@ -2980,9 +2978,9 @@ async def test_seed_catalog_github_issue_orchestrate_expands_moonspec_include(
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
-            template = await service.get_template(
+            template = await service._get_template_for_scope(
                 slug="github-issue-orchestrate",
-                scope="global",
+                scope=PresetScopeType.GLOBAL,
                 scope_ref=None,
             )
             expanded = await service.expand_template(
@@ -2992,50 +2990,123 @@ async def test_seed_catalog_github_issue_orchestrate_expands_moonspec_include(
                 inputs={
                     "github_issue": {
                         "repository": "MoonLadderStudios/MoonMind",
-                        "number": 123,
-                        "title": "Selected story",
+                        "number": 1067,
+                        "url": "https://github.com/MoonLadderStudios/MoonMind/issues/1067",
                     },
-                    "source_design_path": "docs/Designs/GitHubBreakdown.md",
-                    "source_issue_key": "MM-1063",
-                    "source_claim_ids": ["claim:first"],
-                    "constraints": "Preserve source issue MM-1063 traceability.",
+                    "constraints": "Keep preset scope bounded.",
                 },
                 context={},
             )
 
-    assert template["title"] == "GitHub Issue Orchestrate"
-    assert template["annotations"]["issueInput"] == {
-        "provider": "github",
-        "objectInput": "github_issue",
-        "refInput": "github_issue_ref",
-        "refTemplate": "{{ repository }}#{{ number }}",
-    }
     assert [step["title"] for step in expanded["steps"]] == [
         "Load GitHub issue brief",
-        "Create or select MoonSpec",
+        "Assess existing implementation state",
+        "Check GitHub issue blockers before orchestration",
+        "Mark GitHub issue In Progress",
+        "Classify request and resume point",
+        "Create or select Moon Spec",
+        "Split broad designs when needed",
         "Plan selected spec",
         "Generate TDD task breakdown",
-        "Align MoonSpec artifacts",
+        "Align Moon Spec artifacts",
         "Implement the task breakdown",
         "Verify completion",
+        "Remediate verification gaps 1 of 6",
+        "Verify remediation 1 of 6",
+        "Remediate verification gaps 2 of 6",
+        "Verify remediation 2 of 6",
+        "Remediate verification gaps 3 of 6",
+        "Verify remediation 3 of 6",
+        "Remediate verification gaps 4 of 6",
+        "Verify remediation 4 of 6",
+        "Remediate verification gaps 5 of 6",
+        "Verify remediation 5 of 6",
+        "Remediate verification gaps 6 of 6",
+        "Verify remediation 6 of 6",
         "Reconcile declarative docs",
+        "Create pull request",
+        "Finalize GitHub issue status",
     ]
     assert expanded["steps"][0]["tool"]["id"] == "github.load_issue_preset_brief"
     assert expanded["steps"][0]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
-        "issueNumber": "123",
+        "issueNumber": "1067",
+        "artifactPath": "artifacts/github-issue-orchestrate-brief.json",
     }
-    assert "MoonLadderStudios/MoonMind#123" in expanded["steps"][1]["instructions"]
-    assert "MM-1063" in expanded["steps"][1]["instructions"]
-    assert "docs/Designs/GitHubBreakdown.md" in expanded["steps"][1]["instructions"]
-    assert "claim:first" in expanded["steps"][1]["instructions"]
-    assert expanded["appliedTemplate"]["inputs"]["github_issue_ref"] == (
-        "MoonLadderStudios/MoonMind#123"
-    )
+    assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
+    assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
+    assert expanded["steps"][3]["tool"]["inputs"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": "1067",
+        "targetStatus": "In Progress",
+        "mode": "start",
+        "assessmentArtifactPath": "artifacts/github-issue-orchestrate-assessment.json",
+    }
+    assert expanded["steps"][26]["tool"]["id"] == "github.update_issue_status"
+    assert expanded["steps"][26]["tool"]["inputs"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": "1067",
+        "mode": "finalize_after_pr_or_done",
+        "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
+    }
+    assert expanded["steps"][11]["skill"]["id"] == "moonspec-verify"
+    assert expanded["steps"][23]["annotations"] == {
+        "jiraOrchestrateRole": "moonspec-verification-gate",
+        "moonSpecRemediationAttempt": 6,
+        "moonSpecRemediationMaxAttempts": 6,
+        "moonSpecFinalRemediationGate": True,
+    }
+    assert expanded["steps"][24]["annotations"] == {
+        "jiraOrchestrateRole": "doc-reconciliation"
+    }
+    assert expanded["steps"][25]["annotations"] == {
+        "jiraOrchestrateRole": "pull-request-handoff"
+    }
+    assert expanded["steps"][26]["annotations"] == {
+        "jiraOrchestrateRole": "code-review-handoff"
+    }
+    assert "ADDITIONAL_WORK_NEEDED or NO_DETERMINATION" in expanded["steps"][23][
+        "instructions"
+    ]
+    assert "do not continue to pull request creation" in expanded["steps"][23][
+        "instructions"
+    ]
+    assert "only when the controlling post-remediation verdict is FULLY_IMPLEMENTED" in expanded[
+        "steps"
+    ][24]["instructions"]
+    assert "If the latest verdict is not FULLY_IMPLEMENTED" in expanded["steps"][24][
+        "instructions"
+    ]
+    assert "stop without committing, pushing, creating a pull request" in expanded["steps"][
+        25
+    ]["instructions"]
+    assert "terminal verifier outcomes" in expanded["steps"][26]["instructions"]
+    assert "must stop before this status update" in expanded["steps"][26][
+        "instructions"
+    ]
+    assert "FULLY_IMPLEMENTED and no MoonSpec implementation work ran" in expanded[
+        "steps"
+    ][11]["instructions"]
+    assert "skip doc reconciliation" in expanded["steps"][24]["instructions"]
+    assert "skip pull request creation entirely" in expanded["steps"][25][
+        "instructions"
+    ]
+    assert "apply the configured Done strategy" in expanded["steps"][26][
+        "instructions"
+    ]
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
         "github-issue-orchestrate",
-        "moonspec-orchestrate",
+        "issue-implement-assessment",
     ]
+    assert template.annotations["uiSchema"]["github_issue"] == {
+        "widget": "github.issue-picker",
+        "dataSource": "github.issues",
+        "searchPlaceholder": "Search GitHub issues",
+        "allowManualIssueEntry": True,
+    }
+    assert expanded["appliedTemplate"]["inputs"]["github_issue_ref"] == (
+        "MoonLadderStudios/MoonMind#1067"
+    )
 
 
 async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
@@ -3065,7 +3136,10 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
                 scope=PresetScopeType.GLOBAL,
                 scope_ref=None,
             )
-            assert template.title == "Jira Breakdown and Orchestrate"
+            assert template.title == "Breakdown and Jira Orchestrate"
+            assert "jira_board_id" not in {
+                item["name"] for item in template.inputs_schema
+            }
             assert template.annotations["sourceSkill"] == (
                 "jira-breakdown"
             )
@@ -3091,7 +3165,6 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
                     "jira_issue_type": "Story",
-                    "jira_board_id": "84",
                     "jira_dependency_mode": "linear_blocker_chain",
                     "publish_mode": "pr_with_merge_automation",
                     "source_issue_key": "MM-404",
@@ -3115,7 +3188,6 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
             assert expanded["steps"][3]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
-                "boardId": "84",
                 "sourceIssueKey": "MM-404",
                 "dependencyMode": "linear_blocker_chain",
             }
@@ -3124,7 +3196,7 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
             assert "Create one Jira Orchestrate task" in downstream["instructions"]
             assert "dependsOn" in downstream["instructions"]
             assert "MM-404" in downstream["instructions"]
-            assert "Selected Jira board ID: 84" in expanded["steps"][3]["instructions"]
+            assert "Selected Jira board" not in expanded["steps"][3]["instructions"]
             assert downstream["jiraOrchestration"]["task"] == {
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
@@ -3181,7 +3253,6 @@ async def test_jira_breakdown_orchestrate_can_create_source_subtasks(
             assert jira_step["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Sub-task",
-                "boardId": "",
                 "sourceIssueKey": "MM-404",
                 "dependencyMode": "linear_blocker_chain",
             }
@@ -3223,6 +3294,7 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
                 scope_ref=None,
             )
 
+    assert template["title"] == "Breakdown and Jira Implement"
     assert "jira_board_id" not in {item["name"] for item in template["inputs"]}
     assert len(expanded["steps"]) == 5
     assert expanded["steps"][0]["tool"]["id"] == "jira.load_preset_brief"
@@ -3246,106 +3318,6 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
     }
     assert downstream["jiraOrchestration"]["traceability"] == {
         "sourceIssueKey": "MM-404"
-    }
-
-
-@pytest.mark.parametrize(
-    ("slug", "title", "downstream_tool", "downstream_title"),
-    [
-        (
-            "github-issue-breakdown-implement",
-            "Breakdown and GitHub Issue Implement",
-            "story.create_github_issue_implement_tasks",
-            "Create dependent GitHub Issue Implement workflows",
-        ),
-        (
-            "github-issue-breakdown-orchestrate",
-            "Breakdown and GitHub Issue Orchestrate",
-            "story.create_github_issue_orchestrate_tasks",
-            "Create dependent GitHub Issue Orchestrate workflows",
-        ),
-    ],
-)
-async def test_seed_catalog_includes_github_issue_breakdown_composite_presets(
-    tmp_path,
-    slug: str,
-    title: str,
-    downstream_tool: str,
-    downstream_title: str,
-):
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
-
-    async with template_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = PresetCatalogService(session)
-            await service.sync_seed_templates(seed_dir=seed_dir)
-
-            template = await service.get_template(
-                slug=slug,
-                scope="global",
-                scope_ref=None,
-            )
-            expanded = await service.expand_template(
-                slug=slug,
-                scope="global",
-                scope_ref=None,
-                inputs={
-                    "feature_request": "Break docs/Designs/GitHubBreakdown.md into stories.",
-                    "source_design_path": "docs/Designs/GitHubBreakdown.md",
-                    "github_repository": "MoonLadderStudios/MoonMind",
-                    "publish_mode": "pr",
-                    "source_issue_key": "MM-1063",
-                },
-                context={
-                    "repository": "MoonLadderStudios/MoonMind",
-                    "targetRuntime": "codex_cli",
-                },
-            )
-
-    assert template["title"] == title
-    assert template["annotations"]["traceability"] == {
-        "implementationIssueKey": "MM-1069",
-        "sourceIssueKey": "MM-1063",
-        "coverageIds": [
-            "DESIGN-REQ-001",
-            "DESIGN-REQ-005",
-            "DESIGN-REQ-006",
-            "DESIGN-REQ-008",
-            "DESIGN-REQ-014",
-            "DESIGN-REQ-015",
-        ],
-    }
-    assert [step["skill"]["id"] for step in expanded["steps"]] == [
-        "moonspec-breakdown",
-        "story-reconcile-implementation",
-        "story.create_github_issues",
-        downstream_tool,
-    ]
-    issue_step = expanded["steps"][2]
-    assert issue_step["storyOutput"] == {
-        "mode": "github",
-        "fallback": "fail",
-        "github": {
-            "repository": "MoonLadderStudios/MoonMind",
-            "sourceIssueKey": "MM-1063",
-        },
-    }
-    downstream = expanded["steps"][3]
-    assert downstream["title"] == downstream_title
-    assert "must not run implementation inline" in downstream["instructions"]
-    assert "MM-1063" in downstream["instructions"]
-    assert downstream["githubOrchestration"] == {
-        "task": {
-            "repository": "MoonLadderStudios/MoonMind",
-            "runtime": {"mode": "codex_cli"},
-            "publish": {"mode": "pr"},
-        },
-        "traceability": {"sourceIssueKey": "MM-1063"},
     }
 
 async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path):

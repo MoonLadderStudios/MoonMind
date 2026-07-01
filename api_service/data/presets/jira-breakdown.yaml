@@ -1,5 +1,5 @@
 slug: jira-breakdown
-title: Jira Breakdown
+title: Breakdown and Jira Create
 description: Break a preferred source input into MoonSpec story candidates, then create Jira Story issues from the generated breakdown.
 scope: global
 tags:
@@ -39,11 +39,6 @@ inputs:
     type: text
     required: true
     default: Story
-  - name: jira_board_id
-    label: Jira Board
-    type: jira_board
-    required: false
-    default: ""
   - name: jira_dependency_mode
     label: Jira Dependency Mode
     type: enum
@@ -108,7 +103,6 @@ steps:
       Use the runtime-provided story breakdown JSON path.
       Every Jira issue must include the Source Document path and canonical claim IDs from the story breakdown when present; otherwise include the source title and Source Jira issue key when present.
       {% if inputs.source_issue_key %}Source Jira issue key: {{ inputs.source_issue_key }}.{% endif %}
-      {% if inputs.jira_board_id %}Selected Jira board ID: {{ inputs.jira_board_id }}.{% endif %}
       Dependency mode: {{ inputs.jira_dependency_mode }}.
       If dependency mode is linear_blocker_chain, create an ordered blocker chain so each later story is blocked by the immediately preceding story.
       If dependency mode is none, create the Jira issues without dependency links.
@@ -118,7 +112,6 @@ steps:
       jira:
         projectKey: "{{ inputs.jira_project_key }}"
         issueTypeName: "{{ inputs.jira_issue_type }}"
-        boardId: "{{ inputs.jira_board_id }}"
         dependencyMode: "{{ inputs.jira_dependency_mode }}"
     skill:
       id: story.create_jira_issues

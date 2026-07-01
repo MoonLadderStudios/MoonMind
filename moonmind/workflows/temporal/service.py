@@ -3091,28 +3091,6 @@ class TemporalExecutionService:
             or str(memo.get("resume_checkpoint_ref") or "").strip()
             or str(memo.get("resumeCheckpointRef") or "").strip()
         )
-        if not canonical_checkpoint_ref:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Recovery checkpoint ref is required."
-            )
-        requested_checkpoint_ref = str(recovery_checkpoint_ref or "").strip()
-        if (
-            requested_checkpoint_ref
-            and requested_checkpoint_ref != canonical_checkpoint_ref
-        ):
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Recovery checkpoint ref does not match source execution."
-            )
-        checkpoint_ref = canonical_checkpoint_ref
-        source_snapshot_ref = str(
-            memo.get("task_input_snapshot_ref")
-            or memo.get("taskInputSnapshotRef")
-            or ""
-        ).strip()
-        if not source_snapshot_ref:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Original task input snapshot ref is required for failed-step recovery."
-            )
 
         if checkpoint_payload is None:
             raise TemporalExecutionRecoveryCheckpointError(
@@ -3135,6 +3113,26 @@ class TemporalExecutionService:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Failed-run recovery manifest is invalid."
             ) from exc
+        manifest_checkpoint_ref = str(
+            recovery_manifest.validation.checkpoint_ref
+            or recovery_manifest.recovery_eligibility.checkpoint_ref
+            or ""
+        ).strip()
+        if not canonical_checkpoint_ref:
+            canonical_checkpoint_ref = manifest_checkpoint_ref
+        if not canonical_checkpoint_ref:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery checkpoint ref is required."
+            )
+        requested_checkpoint_ref = str(recovery_checkpoint_ref or "").strip()
+        if (
+            requested_checkpoint_ref
+            and requested_checkpoint_ref != canonical_checkpoint_ref
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery checkpoint ref does not match source execution."
+            )
+        checkpoint_ref = canonical_checkpoint_ref
         if not recovery_manifest.resume_allowed:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Failed-run recovery manifest does not allow resume."
@@ -3147,7 +3145,7 @@ class TemporalExecutionService:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Failed-run recovery manifest runId does not match source execution."
             )
-        if recovery_manifest.validation.checkpoint_ref != checkpoint_ref:
+        if manifest_checkpoint_ref != checkpoint_ref:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Failed-run recovery manifest checkpoint ref does not match source execution."
             )
@@ -3164,6 +3162,16 @@ class TemporalExecutionService:
         if checkpoint.source.run_id != source_run_id:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Recovery checkpoint runId does not match source execution."
+            )
+        source_snapshot_ref = str(
+            memo.get("task_input_snapshot_ref")
+            or memo.get("taskInputSnapshotRef")
+            or checkpoint.task_input_snapshot_ref
+            or ""
+        ).strip()
+        if not source_snapshot_ref:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Original task input snapshot ref is required for failed-step recovery."
             )
         if checkpoint.task_input_snapshot_ref != source_snapshot_ref:
             raise TemporalExecutionRecoveryCheckpointError(

@@ -72,6 +72,7 @@ def test_provider_failure_search_markers_cover_classification_markers() -> None:
         "temporary errors",
         "try again later",
         "usage_limit_reached",
+        "hit your weekly limit",
         "http 401",
         "http 403",
         "insufficient scope",
@@ -92,6 +93,16 @@ def test_classifies_claude_code_short_limit_as_429() -> None:
 def test_classifies_claude_code_session_limit_as_429() -> None:
     result = classify_provider_failure(
         "You've hit your session limit · resets 3:20am (UTC)"
+    )
+
+    assert result is not None
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "429"
+    assert result.retry_recommendation == "retry_after_cooldown"
+
+def test_classifies_claude_code_weekly_limit_as_429() -> None:
+    result = classify_provider_failure(
+        "You've hit your weekly limit · resets 12pm (UTC)"
     )
 
     assert result is not None

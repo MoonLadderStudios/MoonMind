@@ -3,7 +3,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from temporalio import workflow, activity
 from temporalio.exceptions import ApplicationError, CancelledError
@@ -170,6 +170,9 @@ AGENT_RUN_RESILIENCY_POLICY_PATCH_ID = "agent-run-resiliency-policy-v1"
 AGENT_RUN_STRUCTURED_PROVIDER_FAILURE_PATCH_ID = (
     "agent-run-structured-provider-failure-cooldown-v1"
 )
+AGENT_RUN_PROVIDER_COOLDOWN_EXPONENTIAL_BACKOFF_PATCH_ID = (
+    "agent-run-provider-cooldown-exponential-backoff-v1"
+)
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
@@ -204,6 +207,7 @@ _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
 _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS = 1800
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
+_MAX_PROVIDER_COOLDOWN_BACKOFF_SECONDS = 3600
 _MANAGED_RUNTIME_STORE_ROOT = os.environ.get(
     "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
 )
@@ -441,6 +445,7 @@ class MoonMindAgentRun:
         self._awaiting_slot_reason_override: str | None = None
         self._slot_wait_timeout_override_seconds: int | None = None
         self._skip_default_profile_pin_once: bool = False
+        self._provider_cooldown_retry_counts: dict[str, int] = {}
         self.runtime_selection_updated_event = asyncio.Event()
         self._pending_runtime_selection_update: dict[str, Any] | None = None
         self._paused: bool = False
@@ -628,6 +633,54 @@ class MoonMindAgentRun:
             if seconds >= 0:
                 return seconds
         return _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS
+
+    @staticmethod
+    def _provider_failure_supplies_retry_timing(provider_failure_event: Any) -> bool:
+        if provider_failure_event is None:
+            return False
+        retry_after_seconds = getattr(
+            provider_failure_event, "retry_after_seconds", None
+        )
+        if retry_after_seconds is not None and retry_after_seconds > 0:
+            return True
+        reset_at = getattr(provider_failure_event, "reset_at", None)
+        if reset_at is None:
+            return False
+        reset_raw = str(reset_at).strip()
+        if not reset_raw:
+            return False
+        candidate = reset_raw[:-1] + "+00:00" if reset_raw.endswith("Z") else reset_raw
+        try:
+            reset_dt = datetime.fromisoformat(candidate)
+        except ValueError:
+            return False
+        if reset_dt.tzinfo is None:
+            reset_dt = reset_dt.replace(tzinfo=timezone.utc)
+        try:
+            now = workflow.now()
+        except Exception:
+            now = datetime.now(timezone.utc)
+        now_aware = (
+            now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+        )
+        return (reset_dt - now_aware).total_seconds() > 0
+
+    def _next_provider_cooldown_seconds(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str | None,
+        base_seconds: int,
+    ) -> int:
+        seconds = max(0, int(base_seconds))
+        if seconds <= 0:
+            return seconds
+        key = str(profile_id or runtime_id or "managed").strip() or "managed"
+        prior_failures = self._provider_cooldown_retry_counts.get(key, 0)
+        self._provider_cooldown_retry_counts[key] = prior_failures + 1
+        multiplier = 2 ** min(prior_failures, 10)
+        cap = max(seconds, _MAX_PROVIDER_COOLDOWN_BACKOFF_SECONDS)
+        return min(seconds * multiplier, cap)
 
     @staticmethod
     def _profile_selector_has_constraints(selector: Any) -> bool:
@@ -981,6 +1034,20 @@ class MoonMindAgentRun:
             request=request,
             metadata=metadata,
         )
+        if request.workspace_spec:
+            workspace_spec = dict(request.workspace_spec)
+            metadata.setdefault("workspaceSpec", workspace_spec)
+            for key in (
+                "workspacePath",
+                "workspaceRootRef",
+                "workspaceRoot",
+                "baseCommit",
+                "workspaceCheckpointKind",
+                "checkpointKind",
+            ):
+                value = workspace_spec.get(key)
+                if value is not None:
+                    metadata.setdefault(key, value)
 
         agent_run_id = ""
         if request.managed_session is not None:
@@ -3842,6 +3909,19 @@ class MoonMindAgentRun:
                                 provider_failure_event,
                                 now=workflow.now(),
                                 default_seconds=cooldown_seconds,
+                            )
+                        if (
+                            workflow.patched(
+                                AGENT_RUN_PROVIDER_COOLDOWN_EXPONENTIAL_BACKOFF_PATCH_ID
+                            )
+                            and not self._provider_failure_supplies_retry_timing(
+                                provider_failure_event
+                            )
+                        ):
+                            cooldown_seconds = self._next_provider_cooldown_seconds(
+                                runtime_id=runtime_id,
+                                profile_id=profile_id,
+                                base_seconds=cooldown_seconds,
                             )
                         waiting_reason = self._build_managed_rate_limit_waiting_reason(
                             runtime_id=runtime_id,

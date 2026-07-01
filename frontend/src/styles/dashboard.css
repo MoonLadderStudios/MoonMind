@@ -15,6 +15,7 @@
   --mm-accent-warm: 244 114 182;
   --mm-ok: 34 197 94;
   --mm-warn: 245 158 11;
+  --mm-status-waiting: 146 64 14;
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
@@ -106,6 +107,7 @@
   --mm-accent-warm: 249 115 22;
   --mm-ok: 74 222 128;
   --mm-warn: 251 191 36;
+  --mm-status-waiting: 250 204 21;
   --mm-danger: 251 113 133;
   --mm-action-primary: 26 153 123;
   --mm-shadow: 0 24px 52px -34px rgb(0 0 0 / 0.88);
@@ -558,6 +560,14 @@ h1 {
 }
 
 .panel:has(.skills-page) {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  min-height: 0;
+}
+
+.panel:has(.schedules-page) {
   border: 0;
   background: transparent;
   box-shadow: none;
@@ -1865,6 +1875,11 @@ tbody tr:hover {
   background: rgb(var(--mm-accent) / 0.18);
 }
 
+.dark .workflow-list-data-slab tbody tr:nth-child(2n):not(:hover),
+.workflow-list-data-slab tbody tr:nth-child(2n):not(:hover) {
+  background: transparent;
+}
+
 .queue-layouts {
   display: grid;
   gap: 1rem;
@@ -2755,18 +2770,13 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(var(--mm-status-queued, 99 102 241) / 0.62);
 }
 
-.status-awaiting_action {
-  color: rgb(var(--mm-accent));
-  background: rgb(var(--mm-accent) / 0.14);
-  border-color: rgb(var(--mm-accent) / 0.55);
-}
-
+.status-awaiting_action,
 .status-waiting,
 .status-awaiting-dependencies,
 .status-awaiting-external {
-  color: rgb(var(--mm-status-waiting, 130 72 246));
-  background: rgb(var(--mm-status-waiting, 130 72 246) / 0.14);
-  border-color: rgb(var(--mm-status-waiting, 130 72 246) / 0.62);
+  color: rgb(var(--mm-status-waiting));
+  background: rgb(var(--mm-status-waiting) / 0.14);
+  border-color: rgb(var(--mm-status-waiting) / 0.62);
 }
 
 .status-initializing,
@@ -5084,9 +5094,29 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.5rem;
 }
 
+#queue-dependency-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.5rem;
+}
+
 :is(.queue-step-attachments-list, #queue-dependency-list) li > span:first-child {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+#queue-dependency-list li > span:first-child {
+  display: block;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+#queue-dependency-list .queue-step-icon-button {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  justify-self: end;
 }
 
 :is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button {
@@ -5119,6 +5149,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   max-width: min(100%, 16rem);
   max-height: 10rem;
   object-fit: contain;
+}
+
+.workflow-start-heading {
+  margin-bottom: 0.35rem;
 }
 
 .queue-advanced-settings-body {
@@ -5475,6 +5509,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding-inline-end: 2.25rem;
 }
 
+.skill-combobox-input-row--with-description > input {
+  padding-inline-end: 4.5rem;
+}
+
 .skill-combobox-toggle {
   position: absolute;
   inset-block: 0;
@@ -5506,6 +5544,19 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .skill-combobox-toggle svg {
   transition: transform 0.15s ease;
+}
+
+.skill-combobox-description-toggle {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  min-width: 44px;
+  min-height: 44px;
+  touch-action: manipulation;
 }
 
 .skill-combobox-listbox {
@@ -6350,6 +6401,41 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   filter: none;
 }
 
+.queue-step-capability-chip .queue-step-capability-chip-remove,
+.queue-step-attachment-chip .queue-step-attachment-chip-remove {
+  flex: 0 0 0.78rem;
+  width: 0.78rem;
+  min-width: 0.78rem;
+  height: 0.78rem;
+  border-radius: 999px;
+  background: transparent;
+  background-image: none;
+  border: none;
+  padding: 0;
+  box-shadow: none;
+}
+
+.queue-step-capability-chip .queue-step-capability-chip-remove svg,
+.queue-step-attachment-chip .queue-step-attachment-chip-remove svg {
+  width: 0.46rem;
+  height: 0.46rem;
+  stroke-width: 2;
+}
+
+.queue-step-capability-chip .queue-step-capability-chip-remove:hover,
+.queue-step-capability-chip .queue-step-capability-chip-remove:active,
+.queue-step-capability-chip .queue-step-capability-chip-remove.is-clicked,
+.queue-step-attachment-chip .queue-step-attachment-chip-remove:hover,
+.queue-step-attachment-chip .queue-step-attachment-chip-remove:active,
+.queue-step-attachment-chip .queue-step-attachment-chip-remove.is-clicked {
+  background: transparent;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -6807,13 +6893,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   max-width: none;
 }
 
-/* Collapsed: the sidebar becomes a single toggle icon in a narrow left rail so
- * the centered detail container keeps the same width and only re-centers. */
-.workflow-workspace-shell[data-sidebar-collapsed="true"] {
-  grid-template-columns: auto minmax(0, 1fr);
-  column-gap: 1rem;
-}
-
 .workflow-workspace-sidebar {
   position: sticky;
   top: 1rem;
@@ -6837,6 +6916,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 /* The sidebar controls are compact icon buttons rather than full-text buttons. */
+.workflow-workspace-expand-list,
 .workflow-workspace-close-sidebar,
 .workflow-workspace-open-sidebar {
   display: inline-flex;
@@ -6845,11 +6925,36 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 2rem;
   height: 2rem;
   padding: 0;
+  border: 1px solid rgb(var(--mm-border));
   border-radius: 0.5rem;
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-ink));
   flex: 0 0 auto;
+  text-decoration: none;
+  transition: var(--mm-control-transition);
 }
 
-.workflow-workspace-control-icon {
+.workflow-workspace-expand-list:hover,
+.workflow-workspace-expand-list:focus-visible,
+.workflow-workspace-close-sidebar:hover,
+.workflow-workspace-close-sidebar:focus-visible,
+.workflow-workspace-open-sidebar:hover,
+.workflow-workspace-open-sidebar:focus-visible {
+  background: rgb(var(--mm-ink) / 0.06);
+  border-color: rgb(var(--mm-border));
+  box-shadow: 0 10px 22px -20px rgb(var(--mm-ink) / 0.5);
+  color: rgb(var(--mm-ink));
+}
+
+.workflow-workspace-expand-list:focus-visible,
+.workflow-workspace-close-sidebar:focus-visible,
+.workflow-workspace-open-sidebar:focus-visible {
+  outline: none;
+  box-shadow: var(--mm-control-focus-ring);
+}
+
+.workflow-workspace-control-icon,
+.workflow-workspace-expand-list svg {
   width: 1.05rem;
   height: 1.05rem;
   flex: 0 0 auto;
@@ -6904,8 +7009,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   min-height: 3.75rem;
+  padding: 0.58rem 0.55rem;
   gap: 0.55rem;
-  padding: 0.5rem 0.45rem;
   border: 0;
   border-radius: 0.4rem;
   background: transparent;
@@ -6982,9 +7087,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-size: 0.85rem;
 }
 
-/* The detail is a centered, width-bounded container with a gap from the sidebar.
- * Because its width is capped, collapsing the sidebar only re-centers it; it
- * never grows wider. */
+/* The detail is a centered, width-bounded container in a stable grid column.
+ * Sidebar collapse hides the navigation in its reserved left column, so the
+ * detail only reflows when the viewport is compressed below 85rem. */
 .workflow-workspace-detail {
   min-width: 0;
   width: 100%;
@@ -6996,6 +7101,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   justify-self: start;
   align-self: start;
   margin-bottom: 0.75rem;
+}
+
+@media (min-width: 768px) and (max-width: 85rem) {
+  .workflow-workspace-shell[data-sidebar-collapsed="true"] {
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 1rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -7788,6 +7900,160 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-color: rgb(var(--mm-danger) / 0.5);
   background: rgb(var(--mm-danger) / 0.08);
   color: rgb(var(--mm-danger));
+}
+
+/* DashboardToast ----------------------------------------------------------- */
+
+.dashboard-toast-viewport {
+  position: fixed;
+  z-index: 1000;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  display: flex;
+  width: min(24rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  flex-direction: column;
+  gap: 0.75rem;
+  pointer-events: none;
+}
+
+.dashboard-toast {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: start;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(var(--mm-border) / 0.82);
+  background: rgb(var(--mm-panel) / 0.97);
+  color: rgb(var(--mm-ink));
+  box-shadow: 0 20px 42px -28px rgb(var(--mm-ink) / 0.72);
+  padding: 0.82rem;
+  pointer-events: auto;
+  animation: dashboard-toast-enter 160ms ease-out;
+}
+
+.dashboard-toast--success {
+  border-color: rgb(var(--mm-ok) / 0.58);
+}
+
+.dashboard-toast--error {
+  border-color: rgb(var(--mm-danger) / 0.58);
+}
+
+.dashboard-toast__icon {
+  display: inline-flex;
+  color: rgb(var(--mm-accent));
+  padding-top: 0.12rem;
+}
+
+.dashboard-toast--success .dashboard-toast__icon {
+  color: rgb(var(--mm-ok));
+}
+
+.dashboard-toast--error .dashboard-toast__icon {
+  color: rgb(var(--mm-danger));
+}
+
+.dashboard-toast__content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.38rem;
+}
+
+.dashboard-toast__title,
+.dashboard-toast__message {
+  margin: 0;
+}
+
+.dashboard-toast__title {
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.dashboard-toast__message {
+  color: rgb(var(--mm-ink) / 0.76);
+  font-size: 0.88rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-toast__action {
+  width: fit-content;
+  color: rgb(var(--mm-accent));
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.dashboard-toast__action:hover,
+.dashboard-toast__action:focus-visible {
+  text-decoration: underline;
+}
+
+.dashboard-toast__close {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: rgb(var(--mm-ink) / 0.68);
+  line-height: 1;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.dashboard-toast__close svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.dashboard-toast__close:hover,
+.dashboard-toast__close:focus-visible,
+.dashboard-toast__close:active {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+  background-image: none;
+  border-color: rgb(var(--mm-border) / 0.82);
+  background: rgb(var(--mm-ink) / 0.06);
+  color: rgb(var(--mm-ink));
+}
+
+.dashboard-toast__close:active {
+  background: rgb(var(--mm-ink) / 0.12);
+}
+
+@keyframes dashboard-toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.35rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-toast-viewport {
+    right: max(0.75rem, env(safe-area-inset-right));
+    left: max(0.75rem, env(safe-area-inset-left));
+    bottom: max(0.75rem, env(safe-area-inset-bottom));
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-toast {
+    animation: none;
+  }
 }
 
 /* DashboardErrorDetails ---------------------------------------------------- */

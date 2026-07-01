@@ -1539,7 +1539,7 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
         workspaceSpec={
             "repository": "MoonLadderStudios/MoonMind",
-            "startingBranch": "dependabot/pip/requests-2.33.1",
+            "startingBranch": "origin/dependabot/pip/requests-2.33.1",
             "targetBranch": "codex/session-fix",
         },
     )
@@ -1603,7 +1603,7 @@ async def test_controller_launch_clones_workspace_before_starting_container(
             request.workspace_path,
             "fetch",
             "origin",
-            "codex/session-fix",
+            "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
         ):
             return 0, "", ""
         if command[:2] == ("docker", "run"):
@@ -1637,7 +1637,13 @@ async def test_controller_launch_clones_workspace_before_starting_container(
 
     await controller.launch_session(request)
 
-    assert commands[0][:2] == ("git", "clone")
+    assert commands[0][:5] == (
+        "git",
+        "clone",
+        "--branch",
+        "dependabot/pip/requests-2.33.1",
+        "--single-branch",
+    )
     assert (
         "https://github.com/MoonLadderStudios/MoonMind.git" in commands[0]
     )
@@ -1651,7 +1657,7 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         request.workspace_path,
         "fetch",
         "origin",
-        "codex/session-fix",
+        "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
     )
     assert commands[3] == _workspace_git_command(
         request.workspace_path,
@@ -2017,7 +2023,11 @@ async def test_controller_reuses_resolved_git_environment_for_target_branch(
             return 0, "true\n", ""
         if command[-2:] == ("checkout", "feature/mm-320"):
             return 1, "", "pathspec 'feature/mm-320' did not match"
-        if command[-3:] == ("fetch", "origin", "feature/mm-320"):
+        if command[-3:] == (
+            "fetch",
+            "origin",
+            "+refs/heads/feature/mm-320:refs/remotes/origin/feature/mm-320",
+        ):
             return 0, "", ""
         if command[-4:] == (
             "checkout",
@@ -2204,9 +2214,13 @@ async def test_controller_launch_creates_target_branch_when_remote_branch_missin
             request.workspace_path,
             "fetch",
             "origin",
-            "codex/session-fix",
+            "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
         ):
-            return 128, "", "fatal: couldn't find remote ref codex/session-fix"
+            return (
+                128,
+                "",
+                "fatal: couldn't find remote ref refs/heads/codex/session-fix",
+            )
         if command[:2] == ("docker", "run"):
             return 0, "ctr-1\n", ""
         if "ready" in command:
@@ -2240,7 +2254,7 @@ async def test_controller_launch_creates_target_branch_when_remote_branch_missin
         request.workspace_path,
         "fetch",
         "origin",
-        "codex/session-fix",
+        "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
     )
     assert commands[3] == _workspace_git_command(
         request.workspace_path,
@@ -2373,6 +2387,133 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
     assert all(uid == 1000 and gid == 1000 for _path, uid, gid, _follow in chown_calls)
     assert all(follow is False for _path, _uid, _gid, follow in chown_calls)
     assert git_identities == [(1000, 1000), (1000, 1000)]
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_fetches_branch_refspec_for_target_branch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 1000,
+    )
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / "mm:task-1" / "repo"
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    existing_git_ref = workspace_path / ".git" / "refs" / "heads" / "main"
+    existing_git_ref.parent.mkdir(parents=True, exist_ok=True)
+    existing_git_ref.write_text("abc123\n", encoding="utf-8")
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_path),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        workspaceSpec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "startingBranch": "main",
+            "targetBranch": "codex/session-fix",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command == _workspace_git_command(
+            request.workspace_path,
+            "rev-parse",
+            "--is-inside-work-tree",
+        ):
+            return 0, "true\n", ""
+        if command == _workspace_git_command(
+            request.workspace_path,
+            "checkout",
+            "codex/session-fix",
+        ):
+            return (
+                1,
+                "",
+                "error: pathspec 'codex/session-fix' did not match any file(s) known to git",
+            )
+        if command == _workspace_git_command(
+            request.workspace_path,
+            "fetch",
+            "origin",
+            "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
+        ):
+            return 0, "", ""
+        if command == _workspace_git_command(
+            request.workspace_path,
+            "checkout",
+            "-B",
+            "codex/session-fix",
+            "origin/codex/session-fix",
+        ):
+            return 0, "", ""
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    assert commands[0] == _workspace_git_command(
+        request.workspace_path,
+        "rev-parse",
+        "--is-inside-work-tree",
+    )
+    assert commands[1] == _workspace_git_command(
+        request.workspace_path,
+        "checkout",
+        "codex/session-fix",
+    )
+    assert commands[2] == _workspace_git_command(
+        request.workspace_path,
+        "fetch",
+        "origin",
+        "+refs/heads/codex/session-fix:refs/remotes/origin/codex/session-fix",
+    )
+    assert commands[3] == _workspace_git_command(
+        request.workspace_path,
+        "checkout",
+        "-B",
+        "codex/session-fix",
+        "origin/codex/session-fix",
+    )
+
 
 @pytest.mark.asyncio
 async def test_controller_launch_normalizes_support_paths_before_git_failures(

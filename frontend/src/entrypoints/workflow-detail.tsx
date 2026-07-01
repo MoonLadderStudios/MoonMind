@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNod
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Anser from 'anser';
 import {
+  ArrowRight,
   Ban,
   CalendarClock,
   Check,
-  GitBranch,
+  Link,
   Hand,
   Hourglass,
   Lightbulb,
@@ -36,8 +37,10 @@ import {
   taskEditHref,
 } from '../lib/temporalTaskEditing';
 import {
+  markWorkflowListReturnFocusIntent,
   workflowDetailHref,
   workflowListContextParams,
+  workflowListHrefFromContext,
 } from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
@@ -262,7 +265,7 @@ function workflowWorkspaceListQuery(search: URLSearchParams): string {
 const WORKFLOW_STATUS_ICONS = {
   scheduled: CalendarClock,
   initializing: Power,
-  waiting_on_dependencies: GitBranch,
+  waiting_on_dependencies: Link,
   planning: MapIcon,
   awaiting_slot: Hourglass,
   executing: Play,
@@ -373,9 +376,11 @@ const SIDEBAR_TOGGLE_ICON = (
 function WorkflowSidebarControls({
   closeButtonRef,
   onClose,
+  search,
 }: {
   closeButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
+  search: URLSearchParams;
 }) {
   return (
     <div className="workflow-workspace-sidebar-controls">
@@ -389,6 +394,15 @@ function WorkflowSidebarControls({
       >
         {SIDEBAR_TOGGLE_ICON}
       </button>
+      <a
+        href={workflowListHrefFromContext(search, { markDetailReturn: true })}
+        className="secondary workflow-workspace-expand-list"
+        onClick={markWorkflowListReturnFocusIntent}
+        aria-label="Expand to full list"
+        title="Expand to full list"
+      >
+        <ArrowRight aria-hidden="true" focusable="false" />
+      </a>
     </div>
   );
 }
@@ -450,6 +464,7 @@ function WorkflowSidebar({
       <WorkflowSidebarControls
         closeButtonRef={closeButtonRef}
         onClose={onClose}
+        search={search}
       />
       {workflowsQuery.isLoading ? (
         <p className="workflow-workspace-sidebar-state">Loading workflows...</p>

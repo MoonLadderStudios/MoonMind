@@ -69,6 +69,10 @@ _EMPTY_ASSISTANT_FAILURE_REASONS: tuple[str, ...] = (
     "codex app-server task_complete produced no assistant output",
     "codex app-server turn/completed produced no assistant output",
 )
+_CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON = (
+    "Codex provider reported no remaining credits (usage limit reached); "
+    "retry after a profile cooldown or update the provider profile."
+)
 _DIAGNOSTIC_TEXT_MAX_CHARS = 1000
 _RPC_TRACE_MAX_ENTRIES = 80
 _ROLLUP_EVENT_TYPES_MAX = 24
@@ -118,6 +122,7 @@ class _RolloutTurnScan:
     assistant_text: str = ""
     saw_task_complete: bool = False
     error_text: str | None = None
+    provider_failure_reason: str | None = None
     rollout_path: str | None = None
     entries_scanned: int = 0
     entries_referencing_turn: int = 0
@@ -1003,6 +1008,8 @@ class CodexManagedSessionRuntime:
         event_types: list[str] = []
         saw_task_complete = False
         error_text: str | None = None
+        provider_failure_reason: str | None = None
+        inside_active_turn = False
         if turn_started_at is not None:
             terminal_cutoff = (
                 float(turn_started_at) - _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS
@@ -1034,8 +1041,6 @@ class CodexManagedSessionRuntime:
                         entry_timestamp = self._rollout_entry_timestamp(payload)
                         if entry_timestamp is not None and entry_timestamp >= terminal_cutoff:
                             terminal_text = text
-                if not references_turn:
-                    continue
                 entry_type = str(payload.get("type") or "").strip().lower()
                 if entry_type != "event_msg":
                     continue
@@ -1043,11 +1048,22 @@ class CodexManagedSessionRuntime:
                 if not isinstance(event_payload, Mapping):
                     continue
                 event_type = str(event_payload.get("type") or "").strip().lower()
-                if event_type and event_type not in event_types:
+                event_belongs_to_turn = references_turn or inside_active_turn
+                if event_type == "task_started" and references_turn:
+                    inside_active_turn = True
+                    event_belongs_to_turn = True
+                if event_belongs_to_turn and event_type and event_type not in event_types:
                     event_types.append(event_type)
+                if event_belongs_to_turn and provider_failure_reason is None:
+                    provider_failure_reason = (
+                        self._provider_failure_reason_from_rollout_event(event_payload)
+                    )
+                if not references_turn:
+                    continue
                 if event_type != "task_complete":
                     continue
                 saw_task_complete = True
+                inside_active_turn = False
                 for field_name in ("error", "reason", "message"):
                     extracted_error = self._error_text_from_value(
                         event_payload.get(field_name)
@@ -1062,11 +1078,31 @@ class CodexManagedSessionRuntime:
             assistant_text=last_text or terminal_text,
             saw_task_complete=saw_task_complete,
             error_text=error_text,
+            provider_failure_reason=provider_failure_reason,
             rollout_path=rollout_path,
             entries_scanned=entries_scanned,
             entries_referencing_turn=entries_referencing_turn,
             event_types=tuple(event_types[:_ROLLUP_EVENT_TYPES_MAX]),
         )
+
+    @staticmethod
+    def _provider_failure_reason_from_rollout_event(
+        event_payload: Mapping[str, Any],
+    ) -> str | None:
+        event_type = str(event_payload.get("type") or "").strip().lower()
+        if event_type != "token_count":
+            return None
+        rate_limits = event_payload.get("rate_limits")
+        if not isinstance(rate_limits, Mapping):
+            return None
+        credits = rate_limits.get("credits")
+        if not isinstance(credits, Mapping):
+            return None
+        has_credits = credits.get("has_credits")
+        unlimited = credits.get("unlimited")
+        if has_credits is False and unlimited is not True:
+            return _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON
+        return None
 
     @staticmethod
     def _iter_rollout_lines(rollout_file: Path) -> Iterator[str]:
@@ -1664,6 +1700,9 @@ class CodexManagedSessionRuntime:
             "sawTaskComplete": scan.saw_task_complete,
             "eventTypes": list(scan.event_types),
             "errorText": cls._diagnostic_value(scan.error_text),
+            "providerFailureReason": cls._diagnostic_value(
+                scan.provider_failure_reason
+            ),
         }
 
     def _turn_failure_evidence(
@@ -1843,6 +1882,12 @@ class CodexManagedSessionRuntime:
             )
         if scan.assistant_text:
             return _TurnTerminalOutcome(status="completed")
+        if scan.provider_failure_reason:
+            return _TurnTerminalOutcome(
+                status="failed",
+                error_text=scan.provider_failure_reason,
+                failure_class="integration_error",
+            )
         if scan.saw_task_complete:
             recovered_error = self._extract_turn_error_from_logs(
                 vendor_turn_id,

@@ -1899,6 +1899,86 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
             },
         }
 
+    if name == "story.create_github_issues":
+        return {
+            "name": name,
+            "description": "Create GitHub issues from Moon Spec story breakdown output.",
+            "inputs": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "stories": {"type": "array"},
+                        "storyOutput": {"type": "object"},
+                        "storyBreakdownPath": {"type": "string"},
+                        "storyBreakdownJson": {"type": "string"},
+                        "repository": {"type": "string"},
+                        "targetBranch": {"type": "string"},
+                        "branch": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                }
+            },
+            "outputs": {
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": True,
+                }
+            },
+            "executor": {
+                "activity_type": "mm.tool.execute",
+                "selector": {"mode": "by_capability"},
+            },
+            "requirements": {"capabilities": ["integration:github"]},
+            "policies": {
+                "timeouts": {
+                    "start_to_close_seconds": 300,
+                    "schedule_to_close_seconds": 600,
+                },
+                "retries": {"max_attempts": 1},
+            },
+        }
+
+    if name in {
+        "story.create_github_issue_implement_workflows",
+        "story.create_github_issue_orchestrate_workflows",
+    }:
+        return {
+            "name": name,
+            "description": (
+                "Create downstream MoonMind workflows from GitHub issue mappings."
+            ),
+            "inputs": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "github": {"type": "object"},
+                        "issueMappings": {"type": "array"},
+                        "githubOrchestration": {"type": "object"},
+                        "traceability": {"type": "object"},
+                    },
+                    "additionalProperties": True,
+                }
+            },
+            "outputs": {
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": True,
+                }
+            },
+            "executor": {
+                "activity_type": "mm.tool.execute",
+                "selector": {"mode": "by_capability"},
+            },
+            "requirements": {"capabilities": ["integration:github"]},
+            "policies": {
+                "timeouts": {
+                    "start_to_close_seconds": 300,
+                    "schedule_to_close_seconds": 600,
+                },
+                "retries": {"max_attempts": 1},
+            },
+        }
+
     description = (
         "Execute generic runtime CLI instructions."
         if name == _AUTO_SKILL_SENTINEL
