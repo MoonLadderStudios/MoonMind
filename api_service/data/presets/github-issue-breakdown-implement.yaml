@@ -1,6 +1,6 @@
 slug: github-issue-breakdown-implement
 title: Breakdown and GitHub Issue Implement
-description: Break a preferred source input into stories, create GitHub issues, then create dependent GitHub Issue Implement workflows for each generated issue.
+description: Break a preferred source input into stories, create GitHub issues, then create dependent GitHub Issue Implement workflow executions for each generated issue.
 scope: global
 tags:
   - github
@@ -14,16 +14,6 @@ annotations:
   sourceSkill: github-issue-breakdown
   githubWorkflow: breakdown-to-dependent-implement
   output: dependent-github-issue-implement-workflows
-  traceability:
-    implementationIssueKey: MM-1069
-    sourceIssueKey: MM-1063
-    coverageIds:
-      - DESIGN-REQ-001
-      - DESIGN-REQ-005
-      - DESIGN-REQ-006
-      - DESIGN-REQ-008
-      - DESIGN-REQ-014
-      - DESIGN-REQ-015
 inputs:
   - name: feature_request
     label: Workflow Instructions
@@ -73,8 +63,10 @@ steps:
 
       Preserve story order, dependencies, source issue, source document path, sourceReference, and traceability in the breakdown output.
       If the selected input is a readable repo path under docs/ (except docs/tmp/) or AGENTS.md, use that file as the canonical declarative document and preserve its path plus stable canonical claim IDs in every story's sourceReference.path and sourceReference.claimIds.
-      If the selected input is non-canonical file-backed source, preserve that source path in source.path, source.referencePath, and story sourceReference.path, record sourceReference.claimIds as an empty list, and use sourceReference.coverageIds for run-local traceability.
+      If the selected input is a non-canonical file-backed source, preserve that source path in source.path, source.referencePath, and story sourceReference.path, record sourceReference.claimIds as an empty list, and use sourceReference.coverageIds for run-local traceability.
       If the selected input is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
+      The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).
+      Classify the selected input before extracting stories. Prefer declarative sources when one is selected or resolved. If the selected input is primarily framed as steps, phases, recommendations, checklist items, status, or a roadmap, record sourceDocumentClass as imperative-input and decompose the underlying actionable desired system behavior into GitHub-ready MoonSpec stories instead of failing solely because the source is imperative. Otherwise record sourceDocumentClass as canonical-declarative or declarative-text as appropriate.
       Record sourceDocumentClass in the breakdown output.
       Write the coverage-checked story breakdown to the runtime-provided story breakdown paths.
     skill:
@@ -87,11 +79,11 @@ steps:
       Use story-reconcile-implementation to compare the generated MoonSpec story breakdown against the current repository implementation before any GitHub issue creation occurs.
 
       Read the runtime-provided story breakdown JSON path and rewrite that same JSON handoff with implementationStatus and jiraCreation fields for every story.
-      Mark fully implemented stories with jiraCreation.action = "skip" so no GitHub issue or downstream GitHub Issue Implement workflow is created for completed work.
+      Mark fully implemented stories with jiraCreation.action = "skip" so no GitHub issue or downstream GitHub Issue Implement workflow execution is created for completed work.
       For partially implemented stories, preserve the original story scope and add remainingWork so GitHub tracks only the unmet requirements.
-      Mark unverifiable stories with jiraCreation.action = "manual_review" so deterministic GitHub creation will not create implementation work automatically.
+      Mark unverifiable stories with jiraCreation.action = "manual_review" so deterministic GitHub issue creation will not create implementation work automatically.
       Write the reconciliation report to the runtime-provided markdown breakdown path when available.
-      Do not create GitHub issues, do not create implementation tasks, and do not implement code in this reconciliation step.
+      Do not create GitHub issues, do not create downstream workflow executions, and do not implement code in this reconciliation step.
     skill:
       id: story-reconcile-implementation
       args: {}
@@ -106,6 +98,7 @@ steps:
       Do not create GitHub issues for stories where jiraCreation.action is skip or manual_review.
       For stories where jiraCreation.action is create_remaining_work_issue, create the GitHub issue from the story's remainingWork while preserving the original story traceability.
       Preserve story order in the returned issue mappings.
+      Return the created GitHub issue numbers, URLs, source traceability, skipped stories, and blocked stories.
     storyOutput:
       mode: github
       fallback: fail
@@ -117,19 +110,19 @@ steps:
       requiredCapabilities:
         - gh
       args: {}
-  - title: Create dependent GitHub Issue Implement workflows
+  - title: Create dependent GitHub Issue Implement workflow executions
     instructions: |-
       Create one GitHub Issue Implement workflow execution for each GitHub issue created from the trusted GitHub story output.
 
-      Use the ordered issue mappings returned by story.create_github_issues. Preserve the generated story order when creating downstream workflows.
-      Do not create downstream workflows for skipped fully implemented stories or manual-review stories that did not produce GitHub issue mappings.
-      Each downstream workflow must run GitHub Issue Implement on its corresponding GitHub issue and must not run implementation inline inside this breakdown run.
-      Create workflow dependencies with dependsOn so each later generated workflow waits for the immediately earlier generated workflow ID.
+      Use the ordered issue mappings returned by story.create_github_issues. Preserve the generated story order when creating downstream workflow executions.
+      Do not create downstream workflow executions for skipped fully implemented stories or manual-review stories that did not produce GitHub issue mappings.
+      Each downstream workflow execution must run GitHub Issue Implement on its corresponding GitHub issue and must not run implementation inline inside this breakdown run.
+      Create workflow dependencies with dependsOn so each later generated workflow execution waits for the immediately earlier generated workflow ID.
       Preserve source issue {{ inputs.source_issue_key }}, source document path, dependencies, and traceability in downstream workflow inputs.
-      Report created workflows, skipped stories, dependency edges, partial failures, and no-downstream-workflow outcomes honestly.
+      Report created workflow executions, skipped stories, dependency edges, partial failures, and no-downstream-workflow outcomes honestly.
     githubOrchestration:
       task:
-        repository: "{{ context.repository }}"
+        repository: "{{ inputs.github_repository }}"
         runtime:
           mode: "{{ context.targetRuntime }}"
         publish:
@@ -137,7 +130,7 @@ steps:
       traceability:
         sourceIssueKey: "{{ inputs.source_issue_key }}"
     skill:
-      id: story.create_github_issue_implement_tasks
+      id: story.create_github_issue_implement_workflows
       requiredCapabilities:
         - gh
       args: {}

@@ -281,7 +281,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert jira_implement_steps[1] == "auto"
         assert jira_implement_steps[2] == "jira.check_blockers"
         assert jira_implement_steps[-1] == "jira-issue-updater"
-        assert len(jira_implement_steps) == 8
+        assert len(jira_implement_steps) == 10
         implement_step_titles = [step["title"] for step in expanded_steps]
         assert implement_step_titles[0] == "Load Jira preset brief"
         assert implement_step_titles[1] == "Assess existing implementation state"
@@ -289,6 +289,8 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert implement_step_titles[3] == "Move Jira issue to In Progress"
         assert "Implement the issue" in implement_step_titles
         assert "Verify implementation" in implement_step_titles
+        assert "Remediate verification gaps" in implement_step_titles
+        assert "Verify remediation" in implement_step_titles
         assert "Create pull request" in implement_step_titles
         assert implement_step_titles[-1] == "Finalize Jira status"
         implement_brief_step = expanded_steps[0]
@@ -345,6 +347,16 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             step
             for step in expanded_steps
             if step["title"] == "Create pull request"
+        )
+        verify_step = next(
+            step
+            for step in expanded_steps
+            if step["title"] == "Verify implementation"
+        )
+        assert verify_step["skill"]["id"] == "moonspec-verify"
+        assert "issue-brief verification mode" in verify_step["instructions"]
+        assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
+            implement_pr_step["instructions"]
         )
         assert "merge automation" in implement_pr_step["instructions"]
         assert "Done automatically" in implement_pr_step["instructions"]
@@ -433,7 +445,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "Selected Jira board ID" not in implement_jira_step["instructions"]
         assert "boardId" not in implement_jira_step["storyOutput"]["jira"]
         assert (
-            "Create one Jira Implement task"
+            "Create one Jira Implement workflow execution"
             in implement_downstream_step["instructions"]
         )
         assert "dependsOn" in implement_downstream_step["instructions"]
@@ -443,6 +455,55 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
             },
         }
+
+        for slug, title, downstream_skill in (
+            (
+                "github-issue-breakdown-implement",
+                "Breakdown and GitHub Issue Implement",
+                "story.create_github_issue_implement_workflows",
+            ),
+            (
+                "github-issue-breakdown-orchestrate",
+                "Breakdown and GitHub Issue Orchestrate",
+                "story.create_github_issue_orchestrate_workflows",
+            ),
+        ):
+            result = await session.execute(
+                select(Preset)
+                .where(
+                    Preset.slug == slug,
+                    Preset.scope_type == PresetScopeType.GLOBAL,
+                    Preset.scope_ref.is_(None),
+                )
+            )
+            github_breakdown_template = result.scalar_one_or_none()
+            assert github_breakdown_template is not None
+            assert github_breakdown_template.title == title
+            assert [
+                (step.get("skill") or step.get("tool"))["id"]
+                for step in github_breakdown_template.steps
+            ] == [
+                "moonspec-breakdown",
+                "story-reconcile-implementation",
+                "story.create_github_issues",
+                downstream_skill,
+            ]
+            github_create_step = github_breakdown_template.steps[2]
+            assert github_create_step["storyOutput"]["github"] == {
+                "repository": "{{ inputs.github_repository }}",
+                "sourceIssueKey": "{{ inputs.source_issue_key }}",
+            }
+            github_downstream_step = github_breakdown_template.steps[3]
+            assert "workflow execution" in github_downstream_step["instructions"]
+            assert "Create workflow dependencies with dependsOn" in (
+                github_downstream_step["instructions"]
+            )
+            assert github_downstream_step["githubOrchestration"]["task"]["publish"] == {
+                "mode": "{{ inputs.publish_mode }}",
+            }
+            assert github_downstream_step["githubOrchestration"]["traceability"] == {
+                "sourceIssueKey": "{{ inputs.source_issue_key }}"
+            }
 
         result = await session.execute(
             select(Preset)

@@ -27,7 +27,7 @@ annotations:
       jira_issue:
         type: object
         title: Jira issue
-        description: Issue that will seed the task instructions and implementation
+        description: Issue that will seed the workflow instructions and implementation
           context.
         required:
         - key
@@ -233,11 +233,11 @@ steps:
     the confirmed status.
 
 
-    Note: when this task was submitted with PR merge automation enabled and the work
-    followed the Review path, the parent workflow will transition Jira issue
+    Note: when this workflow execution was submitted with PR merge automation enabled
+    and the work followed the Review path, the parent workflow will transition Jira issue
     {{ inputs.jira_issue_key }} to Done automatically after the pull request merges.
-    This in-task step only owns the explicit Done transition for the already-implemented
-    case and the Review transition for the freshly-implemented case.'
+    This preset step only owns the explicit Done transition for the already-implemented
+    case and the Review transition for the freshly implemented case.'
   skill:
     id: jira-issue-updater
     requiredCapabilities:

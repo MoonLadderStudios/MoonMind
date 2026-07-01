@@ -46,7 +46,7 @@ annotations:
       github_issue:
         type: object
         title: GitHub issue
-        description: Issue that will seed the task instructions and implementation
+        description: Issue that will seed the workflow instructions and implementation
           context.
         required:
         - repository

@@ -21,6 +21,21 @@ get_current_branch() {
         return
     fi
 
+    local repo_root=$(get_repo_root)
+    local feature_json="$repo_root/.specify/feature.json"
+    if [[ -f "$feature_json" ]]; then
+        local feature_dir
+        feature_dir=$(
+            sed -nE \
+                's/.*"feature_directory"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' \
+                "$feature_json" | head -n 1
+        )
+        if [[ -n "$feature_dir" ]]; then
+            basename "$feature_dir"
+            return
+        fi
+    fi
+
     # Then check git if available
     if git rev-parse --abbrev-ref HEAD >/dev/null 2>&1; then
         git rev-parse --abbrev-ref HEAD
@@ -28,7 +43,6 @@ get_current_branch() {
     fi
 
     # For non-git repos, try to find the latest feature directory
-    local repo_root=$(get_repo_root)
     local specs_dir="$repo_root/specs"
 
     if [[ -d "$specs_dir" ]]; then
@@ -39,10 +53,14 @@ get_current_branch() {
             if [[ -d "$dir" ]]; then
                 local dirname=$(basename "$dir")
                 if [[ "$dirname" =~ ^([0-9]{3})- ]]; then
-                    local number=${BASH_REMATCH[1]}
-                    number=$((10#$number))
-                    if [[ "$number" -gt "$highest" ]]; then
-                        highest=$number
+                    local sequence=${BASH_REMATCH[1]}
+                    sequence=$((10#$sequence))
+                    if [[ "$sequence" -gt "$highest" ]]; then
+                        highest=$sequence
+                        latest_feature=$dirname
+                    fi
+                elif [[ "$dirname" =~ ^[0-9]{8}-[0-9]{6}- ]]; then
+                    if [[ "$dirname" > "$latest_feature" ]]; then
                         latest_feature=$dirname
                     fi
                 fi
@@ -73,9 +91,9 @@ check_feature_branch() {
         return 0
     fi
 
-    if [[ ! "$branch" =~ ^[0-9]{3}- ]]; then
+    if [[ ! "$branch" =~ ^[0-9]{3}- && ! "$branch" =~ ^[0-9]{8}-[0-9]{6}- ]]; then
         echo "ERROR: Not on a feature branch. Current branch: $branch" >&2
-        echo "Feature branches should be named like: 001-feature-name" >&2
+        echo "Feature branches should be named like: 001-feature-name or 20260319-143022-feature-name" >&2
         return 1
     fi
 
@@ -154,4 +172,3 @@ EOF
 
 check_file() { [[ -f "$1" ]] && echo "  ✓ $2" || echo "  ✗ $2"; }
 check_dir() { [[ -d "$1" && -n $(ls -A "$1" 2>/dev/null) ]] && echo "  ✓ $2" || echo "  ✗ $2"; }
-

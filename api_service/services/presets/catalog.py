@@ -78,6 +78,12 @@ _JIRA_BREAKDOWN_IMPLEMENT_SLUG = "jira-breakdown-implement"
 _JIRA_BREAKDOWN_COMPOSITE_SLUGS = frozenset(
     {_JIRA_BREAKDOWN_ORCHESTRATE_SLUG, _JIRA_BREAKDOWN_IMPLEMENT_SLUG}
 )
+_GITHUB_ISSUE_BREAKDOWN_SLUGS = frozenset(
+    {
+        "github-issue-breakdown-implement",
+        "github-issue-breakdown-orchestrate",
+    }
+)
 _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS = frozenset(
     {
         _JIRA_BREAKDOWN_SLUG,
@@ -90,6 +96,10 @@ _JIRA_BREAKDOWN_REPLACEABLE_PROJECT_DEFAULTS = frozenset({"TOOL", "MM"})
 _JIRA_BREAKDOWN_SOURCE_INPUTS = (
     "source_design_path",
     "source_issue_key",
+    "feature_request",
+)
+_GITHUB_ISSUE_BREAKDOWN_SOURCE_INPUTS = (
+    "source_design_path",
     "feature_request",
 )
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
@@ -678,24 +688,32 @@ def _preset_step_enabled(value: Any) -> bool:
         return False
     return True
 
-def _validate_jira_breakdown_source_inputs(
+def _validate_breakdown_source_inputs(
     *,
     slug: str,
     inputs: Mapping[str, Any],
 ) -> None:
-    if slug not in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
+    if slug in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
+        source_inputs = _JIRA_BREAKDOWN_SOURCE_INPUTS
+        provider_label = "Jira"
+        source_message = (
+            "Provide a Source Document Path, Source Jira Issue Key, "
+            "or Workflow Instructions."
+        )
+    elif slug in _GITHUB_ISSUE_BREAKDOWN_SLUGS:
+        source_inputs = _GITHUB_ISSUE_BREAKDOWN_SOURCE_INPUTS
+        provider_label = "GitHub issue"
+        source_message = "Provide a Source Document Path or Workflow Instructions."
+    else:
         return
-    if any(str(inputs.get(name) or "").strip() for name in _JIRA_BREAKDOWN_SOURCE_INPUTS):
+    if any(str(inputs.get(name) or "").strip() for name in source_inputs):
         return
     raise PresetValidationError(
-        "Jira breakdown presets require a source input.",
+        f"{provider_label} breakdown presets require a source input.",
         errors=[
             {
                 "path": "preset.inputs",
-                "message": (
-                    "Provide a Source Document Path, Source Jira Issue Key, "
-                    "or Workflow Instructions."
-                ),
+                "message": source_message,
                 "code": "required",
                 "recoverable": True,
             }
@@ -2082,7 +2100,7 @@ class PresetCatalogService:
             submitted=submitted_inputs,
             resolved=validated_inputs,
         )
-        _validate_jira_breakdown_source_inputs(
+        _validate_breakdown_source_inputs(
             slug=template.slug,
             inputs=validated_inputs,
         )
