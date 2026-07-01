@@ -18293,7 +18293,10 @@ describe("Task Create MM-937 step hover containment", () => {
 
   it("keeps context chip remove buttons compact after the generic icon-button rules", () => {
     expect(dashboardCss).toMatch(
-      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s*\{[^}]*width:\s*1rem;[^}]*height:\s*1rem;[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*padding:\s*0;[^}]*box-shadow:\s*none;/s,
+      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s*\{[^}]*width:\s*0\.78rem;[^}]*height:\s*0\.78rem;[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*padding:\s*0;[^}]*box-shadow:\s*none;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove\s+svg,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s+svg\s*\{[^}]*width:\s*0\.46rem;[^}]*height:\s*0\.46rem;/s,
     );
     expect(dashboardCss).toMatch(
       /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove:hover,[^{]+\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\.is-clicked\s*\{[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*box-shadow:\s*none;[^}]*transform:\s*none;[^}]*filter:\s*none;/s,
@@ -18302,7 +18305,13 @@ describe("Task Create MM-937 step hover containment", () => {
 
   it("keeps dependency remove buttons in a fixed right column beside wrapping text", () => {
     expect(dashboardCss).toMatch(
-      /#queue-dependency-list\s+li\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;[^}]*align-items:\s*center;/s,
+      /#queue-dependency-list\s+li\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;[^}]*align-items:\s*center;[^}]*flex-wrap:\s*nowrap;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /#queue-dependency-list\s+li\s*>\s*span:first-child\s*\{[^}]*display:\s*block;[^}]*grid-column:\s*1;[^}]*grid-row:\s*1;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /#queue-dependency-list\s+\.queue-step-icon-button\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*align-self:\s*center;[^}]*justify-self:\s*end;/s,
     );
   });
 });
