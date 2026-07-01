@@ -1100,7 +1100,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
   });
 
-  it('MM-1000 uses a single-column collapsed workspace layout and reduced-motion guard', async () => {
+  it('keeps desktop detail positioning stable when the workspace sidebar is collapsed', async () => {
     window.history.pushState({}, 'Workspace Motion Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -1115,7 +1115,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const dashboardCss = await readDashboardCss();
     expect(dashboardCss).toMatch(
-      /\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+      /@media \(min-width:\s*768px\) and \(max-width:\s*1023px\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*auto minmax\(0,\s*1fr\);[\s\S]*column-gap:\s*1rem;/,
     );
     expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.workflow-workspace-shell,[\s\S]*\.workflow-workspace-detail[\s\S]*transition:\s*none !important;[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,
