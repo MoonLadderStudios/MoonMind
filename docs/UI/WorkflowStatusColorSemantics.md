@@ -34,7 +34,7 @@ For non-terminal states, hue communicates **conceptual distance from active exec
 executing
   -> initializing / planning
   -> scheduled / awaiting_slot
-  -> waiting_on_dependencies / awaiting_external
+  -> awaiting_action / waiting / waiting_on_dependencies / awaiting_external
 ```
 
 The closer a state is to active execution, the closer its hue should sit to the existing executing hue. The furthest waiting states should stay away from red-adjacent colors so they do not read as failure. They use yellow instead of purple so the pills stay legible against MoonMind's purple-forward dashboard surfaces.
@@ -71,6 +71,8 @@ Current interpretation:
 | `planning` | No by current lifecycle semantics | Use near-execution blue. |
 | `scheduled` | No | Use pre-execution waiting indigo. |
 | `awaiting_slot` | No; blocked before slot assignment | Use pre-execution waiting indigo. |
+| `awaiting_action` | No by default; waiting for operator or external action | Use furthest-from-execution yellow. |
+| `waiting` | Compatibility wait alias | Use furthest-from-execution yellow. |
 | `waiting_on_dependencies` | No | Use furthest-from-execution yellow. |
 | `awaiting_external` | No by default; waiting outside immediate execution | Use furthest-from-execution yellow. |
 | `finalizing` | No by normal provider-slot lifecycle; cleanup/final record work after execution | Use finalization color. |
@@ -93,8 +95,10 @@ Rationale: `awaiting_slot` represents a workflow that is waiting for capacity, n
 | `planning` | Planning | Near-execution blue | `#2563EB` | `#2563EB` | Active planning/preparation and conceptually near execution. |
 | `scheduled` | Scheduled | Pre-execution indigo | `#6366F1` | `#6366F1` | Deferred or future work; farther from execution than setup/planning. |
 | `awaiting_slot` | Awaiting slot | Pre-execution indigo | `#6366F1` | `#6366F1` | Waiting before execution capacity is acquired; same distance family as scheduled. |
-| `waiting_on_dependencies` | Awaiting dep | Blocked yellow | `#FACC15` | `#FACC15` | Furthest non-terminal distance from active execution; blocked on prerequisite workflow state and kept legible against purple dashboard backgrounds. |
-| `awaiting_external` | Awaiting external | Blocked yellow | `#FACC15` | `#FACC15` | Furthest non-terminal distance from active execution; waiting on an external system, provider, or human and kept legible against purple dashboard backgrounds. |
+| `awaiting_action` | Awaiting action | Blocked yellow | `#CA8A04` | `#FACC15` | Furthest non-terminal distance from active execution; waiting for operator or external action and kept legible against purple dashboard backgrounds. |
+| `waiting` | Waiting | Blocked yellow compatibility | `#CA8A04` | `#FACC15` | Compatibility wait alias that shares the blocked yellow group. |
+| `waiting_on_dependencies` | Awaiting dep | Blocked yellow | `#CA8A04` | `#FACC15` | Furthest non-terminal distance from active execution; blocked on prerequisite workflow state and kept legible against purple dashboard backgrounds. |
+| `awaiting_external` | Awaiting external | Blocked yellow | `#CA8A04` | `#FACC15` | Furthest non-terminal distance from active execution; waiting on an external system, provider, or human and kept legible against purple dashboard backgrounds. |
 | `finalizing` | Finalizing | Finalization slate | `#64748B` | `#64748B` | Wrap-up, recording, publish summary, and terminalization work. |
 | `no_commit` | No commit | No-commit teal | `#159376` | `#1A997B` | Successful or side-effectful completion with no repository commit/publish artifact. |
 
@@ -123,7 +127,7 @@ Terminal outcomes should remain visually stable and easy to scan:
 
 `scheduled` and `awaiting_slot` intentionally share indigo because both are pre-execution waiting states. Work has not begun, but the workflow is still expected to progress once time or capacity becomes available.
 
-`waiting_on_dependencies` and `awaiting_external` intentionally share yellow because they are the furthest non-terminal states from active execution. The compatibility `waiting` pill uses the same yellow group. These states are blocked outside the current execution loop and may remain stuck until a dependency, provider, human, or external system changes state. Yellow keeps these states distinct without making them feel like red failure states, and it remains readable on purple dashboard backgrounds.
+`awaiting_action`, `waiting`, `waiting_on_dependencies`, and `awaiting_external` intentionally share yellow because they are the furthest non-terminal states from active execution. These states are blocked outside the current execution loop and may remain stuck until a dependency, provider, human, or external system changes state. Yellow keeps these states distinct without making them feel like red failure states, and it remains readable on purple dashboard backgrounds.
 
 `finalizing` uses slate because it is neither active execution nor terminal success/failure. It should feel calm and transitional.
 
@@ -141,7 +145,7 @@ Current shimmer-hue expectations:
 | `planning` | On | Use near-execution blue, matching the pill. |
 | `finalizing` | On | Use finalization slate, matching the pill. |
 | `scheduled` / `awaiting_slot` | Off | No shimmer. |
-| `waiting_on_dependencies` / `awaiting_external` | Off | No shimmer. |
+| `awaiting_action` / `waiting` / `waiting_on_dependencies` / `awaiting_external` | Off | No shimmer. |
 | Terminal statuses | Off | No shimmer. |
 
 The shimmer implementation should use shared CSS variables or `currentColor`-derived tokens so the existing fill, border, and text masks all inherit the same status-aware hue. Do not copy the executing shimmer into separate per-status selector blocks, and do not force `planning`, `initializing`, or `finalizing` through the executing/cyan hue.
@@ -159,4 +163,4 @@ The shimmer sweep angle should remain subtle. A small horizontal-bias refinement
 5. Keep shimmer implemented as one shared effect: one selector contract, one moving light field, one keyframe path, and status-derived hue inputs. Avoid duplicated per-status shimmer implementations.
 6. If the implementation keeps compatibility classes such as `status-running` or `status-queued`, those classes are grouping helpers only. Exact `mm_state` should win for final pill color.
 7. Status filters should show the same pill colors used by table rows and detail headers.
-8. Do not introduce cyan for new status assignments. The existing executing color is grandfathered because it is the current `executing` hue; yellow is reserved for the shared waiting/dependency/external-wait group.
+8. Do not introduce cyan for new status assignments. The existing executing color is grandfathered because it is the current `executing` hue; yellow is reserved for the shared action-wait/dependency/external-wait group.

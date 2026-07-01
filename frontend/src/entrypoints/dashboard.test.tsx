@@ -1009,7 +1009,7 @@ describe('Dashboard shared entry', () => {
       dashboardCss,
       '.status-awaiting_action, .status-waiting, .status-awaiting-dependencies, .status-awaiting-external',
     ).join('\n');
-    expect(dashboardCss).toContain('--mm-status-waiting: 161 98 7');
+    expect(dashboardCss).toContain('--mm-status-waiting: 202 138 4');
     expect(dashboardCss).toContain('--mm-status-waiting: 250 204 21');
     expect(waitBlock).toContain('color: rgb(var(--mm-status-waiting))');
     expect(waitBlock).toContain('rgb(var(--mm-status-waiting) / 0.14)');
