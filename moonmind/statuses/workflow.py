@@ -56,7 +56,7 @@ TEMPORAL_CLOSE_STATUSES = frozenset(
     {"completed", "failed", "canceled", "terminated", "timed_out", "continued_as_new"}
 )
 
-TEMPORAL_CLOSE_TO_SIMPLIFIED_STATUS = {
+TEMPORAL_CLOSE_TO_SIMPLIFIED_STATUS: dict[str | None, SimplifiedTemporalStatus] = {
     None: "running",
     "completed": "completed",
     "canceled": "canceled",
@@ -70,5 +70,4 @@ TEMPORAL_CLOSE_TO_SIMPLIFIED_STATUS = {
 def simplified_temporal_status(
     close_status: str | None,
 ) -> SimplifiedTemporalStatus:
-    return TEMPORAL_CLOSE_TO_SIMPLIFIED_STATUS.get(close_status, "failed")  # type: ignore[return-value]
-
+    return TEMPORAL_CLOSE_TO_SIMPLIFIED_STATUS.get(close_status, "failed")

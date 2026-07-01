@@ -74,7 +74,10 @@ def test_legacy_no_changes_aliases_are_quarantined_in_compat_helpers() -> None:
             "code": "NO_COMMIT",
             "reason": "No repository commit was needed.",
         },
-        "publish": {"reasonCode": "no_commit"},
+        "publish": {
+            "reasonCode": "no_commit",
+            "reason": "No repository changes were available to commit or publish.",
+        },
     }
 
 

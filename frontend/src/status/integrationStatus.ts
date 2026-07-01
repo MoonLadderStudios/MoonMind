@@ -14,6 +14,7 @@ export function formatIntegrationStatusLabel(
 ): string {
   const key = String(status || '').toLowerCase().trim().replace(/\s+/g, '_');
   if (!key) return fallback;
-  return INTEGRATION_STATUS_LABELS[key] || fallback;
+  return Object.prototype.hasOwnProperty.call(INTEGRATION_STATUS_LABELS, key)
+    ? INTEGRATION_STATUS_LABELS[key]!
+    : fallback;
 }
-

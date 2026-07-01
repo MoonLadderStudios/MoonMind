@@ -29,7 +29,7 @@ def canonicalize_workflow_state_alias(
     *,
     logger: logging.Logger | None = None,
 ) -> str | None:
-    candidate = str(value or "").strip()
+    candidate = str(value or "").strip().lower()
     if not candidate:
         return None
     canonical = LEGACY_WORKFLOW_STATE_ALIASES.get(candidate, candidate)
@@ -50,7 +50,7 @@ def canonicalize_finish_outcome_code_alias(
     candidate = str(value or "").strip()
     if not candidate:
         return None
-    canonical = LEGACY_FINISH_OUTCOME_ALIASES.get(candidate.upper(), candidate)
+    canonical = LEGACY_FINISH_OUTCOME_ALIASES.get(candidate.upper(), candidate.upper())
     if canonical != candidate and logger is not None:
         logger.warning(
             "Observed legacy finish outcome alias '%s'; canonicalized to '%s'",
@@ -61,7 +61,7 @@ def canonicalize_finish_outcome_code_alias(
 
 
 def canonicalize_publish_reason_alias(value: Any) -> str | None:
-    candidate = str(value or "").strip()
+    candidate = str(value or "").strip().lower()
     if not candidate:
         return None
     return LEGACY_PUBLISH_REASON_ALIASES.get(candidate, candidate)
@@ -94,8 +94,17 @@ def normalize_no_commit_finish_summary(
     publish = normalized.get("publish")
     if isinstance(publish, Mapping):
         publish_payload = dict(publish)
-        reason_code = canonicalize_publish_reason_alias(publish_payload.get("reasonCode"))
+        raw_reason_code = publish_payload.get("reasonCode") or publish_payload.get(
+            "reason_code"
+        )
+        reason_code = canonicalize_publish_reason_alias(raw_reason_code)
+        reason = str(publish_payload.get("reason") or "").strip().lower()
         if reason_code is not None:
             publish_payload["reasonCode"] = reason_code
+        if reason_code == "no_commit" or reason in _NO_COMMIT_LEGACY_REASONS:
+            publish_payload["reasonCode"] = "no_commit"
+            publish_payload["reason"] = (
+                "No repository changes were available to commit or publish."
+            )
         normalized["publish"] = publish_payload
     return normalized

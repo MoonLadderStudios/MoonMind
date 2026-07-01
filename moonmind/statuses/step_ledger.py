@@ -48,5 +48,4 @@ STEP_EXECUTION_TO_LEDGER_STATUS: dict[StepExecutionStatus, StepLedgerStatus] = {
 def step_execution_to_ledger_status(
     status: StepExecutionStatus,
 ) -> StepLedgerStatus:
-    return STEP_EXECUTION_TO_LEDGER_STATUS[status]
-
+    return STEP_EXECUTION_TO_LEDGER_STATUS.get(status, "pending")

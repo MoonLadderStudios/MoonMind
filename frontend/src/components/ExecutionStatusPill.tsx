@@ -1,11 +1,19 @@
 import { useMemo, type CSSProperties } from 'react';
 
+import { formatStepStatusLabel, stepStatusPillProps } from '../status/stepStatus';
 import { formatWorkflowStatusLabel, workflowStatusPillProps } from '../status/workflowStatus';
 
 type GlyphStyle = CSSProperties & {
   '--mm-letter-count'?: number;
   '--mm-letter-index'?: number;
 };
+
+type ExecutionStatusPillClassProps = Readonly<{
+  className: string;
+  'data-state'?: string;
+  'data-effect'?: 'shimmer-sweep';
+  'data-shimmer-label'?: string;
+}>;
 
 type SegmenterLike = new (
   locales?: string | string[],
@@ -29,7 +37,18 @@ function splitGraphemes(value: string): string[] {
 }
 
 function visibleStatusLabel(status: string | null | undefined): string {
-  return formatWorkflowStatusLabel(status, '-');
+  return formatWorkflowStatusLabel(status, formatStepStatusLabel(status, '-'));
+}
+
+function executionStatusPillProps(
+  status: string | null | undefined,
+  options: { enableMotion?: boolean } = {},
+): ExecutionStatusPillClassProps {
+  const workflowProps = workflowStatusPillProps(status, options);
+  if (workflowProps.className !== 'status status-neutral') {
+    return workflowProps;
+  }
+  return stepStatusPillProps(status);
 }
 
 export function ExecutionStatusPill({
@@ -40,7 +59,7 @@ export function ExecutionStatusPill({
   enableMotion?: boolean;
 }) {
   const label = visibleStatusLabel(status);
-  const pillProps = workflowStatusPillProps(status, { enableMotion });
+  const pillProps = executionStatusPillProps(status, { enableMotion });
   const hasShimmerSweep = pillProps['data-effect'] === 'shimmer-sweep';
   const glyphs = useMemo(() => splitGraphemes(label), [label]);
 
