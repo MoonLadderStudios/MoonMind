@@ -567,6 +567,14 @@ h1 {
   min-height: 0;
 }
 
+.panel:has(.schedules-page) {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  min-height: 0;
+}
+
 .panel.panel--data-wide {
   max-width: min(112rem, calc(100vw - 2rem));
 }
@@ -6882,6 +6890,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 /* The sidebar controls are compact icon buttons rather than full-text buttons. */
+.workflow-workspace-expand-list,
 .workflow-workspace-close-sidebar,
 .workflow-workspace-expand-list,
 .workflow-workspace-open-sidebar {
@@ -6891,11 +6900,29 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 2rem;
   height: 2rem;
   padding: 0;
+  border: 1px solid rgb(var(--mm-border));
   border-radius: 0.5rem;
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-ink));
   flex: 0 0 auto;
+  text-decoration: none;
+  transition: var(--mm-control-transition);
 }
 
-.workflow-workspace-control-icon {
+.workflow-workspace-expand-list:hover,
+.workflow-workspace-expand-list:focus-visible {
+  background: rgb(var(--mm-accent) / 0.08);
+  border-color: rgb(var(--mm-accent));
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
+  color: rgb(var(--mm-ink));
+}
+
+.workflow-workspace-expand-list:focus-visible {
+  outline: none;
+}
+
+.workflow-workspace-control-icon,
+.workflow-workspace-expand-list svg {
   width: 1.05rem;
   height: 1.05rem;
   flex: 0 0 auto;

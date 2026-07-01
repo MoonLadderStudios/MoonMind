@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNod
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Anser from 'anser';
 import {
+  ArrowRight,
   Ban,
   CalendarClock,
   Check,
@@ -385,13 +386,24 @@ function WorkflowSidebarControls({
   fullListHref,
   closeButtonRef,
   onClose,
+  search,
 }: {
   fullListHref: string;
   closeButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
+  search: URLSearchParams;
 }) {
   return (
     <div className="workflow-workspace-sidebar-controls">
+      <a
+        href={workflowListHrefFromContext(search, { markDetailReturn: true })}
+        className="secondary workflow-workspace-expand-list"
+        onClick={markWorkflowListReturnFocusIntent}
+        aria-label="Expand to full list"
+        title="Expand to full list"
+      >
+        <ArrowRight aria-hidden="true" focusable="false" />
+      </a>
       <button
         ref={closeButtonRef}
         type="button"
@@ -474,6 +486,7 @@ function WorkflowSidebar({
         fullListHref={fullListHref}
         closeButtonRef={closeButtonRef}
         onClose={onClose}
+        search={search}
       />
       {workflowsQuery.isLoading ? (
         <p className="workflow-workspace-sidebar-state">Loading workflows...</p>

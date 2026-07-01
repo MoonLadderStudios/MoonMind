@@ -1029,7 +1029,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
   });
 
-  it('MM-1000 expands to the full list with preserved context and focusable list target', async () => {
+  it('MM-1000 keeps workspace sidebar full-list navigation compact', async () => {
     window.history.pushState(
       {},
       'Workspace Expand Test',
@@ -1050,8 +1050,10 @@ describe('Workflow Detail Entrypoint', () => {
     expect(expand.getAttribute('href')).not.toContain('sort=');
     expect(expand.getAttribute('href')).not.toContain('selectedWorkflowId=');
     expect(expand.getAttribute('href')).not.toContain('unsafe=');
-    expect(expand.getAttribute('class') || '').toContain('button');
     expect(expand.getAttribute('class') || '').toContain('workflow-workspace-expand-list');
+    expect(expand.getAttribute('class') || '').toContain('secondary');
+    expect(expand.getAttribute('class') || '').not.toContain('button');
+    expect(expand.querySelector('svg.lucide-arrow-right')).toBeTruthy();
     expect(within(sidebar).getByRole('button', { name: 'Close sidebar' }).getAttribute('class') || '').toContain(
       'workflow-workspace-close-sidebar',
     );
@@ -1074,7 +1076,9 @@ describe('Workflow Detail Entrypoint', () => {
 
     const dashboardCss = await readDashboardCss();
     expect(dashboardCss).toMatch(/\.workflow-workspace-close-sidebar[\s\S]*?width:\s*2rem;/);
+    expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list,[\s\S]*?\.workflow-workspace-close-sidebar,[\s\S]*?width:\s*2rem;/);
     expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list\s*\{[\s\S]*?background:\s*rgb\(var\(--mm-accent\)/);
+    expect(dashboardCss).toMatch(/\.workflow-workspace-control-icon,[\s\S]*?\.workflow-workspace-expand-list svg[\s\S]*?width:\s*1\.05rem;/);
   });
 
   it('MM-1002 renders sidebar titles and statuses as React text', async () => {
@@ -1108,7 +1112,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(sidebar.querySelector('script')).toBeNull();
   });
 
-  it('MM-1005 expands to the plain workflow list from the desktop workspace when no list context exists', async () => {
+  it('MM-1005 expands to the plain workflow list when no filter context exists', async () => {
     window.history.pushState({}, 'Workspace Plain Expand Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
