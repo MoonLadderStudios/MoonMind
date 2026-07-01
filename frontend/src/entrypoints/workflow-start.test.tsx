@@ -18293,10 +18293,10 @@ describe("Task Create MM-937 step hover containment", () => {
 
   it("keeps context chip remove buttons compact after the generic icon-button rules", () => {
     expect(dashboardCss).toMatch(
-      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s*\{[^}]*width:\s*1rem;[^}]*height:\s*1rem;[^}]*box-shadow:\s*none;/s,
+      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s*\{[^}]*width:\s*1rem;[^}]*height:\s*1rem;[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*padding:\s*0;[^}]*box-shadow:\s*none;/s,
     );
     expect(dashboardCss).toMatch(
-      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove:hover,[^{]+\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\.is-clicked\s*\{[^}]*transform:\s*none;/s,
+      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove:hover,[^{]+\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\.is-clicked\s*\{[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*box-shadow:\s*none;[^}]*transform:\s*none;[^}]*filter:\s*none;/s,
     );
   });
 
