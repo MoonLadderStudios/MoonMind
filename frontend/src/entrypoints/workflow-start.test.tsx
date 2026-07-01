@@ -29,6 +29,7 @@ import {
   preferredTemplate,
   resolveDefaultProviderProfileId,
   resolveObjectiveInstructions,
+  WORKFLOW_START_HEADING_QUOTES,
   WorkflowStartPage,
 } from "./workflow-start";
 
@@ -2828,7 +2829,8 @@ describe.skip("Task Create Entrypoint", () => {
   it("does not load an execution detail draft in create mode", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Start Workflow" })).toBeTruthy();
+    const heading = await screen.findByRole("heading", { level: 2 });
+    expect(WORKFLOW_START_HEADING_QUOTES).toContain(heading.textContent);
     expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Create Task" })).toBeNull();
     expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
@@ -5231,10 +5233,10 @@ describe.skip("Task Create Entrypoint", () => {
   it("submits the Temporal task payload and redirects on success", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
+    const heading = await screen.findByRole("heading", { level: 2 });
+    expect(WORKFLOW_START_HEADING_QUOTES).toContain(heading.textContent);
     expect(
-      (await screen.findByRole("heading", { name: "Start Workflow" })).closest(
-        ".workflow-start-page",
-      ),
+      heading.closest(".workflow-start-page"),
     ).not.toBeNull();
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
