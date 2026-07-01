@@ -2964,6 +2964,143 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "MoonLadderStudios/MoonMind#123"
     )
 
+
+async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_path):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "presets"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service._get_template_for_scope(
+                slug="github-issue-orchestrate",
+                scope=PresetScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            expanded = await service.expand_template(
+                slug="github-issue-orchestrate",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 1067,
+                        "url": "https://github.com/MoonLadderStudios/MoonMind/issues/1067",
+                    },
+                    "constraints": "Keep preset scope bounded.",
+                },
+                context={},
+            )
+
+    assert [step["title"] for step in expanded["steps"]] == [
+        "Load GitHub issue brief",
+        "Assess existing implementation state",
+        "Check GitHub issue blockers before orchestration",
+        "Mark GitHub issue In Progress",
+        "Classify request and resume point",
+        "Create or select Moon Spec",
+        "Split broad designs when needed",
+        "Plan selected spec",
+        "Generate TDD task breakdown",
+        "Align Moon Spec artifacts",
+        "Implement the task breakdown",
+        "Verify completion",
+        "Remediate verification gaps 1 of 6",
+        "Verify remediation 1 of 6",
+        "Remediate verification gaps 2 of 6",
+        "Verify remediation 2 of 6",
+        "Remediate verification gaps 3 of 6",
+        "Verify remediation 3 of 6",
+        "Remediate verification gaps 4 of 6",
+        "Verify remediation 4 of 6",
+        "Remediate verification gaps 5 of 6",
+        "Verify remediation 5 of 6",
+        "Remediate verification gaps 6 of 6",
+        "Verify remediation 6 of 6",
+        "Reconcile declarative docs",
+        "Create pull request",
+        "Finalize GitHub issue status",
+    ]
+    assert expanded["steps"][0]["tool"]["id"] == "github.load_issue_preset_brief"
+    assert expanded["steps"][0]["tool"]["inputs"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": "1067",
+    }
+    assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
+    assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
+    assert expanded["steps"][26]["tool"]["id"] == "github.update_issue_status"
+    assert expanded["steps"][26]["tool"]["inputs"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": "1067",
+        "mode": "finalize_after_pr_or_done",
+        "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
+    }
+    assert expanded["steps"][11]["skill"]["id"] == "moonspec-verify"
+    assert expanded["steps"][23]["annotations"] == {
+        "jiraOrchestrateRole": "moonspec-verification-gate",
+        "moonSpecRemediationAttempt": 6,
+        "moonSpecRemediationMaxAttempts": 6,
+        "moonSpecFinalRemediationGate": True,
+    }
+    assert expanded["steps"][24]["annotations"] == {
+        "jiraOrchestrateRole": "doc-reconciliation"
+    }
+    assert expanded["steps"][25]["annotations"] == {
+        "jiraOrchestrateRole": "pull-request-handoff"
+    }
+    assert expanded["steps"][26]["annotations"] == {
+        "jiraOrchestrateRole": "code-review-handoff"
+    }
+    assert "ADDITIONAL_WORK_NEEDED or NO_DETERMINATION" in expanded["steps"][23][
+        "instructions"
+    ]
+    assert "do not continue to pull request creation" in expanded["steps"][23][
+        "instructions"
+    ]
+    assert "only when the controlling post-remediation verdict is FULLY_IMPLEMENTED" in expanded[
+        "steps"
+    ][24]["instructions"]
+    assert "If the latest verdict is not FULLY_IMPLEMENTED" in expanded["steps"][24][
+        "instructions"
+    ]
+    assert "stop without committing, pushing, creating a pull request" in expanded["steps"][
+        25
+    ]["instructions"]
+    assert "terminal verifier outcomes" in expanded["steps"][26]["instructions"]
+    assert "must stop before this status update" in expanded["steps"][26][
+        "instructions"
+    ]
+    assert "FULLY_IMPLEMENTED and no MoonSpec implementation work ran" in expanded[
+        "steps"
+    ][11]["instructions"]
+    assert "skip doc reconciliation" in expanded["steps"][24]["instructions"]
+    assert "skip pull request creation entirely" in expanded["steps"][25][
+        "instructions"
+    ]
+    assert "apply the configured Done strategy" in expanded["steps"][26][
+        "instructions"
+    ]
+    assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
+        "github-issue-orchestrate",
+        "issue-implement-assessment",
+    ]
+    assert template.annotations["uiSchema"]["github_issue"] == {
+        "widget": "github.issue-picker",
+        "dataSource": "github.issues",
+        "searchPlaceholder": "Search GitHub issues",
+        "allowManualIssueEntry": True,
+    }
+    assert expanded["appliedTemplate"]["inputs"]["github_issue_ref"] == (
+        "MoonLadderStudios/MoonMind#1067"
+    )
+
+
 async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
