@@ -355,7 +355,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         assert verify_step["skill"]["id"] == "moonspec-verify"
         assert "issue-brief verification mode" in verify_step["instructions"]
-        assert "controlling moonspec-verify verdict is FULLY_IMPLEMENTED" in (
+        assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
             implement_pr_step["instructions"]
         )
         assert "merge automation" in implement_pr_step["instructions"]
