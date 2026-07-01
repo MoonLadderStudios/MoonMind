@@ -252,7 +252,7 @@ steps:
 
     Otherwise create a pull request for the completed work for {{ inputs.issue_provider
     }} issue {{ inputs.issue_ref }} only after the latest controlling post-remediation
-    moonspec-verify result in {{ inputs.verify_artifact_path }} reports FULLY_IMPLEMENTED.
+    moonspec-verify verdict is FULLY_IMPLEMENTED in {{ inputs.verify_artifact_path }}.
     If the verifier reported ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED,
     FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, or if
     {{ inputs.remediation_max_attempts }} remediation attempt has been exhausted
