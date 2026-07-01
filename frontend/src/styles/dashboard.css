@@ -5151,6 +5151,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   object-fit: contain;
 }
 
+.workflow-start-heading {
+  margin-bottom: 0.35rem;
+}
+
 .queue-advanced-settings-body {
   margin-top: 0.75rem;
 }

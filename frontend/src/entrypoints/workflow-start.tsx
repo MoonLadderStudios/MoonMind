@@ -83,6 +83,28 @@ const PENTEST_VALIDATE_ACTIONS = [
 ];
 const PRESET_REAPPLY_REQUIRED_MESSAGE =
   "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.";
+export const WORKFLOW_START_HEADING_QUOTES = [
+  "What's the mission?",
+  "Make it so",
+  "Go for launch",
+  "Free your mind",
+  "One small step",
+  "Light this candle",
+  "All systems go",
+];
+
+function randomWorkflowStartHeading(except?: string): string {
+  if (WORKFLOW_START_HEADING_QUOTES.length === 0) {
+    return "Start Workflow";
+  }
+  const candidates = WORKFLOW_START_HEADING_QUOTES.filter(
+    (quote) => quote !== except,
+  );
+  const choices =
+    candidates.length > 0 ? candidates : WORKFLOW_START_HEADING_QUOTES;
+  const index = Math.floor(Math.random() * choices.length);
+  return choices[index] ?? "Start Workflow";
+}
 
 function readProposeTasksPreference(defaultValue: boolean): boolean {
   try {
@@ -5409,6 +5431,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     () => resolveTaskSubmitPageMode(window.location.search),
     [],
   );
+  const [workflowStartHeadingQuote, setWorkflowStartHeadingQuote] = useState(
+    () => randomWorkflowStartHeading(),
+  );
   const temporalTaskEditingEnabled = Boolean(
     dashboardConfig.features?.temporalDashboard?.temporalWorkflowEditing ??
       dashboardConfig.features?.temporalDashboard?.temporalTaskEditing,
@@ -10402,6 +10427,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         : pageMode.mode === "rerun"
           ? "Start New Run"
           : "Start Workflow";
+  const visiblePageTitle =
+    pageMode.mode === "create" ? workflowStartHeadingQuote : pageTitle;
   const primaryCta =
     pageMode.intent === "comparison"
       ? "Start Comparison Run"
@@ -10446,6 +10473,18 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const isTemporalFormBlocked =
     pageMode.mode !== "create" &&
     (temporalDraftQuery.isLoading || Boolean(modeLoadError));
+
+  useEffect(() => {
+    if (pageMode.mode !== "create") {
+      return undefined;
+    }
+    const intervalId = window.setInterval(() => {
+      setWorkflowStartHeadingQuote((current) =>
+        randomWorkflowStartHeading(current),
+      );
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [pageMode.mode]);
 
   useEffect(() => {
     if (!showPrimaryCtaArrow || isTemporalFormBlocked) {
@@ -10494,8 +10533,12 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="stack workflow-start-page dashboard-surface dashboard-surface--page">
-      <section data-canonical-create-section="Header" aria-label="Header">
-        <h2 className="page-title">{pageTitle}</h2>
+      <section
+        className="workflow-start-heading"
+        data-canonical-create-section="Header"
+        aria-label="Header"
+      >
+        <h2 className="page-title">{visiblePageTitle}</h2>
       </section>
 
       {pageMode.mode !== "create" && temporalDraftQuery.isLoading ? (
