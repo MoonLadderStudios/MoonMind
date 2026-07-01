@@ -15,6 +15,7 @@ from moonmind.schemas.agent_runtime_models import (
     _MAX_SUMMARY_CHARS,
 )
 from moonmind.schemas.temporal_activity_models import AgentRuntimeFetchResultInput
+from moonmind.workflows.provider_failures import ProviderFailureEvent
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.merge_gate import build_resolver_run_request
@@ -117,6 +118,56 @@ async def test_slot_waiting_reason_summarizes_capacity_or_cooldown() -> None:
     assert "runtime=codex_cli" in reason
     assert "provider=openai" in reason
     assert "missing_condition=capacity_or_cooldown" in reason
+
+async def test_provider_cooldown_backoff_doubles_and_caps_per_profile() -> None:
+    run = MoonMindAgentRun()
+
+    cooldowns = [
+        run._next_provider_cooldown_seconds(
+            runtime_id="claude_code",
+            profile_id="claude-anthropic",
+            base_seconds=900,
+        )
+        for _ in range(5)
+    ]
+
+    assert cooldowns == [900, 1800, 3600, 3600, 3600]
+
+async def test_provider_cooldown_backoff_tracks_profiles_independently() -> None:
+    run = MoonMindAgentRun()
+
+    first_profile = run._next_provider_cooldown_seconds(
+        runtime_id="claude_code",
+        profile_id="claude-anthropic",
+        base_seconds=300,
+    )
+    second_profile = run._next_provider_cooldown_seconds(
+        runtime_id="claude_code",
+        profile_id="claude-anthropic-backup",
+        base_seconds=300,
+    )
+    first_profile_second_failure = run._next_provider_cooldown_seconds(
+        runtime_id="claude_code",
+        profile_id="claude-anthropic",
+        base_seconds=300,
+    )
+
+    assert (first_profile, second_profile, first_profile_second_failure) == (
+        300,
+        300,
+        600,
+    )
+
+async def test_provider_cooldown_backoff_honors_structured_retry_timing() -> None:
+    assert MoonMindAgentRun._provider_failure_supplies_retry_timing(
+        ProviderFailureEvent(retry_after_seconds=120)
+    )
+    assert MoonMindAgentRun._provider_failure_supplies_retry_timing(
+        ProviderFailureEvent(reset_at="2026-07-01T12:00:00+00:00")
+    )
+    assert not MoonMindAgentRun._provider_failure_supplies_retry_timing(
+        ProviderFailureEvent(provider_error_class="rate_limit")
+    )
 
 async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_head_branch(
     monkeypatch: pytest.MonkeyPatch,

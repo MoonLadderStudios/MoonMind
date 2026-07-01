@@ -170,6 +170,9 @@ AGENT_RUN_RESILIENCY_POLICY_PATCH_ID = "agent-run-resiliency-policy-v1"
 AGENT_RUN_STRUCTURED_PROVIDER_FAILURE_PATCH_ID = (
     "agent-run-structured-provider-failure-cooldown-v1"
 )
+AGENT_RUN_PROVIDER_COOLDOWN_EXPONENTIAL_BACKOFF_PATCH_ID = (
+    "agent-run-provider-cooldown-exponential-backoff-v1"
+)
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
@@ -204,6 +207,7 @@ _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
 _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS = 1800
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
+_MAX_PROVIDER_COOLDOWN_BACKOFF_SECONDS = 3600
 _MANAGED_RUNTIME_STORE_ROOT = os.environ.get(
     "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
 )
@@ -441,6 +445,7 @@ class MoonMindAgentRun:
         self._awaiting_slot_reason_override: str | None = None
         self._slot_wait_timeout_override_seconds: int | None = None
         self._skip_default_profile_pin_once: bool = False
+        self._provider_cooldown_retry_counts: dict[str, int] = {}
         self.runtime_selection_updated_event = asyncio.Event()
         self._pending_runtime_selection_update: dict[str, Any] | None = None
         self._paused: bool = False
@@ -628,6 +633,34 @@ class MoonMindAgentRun:
             if seconds >= 0:
                 return seconds
         return _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS
+
+    @staticmethod
+    def _provider_failure_supplies_retry_timing(provider_failure_event: Any) -> bool:
+        if provider_failure_event is None:
+            return False
+        retry_after_seconds = getattr(
+            provider_failure_event, "retry_after_seconds", None
+        )
+        if retry_after_seconds is not None and retry_after_seconds > 0:
+            return True
+        return bool(getattr(provider_failure_event, "reset_at", None))
+
+    def _next_provider_cooldown_seconds(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str | None,
+        base_seconds: int,
+    ) -> int:
+        seconds = max(0, int(base_seconds))
+        if seconds <= 0:
+            return seconds
+        key = str(profile_id or runtime_id or "managed").strip() or "managed"
+        prior_failures = self._provider_cooldown_retry_counts.get(key, 0)
+        self._provider_cooldown_retry_counts[key] = prior_failures + 1
+        multiplier = 2 ** min(prior_failures, 10)
+        cap = max(seconds, _MAX_PROVIDER_COOLDOWN_BACKOFF_SECONDS)
+        return min(seconds * multiplier, cap)
 
     @staticmethod
     def _profile_selector_has_constraints(selector: Any) -> bool:
@@ -3856,6 +3889,19 @@ class MoonMindAgentRun:
                                 provider_failure_event,
                                 now=workflow.now(),
                                 default_seconds=cooldown_seconds,
+                            )
+                        if (
+                            workflow.patched(
+                                AGENT_RUN_PROVIDER_COOLDOWN_EXPONENTIAL_BACKOFF_PATCH_ID
+                            )
+                            and not self._provider_failure_supplies_retry_timing(
+                                provider_failure_event
+                            )
+                        ):
+                            cooldown_seconds = self._next_provider_cooldown_seconds(
+                                runtime_id=runtime_id,
+                                profile_id=profile_id,
+                                base_seconds=cooldown_seconds,
                             )
                         waiting_reason = self._build_managed_rate_limit_waiting_reason(
                             runtime_id=runtime_id,
