@@ -5086,7 +5086,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 0.5rem;
-  flex-wrap: nowrap;
 }
 
 :is(.queue-step-attachments-list, #queue-dependency-list) li > span:first-child {

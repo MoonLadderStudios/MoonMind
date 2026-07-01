@@ -18305,7 +18305,7 @@ describe("Task Create MM-937 step hover containment", () => {
 
   it("keeps dependency remove buttons in a fixed right column beside wrapping text", () => {
     expect(dashboardCss).toMatch(
-      /#queue-dependency-list\s+li\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;[^}]*align-items:\s*center;[^}]*flex-wrap:\s*nowrap;/s,
+      /#queue-dependency-list\s+li\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;[^}]*align-items:\s*center;/s,
     );
     expect(dashboardCss).toMatch(
       /#queue-dependency-list\s+li\s*>\s*span:first-child\s*\{[^}]*display:\s*block;[^}]*grid-column:\s*1;[^}]*grid-row:\s*1;/s,
