@@ -6898,14 +6898,20 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-expand-list:hover,
-.workflow-workspace-expand-list:focus-visible {
-  background: rgb(var(--mm-accent) / 0.08);
-  border-color: rgb(var(--mm-accent));
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
+.workflow-workspace-expand-list:focus-visible,
+.workflow-workspace-close-sidebar:hover,
+.workflow-workspace-close-sidebar:focus-visible,
+.workflow-workspace-open-sidebar:hover,
+.workflow-workspace-open-sidebar:focus-visible {
+  background: rgb(var(--mm-ink) / 0.06);
+  border-color: rgb(var(--mm-border-strong));
+  box-shadow: 0 10px 22px -20px rgb(var(--mm-ink) / 0.5);
   color: rgb(var(--mm-ink));
 }
 
-.workflow-workspace-expand-list:focus-visible {
+.workflow-workspace-expand-list:focus-visible,
+.workflow-workspace-close-sidebar:focus-visible,
+.workflow-workspace-open-sidebar:focus-visible {
   outline: none;
 }
 

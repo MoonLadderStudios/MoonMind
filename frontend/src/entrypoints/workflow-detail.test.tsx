@@ -1069,6 +1069,9 @@ describe('Workflow Detail Entrypoint', () => {
     const dashboardCss = await readDashboardCss();
     expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list,[\s\S]*?\.workflow-workspace-close-sidebar,[\s\S]*?width:\s*2rem;/);
     expect(dashboardCss).toMatch(/\.workflow-workspace-control-icon,[\s\S]*?\.workflow-workspace-expand-list svg[\s\S]*?width:\s*1\.05rem;/);
+    expect(dashboardCss).toMatch(
+      /\.workflow-workspace-expand-list:hover,[\s\S]*?\.workflow-workspace-close-sidebar:hover,[\s\S]*?background:\s*rgb\(var\(--mm-ink\) \/ 0\.06\);/,
+    );
   });
 
   it('MM-1002 renders sidebar titles and statuses as React text', async () => {
