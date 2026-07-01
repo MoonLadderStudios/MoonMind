@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Queue one child MoonMind workflow per resolved issue target.
 
-The agent resolves Jira board-column or GitHub repository issue targets into the
-canonical resolved-target shape (see SKILL.md) and writes them to a JSON file.
-This helper reads that file plus the selected child preset / publish policy and
+The agent resolves Jira status or other issue targets into the canonical
+resolved-target shape (see SKILL.md) and writes them to a JSON file. This helper
+reads that file plus the selected child run capability / publish policy and
 submits one child execution per target through the internal Temporal execution
 API. Every child inherits the parent runtime via ``runtimeInheritance="caller"``
 (with a fallback copy of the effective runtime fields) and shares a single
@@ -39,11 +39,6 @@ logger = logging.getLogger(__name__)
 API_EXECUTIONS_ENDPOINT = "/api/executions"
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
 
-# Presets whose issue input the batch form auto-binds. The resolved target is
-# mapped into these presets' issue inputs and the server goal scheduler expands
-# the matching preset from the queued child goal.
-AUTO_BINDABLE_PRESETS = frozenset({"jira-implement", "github-issue-implement"})
-
 
 @dataclass
 class ChildSubmission:
@@ -68,9 +63,8 @@ class RuntimeSelection:
 
 @dataclass
 class TargetConfig:
-    preset_slug: str
-    preset_scope: str = "global"
-    preset_scope_ref: str | None = None
+    target_kind: str
+    target_slug: str
     publish_mode: str = "pr"
     constraints: str = ""
     required_capabilities: list[str] = field(default_factory=list)
@@ -90,8 +84,30 @@ def _normalize_publish_mode(value: str | None) -> str:
     return candidate
 
 
-def _required_capabilities_for(provider: str) -> list[str]:
+def parse_run_ref(value: str | None) -> tuple[str, str]:
+    candidate = str(value or "").strip()
+    if ":" not in candidate:
+        raise ValueError(
+            "run ref must use '<kind>:<slug>', for example skill:jira-verify"
+        )
+    kind, slug = candidate.split(":", 1)
+    kind = kind.strip().lower()
+    slug = slug.strip()
+    if kind not in {"skill", "preset"} or not slug:
+        raise ValueError("run ref must target skill:<name> or preset:<slug>")
+    return kind, slug
+
+
+def run_ref_for_config(config: TargetConfig) -> str:
+    return f"{config.target_kind}:{config.target_slug}"
+
+
+def _required_capabilities_for(
+    provider: str, target_kind: str | None = None, target_slug: str | None = None
+) -> list[str]:
     base = ["git"]
+    if provider == "jira" and target_kind == "skill" and target_slug == "jira-verify":
+        return base + ["jira"]
     if provider == "jira":
         base += ["jira", "gh"]
     elif provider == "github":
@@ -99,14 +115,32 @@ def _required_capabilities_for(provider: str) -> list[str]:
     return base
 
 
-def child_goal_for_target(target: dict[str, Any], preset_slug: str) -> str | None:
-    """Return the goal text that routes the server scheduler to ``preset_slug``.
+def child_goal_for_target(
+    target: dict[str, Any], target_kind: str, target_slug: str
+) -> str | None:
+    """Return the goal text for the selected child run target.
 
-    Returns ``None`` when the target cannot be auto-bound to the selected preset.
+    Returns ``None`` when the target cannot be auto-bound to the selected target.
     """
 
     provider = str(target.get("provider") or "").strip().lower()
-    if preset_slug == "jira-implement" and provider == "jira":
+    if (
+        target_kind == "skill"
+        and target_slug == "jira-verify"
+        and provider == "jira"
+    ):
+        issue = (
+            target.get("jiraIssue") if isinstance(target.get("jiraIssue"), dict) else {}
+        )
+        key = _text(issue.get("key")) or _text(target.get("ref"))
+        if key:
+            return f"Verify Jira issue {key}."
+        return None
+    if (
+        target_kind == "preset"
+        and target_slug == "jira-implement"
+        and provider == "jira"
+    ):
         issue = (
             target.get("jiraIssue") if isinstance(target.get("jiraIssue"), dict) else {}
         )
@@ -114,7 +148,11 @@ def child_goal_for_target(target: dict[str, Any], preset_slug: str) -> str | Non
         if key:
             return f"Implement Jira issue {key}."
         return None
-    if preset_slug == "github-issue-implement" and provider == "github":
+    if (
+        target_kind == "preset"
+        and target_slug == "github-issue-implement"
+        and provider == "github"
+    ):
         issue = (
             target.get("githubIssue")
             if isinstance(target.get("githubIssue"), dict)
@@ -132,17 +170,41 @@ def child_goal_for_target(target: dict[str, Any], preset_slug: str) -> str | Non
 
 
 def bind_child_inputs(
-    target: dict[str, Any], preset_slug: str, constraints: str
+    target: dict[str, Any], target_kind: str, target_slug: str, constraints: str
 ) -> dict[str, Any] | None:
-    """Apply the default issue bindings for the selected child preset.
+    """Apply the default issue bindings for the selected child target.
 
     Mirrors the ``annotations.bindings`` declared by the ``batch-workflows``
-    preset. Returns ``None`` when the preset is not auto-bindable for the target.
+    preset. Returns ``None`` when the target is not auto-bindable.
     """
 
     provider = str(target.get("provider") or "").strip().lower()
     shared = _text(constraints)
-    if preset_slug == "jira-implement" and provider == "jira":
+    if (
+        target_kind == "skill"
+        and target_slug == "jira-verify"
+        and provider == "jira"
+    ):
+        issue = (
+            target.get("jiraIssue") if isinstance(target.get("jiraIssue"), dict) else {}
+        )
+        key = _text(issue.get("key")) or _text(target.get("ref"))
+        if not key:
+            return None
+        inputs: dict[str, Any] = {
+            "jira_issue": dict(issue) if issue else {"key": key},
+            "jira_issue_key": key,
+            "repository": _text(target.get("repository")) or "",
+            "verification_mode": "auto",
+            "update_status": False,
+            "constraints": shared or "",
+        }
+        return inputs
+    if (
+        target_kind == "preset"
+        and target_slug == "jira-implement"
+        and provider == "jira"
+    ):
         issue = (
             target.get("jiraIssue") if isinstance(target.get("jiraIssue"), dict) else {}
         )
@@ -155,7 +217,11 @@ def bind_child_inputs(
             "constraints": shared or "",
         }
         return inputs
-    if preset_slug == "github-issue-implement" and provider == "github":
+    if (
+        target_kind == "preset"
+        and target_slug == "github-issue-implement"
+        and provider == "github"
+    ):
         issue = (
             target.get("githubIssue")
             if isinstance(target.get("githubIssue"), dict)
@@ -175,7 +241,12 @@ def bind_child_inputs(
 
 
 def _child_idempotency_key(
-    *, batch_scope: str | None, provider: str, ref: str, preset_slug: str
+    *,
+    batch_scope: str | None,
+    provider: str,
+    ref: str,
+    target_kind: str,
+    target_slug: str,
 ) -> str | None:
     scope = _text(batch_scope)
     if not scope:
@@ -184,7 +255,8 @@ def _child_idempotency_key(
         "scope": scope,
         "provider": provider,
         "ref": ref,
-        "preset": preset_slug,
+        "targetKind": target_kind,
+        "targetSlug": target_slug,
     }
     canonical = json.dumps(components, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -207,7 +279,7 @@ def build_child_request(
 ) -> dict[str, Any] | None:
     """Build a single ``POST /api/executions`` request for one resolved target.
 
-    Returns ``None`` when the target cannot be auto-bound to the selected preset.
+    Returns ``None`` when the target cannot be auto-bound to the selected target.
     """
 
     provider = str(target.get("provider") or "").strip().lower()
@@ -216,14 +288,21 @@ def build_child_request(
     if not ref:
         return None
 
-    goal = child_goal_for_target(target, config.preset_slug)
-    inputs = bind_child_inputs(target, config.preset_slug, config.constraints)
+    goal = child_goal_for_target(target, config.target_kind, config.target_slug)
+    inputs = bind_child_inputs(
+        target,
+        config.target_kind,
+        config.target_slug,
+        config.constraints,
+    )
     if goal is None or inputs is None:
         return None
 
     publish_mode = _normalize_publish_mode(config.publish_mode)
     required_capabilities = config.required_capabilities or _required_capabilities_for(
-        provider
+        provider,
+        config.target_kind,
+        config.target_slug,
     )
 
     task_payload: dict[str, Any] = {
@@ -231,22 +310,22 @@ def build_child_request(
         "instructions": goal,
         "inputs": inputs,
         "publish": {"mode": publish_mode},
-        # Author the child with the selected preset via ``taskTemplate`` so the
-        # execution API expands the exact slug/scope/scopeRef (see
-        # expand_preset_for_child_run). Without this the child is goal-only and
-        # the server goal scheduler silently substitutes a global preset,
-        # dropping any personal scope or scopeRef. ``batchTargetPreset`` has no
-        # readers, so it is not emitted.
-        "taskTemplate": {
-            "slug": config.preset_slug,
-            "scope": config.preset_scope,
-            **(
-                {"scopeRef": config.preset_scope_ref}
-                if _text(config.preset_scope_ref)
-                else {}
-            ),
-        },
     }
+    if config.target_kind == "skill":
+        task_payload["tool"] = {
+            "type": "skill",
+            "name": config.target_slug,
+        }
+    elif config.target_kind == "preset":
+        # Author the child with the selected preset via ``taskTemplate`` so the
+        # execution API expands the exact global preset instead of relying on
+        # goal-only scheduler inference.
+        task_payload["taskTemplate"] = {
+            "slug": config.target_slug,
+            "scope": "global",
+        }
+    else:
+        return None
 
     payload_dict: dict[str, Any] = {
         "requiredCapabilities": required_capabilities,
@@ -280,7 +359,8 @@ def build_child_request(
         batch_scope=batch_scope,
         provider=provider,
         ref=ref,
-        preset_slug=config.preset_slug,
+        target_kind=config.target_kind,
+        target_slug=config.target_slug,
     )
     if idempotency_key:
         payload_dict["idempotencyKey"] = idempotency_key
@@ -307,9 +387,10 @@ def build_child_requests(
     submissions: list[ChildSubmission] = []
     skipped: list[SkippedTarget] = []
 
-    capped = targets[: max(0, int(max_workflows))] if max_workflows else targets
-    if max_workflows and len(targets) > max_workflows:
-        for overflow in targets[max_workflows:]:
+    limit = max(0, int(max_workflows))
+    capped = targets[:limit]
+    if len(targets) > limit:
+        for overflow in targets[limit:]:
             skipped.append(
                 SkippedTarget(
                     ref=str(overflow.get("ref") or "(unknown)"),
@@ -319,9 +400,6 @@ def build_child_requests(
 
     for target in capped:
         ref = str(target.get("ref") or "(unknown)")
-        if config.preset_slug not in AUTO_BINDABLE_PRESETS:
-            skipped.append(SkippedTarget(ref=ref, reason="unsupported_preset"))
-            continue
         request = build_child_request(
             target,
             config=config,
@@ -330,7 +408,7 @@ def build_child_requests(
             inherit_runtime_from_caller=inherit_runtime_from_caller,
         )
         if request is None:
-            skipped.append(SkippedTarget(ref=ref, reason="unbindable_target"))
+            skipped.append(SkippedTarget(ref=ref, reason="unsupported_target"))
             continue
         submissions.append(
             ChildSubmission(
@@ -622,9 +700,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--targets", required=True, help="Path to resolved targets JSON."
     )
-    parser.add_argument("--target-preset-slug", required=True)
-    parser.add_argument("--target-preset-scope", default="global")
-    parser.add_argument("--target-preset-scope-ref", default=None)
+    parser.add_argument("--run-ref", required=True)
     parser.add_argument("--publish-mode", default="pr")
     parser.add_argument("--constraints", default=None)
     parser.add_argument("--constraints-file", default=None)
@@ -644,11 +720,11 @@ async def main(argv: list[str] | None = None) -> int:
     runtime = _resolve_runtime_selection(args.task_context_path)
     batch_scope = _parent_run_scope(args.task_context_path)
     inherit_from_caller = _task_workflow_id_from_env() is not None
+    target_kind, target_slug = parse_run_ref(args.run_ref)
 
     config = TargetConfig(
-        preset_slug=str(args.target_preset_slug).strip(),
-        preset_scope=str(args.target_preset_scope or "global").strip() or "global",
-        preset_scope_ref=_text(args.target_preset_scope_ref),
+        target_kind=target_kind,
+        target_slug=target_slug,
         publish_mode=_normalize_publish_mode(args.publish_mode),
         constraints=constraints,
     )
@@ -666,10 +742,9 @@ async def main(argv: list[str] | None = None) -> int:
     payload = {
         "timestamp": datetime.now(UTC).isoformat(),
         "actor": os.getenv("GITHUB_ACTOR") or os.getenv("USER") or "unknown",
-        "targetPreset": {
-            "slug": config.preset_slug,
-            "scope": config.preset_scope,
-            "scopeRef": config.preset_scope_ref,
+        "target": {
+            "kind": config.target_kind,
+            "slug": config.target_slug,
         },
         "publishMode": config.publish_mode,
         "runtime": {
@@ -707,7 +782,7 @@ async def main(argv: list[str] | None = None) -> int:
     print(json.dumps(payload, indent=2))
     print(
         f"queued={payload['created']} skipped={len(skipped)} errors={len(errors)} "
-        f"preset={config.preset_slug}"
+        f"target={run_ref_for_config(config)}"
     )
     return 1 if errors else 0
 

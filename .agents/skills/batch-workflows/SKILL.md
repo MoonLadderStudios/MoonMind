@@ -1,6 +1,6 @@
 ---
 name: batch-workflows
-description: Resolve Jira board-column or GitHub repository issue targets and enqueue one child MoonMind workflow per target using a selected child preset, inherited runtime, and a shared publish policy.
+description: Resolve Jira issues by project/status and enqueue one child MoonMind workflow per target using a selected run capability, inherited runtime, and a shared advanced publish policy.
 metadata:
   required-capabilities:
     - git
@@ -12,70 +12,55 @@ metadata:
 
 ## Purpose
 
-Resolve a set of issue-like targets, then queue one child MoonMind workflow per
-target running a selected child preset (for example `jira-implement` or
-`github-issue-implement`). Every child inherits the parent runtime
+Resolve a Jira status cohort, then queue one child MoonMind workflow per target
+running a selected child capability such as `skill:jira-verify` or
+`preset:jira-implement`. Every child inherits the parent runtime
 (`runtimeInheritance="caller"`) and a single shared publish policy. The parent
 records a summary artifact that links every queued child workflow.
 
-This replaces one-off prompts like "Queue a Jira Implement preset for every issue
-in the In Progress column of the THOR board" with a single batch run.
+This replaces one-off prompts like "Queue Jira Verify for every MM issue in In
+Progress" with a single batch run.
 
 ## Inputs (preset inputs / skill args)
 
-- `source_kind` (string, required): `jira_board_column` or `github_repo_issues`.
-- Jira board-column source: `jira_board_id`, `jira_column`, optional
-  `jira_label_filter`, `jira_issue_type_filter`, `jira_assignee_filter`, and
-  `repository` (target repo for implementation children; defaults to the parent
-  workflow repository when available).
-- GitHub repo issues source: `github_repository`, `github_issue_state`
-  (default `open`), optional `github_label_filter`, `github_assignee_filter`,
-  `github_milestone_filter`, `github_search_query`.
-- `target_preset_slug` / `target_preset_scope`
-  (default `global`) / `target_preset_scope_ref`: the child preset to run per
-  target. Known issue presets (`jira-implement`, `github-issue-implement`) are
-  auto-bound; other presets must be mapped explicitly.
-- `constraints` (string, optional): shared input copied to every child.
-- `publish_mode` (string, required): `none`, `branch`, or `pr`.
+- `jira_project_key` (string, required): Jira project key, for example `MM`.
+- `jira_status` (string, required): Jira status name, for example `In Progress`.
+- `run_ref` (string, required): child capability to run per target. Default
+  `skill:jira-verify`. Supported values are `skill:jira-verify`,
+  `preset:jira-implement`, and the helper also supports
+  `preset:github-issue-implement` for non-default GitHub target files.
 - `max_workflows` (number, optional): hard cap on queued children. Default `25`.
-- `sort` (string, optional): target ordering.
+- `constraints` (string, optional): shared input copied to every child.
+- `additional_jql` (string, optional): advanced JQL AND-clause appended to the
+  project/status query.
+- `repository` (string, optional): repository override when workflow context
+  cannot infer it.
+- `publish_mode` (string, optional): advanced child publish override, `none`,
+  `branch`, or `pr`. Default `none`.
 
 ## Workflow
 
-1. **Resolve targets** into the canonical resolved-target shape and write them to
-   `artifacts/batch-workflows-targets.json`, then preview the list before queueing.
-   - `jira_board_column`: use the deterministic trusted Jira tool surface to list
-     the issues in the selected column of the selected board, apply the optional
-     label/issue-type/assignee filters, sort, and cap at `max_workflows`. Each
-     target is:
+1. **Resolve Jira targets** into the canonical resolved-target shape and write
+   them to `artifacts/batch-workflows-targets.json`, then preview the list before
+   queueing. Use the trusted Jira tool surface to search:
 
-     ```json
-     {
-       "provider": "jira",
-       "ref": "THOR-123",
-       "jiraIssue": {"key": "THOR-123", "summary": "...", "description": "...",
-                      "url": "...", "status": "In Progress", "assignee": "..."},
-       "repository": "MoonLadderStudios/MoonMind"
-     }
-     ```
+   ```text
+   project = "<jira_project_key>" AND status = "<jira_status>"
+   ```
 
-   - `github_repo_issues`: use the trusted GitHub tool surface (`gh issue list`)
-     on the selected repository with the chosen state and optional
-     label/assignee/milestone/search filters, sort, and cap at `max_workflows`.
-     Each target is:
+   Append `additional_jql` only when provided. Each target is:
 
-     ```json
-     {
-       "provider": "github",
-       "ref": "MoonLadderStudios/MoonMind#123",
-       "githubIssue": {"repository": "MoonLadderStudios/MoonMind", "number": 123,
-                        "title": "...", "body": "...", "url": "...",
-                        "state": "open", "labels": ["..."]},
-       "repository": "MoonLadderStudios/MoonMind"
-     }
-     ```
+   ```json
+   {
+     "provider": "jira",
+     "ref": "MM-123",
+     "jiraIssue": {"key": "MM-123", "summary": "...", "description": "...",
+                    "url": "...", "status": "In Progress", "assignee": "..."},
+     "repository": "MoonLadderStudios/MoonMind"
+   }
+   ```
 
-   Never use raw Jira/GitHub credentials, web scraping, or guessed issue content to
+   Never use raw Jira credentials, web scraping, or guessed issue content to
    build the target list.
 
 2. **Queue child workflows** by running the helper:
@@ -83,26 +68,28 @@ in the In Progress column of the THOR board" with a single batch run.
    ```bash
    python3 .agents/skills/batch-workflows/bin/batch_workflows.py \
      --targets artifacts/batch-workflows-targets.json \
-     --target-preset-slug <slug> \
-     --target-preset-scope <global|personal> \
-     --target-preset-scope-ref <scope-ref-or-empty> \
+     --run-ref <skill:jira-verify|preset:jira-implement> \
      --publish-mode <none|branch|pr> \
      --constraints-file <optional path to shared constraints> \
      --max-workflows <cap>
    ```
 
    For each resolved target the helper:
-   - Auto-binds the issue target into the child preset's issue input
-     (`jira_issue` + `jira_issue_key` for `jira-implement`; `github_issue` +
-     `github_issue_ref` for `github-issue-implement`) and copies the shared
-     `constraints` into every child.
+   - Auto-binds Jira issues into `skill:jira-verify` inputs (`jira_issue`,
+     `jira_issue_key`, `repository`, `verification_mode`, `update_status`, and
+     `constraints`).
+   - Auto-binds Jira issues into `preset:jira-implement` inputs
+     (`jira_issue`, `jira_issue_key`, and `constraints`).
+   - Auto-binds GitHub issue targets into `preset:github-issue-implement` inputs
+     when a non-default GitHub target file is provided.
    - Stamps `runtimeInheritance="caller"` plus a fallback copy of the parent's
      effective runtime (mode/model/effort/provider profile) so children reuse the
      caller runtime even on deployments that do not honour the inheritance
      contract.
    - Applies the chosen `publish.mode` once to every child.
-   - Assigns a stable idempotency key per `(batch scope, target ref)` so rerunning
-     the same batch does not create duplicate child workflows.
+   - Assigns a stable idempotency key per `(batch scope, provider, target kind,
+     target slug, target ref)` so rerunning the same batch does not create
+     duplicate child workflows.
    - Submits via the internal Temporal execution API (`POST /api/executions`);
      `MOONMIND_URL` must point at the MoonMind API from the managed session.
 
@@ -114,8 +101,8 @@ in the In Progress column of the THOR board" with a single batch run.
 
 - Require `MOONMIND_URL` to reach the MoonMind API; the legacy direct-DB queue is
   not supported.
-- Never re-select provider/model/effort in the batch form — children inherit the
+- Never re-select provider/model/effort in the batch form; children inherit the
   caller runtime.
 - Cap the resolved list at `max_workflows`.
-- Targets whose selected preset is not auto-bindable and has no explicit mapping
-  are skipped with a clear `unsupported_preset` reason rather than queued blindly.
+- Targets whose selected run capability is not auto-bindable are skipped with a
+  clear `unsupported_target` reason rather than queued blindly.
