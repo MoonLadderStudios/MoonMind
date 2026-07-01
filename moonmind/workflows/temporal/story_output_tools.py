@@ -3096,13 +3096,20 @@ async def load_github_issue_preset_brief(
     if labels:
         brief_parts.append("Labels: " + ", ".join(str(label) for label in labels))
     preset_brief = "\n\n".join(part for part in brief_parts if part)
+    artifact_path = _first_string(
+        inputs.get("artifactPath"),
+        inputs.get("artifact_path"),
+        inputs.get("briefArtifactPath"),
+        inputs.get("brief_artifact_path"),
+        "artifacts/github-issue-implement-brief.json",
+    )
     return ToolResult(
         status="COMPLETED",
         outputs={
             "trustedSource": "moonmind.github.get_issue",
             "issue": issue,
             "presetBrief": preset_brief,
-            "artifactPath": "artifacts/github-issue-implement-brief.json",
+            "artifactPath": artifact_path,
             "summary": f"Loaded GitHub issue preset brief for {issue_ref} from trusted GitHub data.",
         },
     )
@@ -3219,6 +3226,54 @@ def _pull_request_url_from_artifact_path(
     return ""
 
 
+def _local_json_artifact_from_path(
+    *,
+    artifact_path: str,
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    raw_path = Path(artifact_path).expanduser()
+    candidate_paths: list[Path] = []
+    if raw_path.is_absolute():
+        candidate_paths.append(raw_path.resolve())
+    else:
+        for root in _repo_root_candidates(inputs, context):
+            candidate = (root / raw_path).resolve()
+            if candidate.is_relative_to(root):
+                candidate_paths.append(candidate)
+    for candidate in candidate_paths:
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, Mapping):
+            return dict(payload)
+    return None
+
+
+def _assessment_verdict_from_artifact(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[str, bool]:
+    artifact_path = _string(
+        inputs.get("assessmentArtifactPath")
+        or inputs.get("assessment_artifact_path")
+    )
+    if not artifact_path:
+        return "", True
+    payload = _local_json_artifact_from_path(
+        artifact_path=artifact_path,
+        inputs=inputs,
+        context=context,
+    )
+    if payload is None:
+        return "", False
+    verdict = _string(payload.get("verdict")).upper()
+    return verdict, True
+
+
 def _github_status_pull_request_url(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
@@ -3238,13 +3293,49 @@ async def update_github_issue_status(
 ) -> ToolResult:
     repository, issue_number = _github_issue_inputs(inputs)
     mode = _github_status_mode(inputs)
+    assessment_verdict, assessment_available = _assessment_verdict_from_artifact(
+        inputs,
+        _context,
+    )
+    issue_ref = f"{repository}#{issue_number}"
+    if mode in {"start", "in_progress"} and (
+        inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path")
+    ):
+        if not assessment_available:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "blocked",
+                    "summary": "GitHub issue status update requires an assessment artifact, but it was unavailable.",
+                },
+            )
+        if assessment_verdict == "FULLY_IMPLEMENTED":
+            return ToolResult(
+                status="COMPLETED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "skipped",
+                    "assessmentVerdict": assessment_verdict,
+                    "summary": f"Skipped GitHub issue In Progress update for {issue_ref} because assessment verdict is FULLY_IMPLEMENTED.",
+                },
+            )
+        if assessment_verdict == "BLOCKED":
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "blocked",
+                    "assessmentVerdict": assessment_verdict,
+                    "summary": f"Skipped GitHub issue In Progress update for {issue_ref} because assessment verdict is BLOCKED.",
+                },
+            )
     pull_request_url = _github_status_pull_request_url(inputs, _context)
     if mode == "finalize_after_pr_or_done":
         mode = "code_review" if pull_request_url else "done"
     actions = _GITHUB_STATUS_ACTIONS.get(mode, {})
     service = github_service_factory()
     token, resolution_error = await service.resolve_github_token(repo=repository)
-    issue_ref = f"{repository}#{issue_number}"
     if not token:
         return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "summary": resolution_error or "GitHub issue update is unavailable."})
     headers = service._github_headers(token)

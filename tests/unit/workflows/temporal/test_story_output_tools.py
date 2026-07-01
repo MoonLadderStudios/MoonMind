@@ -13,7 +13,9 @@ from moonmind.workflows.temporal.story_output_tools import (
     create_jira_issues_from_stories,
     create_jira_orchestrate_tasks_from_issue_mappings,
     discover_documents,
+    load_github_issue_preset_brief,
     load_jira_preset_brief,
+    update_github_issue_status,
 )
 
 class _FakeJiraService:
@@ -98,6 +100,146 @@ class _FakeExecutionCreator:
             "runId": f"run-{index}",
             "title": kwargs.get("title"),
         }
+
+
+class _FakeGitHubService:
+    def __init__(self) -> None:
+        self.token_requests: list[str] = []
+
+    async def resolve_github_token(self, *, repo: str):
+        self.token_requests.append(repo)
+        return "ghs-test", None
+
+    def _github_headers(self, token: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token}"}
+
+    def _github_permission_summary(self, response) -> str:
+        return f"github status {response.status_code}"
+
+
+class _FakeHttpResponse:
+    def __init__(self, payload: dict[str, Any], status_code: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+class _FakeHttpClient:
+    def __init__(self, *args, **kwargs) -> None:
+        self.requests: list[tuple[str, str, Any]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    async def get(self, url: str, **kwargs):
+        self.requests.append(("GET", url, kwargs))
+        return _FakeHttpResponse(
+            {
+                "number": 1067,
+                "title": "Add GitHub Issue Orchestrate preset",
+                "body": "Build the preset.",
+                "html_url": "https://github.com/MoonLadderStudios/MoonMind/issues/1067",
+                "state": "open",
+                "labels": [{"name": "moonspec"}],
+            }
+        )
+
+    async def patch(self, url: str, **kwargs):
+        self.requests.append(("PATCH", url, kwargs))
+        return _FakeHttpResponse(
+            {
+                "number": 1067,
+                "title": "Add GitHub Issue Orchestrate preset",
+                "body": "Build the preset.",
+                "html_url": "https://github.com/MoonLadderStudios/MoonMind/issues/1067",
+                "state": "open",
+                "labels": [{"name": "status: in-progress"}],
+            }
+        )
+
+    async def post(self, url: str, **kwargs):
+        self.requests.append(("POST", url, kwargs))
+        return _FakeHttpResponse({"id": 1})
+
+
+@pytest.mark.asyncio
+async def test_load_github_issue_preset_brief_uses_requested_artifact_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    service = _FakeGitHubService()
+
+    result = await load_github_issue_preset_brief(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "artifactPath": "artifacts/github-issue-orchestrate-brief.json",
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["artifactPath"] == (
+        "artifacts/github-issue-orchestrate-brief.json"
+    )
+    assert result.outputs["issue"]["number"] == 1067
+    assert service.token_requests == ["MoonLadderStudios/MoonMind"]
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_skips_start_for_fully_implemented_assessment(
+    tmp_path,
+):
+    assessment = tmp_path / "assessment.json"
+    assessment.write_text('{"verdict": "FULLY_IMPLEMENTED"}', encoding="utf-8")
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "start",
+            "assessmentArtifactPath": str(assessment),
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "skipped"
+    assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_blocks_start_for_blocked_assessment(
+    tmp_path,
+):
+    assessment = tmp_path / "assessment.json"
+    assessment.write_text('{"verdict": "BLOCKED"}', encoding="utf-8")
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": str(assessment),
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["assessmentVerdict"] == "BLOCKED"
+    assert service.token_requests == []
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_from_inline_story_breakdown():
