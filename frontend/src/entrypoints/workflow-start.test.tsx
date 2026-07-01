@@ -18290,4 +18290,19 @@ describe("Task Create MM-937 step hover containment", () => {
       /\.queue-step-controls\s+\.queue-step-icon-button:last-child\s*\{[^}]*transform-origin:\s*right center;/s,
     );
   });
+
+  it("keeps context chip remove buttons compact after the generic icon-button rules", () => {
+    expect(dashboardCss).toMatch(
+      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s*\{[^}]*width:\s*1rem;[^}]*height:\s*1rem;[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*padding:\s*0;[^}]*box-shadow:\s*none;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove:hover,[^{]+\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\.is-clicked\s*\{[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*box-shadow:\s*none;[^}]*transform:\s*none;[^}]*filter:\s*none;/s,
+    );
+  });
+
+  it("keeps dependency remove buttons in a fixed right column beside wrapping text", () => {
+    expect(dashboardCss).toMatch(
+      /#queue-dependency-list\s+li\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;[^}]*align-items:\s*center;/s,
+    );
+  });
 });

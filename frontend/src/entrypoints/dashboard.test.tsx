@@ -353,9 +353,11 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
     const shellPanel = document.querySelector('.panel');
     const startLink = screen.getByRole('link', { name: 'Start Workflow' });
+    const workflowsLink = screen.getByRole('link', { name: 'Workflows' });
     expect(startLink.getAttribute('aria-current')).toBe('page');
+    expect(workflowsLink.getAttribute('aria-current')).toBeNull();
 
-    fireEvent.click(screen.getByRole('link', { name: 'Workflows' }));
+    fireEvent.click(workflowsLink);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     expect(document.querySelector('.panel')).toBe(shellPanel);

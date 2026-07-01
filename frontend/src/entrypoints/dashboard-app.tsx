@@ -349,6 +349,7 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
         >
           <NavLink
             to="/workflows"
+            end
             className={({ isActive }) => (isActive || isWorkflowDetail ? 'active' : undefined)}
           >
             <WorkflowsNavIcon className="route-nav-icon" />
