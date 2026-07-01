@@ -2474,6 +2474,7 @@ def test_runtime_planner_preserves_github_orchestration_for_direct_story_tool() 
                 "publish": {"mode": "none"},
                 "steps": [
                     {
+                        "type": "skill",
                         "title": "Create dependent GitHub Issue Implement workflow executions",
                         "instructions": "Create downstream workflows.",
                         "githubOrchestration": {
