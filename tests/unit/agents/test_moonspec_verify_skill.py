@@ -48,3 +48,25 @@ def test_moonspec_verify_skill_reports_canonical_claim_coverage() -> None:
     assert "Doc drift alone does not block `FULLY_IMPLEMENTED`" in text
     assert "Use durable evidence references" in text
     assert "structured drift in Source Document Drift" in text
+
+
+def test_moonspec_verify_skill_supports_issue_brief_mode() -> None:
+    skill_path = (
+        Path(__file__).resolve().parents[3]
+        / ".agents"
+        / "skills"
+        / "moonspec-verify"
+        / "SKILL.md"
+    )
+
+    text = skill_path.read_text(encoding="utf-8")
+
+    assert "issue-brief verification mode" in text
+    assert "without requiring a MoonSpec feature directory" in text
+    assert "issue brief artifact path" in text
+    assert "assessment artifact path" in text
+    assert "PARTIALLY_IMPLEMENTED" in text
+    assert "unmet and partially-met requirements" in text
+    assert "Do not require `spec.md`, `plan.md`, `tasks.md`" in text
+    assert "Gap Type: implementation | verification | documentation | environment" in text
+    assert "Recoverable In Current Runtime: true | false" in text

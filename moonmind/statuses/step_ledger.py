@@ -35,6 +35,30 @@ StepLedgerStatusValue = Literal[
 STEP_LEDGER_STATUS_VALUES: frozenset[str] = frozenset(
     item.value for item in StepLedgerStatus
 )
+STEP_LEDGER_STATUSES = STEP_LEDGER_STATUS_VALUES
+
+STEP_EXECUTION_TO_LEDGER_STATUS: dict[str, StepLedgerStatus] = {
+    "pending": StepLedgerStatus.PENDING,
+    "preparing": StepLedgerStatus.RUNNING,
+    "running": StepLedgerStatus.RUNNING,
+    "checking": StepLedgerStatus.REVIEWING,
+    "succeeded": StepLedgerStatus.SUCCEEDED,
+    "failed": StepLedgerStatus.FAILED,
+    "blocked": StepLedgerStatus.AWAITING_EXTERNAL,
+    "canceled": StepLedgerStatus.CANCELED,
+    "superseded": StepLedgerStatus.SKIPPED,
+}
 
 
-__all__ = ["STEP_LEDGER_STATUS_VALUES", "StepLedgerStatus", "StepLedgerStatusValue"]
+def step_execution_to_ledger_status(status: str) -> StepLedgerStatus:
+    return STEP_EXECUTION_TO_LEDGER_STATUS.get(str(status), StepLedgerStatus.PENDING)
+
+
+__all__ = [
+    "STEP_EXECUTION_TO_LEDGER_STATUS",
+    "STEP_LEDGER_STATUSES",
+    "STEP_LEDGER_STATUS_VALUES",
+    "StepLedgerStatus",
+    "StepLedgerStatusValue",
+    "step_execution_to_ledger_status",
+]

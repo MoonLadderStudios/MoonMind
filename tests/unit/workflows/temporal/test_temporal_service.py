@@ -53,7 +53,32 @@ from moonmind.schemas.temporal_models import (
     has_user_workflow_plan_source,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.statuses.compat import (
+    canonicalize_finish_outcome_code_alias,
+    canonicalize_workflow_state_alias,
+    normalize_no_commit_finish_summary,
+)
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
+
+
+def test_legacy_no_changes_aliases_are_quarantined_in_compat_helpers() -> None:
+    assert canonicalize_workflow_state_alias("no_changes") == "no_commit"
+    assert canonicalize_finish_outcome_code_alias("NO_CHANGES") == "NO_COMMIT"
+    assert normalize_no_commit_finish_summary(
+        {
+            "finishOutcome": {"code": "NO_CHANGES", "reason": "No local changes"},
+            "publish": {"reasonCode": "no_changes"},
+        }
+    ) == {
+        "finishOutcome": {
+            "code": "NO_COMMIT",
+            "reason": "No repository commit was needed.",
+        },
+        "publish": {
+            "reasonCode": "no_commit",
+            "reason": "No repository changes were available to commit or publish.",
+        },
+    }
 
 
 def _valid_user_workflow_parameters() -> dict[str, object]:

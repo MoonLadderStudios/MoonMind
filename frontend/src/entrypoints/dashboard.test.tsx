@@ -1010,7 +1010,7 @@ describe('Dashboard shared entry', () => {
 
     const waitBlock = cssRuleBlocks(
       dashboardCss,
-      '.status-awaiting_action, .status-waiting, .status-awaiting-dependencies, .status-awaiting-external',
+      '.status-awaiting-action, .status-waiting, .status-awaiting-dependencies, .status-awaiting-external',
     ).join('\n');
     expect(dashboardCss).toContain('--mm-status-waiting: 146 64 14');
     expect(dashboardCss).toContain('--mm-status-waiting: 250 204 21');

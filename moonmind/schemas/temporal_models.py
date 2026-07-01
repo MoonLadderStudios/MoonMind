@@ -18,7 +18,11 @@ from pydantic.json_schema import SkipJsonSchema
 
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
-from moonmind.statuses.step_execution import StepExecutionArtifactStatusValue
+from moonmind.statuses.step_execution import (
+    StepExecutionReason,
+    StepExecutionStatus,
+    StepExecutionTerminalDisposition,
+)
 from moonmind.statuses.step_ledger import StepLedgerStatusValue
 from moonmind.statuses.temporal_status import TemporalStatusValue
 
@@ -68,28 +72,6 @@ STEP_EXECUTION_MANIFEST_CONTENT_TYPE = (
 STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE = (
     "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
 )
-
-StepExecutionReason = Literal[
-    "initial_execution",
-    "quality_gate_failed",
-    "tests_failed",
-    "runtime_recovered",
-    "recover_from_failed_step",
-    "remediation_context",
-    "operator_requested",
-    "dependency_invalidated",
-    "policy_revalidation",
-]
-StepExecutionTerminalDisposition = Literal[
-    "accepted",
-    "retryable",
-    "blocked",
-    "needs_human",
-    "discarded",
-    "superseded",
-    "failed_unrecoverable",
-    "failed_with_remaining_work",
-]
 
 EvidenceCategory = Literal[
     "checkpoint",
@@ -774,7 +756,7 @@ class StepExecutionSummaryRefModel(BaseModel):
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
     reason: StepExecutionReason = Field(..., alias="reason")
-    status: StepExecutionArtifactStatusValue = Field(..., alias="status")
+    status: StepExecutionStatus = Field(..., alias="status")
     terminal_disposition: StepExecutionTerminalDisposition | None = Field(
         None, alias="terminalDisposition"
     )
@@ -795,7 +777,7 @@ class StepExecutionManifestModel(BaseModel):
     execution_scope: Literal["run"] = Field("run", alias="executionScope")
     lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
     reason: StepExecutionReason = Field(..., alias="reason")
-    status: StepExecutionArtifactStatusValue = Field(..., alias="status")
+    status: StepExecutionStatus = Field(..., alias="status")
     terminal_disposition: StepExecutionTerminalDisposition | None = Field(
         None, alias="terminalDisposition"
     )
@@ -2864,7 +2846,7 @@ class StepExecutionProjectionModel(BaseModel):
     source_execution_ordinal: int | None = Field(None, alias="sourceExecutionOrdinal", ge=1)
     lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
     reason: StepExecutionReason | None = Field(None, alias="reason")
-    status: StepExecutionArtifactStatusValue | None = Field(None, alias="status")
+    status: StepExecutionStatus | None = Field(None, alias="status")
     terminal_disposition: StepExecutionTerminalDisposition | None = Field(
         None, alias="terminalDisposition"
     )

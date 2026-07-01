@@ -40,6 +40,11 @@ from api_service.db.models import (
 )
 from moonmind.config.settings import settings
 from moonmind.security import scan_outbound_text
+from moonmind.statuses.compat import (
+    canonicalize_finish_outcome_code_alias,
+    canonicalize_workflow_state_alias,
+    normalize_no_commit_finish_summary,
+)
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
@@ -2286,8 +2291,11 @@ class TemporalExecutionService:
         finish_outcome_code: str | None = None,
         finish_summary: dict[str, Any] | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        normalized_state = canonicalize_workflow_state_alias(
+            str(state or "").strip().lower()
+        )
         try:
-            target_state = coerce_workflow_state(str(state or "").strip().lower())
+            target_state = coerce_workflow_state(normalized_state or "")
         except ValueError:
             target_state = None
         if target_state not in TERMINAL_STATES:
@@ -2374,26 +2382,12 @@ class TemporalExecutionService:
     ) -> None:
         if finish_summary is None:
             return
-        normalized_summary = dict(finish_summary)
+        normalized_summary = normalize_no_commit_finish_summary(finish_summary)
+        if normalized_summary is None:
+            return
         finish_outcome = normalized_summary.get(
             "finishOutcome"
         ) or normalized_summary.get("finish_outcome")
-        if isinstance(finish_outcome, dict):
-            finish_outcome = dict(finish_outcome)
-            if str(finish_outcome.get("code") or "").strip().upper() == "NO_CHANGES":
-                finish_outcome["code"] = "NO_COMMIT"
-                if str(finish_outcome.get("reason") or "").strip().lower() in {
-                    "publish skipped: no local changes",
-                    "no local changes",
-                }:
-                    finish_outcome["reason"] = "No repository commit was needed."
-                normalized_summary["finishOutcome"] = finish_outcome
-        publish = normalized_summary.get("publish")
-        if isinstance(publish, dict):
-            publish_payload = dict(publish)
-            if str(publish_payload.get("reasonCode") or "").strip() == "no_changes":
-                publish_payload["reasonCode"] = "no_commit"
-            normalized_summary["publish"] = publish_payload
         outcome_code = str(
             finish_outcome_code
             or (
@@ -2403,8 +2397,7 @@ class TemporalExecutionService:
             )
             or ""
         ).strip()
-        if outcome_code.upper() == "NO_CHANGES":
-            outcome_code = "NO_COMMIT"
+        outcome_code = canonicalize_finish_outcome_code_alias(outcome_code) or ""
         record.finish_outcome_code = outcome_code or None
         record.finish_summary_json = normalized_summary
 
@@ -3990,7 +3983,8 @@ class TemporalExecutionService:
 
     def _parse_state(self, raw: str) -> MoonMindWorkflowState:
         try:
-            return coerce_workflow_state(raw)
+            state = canonicalize_workflow_state_alias(raw)
+            return coerce_workflow_state(state or "")
         except ValueError as exc:
             raise TemporalExecutionValidationError(f"Unsupported state: {raw}") from exc
 

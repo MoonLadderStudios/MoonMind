@@ -23,6 +23,7 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
+import { formatWorkflowStatusLabel } from '../status/workflowStatus';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { LogPanel } from '../components/dashboard/LogPanel';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
@@ -273,7 +274,6 @@ const WORKFLOW_STATUS_ICONS = {
   awaiting_external: Hand,
   finalizing: PackageCheck,
   no_commit: Check,
-  no_changes: Check,
   completed: Check,
   failed: X,
   canceled: Ban,
@@ -290,14 +290,11 @@ function workflowStatusIconKey(status: string | null | undefined): WorkflowStatu
   if (Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_ICONS, key)) {
     return key as WorkflowStatusIconKey;
   }
-  if (key === 'succeeded') return 'completed';
-  if (key === 'running') return 'executing';
-  if (key === 'awaiting_action') return 'awaiting_external';
   return 'executing';
 }
 
 function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefined }) {
-  const label = formatStatusLabel(status);
+  const label = formatWorkflowStatusLabel(status, formatStatusLabel(status));
   const Icon = WORKFLOW_STATUS_ICONS[workflowStatusIconKey(status)];
   const pillProps = executionStatusPillProps(status, { enableMotion: false });
 
@@ -387,7 +384,7 @@ function WorkflowSidebarControls({
       <button
         ref={closeButtonRef}
         type="button"
-        className="secondary workflow-workspace-close-sidebar"
+        className="secondary workflow-workspace-close-sidebar workflow-workspace-sidebar-control"
         onClick={onClose}
         aria-label="Close sidebar"
         title="Close sidebar"
@@ -396,7 +393,7 @@ function WorkflowSidebarControls({
       </button>
       <a
         href={workflowListHrefFromContext(search, { markDetailReturn: true })}
-        className="secondary workflow-workspace-expand-list"
+        className="secondary workflow-workspace-expand-list workflow-workspace-sidebar-control"
         onClick={markWorkflowListReturnFocusIntent}
         aria-label="Expand to full list"
         title="Expand to full list"
@@ -575,7 +572,7 @@ export function WorkflowWorkspaceShell({
         <button
           ref={openButtonRef}
           type="button"
-          className="secondary workflow-workspace-open-sidebar"
+          className="secondary workflow-workspace-open-sidebar workflow-workspace-sidebar-control"
           onClick={() => {
             updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
             setSidebarOpen(true);
@@ -2549,7 +2546,6 @@ async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLe
 const TERMINAL_RUN_STATUSES = new Set([
   'completed',
   'no_commit',
-  'no_changes',
   'failed',
   'canceled',
   'cancelled',

@@ -33,10 +33,33 @@ StepExecutionArtifactStatusValue = Literal[
     "canceled",
     "superseded",
 ]
+StepExecutionStatus = StepExecutionArtifactStatusValue
+StepExecutionReason = Literal[
+    "initial_execution",
+    "quality_gate_failed",
+    "tests_failed",
+    "runtime_recovered",
+    "recover_from_failed_step",
+    "remediation_context",
+    "operator_requested",
+    "dependency_invalidated",
+    "policy_revalidation",
+]
+StepExecutionTerminalDisposition = Literal[
+    "accepted",
+    "retryable",
+    "blocked",
+    "needs_human",
+    "discarded",
+    "superseded",
+    "failed_unrecoverable",
+    "failed_with_remaining_work",
+]
 
 STEP_EXECUTION_ARTIFACT_STATUS_VALUES: frozenset[str] = frozenset(
     item.value for item in StepExecutionArtifactStatus
 )
+STEP_EXECUTION_STATUSES = STEP_EXECUTION_ARTIFACT_STATUS_VALUES
 
 STEP_EXECUTION_ARTIFACT_STATUS_TO_LEDGER_STATUS: dict[
     StepExecutionArtifactStatus, StepLedgerStatus
@@ -69,7 +92,11 @@ def step_execution_artifact_status_to_ledger_status(
 __all__ = [
     "STEP_EXECUTION_ARTIFACT_STATUS_TO_LEDGER_STATUS",
     "STEP_EXECUTION_ARTIFACT_STATUS_VALUES",
+    "STEP_EXECUTION_STATUSES",
     "StepExecutionArtifactStatus",
     "StepExecutionArtifactStatusValue",
+    "StepExecutionReason",
+    "StepExecutionStatus",
+    "StepExecutionTerminalDisposition",
     "step_execution_artifact_status_to_ledger_status",
 ]

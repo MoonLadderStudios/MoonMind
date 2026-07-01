@@ -10,6 +10,7 @@ from moonmind.schemas.temporal_models import (
     StepLedgerRowModel,
     StepLedgerSnapshotModel,
 )
+from moonmind.statuses.step_ledger import step_execution_to_ledger_status
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
@@ -18,6 +19,15 @@ from moonmind.workflows.temporal.step_ledger import (
     upsert_step_check,
     update_step_row,
 )
+
+
+def test_step_execution_artifact_status_converts_explicitly_to_step_ledger_status() -> None:
+    assert step_execution_to_ledger_status("pending") == "pending"
+    assert step_execution_to_ledger_status("preparing") == "running"
+    assert step_execution_to_ledger_status("checking") == "reviewing"
+    assert step_execution_to_ledger_status("blocked") == "awaiting_external"
+    assert step_execution_to_ledger_status("superseded") == "skipped"
+
 
 def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     updated_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)

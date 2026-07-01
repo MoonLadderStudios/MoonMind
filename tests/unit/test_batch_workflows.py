@@ -1,9 +1,8 @@
-"""Unit tests for the batch-workflows fan-out helper (MM-885).
+"""Unit tests for the batch-workflows fan-out helper (MM-1062).
 
 Covers the deterministic per-target child-request construction: issue bindings,
 runtime inheritance, shared publish policy, idempotency, the max-workflows cap,
-and unsupported-preset skips. The goal text is validated against the real
-server-side goal scheduler so a queued child expands the intended child preset.
+and unsupported-target skips.
 """
 
 from __future__ import annotations
@@ -18,9 +17,6 @@ from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     is_self_managed_publish_skill,
     resolve_publish_mode_for_skill,
-)
-from moonmind.workflows.executions.preset_goal_scheduler import (
-    schedule_preset_from_goal,
 )
 
 
@@ -70,9 +66,9 @@ _GITHUB_TARGET: dict[str, Any] = {
 
 def _jira_config(module, **overrides):
     defaults = dict(
-        preset_slug="jira-implement",
-        preset_scope="global",
-        publish_mode="pr",
+        target_kind="skill",
+        target_slug="jira-verify",
+        publish_mode="none",
         constraints="Be careful",
     )
     defaults.update(overrides)
@@ -81,8 +77,8 @@ def _jira_config(module, **overrides):
 
 def _github_config(module, **overrides):
     defaults = dict(
-        preset_slug="github-issue-implement",
-        preset_scope="global",
+        target_kind="preset",
+        target_slug="github-issue-implement",
         publish_mode="branch",
         constraints="",
     )
@@ -90,17 +86,59 @@ def _github_config(module, **overrides):
     return module["TargetConfig"](**defaults)
 
 
-def test_bind_child_inputs_jira_auto_binds_issue_object_and_key():
+def test_bind_child_inputs_jira_verify_auto_binds_issue_object_and_key():
     module = _load_module()
-    inputs = module["bind_child_inputs"](_JIRA_TARGET, "jira-implement", "Be careful")
+    inputs = module["bind_child_inputs"](
+        _JIRA_TARGET,
+        "skill",
+        "jira-verify",
+        "Be careful",
+    )
+    assert inputs["jira_issue"]["key"] == "THOR-123"
+    assert inputs["jira_issue_key"] == "THOR-123"
+    assert inputs["repository"] == "MoonLadderStudios/MoonMind"
+    assert inputs["verification_mode"] == "auto"
+    assert inputs["update_status"] is False
+    assert inputs["constraints"] == "Be careful"
+
+
+def test_bind_child_inputs_jira_verify_uses_fallback_repository_when_missing():
+    module = _load_module()
+    no_repo_target = dict(_JIRA_TARGET)
+    no_repo_target.pop("repository", None)
+    inputs = module["bind_child_inputs"](
+        no_repo_target,
+        "skill",
+        "jira-verify",
+        "Be careful",
+        fallback_repository="MoonLadderStudios/Tactics",
+    )
+    assert inputs is not None
+    assert inputs["repository"] == "MoonLadderStudios/Tactics"
+
+
+def test_bind_child_inputs_jira_implement_preset_auto_binds_issue_object_and_key():
+    module = _load_module()
+    inputs = module["bind_child_inputs"](
+        _JIRA_TARGET,
+        "preset",
+        "jira-implement",
+        "Be careful",
+    )
     assert inputs["jira_issue"]["key"] == "THOR-123"
     assert inputs["jira_issue_key"] == "THOR-123"
     assert inputs["constraints"] == "Be careful"
+    assert "verification_mode" not in inputs
 
 
 def test_bind_child_inputs_github_auto_binds_issue_object_and_ref():
     module = _load_module()
-    inputs = module["bind_child_inputs"](_GITHUB_TARGET, "github-issue-implement", "")
+    inputs = module["bind_child_inputs"](
+        _GITHUB_TARGET,
+        "preset",
+        "github-issue-implement",
+        "",
+    )
     assert inputs["github_issue"]["number"] == 42
     assert inputs["github_issue_ref"] == "MoonLadderStudios/MoonMind#42"
     assert inputs["constraints"] == ""
@@ -108,23 +146,54 @@ def test_bind_child_inputs_github_auto_binds_issue_object_and_ref():
 
 def test_bind_child_inputs_returns_none_for_provider_mismatch():
     module = _load_module()
-    assert module["bind_child_inputs"](_GITHUB_TARGET, "jira-implement", "") is None
     assert (
-        module["bind_child_inputs"](_JIRA_TARGET, "github-issue-implement", "") is None
+        module["bind_child_inputs"](_GITHUB_TARGET, "skill", "jira-verify", "")
+        is None
+    )
+    assert (
+        module["bind_child_inputs"](
+            _JIRA_TARGET,
+            "preset",
+            "github-issue-implement",
+            "",
+        )
+        is None
     )
 
 
-def test_child_goal_routes_to_selected_preset_via_scheduler():
+def test_child_goal_routes_to_selected_run_capability():
     module = _load_module()
-    jira_goal = module["child_goal_for_target"](_JIRA_TARGET, "jira-implement")
-    github_goal = module["child_goal_for_target"](
-        _GITHUB_TARGET, "github-issue-implement"
+    verify_goal = module["child_goal_for_target"](
+        _JIRA_TARGET,
+        "skill",
+        "jira-verify",
     )
+    jira_goal = module["child_goal_for_target"](
+        _JIRA_TARGET,
+        "preset",
+        "jira-implement",
+    )
+    github_goal = module["child_goal_for_target"](
+        _GITHUB_TARGET,
+        "preset",
+        "github-issue-implement",
+    )
+    assert verify_goal == "Verify Jira issue THOR-123."
     assert jira_goal is not None
     assert github_goal is not None
-    # The queued child goal must expand the intended preset server-side.
-    assert schedule_preset_from_goal(jira_goal).slug == "jira-implement"
-    assert schedule_preset_from_goal(github_goal).slug == "github-issue-implement"
+
+
+def test_load_parent_repository_reads_task_context(tmp_path):
+    module = _load_module()
+    load_parent_repository = module["_load_parent_repository"]
+
+    task_context = tmp_path / "task_context.json"
+    task_context.write_text('{"repository":"MoonLadderStudios/Tactics"}', encoding="utf-8")
+
+    assert (
+        load_parent_repository(str(task_context))
+        == "MoonLadderStudios/Tactics"
+    )
 
 
 def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
@@ -154,14 +223,13 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
         "executionProfileRef": "profile-1",
     }
     # Shared publish policy + repository + bound issue inputs.
-    assert payload["task"]["publish"] == {"mode": "pr"}
+    assert payload["task"]["publish"] == {"mode": "none"}
     assert payload["repository"] == "MoonLadderStudios/MoonMind"
     assert payload["task"]["inputs"]["jira_issue_key"] == "THOR-123"
-    # The selected preset is authored as the child taskTemplate (read by the
-    # execution API), not inert batchTargetPreset metadata.
-    assert payload["task"]["taskTemplate"]["slug"] == "jira-implement"
-    assert payload["task"]["taskTemplate"]["scope"] == "global"
-    assert "version" not in payload["task"]["taskTemplate"]
+    assert payload["requiredCapabilities"] == ["git", "jira"]
+    # The selected skill is authored as a direct skill task.
+    assert payload["task"]["tool"] == {"type": "skill", "name": "jira-verify"}
+    assert "taskTemplate" not in payload["task"]
     assert "batchTargetPreset" not in payload["task"]
     # Stable, length-bounded idempotency key.
     key = payload["idempotencyKey"]
@@ -169,17 +237,53 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     assert len(key) <= module["IDEMPOTENCY_KEY_MAX_LENGTH"]
 
 
-def test_build_child_request_authors_selected_preset_scope_and_ref():
-    # Personal scope / scopeRef must be carried into the child taskTemplate so
-    # the execution API expands the exact selected preset instead of the goal
-    # scheduler's global default.
+def test_build_child_request_uses_default_repository_when_target_missing():
+    module = _load_module()
+    target = dict(_JIRA_TARGET)
+    target.pop("repository", None)
+    request = module["build_child_request"](
+        target,
+        config=_jira_config(module),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+        default_repository="MoonLadderStudios/Alternate",
+    )
+    assert request is not None
+    assert request["payload"]["repository"] == "MoonLadderStudios/Alternate"
+    assert request["payload"]["task"]["inputs"]["repository"] == "MoonLadderStudios/Alternate"
+
+
+def test_idempotency_key_includes_target_kind_and_slug():
+    module = _load_module()
+    skill_key = module["_child_idempotency_key"](
+        batch_scope="run-1",
+        provider="jira",
+        ref="THOR-123",
+        target_kind="skill",
+        target_slug="jira-verify",
+    )
+    preset_key = module["_child_idempotency_key"](
+        batch_scope="run-1",
+        provider="jira",
+        ref="THOR-123",
+        target_kind="preset",
+        target_slug="jira-implement",
+    )
+
+    assert skill_key != preset_key
+    assert skill_key.startswith("batch-workflows:jira:THOR-123:sha256:")
+    assert preset_key.startswith("batch-workflows:jira:THOR-123:sha256:")
+
+
+def test_build_child_request_authors_selected_preset_as_global_template():
     module = _load_module()
     request = module["build_child_request"](
         _JIRA_TARGET,
         config=_jira_config(
             module,
-            preset_scope="personal",
-            preset_scope_ref="user-123",
+            target_kind="preset",
+            target_slug="jira-implement",
         ),
         runtime=module["RuntimeSelection"](mode="codex_cli"),
         batch_scope="run-1",
@@ -187,25 +291,13 @@ def test_build_child_request_authors_selected_preset_scope_and_ref():
     )
     template = request["payload"]["task"]["taskTemplate"]
     assert template["slug"] == "jira-implement"
-    assert template["scope"] == "personal"
-    assert template["scopeRef"] == "user-123"
+    assert template["scope"] == "global"
     assert "version" not in template
+    assert "scopeRef" not in template
     assert "batchTargetPreset" not in request["payload"]["task"]
 
 
-def test_build_child_request_omits_scope_ref_when_blank():
-    module = _load_module()
-    request = module["build_child_request"](
-        _JIRA_TARGET,
-        config=_jira_config(module, preset_scope_ref=None),
-        runtime=module["RuntimeSelection"](mode="codex_cli"),
-        batch_scope="run-1",
-        inherit_runtime_from_caller=True,
-    )
-    assert "scopeRef" not in request["payload"]["task"]["taskTemplate"]
-
-
-def test_parse_args_accepts_slug_scope_without_preset_version(tmp_path):
+def test_parse_args_accepts_run_ref_without_preset_version(tmp_path):
     module = _load_module()
     targets = tmp_path / "targets.json"
     targets.write_text("[]", encoding="utf-8")
@@ -214,10 +306,8 @@ def test_parse_args_accepts_slug_scope_without_preset_version(tmp_path):
         [
             "--targets",
             str(targets),
-            "--target-preset-slug",
-            "jira-implement",
-            "--target-preset-scope",
-            "global",
+            "--run-ref",
+            "skill:jira-verify",
             "--publish-mode",
             "pr",
             "--max-workflows",
@@ -225,7 +315,7 @@ def test_parse_args_accepts_slug_scope_without_preset_version(tmp_path):
         ]
     )
 
-    assert args.target_preset_slug == "jira-implement"
+    assert args.run_ref == "skill:jira-verify"
     assert not hasattr(args, "target_preset_version")
 
 
@@ -265,18 +355,60 @@ def test_build_child_requests_caps_at_max_workflows():
     assert len(overflow) == 3
 
 
-def test_build_child_requests_skips_unsupported_preset():
+def test_build_child_requests_zero_max_workflows_skips_all_targets():
+    module = _load_module()
+    targets = [
+        {**_JIRA_TARGET, "ref": f"THOR-{n}", "jiraIssue": {"key": f"THOR-{n}"}}
+        for n in range(3)
+    ]
+    submissions, skipped = module["build_child_requests"](
+        targets,
+        config=_jira_config(module),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        max_workflows=0,
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+    assert submissions == []
+    assert [item.ref for item in skipped] == ["THOR-0", "THOR-1", "THOR-2"]
+    assert {item.reason for item in skipped} == {"max_workflows_exceeded"}
+
+
+def test_build_child_requests_negative_max_workflows_skips_all_targets():
+    module = _load_module()
+    targets = [
+        {**_JIRA_TARGET, "ref": f"THOR-{n}", "jiraIssue": {"key": f"THOR-{n}"}}
+        for n in range(3)
+    ]
+    submissions, skipped = module["build_child_requests"](
+        targets,
+        config=_jira_config(module),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        max_workflows=-2,
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+    assert submissions == []
+    assert [item.ref for item in skipped] == ["THOR-0", "THOR-1", "THOR-2"]
+    assert {item.reason for item in skipped} == {"max_workflows_exceeded"}
+
+
+def test_build_child_requests_skips_unsupported_target():
     module = _load_module()
     submissions, skipped = module["build_child_requests"](
         [_JIRA_TARGET],
-        config=_jira_config(module, preset_slug="some-custom-preset"),
+        config=_jira_config(
+            module,
+            target_kind="skill",
+            target_slug="some-custom-skill",
+        ),
         runtime=module["RuntimeSelection"](mode="codex_cli"),
         max_workflows=25,
         batch_scope="run-1",
         inherit_runtime_from_caller=True,
     )
     assert submissions == []
-    assert skipped[0].reason == "unsupported_preset"
+    assert skipped[0].reason == "unsupported_target"
 
 
 def test_normalize_publish_mode_falls_back_to_pr():

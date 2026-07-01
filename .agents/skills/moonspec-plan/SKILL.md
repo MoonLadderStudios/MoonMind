@@ -1,6 +1,6 @@
 ---
 name: moonspec-plan
-description: Generate a MoonSpec implementation plan and design artifacts from a single-story spec. Use when the user asks to run or reproduce `/moonspec.plan`, create or update `plan.md`, produce `research.md`, `data-model.md`, `contracts/`, or `quickstart.md`, validate constitution gates, define separate unit and integration test strategies, and perform repo-aware gap analysis before `/moonspec.tasks`.
+description: Generate a MoonSpec implementation plan and design artifacts from a single-story spec. Use when the user asks to run or reproduce `/moonspec.plan`, create or update `plan.md`, produce `research.md`, `data-model.md`, `contracts/`, or `quickstart.md`, evaluate repo principles, define separate unit and integration test strategies, and perform repo-aware gap analysis before `/moonspec.tasks`.
 metadata:
   required-capabilities:
     - git
@@ -96,7 +96,7 @@ For shell arguments containing single quotes, use shell-safe escaping such as `'
 Read:
 
 - `FEATURE_SPEC`
-- `.specify/memory/constitution.md`
+- `AGENTS.md` when present, especially project principles, testing discipline, and repo constraints
 - `IMPL_PLAN`
 - Relevant implementation files, tests, contracts, fixtures, migrations, and public interfaces for the story
 
@@ -106,7 +106,7 @@ Validate before planning:
 - The story has a Summary, Goal, Independent Test, Acceptance Scenarios, Requirements, and Success Criteria.
 - Source design mappings such as `DESIGN-REQ-*` are preserved when present.
 - Source packet provenance is preserved when present: source document path, document class, viewpoint, owning surface, stable claim IDs, temporary-adapter role, and issue traceability such as `MM-933` / `MM-927`.
-- Constitution gates and `MUST` constraints are available for the plan.
+- Relevant `AGENTS.md` principles, testing discipline, and `MUST` constraints are reflected in the plan when present.
 - In-scope requirement IDs and scenario IDs can be identified for planning and traceability.
 
 ## Fill plan.md
@@ -129,9 +129,9 @@ Fill:
   - Performance goals
   - Constraints
   - Scale/scope
-- `Constitution Check`: derive gates from `.specify/memory/constitution.md`
+- `Principles Check`: derive relevant checks from `AGENTS.md` project principles, testing discipline, and repo constraints when present
 - `Project Structure`: replace placeholder trees with the actual repository layout for the feature
-- `Complexity Tracking`: fill only when constitution violations are justified
+- `Complexity Tracking`: fill only when principle conflicts or unjustified complexity must be justified
 
 Add a `## Requirement Status` section after `## Summary` with one row per in-scope item that materially affects delivery:
 
@@ -167,16 +167,16 @@ Rules:
 
 Mark technical unknowns as `NEEDS CLARIFICATION` only when they block defensible planning and cannot be resolved from the repo, spec, or conventional project patterns.
 
-## Constitution Gate
+## Principles Check
 
-Evaluate the constitution before Phase 0 research.
+Evaluate relevant `AGENTS.md` principles, testing discipline, and repo constraints before Phase 0 research.
 
 Rules:
 
-- Error on unjustified constitution violations.
-- Record justified violations in `Complexity Tracking`.
+- Error on unjustified principle conflicts.
+- Record justified conflicts in `Complexity Tracking` with the reason and mitigation.
 - Do not continue with unresolved hard gate failures.
-- Re-check the constitution after Phase 1 design artifacts are generated.
+- Re-check relevant principles after Phase 1 design artifacts are generated.
 
 ## Phase 0: Research And Repo Gap Analysis
 
@@ -188,7 +188,7 @@ Research and resolve:
 - Dependency choices and best practices
 - Integration patterns
 - Test tooling choices, with unit and integration test tools identified separately
-- Any source design or constitution constraint that affects architecture
+- Any source design or repo-principle constraint that affects architecture
 - Current repo coverage for each in-scope requirement or scenario
 
 For each in-scope item, inspect relevant code and tests, then classify it:
@@ -268,7 +268,7 @@ Report:
 - Generated artifacts
 - Unit test strategy
 - Integration test strategy
-- Constitution gate result
+- Principles check result
 - Requirement status summary by ID and count
 - Which items need code changes
 - Which items need tests only
@@ -314,6 +314,6 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Existing code never removes a requirement from `spec.md`; it only changes the planned work.
 - Prefer verification tests before implementation when behavior appears to already exist, but include fallback implementation work for `implemented_unverified` items when verification fails.
 - Resolve all planning clarifications through `research.md`.
-- Error on gate failures, multiple user stories, or unresolved clarifications.
+- Error on unjustified principle conflicts, multiple user stories, or unresolved clarifications.
 - Generate design artifacts only; leave task generation to `/moonspec.tasks`.
 - `tasks.md` should consume `## Requirement Status` when deciding whether to emit implementation tasks, verification-only tasks, or no new work for already-verified items.
