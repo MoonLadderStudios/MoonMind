@@ -6883,6 +6883,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 /* The sidebar controls are compact icon buttons rather than full-text buttons. */
 .workflow-workspace-close-sidebar,
+.workflow-workspace-expand-list,
 .workflow-workspace-open-sidebar {
   display: inline-flex;
   align-items: center;
@@ -6898,6 +6899,21 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 1.05rem;
   height: 1.05rem;
   flex: 0 0 auto;
+}
+
+/* The expand-to-list control keeps the accent emphasis so it stays visually
+ * distinct from the neutral collapse control. */
+.workflow-workspace-expand-list {
+  background: rgb(var(--mm-accent) / 0.16);
+  border-color: rgb(var(--mm-accent) / 0.45);
+  color: rgb(var(--mm-accent));
+  box-shadow: none;
+}
+
+.workflow-workspace-expand-list:hover,
+.workflow-workspace-expand-list:focus-visible {
+  background: rgb(var(--mm-accent) / 0.24);
+  border-color: rgb(var(--mm-accent) / 0.82);
 }
 
 .workflow-workspace-sidebar-list {
