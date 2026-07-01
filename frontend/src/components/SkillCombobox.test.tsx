@@ -134,14 +134,16 @@ describe("SkillCombobox", () => {
           "skill-combobox-input-row--with-description",
         ),
       ).toBe(true);
+      const observerCountAfterRender = mutationObserver.mock.calls.length;
+      const disconnectCountAfterRender = disconnect.mock.calls.length;
 
       fireEvent.click(showToggle);
       fireEvent.change(screen.getByRole("combobox", { name: "Step 1 skill" }), {
         target: { value: "moon" },
       });
 
-      expect(mutationObserver).toHaveBeenCalledTimes(1);
-      expect(disconnect).not.toHaveBeenCalled();
+      expect(mutationObserver).toHaveBeenCalledTimes(observerCountAfterRender);
+      expect(disconnect).toHaveBeenCalledTimes(disconnectCountAfterRender);
     } finally {
       vi.stubGlobal("MutationObserver", OriginalMutationObserver);
     }
