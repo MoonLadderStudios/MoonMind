@@ -3,7 +3,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from temporalio import workflow, activity
 from temporalio.exceptions import ApplicationError, CancelledError
@@ -643,7 +643,27 @@ class MoonMindAgentRun:
         )
         if retry_after_seconds is not None and retry_after_seconds > 0:
             return True
-        return bool(getattr(provider_failure_event, "reset_at", None))
+        reset_at = getattr(provider_failure_event, "reset_at", None)
+        if reset_at is None:
+            return False
+        reset_raw = str(reset_at).strip()
+        if not reset_raw:
+            return False
+        candidate = reset_raw[:-1] + "+00:00" if reset_raw.endswith("Z") else reset_raw
+        try:
+            reset_dt = datetime.fromisoformat(candidate)
+        except ValueError:
+            return False
+        if reset_dt.tzinfo is None:
+            reset_dt = reset_dt.replace(tzinfo=timezone.utc)
+        try:
+            now = workflow.now()
+        except Exception:
+            now = datetime.now(timezone.utc)
+        now_aware = (
+            now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+        )
+        return (reset_dt - now_aware).total_seconds() > 0
 
     def _next_provider_cooldown_seconds(
         self,

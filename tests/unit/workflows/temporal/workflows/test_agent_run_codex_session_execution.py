@@ -163,10 +163,18 @@ async def test_provider_cooldown_backoff_honors_structured_retry_timing() -> Non
         ProviderFailureEvent(retry_after_seconds=120)
     )
     assert MoonMindAgentRun._provider_failure_supplies_retry_timing(
-        ProviderFailureEvent(reset_at="2026-07-01T12:00:00+00:00")
+        ProviderFailureEvent(
+            reset_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        )
     )
     assert not MoonMindAgentRun._provider_failure_supplies_retry_timing(
         ProviderFailureEvent(provider_error_class="rate_limit")
+    )
+    assert not MoonMindAgentRun._provider_failure_supplies_retry_timing(
+        ProviderFailureEvent(reset_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
+    )
+    assert not MoonMindAgentRun._provider_failure_supplies_retry_timing(
+        ProviderFailureEvent(reset_at="not-a-timestamp")
     )
 
 async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_head_branch(
