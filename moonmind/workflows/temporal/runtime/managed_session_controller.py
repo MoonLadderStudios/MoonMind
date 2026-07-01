@@ -2105,7 +2105,7 @@ class DockerCodexManagedSessionController:
                     "checkout",
                     "-B",
                     target_branch,
-                    f"origin/{target_branch}",
+                    "FETCH_HEAD",
                 ),
                 request=request,
                 git_env=git_env,
