@@ -6849,14 +6849,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   max-width: none;
 }
 
-/* Collapsed: keep the detail pane anchored to the same desktop grid line as
- * the open-sidebar state. Only compressed widths fall back to a narrow toggle
- * rail so the detail remains usable. */
-.workflow-workspace-shell[data-sidebar-collapsed="true"] {
-  grid-template-columns: minmax(14rem, 17rem) minmax(0, 1fr);
-  column-gap: 2.25rem;
-}
-
 .workflow-workspace-sidebar {
   position: sticky;
   top: 1rem;

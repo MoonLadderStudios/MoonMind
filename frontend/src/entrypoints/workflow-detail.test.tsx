@@ -1115,9 +1115,6 @@ describe('Workflow Detail Entrypoint', () => {
 
     const dashboardCss = await readDashboardCss();
     expect(dashboardCss).toMatch(
-      /\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(14rem,\s*17rem\)\s*minmax\(0,\s*1fr\);[\s\S]*column-gap:\s*2\.25rem;/,
-    );
-    expect(dashboardCss).toMatch(
       /@media \(min-width:\s*768px\) and \(max-width:\s*1023px\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*auto minmax\(0,\s*1fr\);[\s\S]*column-gap:\s*1rem;/,
     );
     expect(dashboardCss).toMatch(
