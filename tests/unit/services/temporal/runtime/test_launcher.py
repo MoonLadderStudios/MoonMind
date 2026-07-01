@@ -118,6 +118,18 @@ def test_build_command_gemini_cli():
     assert "--effort" not in cmd
     assert "Fix the bug" in cmd
 
+def test_normalize_clone_branch_strips_remote_tracking_refs():
+    assert ManagedRuntimeLauncher._normalize_clone_branch("origin/main") == "main"
+    assert (
+        ManagedRuntimeLauncher._normalize_clone_branch("refs/remotes/origin/main")
+        == "main"
+    )
+    assert ManagedRuntimeLauncher._normalize_clone_branch("refs/heads/main") == "main"
+    assert (
+        ManagedRuntimeLauncher._normalize_clone_branch("feature/origin/main")
+        == "feature/origin/main"
+    )
+
 def test_apply_runtime_command_rendering_raises_before_launch_on_failure():
     store = ManagedRunStore("/tmp/test-store")
     launcher = ManagedRuntimeLauncher(store)

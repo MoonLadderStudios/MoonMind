@@ -1922,6 +1922,7 @@ class DockerCodexManagedSessionController:
             or request.workspace_spec.get("branch")
             or ""
         ).strip()
+        branch = ManagedRuntimeLauncher._normalize_clone_branch(branch)
 
         clone_command = ["git", "clone"]
         if branch:

@@ -533,6 +533,17 @@ class ManagedRuntimeLauncher:
             "Unsupported workspaceSpec.repository format; expected owner/repo, URL, or local path"
         )
 
+    @staticmethod
+    def _normalize_clone_branch(branch: str) -> str:
+        normalized = str(branch or "").strip()
+        if normalized.startswith("refs/remotes/origin/"):
+            return normalized.removeprefix("refs/remotes/origin/")
+        if normalized.startswith("refs/heads/"):
+            return normalized.removeprefix("refs/heads/")
+        if normalized.startswith("origin/"):
+            return normalized.removeprefix("origin/")
+        return normalized
+
     async def _run_command(
         self,
         *cmd: str,
@@ -644,11 +655,12 @@ class ManagedRuntimeLauncher:
             or workspace_spec.get("branch")
             or ""
         ).strip()
+        clone_branch = self._normalize_clone_branch(branch)
         command_env = git_env if self._source_uses_github_https(source) else None
 
         clone_cmd = ["git", "clone"]
-        if branch:
-            clone_cmd.extend(["--branch", branch, "--single-branch"])
+        if clone_branch:
+            clone_cmd.extend(["--branch", clone_branch, "--single-branch"])
         clone_cmd.extend([source, str(repo_path)])
         await self._run_checked_command(
             *clone_cmd,
