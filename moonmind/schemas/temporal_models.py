@@ -80,9 +80,9 @@ StepExecutionReason = Literal[
 StepExecutionStatus = Literal[
     "pending",
     "preparing",
-    "running",
+    "executing",
     "checking",
-    "succeeded",
+    "completed",
     "failed",
     "blocked",
     "canceled",
@@ -2106,7 +2106,7 @@ class RecoveryCheckpointPreservedStepModel(BaseModel):
 
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     order: int = Field(..., alias="order", ge=1)
-    status: Literal["succeeded", "skipped"] = Field(..., alias="status")
+    status: Literal["completed", "skipped"] = Field(..., alias="status")
     source_execution_ordinal: int = Field(..., alias="sourceExecutionOrdinal", ge=1)
     artifacts: dict[str, Any] = Field(default_factory=dict, alias="artifacts")
     state_checkpoint_ref: Optional[str] = Field(None, alias="stateCheckpointRef")
@@ -2574,10 +2574,10 @@ class ExecutionProgressModel(BaseModel):
     total: int = Field(0, alias="total", ge=0)
     pending: int = Field(0, alias="pending", ge=0)
     ready: int = Field(0, alias="ready", ge=0)
-    running: int = Field(0, alias="running", ge=0)
+    executing: int = Field(0, alias="executing", ge=0)
     awaiting_external: int = Field(0, alias="awaitingExternal", ge=0)
     reviewing: int = Field(0, alias="reviewing", ge=0)
-    succeeded: int = Field(0, alias="succeeded", ge=0)
+    completed: int = Field(0, alias="completed", ge=0)
     failed: int = Field(0, alias="failed", ge=0)
     skipped: int = Field(0, alias="skipped", ge=0)
     canceled: int = Field(0, alias="canceled", ge=0)
@@ -2807,10 +2807,10 @@ class StepLedgerRowModel(BaseModel):
     status: Literal[
         "pending",
         "ready",
-        "running",
+        "executing",
         "awaiting_external",
         "reviewing",
-        "succeeded",
+        "completed",
         "failed",
         "skipped",
         "canceled",

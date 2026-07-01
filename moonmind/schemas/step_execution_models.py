@@ -24,9 +24,9 @@ StepExecutionReason = Literal[
 StepExecutionStatus = Literal[
     "pending",
     "preparing",
-    "running",
+    "executing",
     "checking",
-    "succeeded",
+    "completed",
     "failed",
     "blocked",
     "canceled",

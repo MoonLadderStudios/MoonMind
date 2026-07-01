@@ -5544,10 +5544,10 @@ export interface components {
              */
             ready: number;
             /**
-             * Running
+             * Executing
              * @default 0
              */
-            running: number;
+            executing: number;
             /**
              * Awaitingexternal
              * @default 0
@@ -5559,10 +5559,10 @@ export interface components {
              */
             reviewing: number;
             /**
-             * Succeeded
+             * Completed
              * @default 0
              */
-            succeeded: number;
+            completed: number;
             /**
              * Failed
              * @default 0
@@ -8498,7 +8498,7 @@ export interface components {
             /** Reason */
             reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
-            status?: ("pending" | "preparing" | "running" | "checking" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
+            status?: ("pending" | "preparing" | "executing" | "checking" | "completed" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
             terminalDisposition?: ("accepted" | "retryable" | "blocked" | "needs_human" | "discarded" | "superseded" | "failed_unrecoverable" | "failed_with_remaining_work") | null;
             /** Startedat */
@@ -8622,7 +8622,7 @@ export interface components {
             /** Reason */
             reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
-            status?: ("pending" | "preparing" | "running" | "checking" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
+            status?: ("pending" | "preparing" | "executing" | "checking" | "completed" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
             terminalDisposition?: ("accepted" | "retryable" | "blocked" | "needs_human" | "discarded" | "superseded" | "failed_unrecoverable" | "failed_with_remaining_work") | null;
             /** Startedat */
@@ -8758,7 +8758,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "pending" | "ready" | "running" | "awaiting_external" | "reviewing" | "succeeded" | "failed" | "skipped" | "canceled";
+            status: "pending" | "ready" | "executing" | "awaiting_external" | "reviewing" | "completed" | "failed" | "skipped" | "canceled";
             /** Waitingreason */
             waitingReason?: string | null;
             /**

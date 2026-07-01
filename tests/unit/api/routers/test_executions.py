@@ -1096,10 +1096,10 @@ def test_serialize_execution_includes_bounded_progress_without_step_details() ->
             "total": 6,
             "pending": 2,
             "ready": 0,
-            "running": 1,
+            "executing": 1,
             "awaitingExternal": 0,
             "reviewing": 0,
-            "succeeded": 3,
+            "completed": 3,
             "failed": 0,
             "skipped": 0,
             "canceled": 0,
@@ -1120,10 +1120,10 @@ def test_serialize_execution_includes_bounded_progress_without_step_details() ->
         "total": 6,
         "pending": 2,
         "ready": 0,
-        "running": 1,
+        "executing": 1,
         "awaitingExternal": 0,
         "reviewing": 0,
-        "succeeded": 3,
+        "completed": 3,
         "failed": 0,
         "skipped": 0,
         "canceled": 0,
@@ -2359,9 +2359,9 @@ def test_list_executions_source_temporal_filters_and_sorts_progress_from_bounded
             "total": 4,
             "pending": 0,
             "ready": 0,
-            "succeeded": 3,
+            "completed": 3,
             "failed": 1,
-            "running": 0,
+            "executing": 0,
             "awaitingExternal": 0,
             "reviewing": 0,
             "skipped": 0,
@@ -2377,9 +2377,9 @@ def test_list_executions_source_temporal_filters_and_sorts_progress_from_bounded
             "total": 4,
             "pending": 0,
             "ready": 0,
-            "succeeded": 1,
+            "completed": 1,
             "failed": 0,
-            "running": 1,
+            "executing": 1,
             "awaitingExternal": 0,
             "reviewing": 0,
             "skipped": 0,
@@ -2402,9 +2402,9 @@ def test_list_executions_source_temporal_filters_and_sorts_progress_from_bounded
             "total": 4,
             "pending": 0,
             "ready": 0,
-            "succeeded": 3,
+            "completed": 3,
             "failed": 1,
-            "running": 0,
+            "executing": 0,
             "awaitingExternal": 0,
             "reviewing": 0,
             "skipped": 0,
@@ -2416,9 +2416,9 @@ def test_list_executions_source_temporal_filters_and_sorts_progress_from_bounded
             "total": 4,
             "pending": 0,
             "ready": 0,
-            "succeeded": 1,
+            "completed": 1,
             "failed": 0,
-            "running": 1,
+            "executing": 1,
             "awaitingExternal": 0,
             "reviewing": 0,
             "skipped": 0,
@@ -2520,10 +2520,10 @@ def test_list_executions_source_temporal_does_not_hydrate_live_progress() -> Non
             "total": 3,
             "pending": 0,
             "ready": 0,
-            "running": 1,
+            "executing": 1,
             "awaitingExternal": 0,
             "reviewing": 0,
-            "succeeded": 2,
+            "completed": 2,
             "failed": 0,
             "skipped": 0,
             "canceled": 0,
@@ -2606,10 +2606,10 @@ def test_list_executions_source_temporal_hydrates_live_progress_for_filters() ->
             "total": 3,
             "pending": 0,
             "ready": 0,
-            "running": 1,
+            "executing": 1,
             "awaitingExternal": 0,
             "reviewing": 0,
-            "succeeded": 2,
+            "completed": 2,
             "failed": 0,
             "skipped": 0,
             "canceled": 0,
@@ -2930,10 +2930,10 @@ def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
             "total": 1,
             "pending": 0,
             "ready": 0,
-            "running": 0,
+            "executing": 0,
             "awaitingExternal": 0,
             "reviewing": 0,
-            "succeeded": 1,
+            "completed": 1,
             "failed": 0,
             "skipped": 0,
             "canceled": 0,
@@ -9051,10 +9051,10 @@ def test_describe_execution_includes_latest_run_progress() -> None:
             "total": 3,
             "pending": 0,
             "ready": 1,
-            "running": 1,
+            "executing": 1,
             "awaitingExternal": 0,
             "reviewing": 0,
-            "succeeded": 1,
+            "completed": 1,
             "failed": 0,
             "skipped": 0,
             "canceled": 0,
@@ -9074,10 +9074,10 @@ def test_describe_execution_includes_latest_run_progress() -> None:
         "total": 3,
         "pending": 0,
         "ready": 1,
-        "running": 1,
+        "executing": 1,
         "awaitingExternal": 0,
         "reviewing": 0,
-        "succeeded": 1,
+        "completed": 1,
         "failed": 0,
         "skipped": 0,
         "canceled": 0,
@@ -9110,7 +9110,7 @@ def test_describe_execution_includes_live_merge_automation_summary() -> None:
             "total": 1,
             "pending": 0,
             "ready": 0,
-            "running": 0,
+            "executing": 0,
             "awaitingExternal": 1,
             "reviewing": 0,
             "succeeded": 0,
@@ -9234,7 +9234,7 @@ def test_describe_execution_queries_resolver_children_concurrently() -> None:
         await asyncio.wait_for(all_started.wait(), timeout=1)
         return ExecutionMergeAutomationResolverChildModel(
             workflow_id=workflow_id,
-            status="running",
+            status="executing",
             detail_href=f"/workflows/{workflow_id}",
         )
 
@@ -9265,10 +9265,10 @@ def test_describe_execution_prefers_progress_query_run_id_when_newer_latest_run(
             "total": 3,
             "pending": 0,
             "ready": 1,
-            "running": 1,
+            "executing": 1,
             "awaitingExternal": 0,
             "reviewing": 0,
-            "succeeded": 1,
+            "completed": 1,
             "failed": 0,
             "skipped": 0,
             "canceled": 0,
@@ -9289,10 +9289,10 @@ def test_describe_execution_prefers_progress_query_run_id_when_newer_latest_run(
         "total": 3,
         "pending": 0,
         "ready": 1,
-        "running": 1,
+        "executing": 1,
         "awaitingExternal": 0,
         "reviewing": 0,
-        "succeeded": 1,
+        "completed": 1,
         "failed": 0,
         "skipped": 0,
         "canceled": 0,
@@ -9649,7 +9649,7 @@ def _step_execution_manifest_payload(
     *,
     artifact_ref: str,
     attempt: int,
-    status: str = "succeeded",
+    status: str = "completed",
 ) -> dict[str, object]:
     return {
         "schemaVersion": "v1",
@@ -9669,7 +9669,7 @@ def _step_execution_manifest_payload(
         },
         "reason": "recover_from_failed_step" if attempt > 1 else "initial_execution",
         "status": status,
-        "terminalDisposition": "accepted" if status == "succeeded" else "retryable",
+        "terminalDisposition": "accepted" if status == "completed" else "retryable",
         "startedAt": "2026-05-19T10:00:00Z",
         "updatedAt": "2026-05-19T10:01:00Z",
         "input": {"preparedInputRef": f"art-input-{attempt}"},
@@ -9696,7 +9696,7 @@ def _step_execution_manifest_payload(
         "checks": [
             {
                 "kind": "quality_gate",
-                "status": "passed" if status == "succeeded" else "failed",
+                "status": "passed" if status == "completed" else "failed",
                 "artifactRef": f"art-check-{attempt}",
             }
         ],
@@ -10074,13 +10074,13 @@ def test_get_execution_step_executions_degraded_older_ref_uses_per_ref_ordinal()
     assert valid_item["manifestArtifactRef"] == "art-attempt-2"
     assert valid_item["executionOrdinal"] == 2
     assert valid_item.get("compatibilityDecision") is None
-    assert valid_item["status"] == "succeeded"
+    assert valid_item["status"] == "completed"
 
     # The valid latest attempt must win at ordinal 2, not the degraded ref.
     assert detail_latest.status_code == 200
     latest_body = detail_latest.json()
     assert latest_body["executionOrdinal"] == 2
-    assert latest_body["status"] == "succeeded"
+    assert latest_body["status"] == "completed"
     assert latest_body.get("compatibilityDecision") is None
 
     # The degraded older ref is addressable at its own ordinal 1.
@@ -10261,7 +10261,7 @@ def test_get_execution_steps_uses_projection_fallback_when_temporal_query_fails(
     payload = response.json()
     assert payload["workflowId"] == "mm:wf-1"
     assert payload["steps"][0]["logicalStepId"] == "implement"
-    assert payload["steps"][0]["status"] == "running"
+    assert payload["steps"][0]["status"] == "executing"
     session.rollback.assert_awaited_once()
     assert mock_service.describe_execution.await_args.kwargs["include_orphaned"] is True
 
@@ -10326,7 +10326,7 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
     }
     assert payload["steps"][1]["tool"]["name"] == "moonspec-implement"
     assert payload["steps"][1]["dependsOn"] == ["fetch-issue"]
-    assert payload["steps"][1]["status"] == "running"
+    assert payload["steps"][1]["status"] == "executing"
     assert payload["steps"][1]["executionOrdinal"] == 1
 
 def test_get_execution_steps_fallback_prefers_structured_step_order(
@@ -10380,7 +10380,7 @@ def test_get_execution_steps_fallback_prefers_structured_step_order(
     assert response.status_code == 200
     payload = response.json()
     # The structured memo field wins over the stale summary string.
-    assert payload["steps"][1]["status"] == "running"
+    assert payload["steps"][1]["status"] == "executing"
     assert payload["steps"][0]["status"] == "ready"
 
 def test_get_execution_steps_fallback_preserves_independent_steps(
@@ -10442,7 +10442,7 @@ def test_get_execution_steps_fallback_preserves_independent_steps(
     assert payload["steps"][0]["dependsOn"] == []
     assert payload["steps"][1]["dependsOn"] == []
     assert payload["steps"][2]["dependsOn"] == []
-    assert payload["steps"][0]["status"] == "running"
+    assert payload["steps"][0]["status"] == "executing"
     assert payload["steps"][1]["status"] == "ready"
     assert payload["steps"][2]["status"] == "ready"
 
@@ -11390,10 +11390,10 @@ def test_list_executions_reads_progress_from_persisted_finish_summary() -> None:
                 "total": 4,
                 "pending": 0,
                 "ready": 0,
-                "running": 0,
+                "executing": 0,
                 "awaitingExternal": 0,
                 "reviewing": 0,
-                "succeeded": 4,
+                "completed": 4,
                 "failed": 0,
                 "skipped": 0,
                 "canceled": 0,
@@ -11411,7 +11411,7 @@ def test_list_executions_reads_progress_from_persisted_finish_summary() -> None:
         assert response.status_code == 200
         progress = response.json()["items"][0]["progress"]
         assert progress["total"] == 4
-        assert progress["succeeded"] == 4
+        assert progress["completed"] == 4
         assert progress["currentStepTitle"] == "Verify compact response"
 
 
