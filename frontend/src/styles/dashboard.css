@@ -6901,7 +6901,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 /* The sidebar controls are compact icon buttons rather than full-text buttons. */
 .workflow-workspace-expand-list,
 .workflow-workspace-close-sidebar,
-.workflow-workspace-expand-list,
 .workflow-workspace-open-sidebar {
   display: inline-flex;
   align-items: center;
@@ -6919,15 +6918,22 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-expand-list:hover,
-.workflow-workspace-expand-list:focus-visible {
-  background: rgb(var(--mm-accent) / 0.08);
-  border-color: rgb(var(--mm-accent));
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
+.workflow-workspace-expand-list:focus-visible,
+.workflow-workspace-close-sidebar:hover,
+.workflow-workspace-close-sidebar:focus-visible,
+.workflow-workspace-open-sidebar:hover,
+.workflow-workspace-open-sidebar:focus-visible {
+  background: rgb(var(--mm-ink) / 0.06);
+  border-color: rgb(var(--mm-border));
+  box-shadow: 0 10px 22px -20px rgb(var(--mm-ink) / 0.5);
   color: rgb(var(--mm-ink));
 }
 
-.workflow-workspace-expand-list:focus-visible {
+.workflow-workspace-expand-list:focus-visible,
+.workflow-workspace-close-sidebar:focus-visible,
+.workflow-workspace-open-sidebar:focus-visible {
   outline: none;
+  box-shadow: var(--mm-control-focus-ring);
 }
 
 .workflow-workspace-control-icon,
@@ -6935,21 +6941,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 1.05rem;
   height: 1.05rem;
   flex: 0 0 auto;
-}
-
-/* The expand-to-list control keeps the accent emphasis so it stays visually
- * distinct from the neutral collapse control. */
-.workflow-workspace-expand-list {
-  background: rgb(var(--mm-accent) / 0.16);
-  border-color: rgb(var(--mm-accent) / 0.45);
-  color: rgb(var(--mm-accent));
-  box-shadow: none;
-}
-
-.workflow-workspace-expand-list:hover,
-.workflow-workspace-expand-list:focus-visible {
-  background: rgb(var(--mm-accent) / 0.24);
-  border-color: rgb(var(--mm-accent) / 0.82);
 }
 
 .workflow-workspace-sidebar-list {
