@@ -134,7 +134,6 @@ export function WorkflowRowActionsMenu({
   const toast = useDashboardToast();
   const [hasOpened, setHasOpened] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [activeDialog, setActiveDialog] = useState<RowActionDialogKind | null>(null);
 
   const detailQuery = useQuery({
@@ -416,7 +415,6 @@ export function WorkflowRowActionsMenu({
         },
         onBypassDependencies: () => {
           setActionError(null);
-          setActionNotice(null);
           signalMutation.mutate(
             {
               signalName: 'BypassDependencies',
@@ -424,7 +422,14 @@ export function WorkflowRowActionsMenu({
             },
             {
               onSuccess: () => {
-                setActionNotice('Dependency wait bypass was requested.');
+                toast.success({
+                  title: 'Dependency wait bypass requested',
+                  message: `${workflowSubject} will continue without waiting on dependencies.`,
+                  action: {
+                    label: 'View workflow',
+                    href: detailHref,
+                  },
+                });
               },
             },
           );
@@ -535,11 +540,6 @@ export function WorkflowRowActionsMenu({
       {actionError ? (
         <p className="workflow-row-actions-error" role="alert">
           {actionError}
-        </p>
-      ) : null}
-      {actionNotice ? (
-        <p className="notice ok" role="status">
-          {actionNotice}
         </p>
       ) : null}
     </div>
