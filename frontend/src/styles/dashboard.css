@@ -5093,6 +5093,19 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   overflow-wrap: anywhere;
 }
 
+#queue-dependency-list li > span:first-child {
+  display: block;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+#queue-dependency-list .queue-step-icon-button {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  justify-self: end;
+}
+
 :is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button {
   width: 1.85rem;
   height: 1.85rem;
@@ -6356,10 +6369,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-capability-chip .queue-step-capability-chip-remove,
 .queue-step-attachment-chip .queue-step-attachment-chip-remove {
-  flex: 0 0 1rem;
-  width: 1rem;
-  min-width: 1rem;
-  height: 1rem;
+  flex: 0 0 0.78rem;
+  width: 0.78rem;
+  min-width: 0.78rem;
+  height: 0.78rem;
   border-radius: 999px;
   background: transparent;
   background-image: none;
@@ -6370,8 +6383,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-capability-chip .queue-step-capability-chip-remove svg,
 .queue-step-attachment-chip .queue-step-attachment-chip-remove svg {
-  width: 0.56rem;
-  height: 0.56rem;
+  width: 0.46rem;
+  height: 0.46rem;
   stroke-width: 2;
 }
 
