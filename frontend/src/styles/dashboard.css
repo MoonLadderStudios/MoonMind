@@ -6915,6 +6915,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding-bottom: 0.4rem;
 }
 
+/* Shared icon-button styling for compact workflow sidebar controls. */
+.workflow-workspace-sidebar-control {
+  background: rgb(var(--mm-panel));
+  background-image: linear-gradient(145deg, rgb(var(--mm-panel) / 0.95), rgb(var(--mm-panel) / 0.65));
+  border-color: rgb(var(--mm-border) / 0.7);
+  box-shadow: 0 10px 25px -18px rgb(var(--mm-ink) / 0.8);
+  transform-origin: center;
+}
+
 /* The sidebar controls are compact icon buttons rather than full-text buttons. */
 .workflow-workspace-expand-list,
 .workflow-workspace-close-sidebar,
@@ -6934,23 +6943,44 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transition: var(--mm-control-transition);
 }
 
-.workflow-workspace-expand-list:hover,
-.workflow-workspace-expand-list:focus-visible,
-.workflow-workspace-close-sidebar:hover,
-.workflow-workspace-close-sidebar:focus-visible,
-.workflow-workspace-open-sidebar:hover,
-.workflow-workspace-open-sidebar:focus-visible {
-  background: rgb(var(--mm-ink) / 0.06);
-  border-color: rgb(var(--mm-border));
-  box-shadow: 0 10px 22px -20px rgb(var(--mm-ink) / 0.5);
+.workflow-workspace-sidebar-control:hover,
+.workflow-workspace-sidebar-control:focus-visible {
+  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.35), rgb(var(--mm-accent-2) / 0.25));
   color: rgb(var(--mm-ink));
+  border-color: rgb(var(--mm-accent));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 12px 24px -14px rgb(var(--mm-accent) / 0.78);
+  transform: scale(var(--mm-control-hover-scale));
+  filter: brightness(1.08) saturate(1.04);
 }
 
-.workflow-workspace-expand-list:focus-visible,
-.workflow-workspace-close-sidebar:focus-visible,
-.workflow-workspace-open-sidebar:focus-visible {
+.workflow-workspace-sidebar-control:active,
+.workflow-workspace-sidebar-control.is-clicked {
+  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.5), rgb(var(--mm-accent-2) / 0.4));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.42),
+    0 0 0 1px rgb(255 255 255 / 0.56),
+    0 0 14px 1px rgb(var(--mm-accent) / 0.76);
+  transform: scale(var(--mm-control-press-scale));
+  filter: brightness(1.2) saturate(1.12);
+}
+
+.workflow-workspace-sidebar-control:disabled,
+.workflow-workspace-sidebar-control:disabled:hover {
+  opacity: var(--mm-control-disabled-opacity);
+  cursor: not-allowed;
+  background: rgb(var(--mm-panel) / 0.4);
+  border-color: rgb(var(--mm-border) / 0.4);
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+
+.workflow-workspace-sidebar-control:focus-visible {
   outline: none;
-  box-shadow: var(--mm-control-focus-ring);
+  box-shadow:
+    var(--mm-control-focus-ring),
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    0 12px 24px -14px rgb(var(--mm-accent) / 0.78);
 }
 
 .workflow-workspace-control-icon,
@@ -6958,7 +6988,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 1.05rem;
   height: 1.05rem;
   flex: 0 0 auto;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
+
 
 .workflow-workspace-sidebar-list {
   display: flex;

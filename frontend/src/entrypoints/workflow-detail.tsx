@@ -387,7 +387,7 @@ function WorkflowSidebarControls({
       <button
         ref={closeButtonRef}
         type="button"
-        className="secondary workflow-workspace-close-sidebar"
+        className="secondary workflow-workspace-close-sidebar workflow-workspace-sidebar-control"
         onClick={onClose}
         aria-label="Close sidebar"
         title="Close sidebar"
@@ -396,7 +396,7 @@ function WorkflowSidebarControls({
       </button>
       <a
         href={workflowListHrefFromContext(search, { markDetailReturn: true })}
-        className="secondary workflow-workspace-expand-list"
+        className="secondary workflow-workspace-expand-list workflow-workspace-sidebar-control"
         onClick={markWorkflowListReturnFocusIntent}
         aria-label="Expand to full list"
         title="Expand to full list"
@@ -575,7 +575,7 @@ export function WorkflowWorkspaceShell({
         <button
           ref={openButtonRef}
           type="button"
-          className="secondary workflow-workspace-open-sidebar"
+          className="secondary workflow-workspace-open-sidebar workflow-workspace-sidebar-control"
           onClick={() => {
             updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
             setSidebarOpen(true);
