@@ -43,6 +43,9 @@ from moonmind.workflows.adapters.codex_session_adapter import (
 from moonmind.workflows.temporal.managed_session_errors import (
     is_managed_session_locator_mismatch_error,
 )
+from moonmind.workflows.temporal.runtime.codex_session_runtime import (
+    _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
+)
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 pytestmark = [pytest.mark.asyncio]
@@ -2077,6 +2080,97 @@ async def test_start_marks_empty_assistant_retry_exhausted(
     assert turn_metadata["selfHealAction"] == "clear_session"
     assert turn_metadata["selfHealAttempts"] == 1
     assert turn_metadata["sessionInterventions"][0]["toSessionEpoch"] == 2
+
+
+async def test_start_does_not_clear_session_for_codex_no_credits_failure(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    send_turn_calls: list[Any] = []
+    clear_remote_session = AsyncMock()
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(
+            binding=binding,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _session_status(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _send_turn(request: Any) -> CodexManagedSessionTurnResponse:
+        send_turn_calls.append(request)
+        metadata = {
+            "reason": _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
+            "failureClass": "integration_error",
+        }
+        _raise_activity_error_from_application_error(
+            ApplicationError(
+                metadata["reason"],
+                metadata,
+                type="CodexPermanentTurnError",
+                non_retryable=True,
+            )
+        )
+
+    async def _publish_artifacts(
+        _request: Any,
+    ) -> CodexManagedSessionArtifactsPublication:
+        return _publication(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_load_snapshot,
+        launch_session=_async_noop,
+        session_status=_session_status,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=clear_remote_session,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_async_noop,
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    with pytest.raises(CodexSessionRunFailedError) as excinfo:
+        await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+
+    result = excinfo.value.agent_run_result
+    assert len(send_turn_calls) == 1
+    clear_remote_session.assert_not_awaited()
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "429"
+    assert result.retry_recommendation == "retry_after_cooldown"
+    provider_failure = result.metadata["providerFailure"]
+    assert provider_failure["providerErrorClass"] == "rate_limit"
+    assert provider_failure["providerErrorCode"] == "429"
+    assert provider_failure["retryRecommendation"] == "retry_after_cooldown"
+    assert result.metadata["turnMetadata"]["failureClass"] == "integration_error"
 
 
 async def test_start_classifies_codex_provider_capacity_failure_and_publishes_artifacts(

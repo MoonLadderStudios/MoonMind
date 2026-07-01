@@ -20,6 +20,7 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.automation import models as automation_models
 from moonmind.workflows.automation.preflight import CodexPreflightResult
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
+    _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
     CodexAppServerRpcClient,
     CodexManagedSessionRuntime,
     CodexSessionRuntimeState,
@@ -1016,6 +1017,99 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
         "codex app-server turn/completed produced no assistant output"
     )
     assert "lastAssistantText" not in handle.metadata
+
+def test_runtime_send_turn_classifies_no_credits_token_count_as_provider_failure(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "04"
+        / "10"
+        / "rollout-2026-04-10T17-55-14-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[
+            {
+                "timestamp": "2026-04-10T17:57:54.661Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "vendor-turn-1",
+                },
+            },
+            {
+                "timestamp": "2026-04-10T17:57:55.100Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {
+                        "limit_id": "premium",
+                        "credits": {
+                            "has_credits": False,
+                            "unlimited": False,
+                            "balance": None,
+                        },
+                    },
+                },
+            },
+            {
+                "timestamp": "2026-04-10T17:57:55.661Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "vendor-turn-1",
+                    "last_agent_message": None,
+                },
+            },
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.turn_id == "vendor-turn-1"
+    assert response.metadata == {
+        "reason": _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
+        "failureClass": "integration_error",
+    }
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "failed"
+    assert handle.metadata["failureClass"] == "integration_error"
+    assert handle.metadata["lastTurnError"] == _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON
+    assert "retryRecommendedAction" not in response.metadata
 
 def test_runtime_send_turn_recovers_usage_limit_from_recent_log_for_empty_task_complete(
     tmp_path: Path,
