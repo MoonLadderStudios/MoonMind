@@ -40,7 +40,7 @@ def _text(value: Any) -> str | None:
 
 
 def _request_is_task_shape(request: dict[str, Any]) -> bool:
-    return isinstance(request.get("payload"), dict) and "type" in request
+    return "type" in request
 
 
 def _request_idempotency_key(request: dict[str, Any]) -> str | None:
@@ -215,13 +215,38 @@ def _read_worker_token() -> str | None:
     if not token_file:
         return None
     path = Path(token_file)
-    if not path.exists():
+    if not path.is_file():
         return None
     return path.read_text(encoding="utf-8").strip() or None
 
 
+def _read_api_auth_headers() -> dict[str, str]:
+    headers: dict[str, str] = {}
+    auth_header = _text(os.getenv("MOONMIND_AUTH_HEADER"))
+    if auth_header and auth_header.lower().startswith("authorization:"):
+        auth_header = _text(auth_header.split(":", 1)[1])
+    bearer_token = _text(
+        os.getenv("MOONMIND_API_TOKEN")
+        or os.getenv("MOONMIND_AUTH_TOKEN")
+        or os.getenv("MOONMIND_BEARER_TOKEN")
+    )
+    api_key = _text(os.getenv("MOONMIND_API_KEY"))
+
+    if auth_header:
+        headers["Authorization"] = auth_header
+    elif bearer_token:
+        if bearer_token.lower().startswith("bearer "):
+            headers["Authorization"] = bearer_token
+        else:
+            headers["Authorization"] = f"Bearer {bearer_token}"
+    if api_key:
+        headers["X-API-Key"] = api_key
+    return headers
+
+
 def _request_headers() -> dict[str, str]:
     headers: dict[str, str] = {"Content-Type": "application/json"}
+    headers.update(_read_api_auth_headers())
     token = _read_worker_token()
     if token:
         headers["X-MoonMind-Worker-Token"] = token
@@ -425,6 +450,8 @@ async def main(argv: list[str] | None = None) -> int:
     status = "success"
     if dry_run:
         status = "dry_run"
+    elif skipped:
+        status = "partial" if queued else "failed"
     elif errors:
         status = "partial" if queued else "failed"
     elif not queued and args.allow_empty:
@@ -444,6 +471,7 @@ async def main(argv: list[str] | None = None) -> int:
                 "requested": payload["requested"],
                 "submitted": payload["submitted"],
                 "verified": payload["verified"],
+                "skipped": skipped,
                 "errors": errors,
             },
         )
@@ -459,7 +487,7 @@ async def main(argv: list[str] | None = None) -> int:
             status=status,
         )
     )
-    return 1 if errors else 0
+    return 1 if errors or skipped else 0
 
 
 if __name__ == "__main__":

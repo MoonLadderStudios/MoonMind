@@ -105,6 +105,25 @@ def test_load_manifest_rejects_missing_idempotency_scope(tmp_path: Path) -> None
         module["_load_manifest"](manifest)
 
 
+def test_load_manifest_rejects_malformed_task_payload(tmp_path: Path) -> None:
+    module = _load_module()
+    manifest = tmp_path / "manifest.json"
+    request = _task_request()
+    request["payload"] = "not-an-object"
+    manifest.write_text(
+        json.dumps(
+            {
+                "batchScope": "mm:parent",
+                "workflows": [{"ref": "child-1", "request": request}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="task-shaped request.payload"):
+        module["_load_manifest"](manifest)
+
+
 def test_load_manifest_caps_workflows_and_reports_skips(tmp_path: Path) -> None:
     module = _load_module()
     manifest = tmp_path / "manifest.json"
@@ -136,6 +155,45 @@ def test_load_manifest_accepts_explicit_empty_workflows(tmp_path: Path) -> None:
 
     assert children == []
     assert skipped == []
+
+
+def test_read_worker_token_ignores_non_file_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    monkeypatch.delenv("MOONMIND_WORKER_TOKEN", raising=False)
+    monkeypatch.setenv("MOONMIND_WORKER_TOKEN_FILE", str(tmp_path))
+
+    assert module["_read_worker_token"]() is None
+
+
+def test_request_headers_forward_supported_api_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_module()
+    monkeypatch.delenv("MOONMIND_WORKER_TOKEN", raising=False)
+    monkeypatch.delenv("MOONMIND_WORKER_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("MOONMIND_AUTH_HEADER", "Authorization: Bearer test-token")
+    monkeypatch.setenv("MOONMIND_API_KEY", "test-api-key")
+
+    headers = module["_request_headers"]()
+
+    assert headers["Authorization"] == "Bearer test-token"
+    assert headers["X-API-Key"] == "test-api-key"
+
+
+def test_request_headers_build_bearer_auth_from_runtime_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_module()
+    monkeypatch.delenv("MOONMIND_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("MOONMIND_API_KEY", raising=False)
+    monkeypatch.setenv("MOONMIND_API_TOKEN", "test-token")
+
+    headers = module["_request_headers"]()
+
+    assert headers["Authorization"] == "Bearer test-token"
 
 
 class _FakeResponse:
@@ -260,3 +318,41 @@ def test_submit_and_verify_reports_unverified_create(
     assert queued == []
     assert errors[0]["ref"] == "child-1"
     assert "was not verified" in errors[0]["error"]
+
+
+def test_main_fails_when_workflow_cap_skips_entries(tmp_path: Path) -> None:
+    module = _load_module()
+    manifest = tmp_path / "manifest.json"
+    artifacts = tmp_path / "artifacts"
+    manifest.write_text(
+        json.dumps(
+            {
+                "batchScope": "mm:parent",
+                "workflows": [
+                    {"ref": "child-1", "request": _task_request()},
+                    {"ref": "child-2", "request": _task_request()},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = asyncio.run(
+        module["main"](
+            [
+                "--manifest",
+                str(manifest),
+                "--artifacts-dir",
+                str(artifacts),
+                "--max-workflows",
+                "1",
+                "--dry-run",
+            ]
+        )
+    )
+    result = json.loads((artifacts / "queue-moonmind-workflows-result.json").read_text())
+
+    assert exit_code == 1
+    assert result["skipped"] == [
+        {"ref": "child-2", "reason": "max_workflows_exceeded"}
+    ]

@@ -96,7 +96,11 @@ For direct create requests, idempotency is stored at `request.idempotencyKey`.
 `scripts/queue_moonmind_workflows.py`:
 
 - requires `MOONMIND_URL`;
-- forwards `MOONMIND_WORKER_TOKEN` or `MOONMIND_WORKER_TOKEN_FILE` when present;
+- forwards supported API auth from `MOONMIND_AUTH_HEADER`,
+  `MOONMIND_API_TOKEN`, `MOONMIND_AUTH_TOKEN`, `MOONMIND_BEARER_TOKEN`, or
+  `MOONMIND_API_KEY` when present, and also forwards
+  `MOONMIND_WORKER_TOKEN` or `MOONMIND_WORKER_TOKEN_FILE` for deployments that
+  still accept the legacy worker header;
 - forwards parent workflow/agent headers from `MOONMIND_TASK_WORKFLOW_ID`,
   `MOONMIND_WORKFLOW_ID`, `TEMPORAL_WORKFLOW_ID`, `MOONMIND_AGENT_RUN_ID`,
   `MOONMIND_RUN_ID`, or `AGENT_RUN_ID`;
@@ -117,6 +121,8 @@ Treat these as failures:
 
 - `MOONMIND_URL` is missing.
 - The manifest has zero workflows and `--allow-empty` was not set.
+- The manifest exceeds `--max-workflows`; cap skips are reported as partial
+  failures instead of silent success.
 - Any child request lacks a stable idempotency key and the helper cannot derive
   one from parent scope.
 - A `POST /api/executions` response lacks `workflowId`.
