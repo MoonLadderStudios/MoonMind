@@ -1217,8 +1217,12 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
           <button type="button" className="secondary" onClick={() => void refetch()} disabled={isFetching}>
             {isFetching ? 'Refreshing' : 'Refresh'}
           </button>
-          <a href="/workflows/new?scheduleMode=recurring" className="button">
-            Create from workflow page
+          <a
+            href="/workflows/new?scheduleMode=recurring"
+            className="button queue-step-icon-button"
+            aria-label="Create recurring schedule"
+          >
+            +
           </a>
         </div>
       </header>
@@ -1242,7 +1246,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
         </div>
       </section>
 
-      <section className="panel--data schedules-table-panel" aria-label="Recurring schedule list">
+      <section className="schedules-table-panel" aria-label="Recurring schedule list">
         <DataTable
             data={schedules}
             isLoading={isLoading}

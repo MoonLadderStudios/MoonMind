@@ -567,6 +567,14 @@ h1 {
   min-height: 0;
 }
 
+.panel:has(.schedules-page) {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  min-height: 0;
+}
+
 .panel.panel--data-wide {
   max-width: min(112rem, calc(100vw - 2rem));
 }
