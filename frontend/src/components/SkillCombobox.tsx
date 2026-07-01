@@ -27,6 +27,8 @@ export interface SkillComboboxProps {
   inputClassName?: string;
 }
 
+const LINKED_SKILL_DESCRIPTION_SELECTOR = '[data-testid^="skill-schema-fallback-"]';
+
 function filterOptions(options: readonly string[], query: string): string[] {
   const trimmed = query.trim().toLowerCase();
   if (!trimmed) {
@@ -58,15 +60,81 @@ export function SkillCombobox({
 }: SkillComboboxProps): ReactElement {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
+  const [isDescriptionOpen, setIsDescriptionOpen] = useState<boolean>(false);
+  const [hasLinkedDescription, setHasLinkedDescription] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const generatedListId = useId();
   const listboxId = `${generatedListId}-listbox`;
+  const linkedDescriptionId = `${generatedListId}-description`;
 
   const filteredOptions = useMemo(
     () => filterOptions(options, value),
     [options, value],
   );
+
+  useEffect(() => {
+    setIsDescriptionOpen(false);
+  }, [value]);
+
+  const syncLinkedDescription = useCallback((): HTMLElement | null => {
+    const container = containerRef.current;
+    if (!container) {
+      setHasLinkedDescription(false);
+      return null;
+    }
+    const field = container.closest(".field");
+    const candidate = field?.nextElementSibling;
+    const linkedDescription =
+      candidate instanceof HTMLElement &&
+      candidate.matches(LINKED_SKILL_DESCRIPTION_SELECTOR)
+        ? candidate
+        : null;
+
+    if (!linkedDescription) {
+      setHasLinkedDescription(false);
+      return null;
+    }
+
+    linkedDescription.id = linkedDescriptionId;
+    linkedDescription.hidden = !isDescriptionOpen;
+    linkedDescription.setAttribute("aria-live", "polite");
+    setHasLinkedDescription(true);
+    return linkedDescription;
+  }, [isDescriptionOpen, linkedDescriptionId]);
+
+  useEffect(() => {
+    const linkedDescription = syncLinkedDescription();
+    const field = containerRef.current?.closest(".field");
+    const panel = field?.parentElement;
+    if (!panel) {
+      return () => {
+        if (linkedDescription) {
+          linkedDescription.hidden = false;
+          linkedDescription.removeAttribute("aria-live");
+          if (linkedDescription.id === linkedDescriptionId) {
+            linkedDescription.removeAttribute("id");
+          }
+        }
+      };
+    }
+
+    const observer = new MutationObserver(() => {
+      syncLinkedDescription();
+    });
+    observer.observe(panel, { childList: true });
+
+    return () => {
+      observer.disconnect();
+      if (linkedDescription) {
+        linkedDescription.hidden = false;
+        linkedDescription.removeAttribute("aria-live");
+        if (linkedDescription.id === linkedDescriptionId) {
+          linkedDescription.removeAttribute("id");
+        }
+      }
+    };
+  }, [linkedDescriptionId, syncLinkedDescription, value]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -134,6 +202,10 @@ export function SkillCombobox({
     },
     [],
   );
+
+  const handleDescriptionToggle = useCallback(() => {
+    setIsDescriptionOpen((prev) => !prev);
+  }, []);
 
   const handleOptionPick = useCallback(
     (option: string) => {
@@ -224,6 +296,9 @@ export function SkillCombobox({
           aria-expanded={isOpen}
           aria-controls={isOpen ? listboxId : undefined}
           aria-activedescendant={activeDescendantId}
+          aria-describedby={
+            isDescriptionOpen && hasLinkedDescription ? linkedDescriptionId : undefined
+          }
           aria-label={ariaLabel}
           value={value}
           placeholder={placeholder}
@@ -261,6 +336,43 @@ export function SkillCombobox({
             />
           </svg>
         </button>
+        {hasLinkedDescription ? (
+          <button
+            type="button"
+            className="queue-info-toggle skill-combobox-description-toggle"
+            aria-label={
+              isDescriptionOpen ? "Hide skill description" : "Show skill description"
+            }
+            aria-expanded={isDescriptionOpen}
+            aria-controls={linkedDescriptionId}
+            title={
+              isDescriptionOpen ? "Hide skill description" : "Show skill description"
+            }
+            onClick={handleDescriptionToggle}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && isDescriptionOpen) {
+                event.preventDefault();
+                setIsDescriptionOpen(false);
+              }
+            }}
+          >
+            <svg aria-hidden="true" focusable="false" viewBox="0 0 12 12">
+              <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" />
+              <path
+                d="M6 5.5v3"
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+              />
+              <path
+                d="M6 3.5h.01"
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        ) : null}
       </div>
       {isOpen && filteredOptions.length > 0 ? (
         <ul
