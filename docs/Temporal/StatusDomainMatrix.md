@@ -47,7 +47,7 @@ UI labels use human-readable sentence or title case, for example `Awaiting exter
 
 CSS classes use kebab-case, for example `status-awaiting-external` and `status-no-commit`.
 
-## Non-Destructive Audit Command
+## Status Token Audit Command
 
 Run the inventory in report mode:
 
@@ -61,4 +61,10 @@ The report emits these columns:
 token,guessed_domain,files,canonicality,action
 ```
 
-The audit is intentionally non-destructive for MM-1080. It categorizes repository evidence so later cleanup can be reviewed separately.
+Run the CI enforcement mode:
+
+```bash
+python tools/audit_status_tokens.py --fail-on-unknown
+```
+
+The enforcement mode still emits the CSV inventory, then exits nonzero when a scanned token is unclassified or assigned to the unknown domain. Historical migration files may still contain legacy values such as `no_changes`; active code should route legacy handling through compatibility helpers.
