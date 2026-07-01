@@ -372,7 +372,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert remediation_step["annotations"] == {
             "issueImplementRole": "moonspec-remediation",
             "moonSpecRemediationAttempt": 1,
-            "moonSpecRemediationMaxAttempts": "1",
+            "moonSpecRemediationMaxAttempts": 1,
         }
         verify_remediation_step = next(
             step
@@ -385,7 +385,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert verify_remediation_step["annotations"] == {
             "issueImplementRole": "moonspec-verification-gate",
             "moonSpecRemediationAttempt": 1,
-            "moonSpecRemediationMaxAttempts": "1",
+            "moonSpecRemediationMaxAttempts": 1,
             "moonSpecFinalRemediationGate": True,
         }
         assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (

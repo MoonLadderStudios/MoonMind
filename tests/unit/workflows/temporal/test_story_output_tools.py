@@ -279,6 +279,65 @@ async def test_update_github_issue_status_blocks_start_for_blocked_assessment(
     assert result.outputs["assessmentVerdict"] == "BLOCKED"
     assert service.token_requests == []
 
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_blocks_code_review_without_verification_artifact(
+    tmp_path,
+):
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "verificationArtifactPath": str(tmp_path / "missing-verify.json"),
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert "verification artifact" in result.outputs["summary"]
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_blocks_code_review_until_fully_implemented(
+    tmp_path,
+):
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    verify_artifact = tmp_path / "verify.json"
+    verify_artifact.write_text('{"verdict": "ADDITIONAL_WORK_NEEDED"}', encoding="utf-8")
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "verificationArtifactPath": str(verify_artifact),
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["verificationVerdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert service.token_requests == []
+
+
 @pytest.mark.asyncio
 async def test_create_jira_issues_from_inline_story_breakdown():
     service = _FakeJiraService()

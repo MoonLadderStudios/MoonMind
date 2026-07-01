@@ -2975,7 +2975,7 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert expanded["steps"][6]["annotations"] == {
         "issueImplementRole": "moonspec-remediation",
         "moonSpecRemediationAttempt": 1,
-        "moonSpecRemediationMaxAttempts": "1",
+        "moonSpecRemediationMaxAttempts": 1,
     }
     assert expanded["steps"][7]["skill"]["id"] == "moonspec-verify"
     assert expanded["steps"][7]["skill"]["args"]["verify_artifact_path"] == (
@@ -2984,7 +2984,7 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert expanded["steps"][7]["annotations"] == {
         "issueImplementRole": "moonspec-verification-gate",
         "moonSpecRemediationAttempt": 1,
-        "moonSpecRemediationMaxAttempts": "1",
+        "moonSpecRemediationMaxAttempts": 1,
         "moonSpecFinalRemediationGate": True,
     }
     assert "controlling verification gate" in expanded["steps"][7]["instructions"]
