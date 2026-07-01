@@ -221,11 +221,44 @@ Color and grouping are defined in `docs/UI/WorkflowStatusColorSemantics.md`.
 
 Existing persisted artifacts, projections, or compatibility clients may still emit `NO_CHANGES` or `no_changes`.
 
-Compatibility rule:
+Source traceability: MM-1073 established the canonical `no_commit` / `NO_COMMIT` model; MM-1082 bounds the remaining legacy-alias quarantine and repair path.
+
+Explicit compatibility maps:
 
 ```text
-NO_CHANGES -> NO_COMMIT
-no_changes -> no_commit
+LEGACY_WORKFLOW_STATE_ALIASES:
+  no_changes -> no_commit
+
+LEGACY_FINISH_OUTCOME_ALIASES:
+  NO_CHANGES -> NO_COMMIT
 ```
 
-UI and API adapters should render legacy `NO_CHANGES` as `No commit` when the reason is repository-publication absence. New workflow histories should emit `NO_COMMIT` directly.
+Compatibility is allowed only at inbound or durable-history boundaries:
+
+- Temporal Visibility `mm_state` reads may repair `no_changes` to `no_commit`.
+- Terminal-state activity inputs may repair legacy workflow histories that pass `state=no_changes`.
+- Finish-summary artifacts, memo payloads, and API serialization may repair `finishOutcome.code=NO_CHANGES` and `publish.reasonCode=no_changes`.
+- Automation-run repository reads and writes may repair old `automation_runs.status=no_changes` rows to the canonical `no_commit` value.
+
+Direct canonical-domain callers must reject legacy aliases instead of silently accepting them. Provider, billing, model, effort, runtime, credential, and publish-policy values are not part of this compatibility rule and must not be translated through these maps.
+
+Alias observation must log only bounded fields: `domain`, `alias`, and `canonical`. It must not log full finish summaries, search-attribute maps, provider payloads, prompts, credentials, or large artifacts.
+
+### 9.1 Persisted inventory and repair path
+
+Persisted surfaces that may contain legacy no-changes aliases:
+
+| Surface | Legacy value | Repair path |
+| --- | --- | --- |
+| Temporal Visibility Search Attribute `mm_state` | `no_changes` | Read-time compatibility repairs to `no_commit`; open workflows should write canonical `mm_state=no_commit` on their next lifecycle update. Closed histories are read through the compatibility boundary. |
+| `temporal_execution_sources.state` and projection `temporal_executions.state` | `no_changes` if written by an older worker or imported projection | Repository/API sync must coerce legacy values through the workflow-state alias map before storing or serializing. Database repair should update rows to `no_commit` before removing legacy enum values. |
+| `automation_runs.status` | `no_changes` | Migration `332_mm1024_no_commit_status` updates existing rows to `no_commit`; repository coercion keeps reads and writes canonical. |
+| `finish_summary_json.finishOutcome.code` | `NO_CHANGES` | Finish-summary compatibility rewrites to `NO_COMMIT` before indexing, API serialization, or terminal-state persistence. |
+| `finish_summary_json.publish.reasonCode` and related JSON payloads | `no_changes` | Finish-summary compatibility rewrites to `no_commit` when the publish reason is repository-publication absence. |
+| Memo `finishSummary` / `finish_summary` payloads | `NO_CHANGES` or `no_changes` nested values | Projection sync repairs memo-derived summaries before storing projection fields or returning API payloads. |
+
+Replay and in-flight safety:
+
+- Existing Temporal histories may replay terminal-state payloads or memo/search-attribute values containing legacy aliases. Those values are accepted only through the named compatibility helpers above.
+- New workflow code must emit `no_commit`, `NO_COMMIT`, and publish `reasonCode=no_commit` directly.
+- Removing the legacy database enum member requires a coordinated persisted-data repair that first proves no rows or durable JSON payloads still require direct enum decoding.

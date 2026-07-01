@@ -3639,7 +3639,7 @@ export interface components {
          * @description Lifecycle states for workflow automation runs.
          * @enum {string}
          */
-        AutomationRunStatus: "queued" | "in_progress" | "completed" | "failed" | "no_commit" | "no_changes";
+        AutomationRunStatus: "queued" | "in_progress" | "completed" | "failed" | "no_commit";
         /**
          * AutomationTaskStatus
          * @description Per-phase task status values for workflow automation.

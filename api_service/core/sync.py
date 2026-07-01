@@ -19,6 +19,10 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
+from moonmind.workflows.no_commit_compatibility import (
+    canonicalize_legacy_workflow_state,
+    normalize_no_commit_finish_summary_aliases,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +93,15 @@ def _finish_summary_from_memo(memo: dict[str, Any]) -> dict[str, Any] | None:
     finish_summary = memo.get("finishSummary") or memo.get("finish_summary")
     if isinstance(finish_summary, dict):
         sanitized = _sanitize_for_json(dict(finish_summary))
-        return sanitized if isinstance(sanitized, dict) else None
+        return (
+            normalize_no_commit_finish_summary_aliases(
+                sanitized,
+                domain="temporal_memo_finish_summary",
+                logger=logger,
+            )
+            if isinstance(sanitized, dict)
+            else None
+        )
     return None
 
 def _artifact_ref_from_memo(memo: dict[str, Any], *keys: str) -> str | None:
@@ -145,9 +157,12 @@ def _coerce_mm_state(search_attributes: dict[str, Any]) -> MoonMindWorkflowState
     if raw_state is None:
         return None
     try:
-        if raw_state == "no_changes":
-            return MoonMindWorkflowState.NO_COMMIT
-        return MoonMindWorkflowState(raw_state)
+        normalized_state = canonicalize_legacy_workflow_state(
+            raw_state,
+            domain="temporal_search_attribute.mm_state",
+            logger=logger,
+        )
+        return MoonMindWorkflowState(normalized_state)
     except ValueError:
         logger.warning("Invalid value for mm_state search attribute: '%s'", raw_state)
         return None

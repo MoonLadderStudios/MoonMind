@@ -184,7 +184,6 @@ class AutomationRunStatus(str, enum.Enum):
     SUCCEEDED = "completed"
     FAILED = "failed"
     NO_COMMIT = "no_commit"
-    NO_CHANGES = "no_changes"
 
 class AutomationPhase(str, enum.Enum):
     """Phases executed during the workflow automation pipeline."""

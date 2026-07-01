@@ -1065,6 +1065,11 @@ def test_serialize_execution_includes_finish_summary_projection_fields():
             "stage": "publish",
             "reason": "publish skipped: no local changes",
         },
+        "publish": {
+            "status": "skipped",
+            "reasonCode": "no_changes",
+            "reason": "no local changes",
+        },
     }
 
     payload = _serialize_execution(record).model_dump(by_alias=True, mode="json")
@@ -1074,6 +1079,11 @@ def test_serialize_execution_includes_finish_summary_projection_fields():
     assert (
         payload["finishSummary"]["finishOutcome"]["reason"]
         == "No repository commit was needed."
+    )
+    assert payload["finishSummary"]["publish"]["reasonCode"] == "no_commit"
+    assert (
+        payload["finishSummary"]["publish"]["reason"]
+        == "No repository changes were available to commit or publish."
     )
 
 def test_serialize_execution_maps_no_commit_to_completed_dashboard_status():

@@ -11,6 +11,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -39,7 +40,12 @@ from api_service.db.models import (
     TemporalWorkflowType,
 )
 from moonmind.config.settings import settings
-from moonmind.security import scan_outbound_text
+from moonmind.workflows.no_commit_compatibility import (
+    canonicalize_legacy_finish_outcome_code,
+    canonicalize_legacy_workflow_state,
+    normalize_no_commit_finish_summary_aliases,
+    parse_canonical_workflow_state,
+)
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
@@ -82,6 +88,8 @@ from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
 )
+
+logger = logging.getLogger(__name__)
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.NO_COMMIT,
@@ -2316,10 +2324,12 @@ class TemporalExecutionService:
         finish_outcome_code: str | None = None,
         finish_summary: dict[str, Any] | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
-        normalized_state = str(state or "").strip().lower()
+        normalized_state = canonicalize_legacy_workflow_state(
+            str(state or ""),
+            domain="terminal_state_activity.state",
+            logger=logger,
+        )
         state_by_value = {item.value: item for item in MoonMindWorkflowState}
-        if normalized_state == "no_changes":
-            normalized_state = MoonMindWorkflowState.NO_COMMIT.value
         target_state = state_by_value.get(normalized_state)
         if target_state not in TERMINAL_STATES:
             raise TemporalExecutionValidationError(
@@ -2410,26 +2420,16 @@ class TemporalExecutionService:
     ) -> None:
         if finish_summary is None:
             return
-        normalized_summary = dict(finish_summary)
+        normalized_summary = normalize_no_commit_finish_summary_aliases(
+            finish_summary,
+            domain="terminal_state_activity.finishSummary",
+            logger=logger,
+        )
+        if normalized_summary is None:
+            return
         finish_outcome = normalized_summary.get(
             "finishOutcome"
         ) or normalized_summary.get("finish_outcome")
-        if isinstance(finish_outcome, dict):
-            finish_outcome = dict(finish_outcome)
-            if str(finish_outcome.get("code") or "").strip().upper() == "NO_CHANGES":
-                finish_outcome["code"] = "NO_COMMIT"
-                if str(finish_outcome.get("reason") or "").strip().lower() in {
-                    "publish skipped: no local changes",
-                    "no local changes",
-                }:
-                    finish_outcome["reason"] = "No repository commit was needed."
-                normalized_summary["finishOutcome"] = finish_outcome
-        publish = normalized_summary.get("publish")
-        if isinstance(publish, dict):
-            publish_payload = dict(publish)
-            if str(publish_payload.get("reasonCode") or "").strip() == "no_changes":
-                publish_payload["reasonCode"] = "no_commit"
-            normalized_summary["publish"] = publish_payload
         outcome_code = str(
             finish_outcome_code
             or (
@@ -2439,8 +2439,11 @@ class TemporalExecutionService:
             )
             or ""
         ).strip()
-        if outcome_code.upper() == "NO_CHANGES":
-            outcome_code = "NO_COMMIT"
+        outcome_code = canonicalize_legacy_finish_outcome_code(
+            outcome_code,
+            domain="terminal_state_activity.finishOutcomeCode",
+            logger=logger,
+        )
         record.finish_outcome_code = outcome_code or None
         record.finish_summary_json = normalized_summary
 
@@ -4026,9 +4029,7 @@ class TemporalExecutionService:
 
     def _parse_state(self, raw: str) -> MoonMindWorkflowState:
         try:
-            if str(raw).strip() == "no_changes":
-                return MoonMindWorkflowState.NO_COMMIT
-            return MoonMindWorkflowState(raw)
+            return MoonMindWorkflowState(parse_canonical_workflow_state(raw))
         except ValueError as exc:
             raise TemporalExecutionValidationError(f"Unsupported state: {raw}") from exc
 
