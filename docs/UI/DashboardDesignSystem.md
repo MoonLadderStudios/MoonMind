@@ -489,7 +489,7 @@ Preferred mapping:
 
 - `queued` -> amber / yellow
 - `running` / `executing` -> cyan
-- `awaiting_action` -> purple
+- `awaiting_action` / `waiting` / `waiting_on_dependencies` / `awaiting_external` -> yellow
 - `succeeded` / `completed` -> green
 - `failed` / `cancelled` -> rose / red
 

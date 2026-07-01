@@ -356,6 +356,8 @@ describe('Dashboard shared entry', () => {
     const workflowsLink = screen.getByRole('link', { name: 'Workflows' });
     expect(startLink.getAttribute('aria-current')).toBe('page');
     expect(workflowsLink.getAttribute('aria-current')).toBeNull();
+    expect(startLink.classList.contains('active')).toBe(true);
+    expect(workflowsLink.classList.contains('active')).toBe(false);
 
     fireEvent.click(workflowsLink);
 
@@ -363,6 +365,7 @@ describe('Dashboard shared entry', () => {
     expect(document.querySelector('.panel')).toBe(shellPanel);
     expect(window.location.pathname).toBe('/workflows');
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Workflows' }).classList.contains('active')).toBe(true);
   });
 
   it('waits for UI info before mounting the workflow start route', async () => {
@@ -1009,7 +1012,7 @@ describe('Dashboard shared entry', () => {
       dashboardCss,
       '.status-awaiting_action, .status-waiting, .status-awaiting-dependencies, .status-awaiting-external',
     ).join('\n');
-    expect(dashboardCss).toContain('--mm-status-waiting: 161 98 7');
+    expect(dashboardCss).toContain('--mm-status-waiting: 146 64 14');
     expect(dashboardCss).toContain('--mm-status-waiting: 250 204 21');
     expect(waitBlock).toContain('color: rgb(var(--mm-status-waiting))');
     expect(waitBlock).toContain('rgb(var(--mm-status-waiting) / 0.14)');

@@ -2446,6 +2446,19 @@ def test_runtime_planner_uses_branch_handoff_for_jira_output_when_task_publish_n
     assert jira["inputs"]["storyOutput"]["mode"] == "jira"
     assert jira["inputs"]["targetBranch"] == breakdown["inputs"]["targetBranch"]
 
+
+def test_github_story_tools_route_as_direct_story_output_tools() -> None:
+    assert "story.create_github_issues" in worker_runtime._STORY_OUTPUT_TASK_TOOLS
+    assert (
+        "story.create_github_issue_orchestrate_workflows"
+        in worker_runtime._STORY_OUTPUT_TASK_TOOLS
+    )
+    assert (
+        "story.create_github_issue_implement_workflows"
+        in worker_runtime._STORY_OUTPUT_TASK_TOOLS
+    )
+
+
 def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

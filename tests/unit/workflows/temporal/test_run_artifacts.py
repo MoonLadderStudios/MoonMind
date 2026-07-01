@@ -4447,11 +4447,31 @@ def test_publish_completion_requires_pr_url_for_pr_publish_mode() -> None:
     assert reason == "publishMode 'pr' requested but no PR was created"
     assert failed is True
 
-@pytest.mark.parametrize("story_status", ["jira_created", "jira_partial"])
-def test_jira_story_output_status_satisfies_pr_publish(story_status: str) -> None:
+@pytest.mark.parametrize(
+    ("mode", "story_status"),
+    [
+        ("jira", "jira_created"),
+        ("jira", "jira_partial"),
+        ("github", "github_created"),
+        ("github", "github_partial"),
+        ("github", "github_noop"),
+    ],
+)
+def test_story_output_status_satisfies_pr_publish(mode: str, story_status: str) -> None:
     assert MoonMindRunWorkflow._is_successful_jira_story_output(
-        mode="jira",
+        mode=mode,
         status=story_status,
+    )
+
+
+def test_story_output_status_rejects_cross_mode_status() -> None:
+    assert not MoonMindRunWorkflow._is_successful_jira_story_output(
+        mode="jira",
+        status="github_created",
+    )
+    assert not MoonMindRunWorkflow._is_successful_jira_story_output(
+        mode="github",
+        status="jira_created",
     )
 
 

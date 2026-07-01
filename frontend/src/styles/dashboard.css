@@ -15,7 +15,7 @@
   --mm-accent-warm: 244 114 182;
   --mm-ok: 34 197 94;
   --mm-warn: 245 158 11;
-  --mm-status-waiting: 161 98 7;
+  --mm-status-waiting: 146 64 14;
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
@@ -560,6 +560,14 @@ h1 {
 }
 
 .panel:has(.skills-page) {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  min-height: 0;
+}
+
+.panel:has(.schedules-page) {
   border: 0;
   background: transparent;
   box-shadow: none;
@@ -5093,6 +5101,19 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   overflow-wrap: anywhere;
 }
 
+#queue-dependency-list li > span:first-child {
+  display: block;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+#queue-dependency-list .queue-step-icon-button {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  justify-self: end;
+}
+
 :is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button {
   width: 1.85rem;
   height: 1.85rem;
@@ -6356,10 +6377,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-capability-chip .queue-step-capability-chip-remove,
 .queue-step-attachment-chip .queue-step-attachment-chip-remove {
-  flex: 0 0 1rem;
-  width: 1rem;
-  min-width: 1rem;
-  height: 1rem;
+  flex: 0 0 0.78rem;
+  width: 0.78rem;
+  min-width: 0.78rem;
+  height: 0.78rem;
   border-radius: 999px;
   background: transparent;
   background-image: none;
@@ -6370,8 +6391,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-capability-chip .queue-step-capability-chip-remove svg,
 .queue-step-attachment-chip .queue-step-attachment-chip-remove svg {
-  width: 0.56rem;
-  height: 0.56rem;
+  width: 0.46rem;
+  height: 0.46rem;
   stroke-width: 2;
 }
 
@@ -6869,6 +6890,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 /* The sidebar controls are compact icon buttons rather than full-text buttons. */
+.workflow-workspace-expand-list,
 .workflow-workspace-close-sidebar,
 .workflow-workspace-open-sidebar {
   display: inline-flex;
@@ -6877,11 +6899,29 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 2rem;
   height: 2rem;
   padding: 0;
+  border: 1px solid rgb(var(--mm-border));
   border-radius: 0.5rem;
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-ink));
   flex: 0 0 auto;
+  text-decoration: none;
+  transition: var(--mm-control-transition);
 }
 
-.workflow-workspace-control-icon {
+.workflow-workspace-expand-list:hover,
+.workflow-workspace-expand-list:focus-visible {
+  background: rgb(var(--mm-accent) / 0.08);
+  border-color: rgb(var(--mm-accent));
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
+  color: rgb(var(--mm-ink));
+}
+
+.workflow-workspace-expand-list:focus-visible {
+  outline: none;
+}
+
+.workflow-workspace-control-icon,
+.workflow-workspace-expand-list svg {
   width: 1.05rem;
   height: 1.05rem;
   flex: 0 0 auto;
@@ -7014,9 +7054,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-size: 0.85rem;
 }
 
-/* The detail is a centered, width-bounded container with a gap from the sidebar.
- * Because its width is capped, collapsing the sidebar only re-centers it; it
- * never grows wider. */
+/* The detail is a centered, width-bounded container in a stable grid column.
+ * Sidebar collapse hides the navigation in its reserved left column, so the
+ * detail only reflows when the viewport is compressed below 85rem. */
 .workflow-workspace-detail {
   min-width: 0;
   width: 100%;
@@ -7028,6 +7068,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   justify-self: start;
   align-self: start;
   margin-bottom: 0.75rem;
+}
+
+@media (min-width: 768px) and (max-width: 85rem) {
+  .workflow-workspace-shell[data-sidebar-collapsed="true"] {
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 1rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -7074,13 +7121,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   .flat-fact-grid > div {
     grid-template-columns: minmax(0, 1fr);
     gap: 0.2rem;
-  }
-}
-
-@media (min-width: 768px) and (max-width: 1023px) {
-  .workflow-workspace-shell[data-sidebar-collapsed="true"] {
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 1rem;
   }
 }
 

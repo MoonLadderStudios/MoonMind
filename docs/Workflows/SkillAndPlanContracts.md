@@ -577,6 +577,23 @@ and `"false"` for callers that produce typed or form encoded payloads.
 
 If Jira output succeeds, workflow PR output is skipped because Jira is the requested output. If Jira output cannot run or fails and fallback is enabled, the tool returns fallback metadata pointing to the existing `artifacts/story-breakdowns/...` handoff so normal branch/PR publishing can expose that docs output.
 
+`story.create_github_issues` uses the same runtime story breakdown inputs and
+reconciliation semantics as `story.create_jira_issues`, but creates GitHub
+issues through the trusted GitHub integration. It preserves source
+path/title/section/claim/source issue traceability in each GitHub issue body and
+returns stable `github.issueMappings` for downstream workflow creation. GitHub
+issue dependency output is conservative: the tool reports
+`dependencyMode = "none"` and `dependencyCount = 0` unless a trusted GitHub API
+operation has actually established a dependency relationship.
+
+`story.create_github_issue_implement_workflows` and
+`story.create_github_issue_orchestrate_workflows` consume the GitHub issue
+mappings and create downstream MoonMind workflow executions using the
+`github-issue-implement` and `github-issue-orchestrate` presets. Their output is
+reported under `githubWorkflowOrchestration` and uses workflow terminology such
+as `createdWorkflowCount`, `dependencyMode`, and `dependencyCount`; dependency
+counts refer to MoonMind workflow dependencies, not GitHub issue dependencies.
+
 ---
 
 ## 6) Plan contract
