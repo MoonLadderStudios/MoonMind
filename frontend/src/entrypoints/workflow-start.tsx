@@ -1165,7 +1165,7 @@ function artifactInputParametersForPatch(
   };
 }
 
-function buildEditParametersPatch({
+export function buildEditParametersPatch({
   execution,
   artifactInput,
   submittedPayload,
@@ -1205,10 +1205,7 @@ function buildEditParametersPatch({
   const mergedWorkflow: Record<string, unknown> = {
     ...baseWorkflow,
     ...editWorkflow,
-    runtime: mergeRecordValues(
-      recordValue(baseWorkflow.runtime),
-      recordValue(editWorkflow.runtime),
-    ),
+    runtime: recordValue(editWorkflow.runtime),
     git: mergeRecordValues(
       recordValue(baseWorkflow.git),
       recordValue(editWorkflow.git),
@@ -1232,6 +1229,26 @@ function buildEditParametersPatch({
     ...submittedPayload,
     workflow: mergedWorkflow,
   };
+  const submittedRuntime = recordValue(editWorkflow.runtime);
+  const submittedRuntimeMode = String(
+    submittedRuntime.mode || submittedRuntime.targetRuntime || "",
+  ).trim();
+  const submittedRuntimeModel = String(submittedRuntime.model || "").trim();
+  const submittedRuntimeEffort = String(submittedRuntime.effort || "").trim();
+  const submittedRuntimeProfile = String(
+    submittedRuntime.profileId ||
+      submittedRuntime.providerProfile ||
+      submittedRuntime.executionProfileRef ||
+      "",
+  ).trim();
+  if (submittedRuntimeMode) {
+    parametersPatch.targetRuntime = submittedRuntimeMode;
+  }
+  parametersPatch.model = submittedRuntimeModel || null;
+  parametersPatch.requestedModel = submittedRuntimeModel || null;
+  parametersPatch.resolvedModel = submittedRuntimeModel || null;
+  parametersPatch.effort = submittedRuntimeEffort || null;
+  parametersPatch.profileId = submittedRuntimeProfile || null;
   delete parametersPatch.task;
   if (!("mergeAutomation" in submittedPayload)) {
     delete parametersPatch.mergeAutomation;
