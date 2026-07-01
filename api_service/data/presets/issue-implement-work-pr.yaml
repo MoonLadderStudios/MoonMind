@@ -104,8 +104,11 @@ steps:
     the blocking evidence from the assessment.
 
 
-    Otherwise verify that the implementation for {{ inputs.issue_provider }} issue
-    {{ inputs.issue_ref }} satisfies the loaded preset brief and acceptance criteria.
+    Otherwise run moonspec-verify in issue-brief verification mode for {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }}. Use {{ inputs.brief_artifact_path }} as the
+    authoritative issue brief and {{ inputs.assessment_artifact_path }} as the initial
+    state assessment. Do not require a MoonSpec feature directory, spec.md, plan.md,
+    or tasks.md for this issue-brief verification mode.
 
 
     Re-read the issue preset brief and confirm every required behavior change is implemented
@@ -113,11 +116,20 @@ steps:
     brief or implied by the changed code paths.
 
 
-    If gaps remain, fix them now before proceeding to pull request creation. Do not
-    create a pull request until the implementation matches the brief and the relevant
-    tests pass.'
+    If verification returns ADDITIONAL_WORK_NEEDED, produce structured remaining
+    work with implementation gaps, verification gaps, required tests, and concrete
+    next files or commands so remediation can consume it. Fix those gaps before
+    proceeding to pull request creation.
+
+
+    If verification returns NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or
+    ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, stop and report the terminal evidence.
+
+
+    Do not create a pull request until the controlling moonspec-verify verdict is
+    FULLY_IMPLEMENTED and the relevant tests pass.'
   skill:
-    id: auto
+    id: moonspec-verify
     args: {}
     requiredCapabilities:
     - git
@@ -139,7 +151,10 @@ steps:
 
 
     Otherwise create a pull request for the completed work for {{ inputs.issue_provider
-    }} issue {{ inputs.issue_ref }}.
+    }} issue {{ inputs.issue_ref }} only after the immediately preceding controlling
+    moonspec-verify verdict is FULLY_IMPLEMENTED. If the verifier reported ADDITIONAL_WORK_NEEDED,
+    NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
+    stop without creating a pull request and report the verifier evidence.
 
 
     This Issue Implement handoff step is the explicit PR-publication step for this
@@ -147,12 +162,12 @@ steps:
     }} code review transition so the confirmed pull request URL is available to both
     {{ inputs.issue_provider }} and MoonMind publish handling. If generic managed-runtime
     guidance says not to push or create a pull request, treat this step-specific handoff
-    instruction as the controlling instruction for this step only. If the task is
+    instruction as the controlling instruction for this step only. If the workflow is
     submitted with PR merge automation enabled, the parent workflow must use the pull
     request URL produced by this step as the published PR and then run merge automation
     against that PR; on a successful merge the parent workflow will transition {{
     inputs.issue_provider }} issue {{ inputs.issue_ref }} to Done automatically. If
-    the runtime instructions, task parameters, authentication, remote configuration,
+    the runtime instructions, workflow parameters, authentication, remote configuration,
     branch protection, or repository permissions prevent committing, pushing, or creating
     the pull request in this step, stop before changing Jira to Review and report
     the exact blocker.

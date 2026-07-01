@@ -23,7 +23,7 @@ annotations:
       jira_issue:
         type: object
         title: Jira issue
-        description: Issue that will seed the task instructions and orchestration context.
+        description: Issue that will seed the workflow instructions and orchestration context.
         required:
           - key
         properties:
@@ -129,7 +129,7 @@ steps:
         issueKey: "{{ inputs.jira_issue_key }}"
   - title: Classify request and resume point
     instructions: |-
-      Use the Jira preset brief for {{ inputs.jira_issue_key }} as the canonical Moon Spec orchestration input.
+      Use the Jira preset brief for {{ inputs.jira_issue_key }} as the canonical MoonSpec orchestration input.
 
       Additional constraints:
       {{ inputs.constraints }}
@@ -139,11 +139,11 @@ steps:
       Source design path (optional): {{ inputs.source_design_path }}.
 
       Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
-      Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
+      Inspect existing MoonSpec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
     skill:
       id: auto
       args: {}
-  - title: Create or select Moon Spec
+  - title: Create or select MoonSpec
     instructions: |-
       For a single-story Jira preset brief, run moonspec-specify unless an active spec.md already passes the specify gate.
       For a broad technical or declarative design, run moonspec-breakdown first, then select the recommended first generated spec unless the issue brief explicitly requires processing all specs.
@@ -173,7 +173,7 @@ steps:
     skill:
       id: moonspec-tasks
       args: {}
-  - title: Align Moon Spec artifacts
+  - title: Align MoonSpec artifacts
     instructions: |-
       Run moonspec-align after task generation.
       Let moonspec-align analyze and remediate artifact drift conservatively without manual analyze prompts, scripted user approvals, or extra Prompt A/Prompt B loops.
@@ -473,7 +473,7 @@ steps:
 
       Before committing, inspect the latest post-remediation moonspec-verify result and confirm the verdict is FULLY_IMPLEMENTED. If the latest verdict is ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, stop without committing, pushing, creating a pull request, or changing Jira. Classify runtime or infrastructure causes as environment failure.
 
-      This Jira Orchestrate handoff step is the explicit PR-publication step for this preset. It intentionally owns pull request creation before the Jira Review transition so the confirmed pull request URL is available to both Jira and MoonMind publish handling. If generic managed-runtime guidance says not to push or create a pull request, treat this step-specific handoff instruction as the controlling instruction for this step only. If the task is submitted with PR merge automation enabled, the parent workflow must use the pull request URL produced by this step as the published PR and then run merge automation against that PR. If the runtime instructions, task parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Review and report the exact blocker.
+      This Jira Orchestrate handoff step is the explicit PR-publication step for this preset. It intentionally owns pull request creation before the Jira Review transition so the confirmed pull request URL is available to both Jira and MoonMind publish handling. If generic managed-runtime guidance says not to push or create a pull request, treat this step-specific handoff instruction as the controlling instruction for this step only. If the workflow is submitted with PR merge automation enabled, the parent workflow must use the pull request URL produced by this step as the published PR and then run merge automation against that PR. If the runtime instructions, workflow parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Review and report the exact blocker.
 
       First confirm the working tree contains only intentional changes for this issue and no raw credentials. Commit the work with a concise message that includes {{ inputs.jira_issue_key }}. Push the current non-protected work branch and create a non-draft pull request with the available authenticated GitHub tooling.
 

@@ -1863,7 +1863,7 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if name == "story.create_jira_issues":
         return {
             "name": name,
-            "description": "Create Jira issues from Moon Spec story breakdown output.",
+            "description": "Create Jira issues from MoonSpec story breakdown output.",
             "inputs": {
                 "schema": {
                     "type": "object",
@@ -1902,7 +1902,7 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if name == "story.create_github_issues":
         return {
             "name": name,
-            "description": "Create GitHub issues from Moon Spec story breakdown output.",
+            "description": "Create GitHub issues from MoonSpec story breakdown output.",
             "inputs": {
                 "schema": {
                     "type": "object",
@@ -9966,7 +9966,7 @@ class TemporalAgentRuntimeActivities:
         normalized_message = (
             str(commit_message).strip()
             if isinstance(commit_message, str) and commit_message.strip()
-            else f"MoonMind task result for run {run_id}"
+            else f"MoonMind workflow result for run {run_id}"
         )
         commit_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(

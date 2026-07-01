@@ -28,12 +28,13 @@ This skill answers:
 ## Inputs
 
 - Treat the user's text as optional verification focus.
-- Work from the active feature directory resolved by the prerequisite script unless the user provides a specific feature directory or `spec.md`.
-- Require `spec.md`, `plan.md`, `tasks.md`, and `.specify/memory/constitution.md`.
+- Work from the active feature directory resolved by the prerequisite script unless the user provides a specific feature directory, `spec.md`, or issue-brief verification inputs.
+- In MoonSpec feature-directory mode, require `spec.md`, `plan.md`, `tasks.md`, and `.specify/memory/constitution.md`.
+- In issue-brief verification mode, use the provided issue brief artifact, issue reference, acceptance criteria, and assessment artifact as the verification baseline without requiring a MoonSpec feature directory, `spec.md`, `plan.md`, or `tasks.md`.
 - Use absolute paths in reports.
 - Keep the verdict conservative when evidence is incomplete.
 
-Stop if the required artifacts cannot be located. If `spec.md` contains multiple stories, report `NO_DETERMINATION` for MoonSpec completion and recommend splitting the design with `/moonspec.breakdown` or regenerating a one-story spec.
+Stop if the required artifacts for the selected mode cannot be located. If `spec.md` contains multiple stories, report `NO_DETERMINATION` for MoonSpec completion and recommend splitting the design with `/moonspec.breakdown` or regenerating a one-story spec.
 
 ## Pre-Verify Hooks
 
@@ -72,6 +73,22 @@ Wait for the result of the hook command before proceeding to verification.
 If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently.
 
 ## Setup
+
+If the user provides issue-brief verification inputs, use issue-brief verification mode. Accept inputs expressed in prose or preset instructions such as:
+
+- issue provider, for example `jira` or `github`
+- issue reference, for example `MM-1063` or `owner/repo#123`
+- issue brief artifact path, such as `artifacts/jira-implement-brief.json`
+- assessment artifact path, such as `artifacts/jira-implement-assessment.json`
+
+In issue-brief verification mode:
+
+1. Read the issue brief artifact and assessment artifact.
+2. Use the issue summary, description, acceptance criteria, loaded preset brief, and the assessment's unmet and partially-met requirements as the verification baseline.
+3. Treat a `PARTIALLY_IMPLEMENTED` assessment as a bounded backlog: verify only the previously unmet or partially met requirements unless the issue brief explicitly requires broader validation.
+4. Treat `FULLY_IMPLEMENTED` as already verified only when no implementation step made code changes after that assessment.
+5. Inspect production code and tests directly; do not treat the assessment itself as proof that new work is complete.
+6. Do not require `spec.md`, `plan.md`, `tasks.md`, or `.specify/memory/constitution.md`.
 
 If the user provides a specific `spec.md` or feature directory, use it and derive sibling artifacts from that directory.
 
@@ -117,7 +134,7 @@ not be deleted, moved, or treated as the active selected skill snapshot.
 
 ## Load Verification Sources
 
-Read:
+In MoonSpec feature-directory mode, read:
 
 - `spec.md`: original request in `**Input**`, the single user story, independent test, acceptance scenarios or `SCN-*`, functional requirements `FR-*`, success criteria `SC-*`, edge cases, assumptions, key entities, and source design mappings such as `DESIGN-REQ-*` or `DOC-REQ-*`.
 - `plan.md`: intended architecture, project structure, test commands, test tooling, integration dependencies, and constraints. Treat as context, not proof.
@@ -128,6 +145,15 @@ Read:
 - The canonical source document named by `spec.md` `**Source Document**` when present, plus `artifacts/doc-discoveries/<feature>.json` when it exists, so source-document drift can be assessed.
 
 Do not use copied source requirement text in `spec.md` as evidence that behavior exists.
+
+In issue-brief verification mode, read:
+
+- the issue brief artifact: issue key or GitHub issue ref, title, description, acceptance criteria, loaded preset brief, constraints, and source-resolution metadata when present.
+- the assessment artifact: verdict, per-requirement statuses, unmet requirements, partially met requirements, blocking evidence, and summary.
+- changed production and test files relevant to the issue brief and assessment gaps.
+- local implementation artifacts named by the preset, such as pull request handoff artifacts or verification reports, only as process context.
+
+Do not use the issue brief, assessment, or generated handoff text as evidence that behavior exists.
 
 ## Canonical Claim Coverage
 
@@ -181,6 +207,7 @@ Build an internal inventory before inspecting code:
 - One row per constitution constraint or `CC-*`.
 - One row per in-scope `DESIGN-REQ-*` or `DOC-REQ-*`.
 - One row per stable canonical source claim in scope for the story.
+- In issue-brief verification mode, one row per acceptance criterion and one row per unmet or partially met assessment requirement.
 
 For each row, track:
 
@@ -258,6 +285,14 @@ Choose exactly one verdict:
 
 Prefer `ADDITIONAL_WORK_NEEDED` over `NO_DETERMINATION` when a concrete missing code or test gap is visible.
 
+When the verdict is `ADDITIONAL_WORK_NEEDED`, include a structured Remaining Work section that remediation steps can consume. Each item must identify:
+
+- requirement or acceptance criterion
+- gap type: `implementation`, `verification`, `documentation`, or `environment`
+- concrete remaining work
+- suggested files, commands, or evidence to inspect
+- whether the gap is recoverable in the current runtime
+
 ## Report
 
 Return a Markdown report in the response. Do not write a file unless the user explicitly asks for one.
@@ -320,6 +355,22 @@ Use this structure:
 ## Remaining Work
 
 - [Ordered, concrete code or test changes required before completion]
+
+For issue-brief verification mode, set:
+
+- **Feature**: issue reference
+- **Spec**: N/A (issue-brief verification mode)
+- **Original Request Source**: issue brief artifact path
+
+Use this structured form for each Remaining Work item:
+
+```markdown
+- Requirement: [criterion or assessment requirement]
+  Gap Type: implementation | verification | documentation | environment
+  Remaining Work: [bounded work]
+  Suggested Evidence: [files, tests, commands, or artifact refs]
+  Recoverable In Current Runtime: true | false
+```
 
 ## Decision
 

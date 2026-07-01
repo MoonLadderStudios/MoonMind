@@ -5053,7 +5053,7 @@ class CodexWorker:
             sanitized = _FULL_UUID_PATTERN.sub("job", sanitized)
         sanitized = sanitized.strip()
         if not sanitized:
-            sanitized = "MoonMind task result"
+            sanitized = "MoonMind workflow result"
         if len(sanitized) <= max_chars:
             return sanitized
         return f"{sanitized[: max_chars - 3].rstrip()}..."
@@ -5076,7 +5076,9 @@ class CodexWorker:
         if candidate:
             return cls._sanitize_pr_title(candidate, redact_uuids=False)
 
-        return cls._sanitize_pr_title(f"MoonMind task result [mm:{str(job_id)[:8]}]")
+        return cls._sanitize_pr_title(
+            f"MoonMind workflow result [mm:{str(job_id)[:8]}]"
+        )
 
     @classmethod
     def _derive_default_jira_pr_title(
@@ -6084,7 +6086,7 @@ class CodexWorker:
 
             commit_message = (
                 self._resolve_publish_text_override(publish.get("commitMessage"))
-                or f"MoonMind task result for job {job_id}"
+                or f"MoonMind workflow result for job {job_id}"
             )
             await self._run_stage_command(
                 ["git", "commit", "-m", commit_message],
