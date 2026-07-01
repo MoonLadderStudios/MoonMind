@@ -1,0 +1,116 @@
+slug: github-issue-orchestrate
+title: GitHub Issue Orchestrate
+description: Run MoonSpec orchestration for a selected GitHub issue while preserving GitHub issue traceability.
+scope: global
+tags:
+  - github
+  - moonspec
+  - orchestration
+requiredCapabilities:
+  - git
+  - gh
+annotations:
+  sourceSkill: moonspec-orchestrate
+  issueProvider: github
+  output: pull-request
+  traceability:
+    implementationIssueKey: MM-1069
+    sourceIssueKey: MM-1063
+  issueInput:
+    provider: github
+    objectInput: github_issue
+    refInput: github_issue_ref
+    refTemplate: '{{ repository }}#{{ number }}'
+  inputSchema:
+    type: object
+    required:
+      - github_issue
+    properties:
+      github_issue:
+        type: object
+        title: GitHub issue
+        description: Issue that will seed the MoonSpec orchestration context.
+        required:
+          - repository
+          - number
+        properties:
+          repository:
+            type: string
+            title: Repository
+          number:
+            type: integer
+            title: Issue number
+          title:
+            type: string
+          body:
+            type: string
+          url:
+            type: string
+            format: uri
+          state:
+            type: string
+          labels:
+            type: array
+            items:
+              type: string
+  uiSchema:
+    github_issue:
+      widget: github.issue-picker
+      dataSource: github.issues
+      searchPlaceholder: Search GitHub issues
+      allowManualIssueEntry: true
+  defaults: {}
+inputs:
+  - name: github_issue_ref
+    label: GitHub Issue Reference
+    type: text
+    required: false
+    default: ''
+  - name: source_design_path
+    label: Source Design Path
+    type: text
+    required: false
+    default: ''
+  - name: source_issue_key
+    label: Source Issue Key
+    type: text
+    required: false
+    default: ''
+  - name: source_claim_ids
+    label: Source Claim IDs
+    type: text
+    required: false
+    default: ''
+  - name: constraints
+    label: Constraints
+    type: textarea
+    required: false
+    default: ''
+steps:
+  - title: Load GitHub issue brief
+    type: tool
+    instructions: |-
+      Fetch GitHub issue {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }} through the deterministic trusted GitHub tool surface.
+
+      Build the canonical MoonSpec orchestration input from the issue title, body, labels, state, URL, and any acceptance criteria in the issue body. Preserve the repository, issue number, source issue key, source design path, source claim IDs, and source issue traceability in the brief so downstream orchestration artifacts can reference {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}.
+    tool:
+      id: github.load_issue_preset_brief
+      requiredCapabilities:
+        - gh
+      inputs:
+        repository: '{{ inputs.github_issue.repository }}'
+        issueNumber: '{{ inputs.github_issue.number }}'
+  - kind: include
+    slug: moonspec-orchestrate
+    alias: moonspec-orchestrate
+    scope: global
+    inputMapping:
+      feature_request: |-
+        Run MoonSpec Orchestrate for GitHub issue {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}.
+
+        GitHub issue title: {{ inputs.github_issue.title | default('') }}
+        GitHub issue URL: {{ inputs.github_issue.url | default('') }}
+
+        Use the loaded GitHub issue brief from the previous step as the authoritative issue context. Preserve GitHub issue {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}, source issue {{ inputs.source_issue_key }}, source design path {{ inputs.source_design_path }}, source claim IDs {{ inputs.source_claim_ids }}, and these constraints in generated MoonSpec artifacts.
+      source_design_path: '{{ inputs.source_design_path }}'
+      constraints: '{{ inputs.constraints }}'

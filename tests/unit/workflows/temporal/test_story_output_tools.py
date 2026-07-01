@@ -2490,18 +2490,36 @@ async def test_create_github_issue_downstream_tasks_preserve_dependencies_and_tr
                         "summary": "First",
                         "repository": "MoonLadderStudios/MoonMind",
                         "issueNumber": "101",
+                        "sourceDesignPath": "docs/Designs/GitHubBreakdown.md",
+                        "sourceClaimIds": ["claim:first"],
                     }
                 ]
             },
-            "traceability": {"sourceIssueKey": "MM-1063"},
+            "githubOrchestration": {
+                "traceability": {"sourceIssueKey": "MM-1063"},
+            },
         },
         execution_creator=orchestrate_creator,
     )
     orchestrate_workflow = orchestrate_creator.requests[0]["initial_parameters"][
         "workflow"
     ]
-    assert orchestrate_workflow["taskTemplate"]["slug"] == "moonspec-orchestrate"
+    assert orchestrate_workflow["taskTemplate"]["slug"] == "github-issue-orchestrate"
     assert "GitHub Issue Orchestrate" in orchestrate_workflow["title"]
+    assert orchestrate_workflow["inputs"]["github_issue"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "number": 101,
+        "title": "First",
+    }
+    assert orchestrate_workflow["inputs"]["source_design_path"] == (
+        "docs/Designs/GitHubBreakdown.md"
+    )
+    assert orchestrate_workflow["inputs"]["source_claim_ids"] == ["claim:first"]
+    assert orchestrate_workflow["inputs"]["source_issue_key"] == "MM-1063"
+    assert orchestrate_creator.requests[0]["initial_parameters"]["traceability"] == {
+        "sourceIssueKey": "MM-1063",
+        "sourceBriefRef": "",
+    }
 
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_uses_input_previous_outputs_mappings():

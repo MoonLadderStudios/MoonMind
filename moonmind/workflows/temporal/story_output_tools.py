@@ -66,7 +66,7 @@ _DOWNSTREAM_PRESETS: dict[str, dict[str, str]] = {
         "idempotencyPrefix": "jira-implement",
     },
     _DOWNSTREAM_PRESET_GITHUB_ORCHESTRATE: {
-        "slug": "moonspec-orchestrate",
+        "slug": "github-issue-orchestrate",
         "label": "GitHub Issue Orchestrate",
         "idempotencyPrefix": "github-issue-orchestrate",
     },
@@ -1727,6 +1727,7 @@ def _github_downstream_task_payload(
             "github_issue_ref": issue_ref,
             "source_design_path": source_design_path,
             "source_claim_ids": source_claim_ids,
+            "source_issue_key": source_issue_key,
             "constraints": (
                 f"Preserve source issue {source_issue_key} traceability."
                 if source_issue_key

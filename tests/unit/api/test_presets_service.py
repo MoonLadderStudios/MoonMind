@@ -2964,6 +2964,80 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "MoonLadderStudios/MoonMind#123"
     )
 
+
+async def test_seed_catalog_github_issue_orchestrate_expands_moonspec_include(
+    tmp_path,
+):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "presets"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service.get_template(
+                slug="github-issue-orchestrate",
+                scope="global",
+                scope_ref=None,
+            )
+            expanded = await service.expand_template(
+                slug="github-issue-orchestrate",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 123,
+                        "title": "Selected story",
+                    },
+                    "source_design_path": "docs/Designs/GitHubBreakdown.md",
+                    "source_issue_key": "MM-1063",
+                    "source_claim_ids": ["claim:first"],
+                    "constraints": "Preserve source issue MM-1063 traceability.",
+                },
+                context={},
+            )
+
+    assert template["title"] == "GitHub Issue Orchestrate"
+    assert template["annotations"]["issueInput"] == {
+        "provider": "github",
+        "objectInput": "github_issue",
+        "refInput": "github_issue_ref",
+        "refTemplate": "{{ repository }}#{{ number }}",
+    }
+    assert [step["title"] for step in expanded["steps"]] == [
+        "Load GitHub issue brief",
+        "Create or select MoonSpec",
+        "Plan selected spec",
+        "Generate TDD task breakdown",
+        "Align MoonSpec artifacts",
+        "Implement the task breakdown",
+        "Verify completion",
+        "Reconcile declarative docs",
+    ]
+    assert expanded["steps"][0]["tool"]["id"] == "github.load_issue_preset_brief"
+    assert expanded["steps"][0]["tool"]["inputs"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": "123",
+    }
+    assert "MoonLadderStudios/MoonMind#123" in expanded["steps"][1]["instructions"]
+    assert "MM-1063" in expanded["steps"][1]["instructions"]
+    assert "docs/Designs/GitHubBreakdown.md" in expanded["steps"][1]["instructions"]
+    assert "claim:first" in expanded["steps"][1]["instructions"]
+    assert expanded["appliedTemplate"]["inputs"]["github_issue_ref"] == (
+        "MoonLadderStudios/MoonMind#123"
+    )
+    assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
+        "github-issue-orchestrate",
+        "moonspec-orchestrate",
+    ]
+
+
 async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
