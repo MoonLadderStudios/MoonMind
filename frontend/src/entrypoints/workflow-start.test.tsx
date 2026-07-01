@@ -4657,6 +4657,11 @@ describe.skip("Task Create Entrypoint", () => {
         repository: "MoonLadderStudios/MoonMind",
         operatorNote: "Keep this unedited top-level value.",
         targetRuntime: "gemini_cli",
+        model: "gemini-2.5-pro",
+        requestedModel: "gemini-2.5-pro",
+        resolvedModel: "gemini-2.5-pro",
+        effort: "high",
+        profileId: "profile:gemini-default",
         task: {
           instructions: "Save edited Temporal inputs.",
           proposeTasks: true,

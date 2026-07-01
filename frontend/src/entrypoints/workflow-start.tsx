@@ -1232,6 +1232,32 @@ function buildEditParametersPatch({
     ...submittedPayload,
     workflow: mergedWorkflow,
   };
+  const submittedRuntime = recordValue(mergedWorkflow.runtime);
+  const submittedRuntimeMode = String(
+    submittedRuntime.mode || submittedRuntime.targetRuntime || "",
+  ).trim();
+  const submittedRuntimeModel = String(submittedRuntime.model || "").trim();
+  const submittedRuntimeEffort = String(submittedRuntime.effort || "").trim();
+  const submittedRuntimeProfile = String(
+    submittedRuntime.profileId ||
+      submittedRuntime.providerProfile ||
+      submittedRuntime.executionProfileRef ||
+      "",
+  ).trim();
+  if (submittedRuntimeMode) {
+    parametersPatch.targetRuntime = submittedRuntimeMode;
+  }
+  if (submittedRuntimeModel) {
+    parametersPatch.model = submittedRuntimeModel;
+    parametersPatch.requestedModel = submittedRuntimeModel;
+    parametersPatch.resolvedModel = submittedRuntimeModel;
+  }
+  if (submittedRuntimeEffort) {
+    parametersPatch.effort = submittedRuntimeEffort;
+  }
+  if (submittedRuntimeProfile) {
+    parametersPatch.profileId = submittedRuntimeProfile;
+  }
   delete parametersPatch.task;
   if (!("mergeAutomation" in submittedPayload)) {
     delete parametersPatch.mergeAutomation;
