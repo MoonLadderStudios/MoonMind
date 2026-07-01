@@ -25,6 +25,7 @@ import {
   CAPABILITY_CATALOG,
   capabilityChipProvenanceLabel,
   LIQUID_GL_OPTIONS,
+  buildEditParametersPatch,
   preferredTemplate,
   resolveDefaultProviderProfileId,
   resolveObjectiveInstructions,
@@ -34,6 +35,69 @@ import {
 vi.mock("../lib/navigation", () => ({
   navigateTo: vi.fn(),
 }));
+
+describe("buildEditParametersPatch", () => {
+  it("uses submitted runtime fields as authoritative when canonical edit metadata is cleared", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-runtime-clear",
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          model: "gpt-5.4",
+          requestedModel: "gpt-5.4",
+          resolvedModel: "gpt-5.4",
+          effort: "high",
+          profileId: "profile:codex-default",
+          workflow: {
+            instructions: "Keep the objective.",
+            runtime: {
+              mode: "codex_cli",
+              model: "gpt-5.4",
+              effort: "high",
+              profileId: "profile:codex-default",
+            },
+          },
+        },
+      },
+      submittedPayload: {
+        targetRuntime: "codex_cli",
+        task: {
+          instructions: "Keep the objective.",
+          runtime: {
+            mode: "codex_cli",
+          },
+        },
+      },
+      submittedWorkflow: {
+        instructions: "Keep the objective.",
+        runtime: {
+          mode: "codex_cli",
+        },
+      },
+    });
+
+    expect(patch).toMatchObject({
+      targetRuntime: "codex_cli",
+      model: null,
+      requestedModel: null,
+      resolvedModel: null,
+      effort: null,
+      profileId: null,
+      workflow: {
+        runtime: {
+          mode: "codex_cli",
+        },
+      },
+    });
+    expect(patch.workflow).not.toMatchObject({
+      runtime: {
+        model: "gpt-5.4",
+        effort: "high",
+        profileId: "profile:codex-default",
+      },
+    });
+  });
+});
 
 const mockPayload: BootPayload = {
   page: "workflow-start",
