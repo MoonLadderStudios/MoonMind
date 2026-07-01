@@ -73,6 +73,24 @@ def test_resolve_checkpoint_policy_uses_omnigent_external_state_before_execution
     )
 
 
+def test_resolve_checkpoint_policy_uses_exact_external_agent_identity() -> None:
+    policy = resolve_checkpoint_policy(
+        boundary=_Boundary.BEFORE_EXECUTION,
+        runtime_kind="external",
+        external_agent_id="Omnigent",
+    )
+    control = resolve_checkpoint_policy(
+        boundary=_Boundary.BEFORE_EXECUTION,
+        runtime_kind="external",
+        external_agent_id="jules",
+    )
+
+    assert policy.workspace_policy == "continue_from_previous_execution"
+    assert policy.checkpoint_kind == "external_state_ref"
+    assert control.workspace_policy == "restore_pre_execution"
+    assert control.checkpoint_kind == "worktree_archive"
+
+
 def test_resolve_checkpoint_policy_keeps_local_after_execution_default() -> None:
     policy = resolve_checkpoint_policy(
         boundary="after_execution",
