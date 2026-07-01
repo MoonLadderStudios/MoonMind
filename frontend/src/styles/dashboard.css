@@ -7016,7 +7016,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 /* The detail is a centered, width-bounded container in a stable grid column.
  * Sidebar collapse hides the navigation in its reserved left column, so the
- * detail only reflows when the viewport reaches the compressed mobile layout. */
+ * detail only reflows when the viewport is compressed below 85rem. */
 .workflow-workspace-detail {
   min-width: 0;
   width: 100%;
@@ -7028,6 +7028,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   justify-self: start;
   align-self: start;
   margin-bottom: 0.75rem;
+}
+
+@media (min-width: 768px) and (max-width: 85rem) {
+  .workflow-workspace-shell[data-sidebar-collapsed="true"] {
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 1rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
