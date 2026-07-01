@@ -167,7 +167,10 @@ def child_goal_for_target(
             if isinstance(target.get("githubIssue"), dict)
             else {}
         )
-        repository = _text(issue.get("repository")) or _text(target.get("repository"))
+        repository = (
+            _normalize_repo(issue.get("repository"))
+            or _normalize_repo(target.get("repository"))
+        )
         number = issue.get("number")
         ref = _text(target.get("ref"))
         if repository and number is not None:
@@ -209,7 +212,7 @@ def bind_child_inputs(
             "jira_issue": dict(issue) if issue else {"key": key},
             "jira_issue_key": key,
             "repository": (
-                _text(target.get("repository")) or normalized_fallback or ""
+                _normalize_repo(target.get("repository")) or normalized_fallback or ""
             ),
             "verification_mode": "auto",
             "update_status": False,
@@ -244,15 +247,19 @@ def bind_child_inputs(
             else {}
         )
         repository = (
-            _text(issue.get("repository"))
-            or _text(target.get("repository"))
+            _normalize_repo(issue.get("repository"))
+            or _normalize_repo(target.get("repository"))
             or normalized_fallback
         )
         number = issue.get("number")
         if not repository or number is None:
             return None
+        resolved_issue = dict(issue)
+        if not _text(resolved_issue.get("repository")):
+            resolved_issue["repository"] = repository
+
         inputs = {
-            "github_issue": dict(issue),
+            "github_issue": resolved_issue,
             "github_issue_ref": f"{repository}#{number}",
             "constraints": shared or "",
         }
@@ -306,7 +313,7 @@ def build_child_request(
     provider = str(target.get("provider") or "").strip().lower()
     ref = _text(target.get("ref")) or ""
     repository = (
-        _text(target.get("repository"))
+        _normalize_repo(target.get("repository"))
         or _normalize_repo(target.get("batch_repository"))
         or _normalize_repo(default_repository)
     )
