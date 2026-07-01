@@ -2575,8 +2575,8 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     workflow = MoonMindRunWorkflow()
     now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
     node_inputs = {
-        "agentKind": "external",
-        "agentId": "omnigent",
+        "agentKind": "External",
+        "agentId": "Omnigent",
         "workspaceRoot": "/work/agent_jobs/run-1/repo",
         "baseCommit": "abc123",
     }
@@ -2629,10 +2629,11 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     )
 
     assert request.agent_kind == "external"
-    assert request.agent_id == "omnigent"
+    assert request.agent_id == "Omnigent"
+    assert workflow._step_external_agent_ids["implement"] == "omnigent"
     assert request.step_execution is not None
     assert request.step_execution.runtime_selection == {
-        "runtimeId": "omnigent",
+        "runtimeId": "Omnigent",
         "agentKind": "external",
     }
     assert result == "artifact://checkpoint/before_execution"
@@ -2644,6 +2645,25 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     assert captured[1]["payload"]["workspace"]["kind"] == "external_state_ref"
     assert "patchRef" not in captured[1]["payload"]["workspace"]
     assert "archiveRef" not in captured[1]["payload"]["workspace"]
+
+
+def test_run_derives_external_omnigent_identity_from_runtime_selection() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "runtime": {"mode": "Omnigent"},
+            "workspaceRoot": "/work/agent_jobs/run-1/repo",
+            "baseCommit": "abc123",
+        },
+    )
+
+    assert workflow._step_external_agent_ids["implement"] == "omnigent"
+    assert workflow._step_workspace_capture_inputs["implement"] == {
+        "workspacePath": "/work/agent_jobs/run-1/repo",
+        "baseCommit": "abc123",
+    }
 
 
 @pytest.mark.asyncio

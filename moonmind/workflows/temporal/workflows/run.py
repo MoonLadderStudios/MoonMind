@@ -3952,12 +3952,17 @@ class MoonMindRunWorkflow:
     ) -> None:
         raw_agent_kind = outputs.get("agentKind") or outputs.get("agent_kind")
         raw_agent_id = outputs.get("agentId") or outputs.get("agent_id")
-        if str(raw_agent_kind or "").strip() == "external" and isinstance(
-            raw_agent_id, str
-        ):
-            external_agent_id = raw_agent_id.strip()
-            if external_agent_id:
-                self._step_external_agent_ids[logical_step_id] = external_agent_id
+        agent_kind = str(raw_agent_kind or "").strip().lower()
+        agent_id = str(raw_agent_id or "").strip()
+        if not agent_id:
+            agent_id = self._agent_id_from_runtime_inputs(
+                node_inputs=outputs,
+                fallback_name=None,
+            )
+            if agent_id:
+                agent_kind = self._agent_kind_for_id(agent_id)
+        if agent_kind == "external" and agent_id:
+            self._step_external_agent_ids[logical_step_id] = agent_id.lower()
 
         candidates: list[Mapping[str, Any]] = [outputs]
         workspace_spec = outputs.get("workspaceSpec") or outputs.get("workspace_spec")

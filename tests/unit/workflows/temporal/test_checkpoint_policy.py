@@ -77,7 +77,7 @@ def test_resolve_checkpoint_policy_uses_exact_external_agent_identity() -> None:
     policy = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_EXECUTION,
         runtime_kind="external",
-        external_agent_id="omnigent",
+        external_agent_id="Omnigent",
     )
     control = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_EXECUTION,
