@@ -36,6 +36,20 @@ inputs:
   label: Pull Request Artifact Path
   type: text
   required: true
+- name: verify_artifact_path
+  label: Verification Artifact Path
+  type: text
+  required: true
+- name: verification_target
+  label: Verification Target
+  type: text
+  required: false
+  default: issue_brief
+- name: remediation_max_attempts
+  label: Remediation Max Attempts
+  type: text
+  required: false
+  default: '1'
 - name: constraints
   label: Constraints
   type: textarea
@@ -104,11 +118,12 @@ steps:
     the blocking evidence from the assessment.
 
 
-    Otherwise run moonspec-verify in issue-brief verification mode for {{ inputs.issue_provider
-    }} issue {{ inputs.issue_ref }}. Use {{ inputs.brief_artifact_path }} as the
+    Otherwise run moonspec-verify against verification target {{ inputs.verification_target
+    }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }}. The default
+    verification target is issue_brief. Use {{ inputs.brief_artifact_path }} as the
     authoritative issue brief and {{ inputs.assessment_artifact_path }} as the initial
     state assessment. Do not require a MoonSpec feature directory, spec.md, plan.md,
-    or tasks.md for this issue-brief verification mode.
+    or tasks.md for issue_brief verification mode.
 
 
     Re-read the issue preset brief and confirm every required behavior change is implemented
@@ -119,7 +134,8 @@ steps:
     If verification returns ADDITIONAL_WORK_NEEDED, produce structured remaining
     work with implementation gaps, verification gaps, required tests, and concrete
     next files or commands so the following remediation step can consume it. Do
-    not modify source code or tests in this read-only verification step.
+    not modify source code or tests in this read-only verification step. Write the
+    complete structured verifier result to {{ inputs.verify_artifact_path }}.
 
 
     If verification returns NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or
@@ -130,12 +146,27 @@ steps:
     FULLY_IMPLEMENTED and the relevant tests pass.'
   skill:
     id: moonspec-verify
-    args: {}
+    args:
+      verification_target: '{{ inputs.verification_target }}'
+      issue_provider: '{{ inputs.issue_provider }}'
+      issue_ref: '{{ inputs.issue_ref }}'
+      brief_artifact_path: '{{ inputs.brief_artifact_path }}'
+      assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
+      verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
 - title: Remediate verification gaps
+  annotations:
+    issueImplementRole: moonspec-remediation
+    moonSpecRemediationAttempt: 1
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
     }} issue {{ inputs.issue_ref }} before doing any work.
+
+
+    This preset allows at most {{ inputs.remediation_max_attempts }} remediation
+    attempt before the issue implementation must stop and report the remaining verifier
+    evidence.
 
 
     If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
@@ -165,15 +196,20 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation
+  annotations:
+    issueImplementRole: moonspec-verification-gate
+    moonSpecRemediationAttempt: 1
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+    moonSpecFinalRemediationGate: true
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
 
-    Run moonspec-verify in issue-brief verification mode for {{ inputs.issue_provider
-    }} issue {{ inputs.issue_ref }} after remediation, even when remediation was
-    skipped because the prior verdict was FULLY_IMPLEMENTED. Use {{ inputs.brief_artifact_path
-    }} as the authoritative issue brief and {{ inputs.assessment_artifact_path }}
-    as the initial state assessment.
+    Run moonspec-verify against verification target {{ inputs.verification_target
+    }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation,
+    even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+    Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
+    inputs.assessment_artifact_path }} as the initial state assessment.
 
 
     This is the controlling verification gate for pull request creation. If the verdict
@@ -184,10 +220,17 @@ steps:
     do not create a pull request.
 
 
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
     Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
   skill:
     id: moonspec-verify
-    args: {}
+    args:
+      verification_target: '{{ inputs.verification_target }}'
+      issue_provider: '{{ inputs.issue_provider }}'
+      issue_ref: '{{ inputs.issue_ref }}'
+      brief_artifact_path: '{{ inputs.brief_artifact_path }}'
+      assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
+      verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
 - title: Create pull request
@@ -208,10 +251,13 @@ steps:
 
 
     Otherwise create a pull request for the completed work for {{ inputs.issue_provider
-    }} issue {{ inputs.issue_ref }} only after the controlling post-remediation moonspec-verify
-    verdict is FULLY_IMPLEMENTED. If the verifier reported ADDITIONAL_WORK_NEEDED,
-    NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
-    stop without creating a pull request and report the verifier evidence.
+    }} issue {{ inputs.issue_ref }} only after the latest controlling post-remediation
+    moonspec-verify result in {{ inputs.verify_artifact_path }} reports FULLY_IMPLEMENTED.
+    If the verifier reported ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED,
+    FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, or if
+    {{ inputs.remediation_max_attempts }} remediation attempt has been exhausted
+    without FULLY_IMPLEMENTED, stop without creating a pull request and report the
+    verifier evidence.
 
 
     This Issue Implement handoff step is the explicit PR-publication step for this

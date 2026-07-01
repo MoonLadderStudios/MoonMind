@@ -196,6 +196,9 @@ steps:
     brief_artifact_path: artifacts/jira-implement-brief.json
     assessment_artifact_path: artifacts/jira-implement-assessment.json
     pr_artifact_path: artifacts/jira-implement-pr.json
+    verify_artifact_path: artifacts/jira-implement-verify.json
+    verification_target: issue_brief
+    remediation_max_attempts: '1'
     constraints: '{{ inputs.constraints }}'
 - title: Finalize Jira status
   annotations:
@@ -220,11 +223,15 @@ steps:
 
     - Otherwise (the initial verdict was PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED),
     transition Jira issue {{ inputs.jira_issue_key }} to status Review only after
-    the pull request exists. Read the previous pull request creation result or artifacts/jira-implement-pr.json
-    and verify it contains a non-empty pull_request_url for {{ inputs.jira_issue_key
-    }}. If no confirmed pull request URL is available, stop without changing Jira
-    and report that Review is blocked until PR creation succeeds. Add or preserve
-    a Jira-visible reference to the pull request when supported by the trusted tools.
+    the latest controlling verifier result in artifacts/jira-implement-verify.json
+    reports FULLY_IMPLEMENTED and the pull request exists. Read the previous pull
+    request creation result or artifacts/jira-implement-pr.json and verify it contains
+    a non-empty pull_request_url for {{ inputs.jira_issue_key }}. If the verifier
+    artifact is missing, terminal, reports ADDITIONAL_WORK_NEEDED after remediation
+    is exhausted, or no confirmed pull request URL is available, stop without changing
+    Jira and report that Review is blocked until verification and PR creation succeed.
+    Add or preserve a Jira-visible reference to the pull request when supported by
+    the trusted tools.
 
 
     In both cases, use the trusted Jira issue updater workflow and Jira transition

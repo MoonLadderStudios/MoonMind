@@ -354,10 +354,46 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             if step["title"] == "Verify implementation"
         )
         assert verify_step["skill"]["id"] == "moonspec-verify"
-        assert "issue-brief verification mode" in verify_step["instructions"]
+        assert verify_step["skill"]["args"] == {
+            "verification_target": "issue_brief",
+            "issue_provider": "jira",
+            "issue_ref": "MM-999",
+            "brief_artifact_path": "artifacts/jira-implement-brief.json",
+            "assessment_artifact_path": "artifacts/jira-implement-assessment.json",
+            "verify_artifact_path": "artifacts/jira-implement-verify.json",
+        }
+        assert "verification target issue_brief" in verify_step["instructions"]
+        assert "artifacts/jira-implement-verify.json" in verify_step["instructions"]
+        remediation_step = next(
+            step
+            for step in expanded_steps
+            if step["title"] == "Remediate verification gaps"
+        )
+        assert remediation_step["annotations"] == {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 1,
+            "moonSpecRemediationMaxAttempts": "1",
+        }
+        verify_remediation_step = next(
+            step
+            for step in expanded_steps
+            if step["title"] == "Verify remediation"
+        )
+        assert verify_remediation_step["skill"]["args"]["verify_artifact_path"] == (
+            "artifacts/jira-implement-verify.json"
+        )
+        assert verify_remediation_step["annotations"] == {
+            "issueImplementRole": "moonspec-verification-gate",
+            "moonSpecRemediationAttempt": 1,
+            "moonSpecRemediationMaxAttempts": "1",
+            "moonSpecFinalRemediationGate": True,
+        }
         assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
             implement_pr_step["instructions"]
         )
+        assert "artifacts/jira-implement-verify.json" in implement_pr_step[
+            "instructions"
+        ]
         assert "merge automation" in implement_pr_step["instructions"]
         assert "Done automatically" in implement_pr_step["instructions"]
         assert "artifacts/jira-implement-pr.json" in implement_pr_step["instructions"]
@@ -368,6 +404,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "Done" in implement_finalize_step["instructions"]
         assert "status Review" in implement_finalize_step["instructions"]
         assert "pull_request_url" in implement_finalize_step["instructions"]
+        assert "artifacts/jira-implement-verify.json" in (
+            implement_finalize_step["instructions"]
+        )
         assert (
             "FULLY_IMPLEMENTED" in implement_finalize_step["instructions"]
         )
