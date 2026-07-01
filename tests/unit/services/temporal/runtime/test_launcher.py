@@ -124,6 +124,14 @@ def test_normalize_clone_branch_strips_remote_tracking_refs():
         ManagedRuntimeLauncher._normalize_clone_branch("refs/remotes/origin/main")
         == "main"
     )
+    assert (
+        ManagedRuntimeLauncher._normalize_clone_branch("refs/remotes/origin/origin/main")
+        == "main"
+    )
+    assert (
+        ManagedRuntimeLauncher._normalize_clone_branch("refs/heads/origin/main")
+        == "main"
+    )
     assert ManagedRuntimeLauncher._normalize_clone_branch("refs/heads/main") == "main"
     assert (
         ManagedRuntimeLauncher._normalize_clone_branch("feature/origin/main")

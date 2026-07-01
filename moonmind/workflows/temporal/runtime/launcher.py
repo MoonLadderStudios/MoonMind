@@ -536,12 +536,16 @@ class ManagedRuntimeLauncher:
     @staticmethod
     def _normalize_clone_branch(branch: str) -> str:
         normalized = str(branch or "").strip()
-        if normalized.startswith("refs/remotes/origin/"):
-            return normalized.removeprefix("refs/remotes/origin/")
-        if normalized.startswith("refs/heads/"):
-            return normalized.removeprefix("refs/heads/")
-        if normalized.startswith("origin/"):
-            return normalized.removeprefix("origin/")
+        while True:
+            prior = normalized
+            if normalized.startswith("refs/remotes/origin/"):
+                normalized = normalized.removeprefix("refs/remotes/origin/")
+            if normalized.startswith("refs/heads/"):
+                normalized = normalized.removeprefix("refs/heads/")
+            if normalized.startswith("origin/"):
+                normalized = normalized.removeprefix("origin/")
+            if prior == normalized:
+                break
         return normalized
 
     async def _run_command(
