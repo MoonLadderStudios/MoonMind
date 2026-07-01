@@ -10,5 +10,11 @@ export type {
 } from './DashboardNotice';
 export { DashboardErrorDetails } from './DashboardErrorDetails';
 export type { DashboardErrorDetailsProps } from './DashboardErrorDetails';
+export { DashboardToastProvider, useDashboardToast } from './DashboardToast';
+export type {
+  DashboardToastAction,
+  DashboardToastOptions,
+  DashboardToastVariant,
+} from './DashboardToast';
 export { LogPanel } from './LogPanel';
 export type { LogPanelProps } from './LogPanel';

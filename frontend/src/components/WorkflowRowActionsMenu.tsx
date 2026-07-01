@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { DashboardActionDialog } from './DashboardActionDialog';
+import { useDashboardToast } from './dashboard/DashboardToast';
 import { formatStatusLabel } from '../utils/formatters';
+import { workflowDetailHref } from '../lib/workflowListContext';
 import {
   taskCompareHref,
   taskEditForRerunHref,
@@ -75,6 +77,7 @@ const KEBAB_ICON = (
 );
 
 const ACTION_AVAILABILITY_PENDING_REASON = 'Checking availability…';
+const DEFAULT_WORKFLOW_ACTION_ERROR = 'The workflow action could not be completed.';
 
 const PENDING_WORKFLOW_ACTION_CAPABILITIES = {
   canSetTitle: true,
@@ -90,6 +93,51 @@ const PENDING_WORKFLOW_ACTION_CAPABILITIES = {
   canSendMessage: true,
   canBypassDependencies: true,
 } satisfies RowActionsExecution['actions'];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readableWorkflowActionError(error: unknown): string {
+  const rawMessage =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : isRecord(error) && typeof error.message === 'string'
+          ? error.message
+          : '';
+  const message = rawMessage.trim();
+  if (!message) return DEFAULT_WORKFLOW_ACTION_ERROR;
+  try {
+    const parsed = JSON.parse(message) as { detail?: unknown; message?: unknown };
+    const parsedMessage =
+      typeof parsed.detail === 'string'
+        ? parsed.detail
+        : typeof parsed.message === 'string'
+          ? parsed.message
+          : null;
+    if (parsedMessage?.trim()) return parsedMessage.trim();
+  } catch {
+    // Plain text API errors are already user-readable enough for this surface.
+  }
+  return message.replace(/\s+/g, ' ').slice(0, 240);
+}
+
+function workflowActionResultHref(result: unknown, fallbackHref: string): string {
+  const execution = isRecord(result) && isRecord(result.execution) ? result.execution : null;
+  const redirectPath =
+    execution && typeof execution.redirectPath === 'string' ? execution.redirectPath.trim() : '';
+  if (redirectPath) return redirectPath;
+
+  const resultWorkflowId =
+    execution && typeof execution.workflowId === 'string' ? execution.workflowId.trim() : '';
+  if (resultWorkflowId) {
+    return workflowDetailHref(resultWorkflowId, new URLSearchParams(window.location.search));
+  }
+
+  return fallbackHref;
+}
 
 export type WorkflowRowActionsMenuProps = {
   workflowId: string;
@@ -111,9 +159,9 @@ export function WorkflowRowActionsMenu({
   taskEditingEnabled,
 }: WorkflowRowActionsMenuProps) {
   const queryClient = useQueryClient();
+  const toast = useDashboardToast();
   const [hasOpened, setHasOpened] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [activeDialog, setActiveDialog] = useState<RowActionDialogKind | null>(null);
 
   const detailQuery = useQuery({
@@ -140,9 +188,17 @@ export function WorkflowRowActionsMenu({
     void queryClient.invalidateQueries({ queryKey: ['workflow-list'] });
   }, [queryClient, workflowId]);
 
-  const onMutationError = useCallback((error: Error) => {
-    setActionError(error.message);
-  }, []);
+  const onMutationError = useCallback(
+    (error: unknown) => {
+      const message = readableWorkflowActionError(error);
+      setActionError(message);
+      toast.error({
+        title: 'Workflow action failed',
+        message,
+      });
+    },
+    [toast],
+  );
 
   const updateMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -289,6 +345,8 @@ export function WorkflowRowActionsMenu({
   const rerunUnavailableReason = actions?.disabledReasons?.canRerun || null;
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
   const actionAvailabilityPending = actionsEnabled && !actions && !detailQuery.isError;
+  const workflowSubject = execution?.title?.trim() || workflowId;
+  const detailHref = workflowDetailHref(workflowId, new URLSearchParams(window.location.search));
   const disabledReason = useCallback(
     (key: string): string | null => {
       if (actionAvailabilityPending) return ACTION_AVAILABILITY_PENDING_REASON;
@@ -333,13 +391,19 @@ export function WorkflowRowActionsMenu({
         onCompareRun: () => {},
         onRerun: () => {
           setActionError(null);
-          setActionNotice(null);
           if (busy || !workflowId) return;
           updateMutation.mutate(
             { updateName: 'RequestRerun' },
             {
-              onSuccess: () => {
-                setActionNotice('Rerun was requested and the latest execution view is ready.');
+              onSuccess: (result) => {
+                toast.success({
+                  title: 'Rerun requested',
+                  message: `${workflowSubject} has been queued.`,
+                  action: {
+                    label: 'View workflow',
+                    href: workflowActionResultHref(result, detailHref),
+                  },
+                });
               },
             },
           );
@@ -379,7 +443,6 @@ export function WorkflowRowActionsMenu({
         },
         onBypassDependencies: () => {
           setActionError(null);
-          setActionNotice(null);
           signalMutation.mutate(
             {
               signalName: 'BypassDependencies',
@@ -387,7 +450,14 @@ export function WorkflowRowActionsMenu({
             },
             {
               onSuccess: () => {
-                setActionNotice('Dependency wait bypass was requested.');
+                toast.success({
+                  title: 'Dependency wait bypass requested',
+                  message: `${workflowSubject} will continue without waiting on dependencies.`,
+                  action: {
+                    label: 'View workflow',
+                    href: detailHref,
+                  },
+                });
               },
             },
           );
@@ -409,6 +479,7 @@ export function WorkflowRowActionsMenu({
     compareHref,
     createRemediationMutation,
     disabledReason,
+    detailHref,
     editHref,
     editTaskUnavailableReason,
     execution,
@@ -416,8 +487,10 @@ export function WorkflowRowActionsMenu({
     rerunUnavailableReason,
     signalMutation,
     taskEditingEnabled,
+    toast,
     updateMutation,
     workflowId,
+    workflowSubject,
   ]);
 
   const emptyMessage = detailQuery.isLoading
@@ -425,7 +498,7 @@ export function WorkflowRowActionsMenu({
     : detailQuery.isError
       ? 'Unable to load workflow actions.'
       : 'No workflow actions are currently available.';
-  const subject = execution?.title?.trim() || workflowId;
+  const subject = workflowSubject;
   const closeDialog = () => {
     setActiveDialog(null);
     setActionError(null);
@@ -495,11 +568,6 @@ export function WorkflowRowActionsMenu({
       {actionError ? (
         <p className="workflow-row-actions-error" role="alert">
           {actionError}
-        </p>
-      ) : null}
-      {actionNotice ? (
-        <p className="notice ok" role="status">
-          {actionNotice}
         </p>
       ) : null}
     </div>
