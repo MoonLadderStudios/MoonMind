@@ -97,17 +97,13 @@ function randomWorkflowStartHeading(except?: string): string {
   if (WORKFLOW_START_HEADING_QUOTES.length === 0) {
     return "Start Workflow";
   }
-  if (WORKFLOW_START_HEADING_QUOTES.length === 1) {
-    return WORKFLOW_START_HEADING_QUOTES[0] ?? "Start Workflow";
-  }
-  let next = except || "Start Workflow";
-  while (next === except) {
-    const index = Math.floor(
-      Math.random() * WORKFLOW_START_HEADING_QUOTES.length,
-    );
-    next = WORKFLOW_START_HEADING_QUOTES[index] ?? "Start Workflow";
-  }
-  return next;
+  const candidates = WORKFLOW_START_HEADING_QUOTES.filter(
+    (quote) => quote !== except,
+  );
+  const choices =
+    candidates.length > 0 ? candidates : WORKFLOW_START_HEADING_QUOTES;
+  const index = Math.floor(Math.random() * choices.length);
+  return choices[index] ?? "Start Workflow";
 }
 
 function readProposeTasksPreference(defaultValue: boolean): boolean {
