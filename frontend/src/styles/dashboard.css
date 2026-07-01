@@ -5084,6 +5084,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.5rem;
 }
 
+#queue-dependency-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.5rem;
+}
+
 :is(.queue-step-attachments-list, #queue-dependency-list) li > span:first-child {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -6348,6 +6355,33 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   box-shadow: none;
   transform: none;
   filter: none;
+}
+
+.queue-step-capability-chip .queue-step-capability-chip-remove,
+.queue-step-attachment-chip .queue-step-attachment-chip-remove {
+  flex: 0 0 1rem;
+  width: 1rem;
+  min-width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  background-image: none;
+  box-shadow: none;
+}
+
+.queue-step-capability-chip .queue-step-capability-chip-remove svg,
+.queue-step-attachment-chip .queue-step-attachment-chip-remove svg {
+  width: 0.56rem;
+  height: 0.56rem;
+  stroke-width: 2;
+}
+
+.queue-step-capability-chip .queue-step-capability-chip-remove:hover,
+.queue-step-capability-chip .queue-step-capability-chip-remove:active,
+.queue-step-capability-chip .queue-step-capability-chip-remove.is-clicked,
+.queue-step-attachment-chip .queue-step-attachment-chip-remove:hover,
+.queue-step-attachment-chip .queue-step-attachment-chip-remove:active,
+.queue-step-attachment-chip .queue-step-attachment-chip-remove.is-clicked {
+  transform: none;
 }
 
 .sr-only {
