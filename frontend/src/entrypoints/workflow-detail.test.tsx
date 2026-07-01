@@ -1080,7 +1080,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list,[\s\S]*?\.workflow-workspace-close-sidebar,[\s\S]*?width:\s*2rem;/);
     expect(dashboardCss).toMatch(/\.workflow-workspace-control-icon,[\s\S]*?\.workflow-workspace-expand-list svg[\s\S]*?width:\s*1\.05rem;/);
     expect(dashboardCss).toMatch(
-      /\.workflow-workspace-expand-list:hover,[\s\S]*?\.workflow-workspace-close-sidebar:hover,[\s\S]*?background:\s*rgb\(var\(--mm-ink\) \/ 0\.06\);/,
+      /\.workflow-workspace-sidebar-control:hover,[\s\S]*?background-image:\s*linear-gradient\(145deg,\s*rgb\(var\(--mm-accent\) \/ 0\.35\),\s*rgb\(var\(--mm-accent-2\) \/ 0\.25\)\);/,
     );
   });
 
