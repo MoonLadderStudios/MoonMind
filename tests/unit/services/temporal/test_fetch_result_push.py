@@ -1422,6 +1422,81 @@ class TestPushWorkspaceBranch:
         ]
 
     @pytest.mark.asyncio
+    async def test_push_commits_already_staged_add_delete_without_restaging(self):
+        """Already-staged add/delete changes should commit without pathspec failures."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+        recorded_calls: list[tuple[object, ...]] = []
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"auto-staged123\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(
+                    return_value=(
+                        b"A  tests/unit/tools/test_link_moonspec_submodule.py\0"
+                        b"D  tests/unit/tools/test_sync_moonspec_submodule.py\0",
+                        b"",
+                    )
+                )
+                proc.returncode = 0
+            elif call_count == 3:  # staged diff check
+                proc.communicate = AsyncMock(
+                    return_value=(
+                        b"tests/unit/tools/test_link_moonspec_submodule.py\n"
+                        b"tests/unit/tools/test_sync_moonspec_submodule.py\n",
+                        b"",
+                    )
+                )
+                proc.returncode = 0
+            elif call_count == 4:  # commit
+                proc.communicate = AsyncMock(
+                    return_value=(b"[auto-staged123 abc123] msg\n", b"")
+                )
+                proc.returncode = 0
+            elif call_count == 5:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 6:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"staged-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 7:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 8:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"staged-head-sha\n", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch(
+                "run-1",
+                commit_message="Ship staged workspace",
+            )
+
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "auto-staged123"
+        assert result["push_commit_count"] == 1
+        assert result["push_head_sha"] == "staged-head-sha"
+        assert result["push_commit_message"] == "Ship staged workspace"
+        assert all("add" not in call for call in recorded_calls)
+        commit_call = next(call for call in recorded_calls if "commit" in call)
+        assert list(commit_call[-3:]) == [
+            "commit",
+            "-m",
+            "Ship staged workspace",
+        ]
+
+    @pytest.mark.asyncio
     async def test_push_dirty_workspace_commit_failure_returns_failed(self):
         """Commit failures surface as publish failures instead of false no-ops."""
         store = _make_mock_store()
