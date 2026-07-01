@@ -15,6 +15,7 @@
   --mm-accent-warm: 244 114 182;
   --mm-ok: 34 197 94;
   --mm-warn: 245 158 11;
+  --mm-status-waiting: 161 98 7;
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
@@ -106,6 +107,7 @@
   --mm-accent-warm: 249 115 22;
   --mm-ok: 74 222 128;
   --mm-warn: 251 191 36;
+  --mm-status-waiting: 250 204 21;
   --mm-danger: 251 113 133;
   --mm-action-primary: 26 153 123;
   --mm-shadow: 0 24px 52px -34px rgb(0 0 0 / 0.88);
@@ -2755,18 +2757,13 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(var(--mm-status-queued, 99 102 241) / 0.62);
 }
 
-.status-awaiting_action {
-  color: rgb(var(--mm-accent));
-  background: rgb(var(--mm-accent) / 0.14);
-  border-color: rgb(var(--mm-accent) / 0.55);
-}
-
+.status-awaiting_action,
 .status-waiting,
 .status-awaiting-dependencies,
 .status-awaiting-external {
-  color: rgb(var(--mm-status-waiting, 130 72 246));
-  background: rgb(var(--mm-status-waiting, 130 72 246) / 0.14);
-  border-color: rgb(var(--mm-status-waiting, 130 72 246) / 0.62);
+  color: rgb(var(--mm-status-waiting));
+  background: rgb(var(--mm-status-waiting) / 0.14);
+  border-color: rgb(var(--mm-status-waiting) / 0.62);
 }
 
 .status-initializing,
