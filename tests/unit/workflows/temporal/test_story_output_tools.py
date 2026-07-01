@@ -9,6 +9,9 @@ from moonmind.workflows.temporal import story_output_tools as story_tools
 from moonmind.workflows.temporal.story_output_tools import (
     check_jira_blockers,
     create_document_update_tasks_from_paths,
+    create_github_issue_implement_workflows_from_issue_mappings,
+    create_github_issue_orchestrate_workflows_from_issue_mappings,
+    create_github_issues_from_stories,
     create_jira_implement_tasks_from_issue_mappings,
     create_jira_issues_from_stories,
     create_jira_orchestrate_tasks_from_issue_mappings,
@@ -102,13 +105,48 @@ class _FakeExecutionCreator:
         }
 
 
+class _RecordingDispatcher:
+    def __init__(self) -> None:
+        self.skills: dict[str, Any] = {}
+
+    def register_skill(self, *, skill_name: str, handler: Any) -> None:
+        self.skills[skill_name] = handler
+
+
 class _FakeGitHubService:
     def __init__(self) -> None:
         self.token_requests: list[str] = []
+        self.create_issue_requests: list[dict[str, Any]] = []
 
     async def resolve_github_token(self, *, repo: str):
         self.token_requests.append(repo)
         return "ghs-test", None
+
+    async def create_issue(
+        self,
+        *,
+        repo: str,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+        github_token: str | None = None,
+    ):
+        self.create_issue_requests.append(
+            {
+                "repo": repo,
+                "title": title,
+                "body": body,
+                "labels": labels or [],
+                "github_token": github_token,
+            }
+        )
+        issue_number = len(self.create_issue_requests)
+        return {
+            "externalKey": str(issue_number),
+            "externalUrl": f"https://github.com/{repo}/issues/{issue_number}",
+            "created": True,
+            "summary": f"GitHub issue created: https://github.com/{repo}/issues/{issue_number}",
+        }
 
     def _github_headers(self, token: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {token}"}
@@ -442,6 +480,247 @@ async def test_create_jira_issues_drops_original_criteria_when_partial_remaining
     assert "Implement only the missing behavior." in request.description
     assert "Acceptance Criteria\nOriginal completed criterion." not in request.description
     assert "Requirements\nOriginal completed requirement." not in request.description
+
+
+@pytest.mark.asyncio
+async def test_create_github_issues_from_reconciled_story_breakdown():
+    service = _FakeGitHubService()
+
+    result = await create_github_issues_from_stories(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "workflowId": "mm-1068-run",
+            "github": {
+                "labels": ["moonmind", "MM-1068"],
+                "token": "workflow-payload-token",
+                "githubToken": "workflow-payload-token-alias",
+            },
+            "stories": {
+                "source": {
+                    "referencePath": "docs/Workflows/SkillAndPlanContracts.md",
+                    "sourceDocumentClass": "canonical-declarative",
+                },
+                "stories": [
+                    {
+                        "id": "STORY-001",
+                        "summary": "Create GitHub issue story output",
+                        "description": "As a breakdown workflow, create GitHub issues.",
+                        "acceptanceCriteria": ["One issue is created."],
+                        "sourceReference": {
+                            "path": "docs/Workflows/SkillAndPlanContracts.md",
+                            "title": "MM-1063: Update Presets",
+                            "sections": [
+                                "Add GitHub Issue creation from MoonSpec breakdowns"
+                            ],
+                            "claimIds": ["DESIGN-REQ-007"],
+                            "coverageIds": ["DESIGN-REQ-014"],
+                            "sourceIssueKey": "MM-1063",
+                        },
+                    },
+                    {
+                        "id": "STORY-002",
+                        "summary": "Already implemented",
+                        "implementationStatus": "fully_implemented",
+                        "jiraCreation": {"action": "skip"},
+                    },
+                    {
+                        "id": "STORY-003",
+                        "summary": "Unverifiable story",
+                        "implementationStatus": "unverifiable",
+                        "jiraCreation": {"action": "manual_review"},
+                    },
+                ],
+            },
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["storyOutput"]["status"] == "github_partial"
+    assert result.outputs["storyOutput"]["storyCount"] == 3
+    assert result.outputs["storyOutput"]["eligibleStoryCount"] == 1
+    assert result.outputs["storyOutput"]["createdCount"] == 1
+    assert result.outputs["storyOutput"]["dependencyMode"] == "none"
+    assert result.outputs["storyOutput"]["dependencyCount"] == 0
+    assert result.outputs["storyOutput"]["skippedStories"][0]["storyId"] == "STORY-002"
+    assert result.outputs["storyOutput"]["blockedStories"][0]["storyId"] == "STORY-003"
+    assert result.outputs["github"]["issueMappings"] == [
+        {
+            "storyId": "STORY-001",
+            "storyIndex": 1,
+            "summary": "Create GitHub issue story output",
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": "1",
+            "issueUrl": "https://github.com/MoonLadderStudios/MoonMind/issues/1",
+            "sourceDesignPath": "docs/Workflows/SkillAndPlanContracts.md",
+            "sourceTitle": "MM-1063: Update Presets",
+            "sourceClaimIds": ["DESIGN-REQ-007"],
+            "sourceSections": [
+                "Add GitHub Issue creation from MoonSpec breakdowns"
+            ],
+            "sourceIssueKey": "MM-1063",
+            "coverageIds": ["DESIGN-REQ-014"],
+        }
+    ]
+
+    request = service.create_issue_requests[0]
+    assert request["repo"] == "MoonLadderStudios/MoonMind"
+    assert request["title"] == "Create GitHub issue story output"
+    assert request["labels"] == [
+        "moonmind",
+        "MM-1068",
+        "moonmind-workflow-mm-1068-run",
+    ]
+    assert "Source Document: docs/Workflows/SkillAndPlanContracts.md" in request["body"]
+    assert "Source Title: MM-1063: Update Presets" in request["body"]
+    assert "Source Sections:" in request["body"]
+    assert "DESIGN-REQ-007" in request["body"]
+    assert "DESIGN-REQ-014" in request["body"]
+    assert "One issue is created." in request["body"]
+    assert request["github_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_github_issues_narrows_partial_story_to_remaining_work():
+    service = _FakeGitHubService()
+
+    result = await create_github_issues_from_stories(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "Original broad GitHub story",
+                    "description": "Original work.",
+                    "implementationStatus": "partially_implemented",
+                    "implementedEvidence": [
+                        {"requirement": "DESIGN-REQ-007", "evidence": "Tool exists."}
+                    ],
+                    "remainingWork": {
+                        "summary": "Complete GitHub workflow mapping",
+                        "description": "Add workflow creation outputs.",
+                        "acceptanceCriteria": ["Workflow mappings are returned."],
+                    },
+                }
+            ],
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["storyOutput"]["status"] == "github_created"
+    assert result.outputs["storyOutput"]["partialStoriesAdjusted"][0]["storyId"] == (
+        "STORY-001"
+    )
+    request = service.create_issue_requests[0]
+    assert request["title"] == "Complete GitHub workflow mapping"
+    assert "Add workflow creation outputs." in request["body"]
+    assert "Already Implemented Evidence" in request["body"]
+    assert "Tool exists." in request["body"]
+    assert "Original Story Scope" in request["body"]
+    assert "Workflow mappings are returned." in request["body"]
+
+
+@pytest.mark.asyncio
+async def test_create_github_issue_workflows_from_issue_mappings():
+    creator = _FakeExecutionCreator()
+
+    result = await create_github_issue_implement_workflows_from_issue_mappings(
+        {
+            "github": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-001",
+                        "storyIndex": 1,
+                        "summary": "First story",
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "issueNumber": "11",
+                        "sourceDesignPath": "docs/Workflows/SkillAndPlanContracts.md",
+                        "sourceClaimIds": ["DESIGN-REQ-007"],
+                    },
+                    {
+                        "storyId": "STORY-002",
+                        "storyIndex": 2,
+                        "summary": "Second story",
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "issueNumber": "12",
+                    },
+                ]
+            },
+            "githubOrchestration": {
+                "traceability": {
+                    "sourceIssueKey": "MM-1063",
+                    "sourceBriefRef": "MM-1068",
+                },
+                "task": {
+                    "runtime": {"mode": "codex"},
+                    "publish": {"mode": "pr"},
+                },
+            },
+        },
+        execution_creator=creator,
+    )
+
+    orchestration = result.outputs["githubWorkflowOrchestration"]
+    assert orchestration["status"] == "completed"
+    assert orchestration["storyCount"] == 2
+    assert orchestration["createdWorkflowCount"] == 2
+    assert orchestration["dependencyMode"] == "workflow_linear_chain"
+    assert orchestration["dependencyCount"] == 1
+    assert orchestration["workflows"][0]["githubIssueNumber"] == "11"
+    assert orchestration["workflows"][1]["dependsOn"] == ["mm:story-1"]
+
+    first_request = creator.requests[0]
+    assert first_request["integration"] == "github"
+    assert first_request["idempotency_key"].startswith(
+        "github-issue-implement:MM-1063:STORY-001:"
+    )
+    workflow = first_request["initial_parameters"]["workflow"]
+    assert workflow["taskTemplate"]["slug"] == "github-issue-implement"
+    assert workflow["inputs"]["github_issue"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "number": 11,
+        "title": "First story",
+    }
+    assert workflow["inputs"]["github_issue_ref"] == "MoonLadderStudios/MoonMind#11"
+    assert "Source issue: MM-1063." in workflow["instructions"]
+    assert "Source canonical claim IDs: DESIGN-REQ-007." in workflow["instructions"]
+
+
+@pytest.mark.asyncio
+async def test_create_github_issue_orchestrate_workflows_uses_orchestrate_preset():
+    creator = _FakeExecutionCreator()
+
+    result = await create_github_issue_orchestrate_workflows_from_issue_mappings(
+        {
+            "issueMappings": [
+                {
+                    "storyId": "STORY-001",
+                    "storyIndex": 1,
+                    "summary": "Orchestrate story",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "issueNumber": "21",
+                }
+            ],
+            "traceability": {"sourceIssueKey": "MM-1063"},
+        },
+        execution_creator=creator,
+    )
+
+    assert result.outputs["githubWorkflowOrchestration"]["createdWorkflowCount"] == 1
+    workflow = creator.requests[0]["initial_parameters"]["workflow"]
+    assert workflow["taskTemplate"]["slug"] == "github-issue-orchestrate"
+    assert workflow["inputs"]["github_issue_ref"] == "MoonLadderStudios/MoonMind#21"
+
+
+def test_register_story_output_tool_handlers_includes_github_story_tools():
+    dispatcher = _RecordingDispatcher()
+
+    story_tools.register_story_output_tool_handlers(dispatcher)
+
+    assert "story.create_github_issues" in dispatcher.skills
+    assert "story.create_github_issue_implement_workflows" in dispatcher.skills
+    assert "story.create_github_issue_orchestrate_workflows" in dispatcher.skills
 
 @pytest.mark.asyncio
 async def test_load_jira_preset_brief_uses_trusted_jira_issue_payload():

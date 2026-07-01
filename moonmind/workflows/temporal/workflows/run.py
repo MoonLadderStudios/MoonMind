@@ -7782,9 +7782,10 @@ class MoonMindRunWorkflow:
                         require_pull_request_url = False
                         self._publish_status = "published"
                         self._publish_reason = (
-                            "Jira issue output succeeded; no PR output required"
+                            f"{story_output_mode.title()} issue output succeeded; "
+                            "no PR output required"
                         )
-                        self._publish_context["storyOutputMode"] = "jira"
+                        self._publish_context["storyOutputMode"] = story_output_mode
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
 
@@ -10116,11 +10117,19 @@ class MoonMindRunWorkflow:
 
     @staticmethod
     def _is_successful_jira_story_output(*, mode: str, status: str) -> bool:
-        return mode == "jira" and status in {
-            "jira_created",
-            "jira_partial",
-            "jira_noop",
-        }
+        if mode == "jira":
+            return status in {
+                "jira_created",
+                "jira_partial",
+                "jira_noop",
+            }
+        if mode == "github":
+            return status in {
+                "github_created",
+                "github_partial",
+                "github_noop",
+            }
+        return False
 
     @staticmethod
     def _trusted_jira_output_summary(outputs: Mapping[str, Any]) -> str | None:
@@ -10144,9 +10153,35 @@ class MoonMindRunWorkflow:
                     parts.append(f"dependencyMode={dependency_mode}")
                 return "; ".join(parts) + "."
             reason = str(story_output.get("reason") or "").strip()
-            if status:
+            if status and (status.startswith("jira_") or status == "fallback"):
                 suffix = f": {reason}" if reason else ""
                 return f"Jira story output finished with status {status}{suffix}."
+
+        if isinstance(story_output, Mapping):
+            status = str(story_output.get("status") or "").strip()
+            created_count = story_output.get("createdCount")
+            story_count = story_output.get("storyCount")
+            eligible_count = story_output.get("eligibleStoryCount")
+            dependency_mode = str(story_output.get("dependencyMode") or "").strip()
+            dependency_count = story_output.get("dependencyCount")
+            if status in {"github_created", "github_partial", "github_noop"}:
+                verb = "Created" if status != "github_noop" else "Created no"
+                parts = [f"{verb} GitHub issues"]
+                if isinstance(created_count, int):
+                    parts.append(f"created={created_count}")
+                if isinstance(eligible_count, int):
+                    parts.append(f"eligible={eligible_count}")
+                if isinstance(story_count, int):
+                    parts.append(f"stories={story_count}")
+                if dependency_mode:
+                    parts.append(f"dependencyMode={dependency_mode}")
+                if isinstance(dependency_count, int):
+                    parts.append(f"dependencyCount={dependency_count}")
+                return "; ".join(parts) + "."
+            reason = str(story_output.get("reason") or "").strip()
+            if status and status.startswith("github_"):
+                suffix = f": {reason}" if reason else ""
+                return f"GitHub story output finished with status {status}{suffix}."
 
         orchestration = outputs.get("jiraOrchestration") or outputs.get(
             "jira_orchestration"
@@ -10177,6 +10212,36 @@ class MoonMindRunWorkflow:
             if status:
                 suffix = f" ({'; '.join(parts)})" if parts else ""
                 return f"Jira downstream task creation {status}{suffix}."
+
+        github_orchestration = outputs.get("githubWorkflowOrchestration") or outputs.get(
+            "github_workflow_orchestration"
+        )
+        if isinstance(github_orchestration, Mapping):
+            status = str(github_orchestration.get("status") or "").strip()
+            created_count = github_orchestration.get("createdWorkflowCount")
+            story_count = github_orchestration.get("storyCount")
+            dependency_count = github_orchestration.get("dependencyCount")
+            parts = []
+            if isinstance(created_count, int):
+                parts.append(f"createdWorkflows={created_count}")
+            if isinstance(story_count, int):
+                parts.append(f"stories={story_count}")
+            if isinstance(dependency_count, int):
+                parts.append(f"workflowDependencies={dependency_count}")
+            failures = github_orchestration.get("failures")
+            if isinstance(failures, list) and failures:
+                first_failure = failures[0] if isinstance(failures[0], Mapping) else {}
+                message = str(first_failure.get("message") or "").strip()
+                error_code = str(first_failure.get("errorCode") or "").strip()
+                if error_code or message:
+                    message = message.rstrip(".")
+                    parts.append(
+                        "firstFailure="
+                        + ": ".join(part for part in (error_code, message) if part)
+                    )
+            if status:
+                suffix = f" ({'; '.join(parts)})" if parts else ""
+                return f"GitHub downstream workflow creation {status}{suffix}."
         return None
 
     def _record_execution_context(self, *, node_id: str, execution_result: Any) -> None:

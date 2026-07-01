@@ -2321,6 +2321,40 @@ def test_trusted_jira_output_summary_omits_empty_reason_suffix() -> None:
     assert summary == "Jira story output finished with status jira_blocked."
 
 
+def test_trusted_output_summary_uses_github_workflow_terminology() -> None:
+    issue_summary = MoonMindRunWorkflow._trusted_jira_output_summary(
+        {
+            "storyOutput": {
+                "status": "github_created",
+                "createdCount": 2,
+                "eligibleStoryCount": 2,
+                "storyCount": 3,
+                "dependencyMode": "none",
+                "dependencyCount": 0,
+            }
+        }
+    )
+    workflow_summary = MoonMindRunWorkflow._trusted_jira_output_summary(
+        {
+            "githubWorkflowOrchestration": {
+                "status": "completed",
+                "createdWorkflowCount": 2,
+                "storyCount": 2,
+                "dependencyCount": 1,
+            }
+        }
+    )
+
+    assert issue_summary == (
+        "Created GitHub issues; created=2; eligible=2; stories=3; "
+        "dependencyMode=none; dependencyCount=0."
+    )
+    assert workflow_summary == (
+        "GitHub downstream workflow creation completed "
+        "(createdWorkflows=2; stories=2; workflowDependencies=1)."
+    )
+
+
 def test_record_execution_context_scrubs_operator_summary_and_ignores_negative_commit_count(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
