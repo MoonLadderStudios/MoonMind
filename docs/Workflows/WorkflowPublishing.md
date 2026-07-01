@@ -1,31 +1,195 @@
 # Workflow Publishing
 
-Workflow publishing controls how agent-produced changes reach the repository after execution. The `publishMode` field on a Workflow Execution determines whether changes are committed only, pushed to a branch, or turned into a pull request.
+Workflow publishing controls how agent-produced changes reach the repository after execution. The `publishMode` field on a Workflow Execution, also represented in canonical payloads as `publish.mode`, determines whether publishing is disabled, handled by MoonMind infrastructure, or left to the agent under auto publish.
 
 ## Publish Modes
 
-| Mode     | Behavior |
-|----------|----------|
-| `none`   | No publishing. Changes remain in the agent's workspace only. |
-| `branch` | Changes are committed and pushed to the selected branch on the remote. |
-| `pr`     | Changes are committed, pushed to a work branch, and a pull request is created against the base branch. |
+| Mode | Behavior |
+| --- | --- |
+| `auto` | Agent-owned publishing. The agent or selected skill determines whether to no-op, commit, push, update a PR branch, merge, or block, then writes publish evidence proving the result. |
+| `none` | Publishing is disabled. No commit, push, pull request, or merge should happen. |
+| `branch` | MoonMind-managed publishing commits and pushes changes to the selected branch on the remote. |
+| `pr` | MoonMind-managed publishing commits changes, pushes a work branch, and creates a pull request against the base branch. |
+
+### `auto`
+
+`auto` is the user-facing mode for agent-owned publishing. It mirrors skill selection: when `skill.id = "auto"`, the agent determines which skill to use; when `publish.mode = "auto"`, the agent determines the correct publish action for the selected task and skill.
+
+The canonical user payload stays simple:
+
+```json
+{
+  "publish": {
+    "mode": "auto"
+  }
+}
+```
+
+MoonMind expands that into an effective declarative contract:
+
+```yaml
+publish:
+  mode: auto
+  owner: agent
+  requiredEvidence: true
+  allowedActions:
+    - no_op_verified
+    - commit
+    - push
+    - merge
+  failureBehavior: block_if_unverified
+```
+
+In auto mode, the agent may choose no-op, commit, push, PR-branch update, or merge when that is required by the selected skill. A run is successful only when the agent writes structured publish evidence proving the chosen outcome. MoonMind must not describe auto publish as disabled.
+
+Auto-publish-capable skills include the PR-resolution and delegated publish skills that own their repository side effects, such as `pr-resolver`, `batch-pr-resolver`, `batch-dependabot-resolver`, `batch-workflows`, `fix-comments`, `fix-ci`, and `fix-merge-conflicts`. Long-term, the source of truth should be skill metadata, not only a hardcoded compatibility list. A skill can declare the contract explicitly:
+
+```yaml
+metadata:
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
+```
+
+Normalization rules for auto-publish-capable skills:
+
+- omitted publish mode resolves to `auto`.
+- explicit `auto` resolves to `auto`.
+- legacy explicit `none` resolves to `auto` with a deprecation diagnostic.
+- `branch` and `pr` are rejected unless the skill explicitly opts into MoonMind-managed publishing.
+
+For non-auto-publish-capable tasks, `auto` is invalid unless the selected skill or runtime contract declares that the agent owns publishing. This keeps `auto` from silently meaning the default PR publisher.
+
+#### Auto publish evidence
+
+Every `publish.mode = "auto"` run must write one shared evidence artifact:
+
+```text
+artifacts/publish_result.json
+```
+
+The artifact is bounded, non-secret, and uses this schema shape:
+
+```json
+{
+  "schemaVersion": "moonmind.publish.auto.v1",
+  "mode": "auto",
+  "owner": "agent",
+  "skillId": "fix-ci",
+  "status": "verified",
+  "action": "push",
+  "repository": "MoonLadderStudios/MoonMind",
+  "branch": "feature/example",
+  "localHead": "abc123...",
+  "remoteBranchHead": "abc123...",
+  "remoteVerified": true,
+  "pushed": true,
+  "merged": false,
+  "prUrl": "https://github.com/org/repo/pull/123",
+  "blockedReason": null,
+  "verificationCommands": [
+    "git rev-parse HEAD",
+    "git ls-remote origin refs/heads/feature/example"
+  ]
+}
+```
+
+Allowed `status` values:
+
+- `verified`
+- `no_op_verified`
+- `blocked`
+- `failed`
+
+Allowed `action` values:
+
+- `none`
+- `commit`
+- `push`
+- `merge`
+- `commit_and_push`
+- `push_and_merge`
+
+A blocked run should still write the artifact when possible:
+
+```json
+{
+  "schemaVersion": "moonmind.publish.auto.v1",
+  "mode": "auto",
+  "owner": "agent",
+  "skillId": "fix-comments",
+  "status": "blocked",
+  "action": "push",
+  "repository": "MoonLadderStudios/MoonMind",
+  "branch": "feature/example",
+  "localHead": "abc123...",
+  "remoteBranchHead": null,
+  "remoteVerified": false,
+  "pushed": false,
+  "merged": false,
+  "prUrl": "https://github.com/org/repo/pull/123",
+  "blockedReason": "publish_unavailable"
+}
+```
+
+#### Auto verification standard
+
+Local success is not enough for auto publish. A successful auto-publish run must prove one of these outcomes:
+
+1. The exact local `HEAD` is visible on the remote branch.
+2. The pull request was merged.
+3. No repository change was needed, and the current `HEAD` was already verified on the remote branch.
+
+If push, merge, GitHub authentication, or remote-head verification is unavailable, the agent must block with `blockedReason = "publish_unavailable"` or a more precise reason. It must not report success based only on a local commit.
+
+#### Auto finish outcomes
+
+`PUBLISH_DISABLED` is reserved for true `publish.mode = "none"`. Auto publish must map from evidence, not from the absence of the MoonMind-managed publish stage.
+
+| Auto evidence | Finish outcome |
+| --- | --- |
+| `status=verified`, `merged=true` | `PUBLISHED_PR` with `publish.mode=auto` and `publish.owner=agent` |
+| `status=verified`, `pushed=true` | `PUBLISHED_BRANCH` with `publish.mode=auto` and `publish.owner=agent` |
+| `status=no_op_verified` | `NO_COMMIT` with `publish.mode=auto` |
+| `status=blocked`, `blockedReason=publish_unavailable` | blocked or failed at `finishOutcome.stage = "publish"` |
+| missing evidence artifact | failed at `finishOutcome.stage = "publish"` with reason `auto_publish_evidence_missing` |
+
+Preferred structured run-summary shape:
+
+```json
+{
+  "finishOutcome": {
+    "code": "PUBLISHED_PR",
+    "stage": "publish",
+    "reason": "Agent auto-published and verified the PR branch."
+  },
+  "publish": {
+    "mode": "auto",
+    "owner": "agent",
+    "status": "verified",
+    "action": "push",
+    "branch": "feature/example",
+    "localHead": "abc123",
+    "remoteBranchHead": "abc123",
+    "prUrl": "https://github.com/org/repo/pull/123",
+    "evidenceRef": "artifact://..."
+  }
+}
+```
+
+UI copy should use `Publish: Auto` and render successful evidence as `Auto publish verified`. Blocked evidence should render as `Auto publish blocked: <reason>`. True `none` mode should render as `Publish disabled`.
 
 ### `none`
 
-The agent runs in its workspace but no git operations occur after completion. Useful for read-only Workflow Executions (analysis, diagnostics, research) or for Workflow Executions with side effects other than a final publish action.
+Publishing is disabled. The agent runs in its workspace, but no repository publish action should happen during or after execution. This is useful for read-only Workflow Executions such as analysis, diagnostics, and research, or for Workflow Executions whose only intended side effects are outside repository publication.
 
-Some self-managed skills own their own repository side effects while requiring
-MoonMind publish mode `none`. Standalone `pr-resolver` is the canonical case:
-it resolves and merges an existing pull request from inside the managed runtime.
-For these runs, an explicit PR selector in `inputs.pr` or `inputs.branch` is
-preferred. When the create-form single `git.branch` field names a non-default
-branch, MoonMind may use that branch as the resolver's PR selector; common
-default/base branch names such as `main` and `master` remain invalid as implicit
-resolver selectors.
+`none` must not be overloaded to mean agent-owned commit, push, or merge. Legacy payloads that used `none` for known auto-publish-capable skills should be normalized to `auto` for active execution and surfaced with a compatibility diagnostic.
 
 ### `branch`
 
-After the agent completes, the infrastructure pushes the current work branch to the remote. The agent is instructed to commit but **not** to push or create a PR — that is handled deterministically by the runtime.
+After the agent completes, MoonMind infrastructure pushes the current work branch to the remote. The agent is instructed to commit but **not** to push or create a PR — that is handled deterministically by the runtime.
 
 For new authored submissions, `branch` publish uses a single operator-selected `branch` field. That branch is the branch to update and push. MoonMind no longer exposes a separate "clone from X, push to Y" authoring model.
 
@@ -44,7 +208,7 @@ Example:
 
 For PR publication, the authored `branch` is the selected repository branch and PR base. MoonMind creates or obtains a runtime-generated work branch for the PR head, pushes changes there, and creates a pull request back to the authored base branch.
 
-When merge automation is explicitly enabled for a PR-publishing Workflow Execution, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.UserWorkflow` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `none`; downstream dependencies on the original Workflow Execution are satisfied only after merge automation succeeds.
+When merge automation is explicitly enabled for a PR-publishing Workflow Execution, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.UserWorkflow` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `auto`; downstream dependencies on the original Workflow Execution are satisfied only after merge automation succeeds.
 
 Operator-facing detail payloads present PR publishing with merge automation as the single publish mode value `pr_with_merge_automation`. Worker-bound execution input remains normalized as `publishMode = "pr"` plus merge automation configuration, because merge automation is an orchestration extension of PR publishing rather than a separate repository publish primitive. Details must not expose a second selection flag such as `mergeAutomationSelected`; active or terminal merge automation state belongs under the `mergeAutomation` status object.
 
@@ -52,12 +216,7 @@ For Jira-backed PR-publishing Workflow Executions, the authored or preset-provid
 
 The publish path must not infer post-merge completion targets through fuzzy summary search or by transitioning every issue key found in PR metadata. PR metadata is only a strict fallback when stronger configured or captured Jira context is unavailable.
 
-If a Jira-oriented PR-publishing Workflow Execution completes with no repository changes
-because the issue is already implemented, `MoonMind.UserWorkflow` completes that
-authoritative Jira issue through the same trusted Jira transition boundary used
-for post-merge completion. Ambiguous no-change results that do not explicitly
-confirm the issue is already implemented remain non-mutating and must say so in
-the run summary.
+If a Jira-oriented PR-publishing Workflow Execution completes with no repository changes because the issue is already implemented, `MoonMind.UserWorkflow` completes that authoritative Jira issue through the same trusted Jira transition boundary used for post-merge completion. Ambiguous no-change results that do not explicitly confirm the issue is already implemented remain non-mutating and must say so in the run summary.
 
 ## Branch Naming
 
@@ -82,7 +241,7 @@ New authored submissions use one branch field consistently across UI, API, snaps
 
 | Field | Role | Description |
 | --- | --- | --- |
-| `branch` | Authored branch selection | For `publishMode: pr`, the selected repo branch and PR base. For `publishMode: branch`, the branch to update and push. |
+| `branch` | Authored branch selection | For `publishMode: pr`, the selected repo branch and PR base. For `publishMode: branch`, the branch to update and push. For `publishMode: auto`, the agent-owned publisher may use it as the current PR branch or PR selector. |
 
 `targetBranch` is not an authored or operator-facing field in new submissions. For PR mode, the head/work branch is runtime-generated or provider-managed and is not part of the create-form contract. `Publish Mode` remains part of the Workflow Execution contract; only its UI placement changed.
 
@@ -117,6 +276,8 @@ For `publishMode: pr`, the authored branch is the PR base branch. The PR head br
 
 For `publishMode: branch`, the authored branch is the branch the infrastructure updates and pushes.
 
+For `publishMode: auto`, the authored branch is input to the agent-owned publish contract. A PR-resolving skill may treat it as the current PR branch or selector, while an implementation skill may use it as the branch whose remote head must be verified.
+
 ### Work Branch (PR source)
 
 When the workflow creates a PR, it resolves the work/head branch from runtime-owned sources:
@@ -129,16 +290,15 @@ If no PR head branch can be resolved for `publishMode: pr`, the workflow raises 
 
 ## Post-Agent Git Push
 
-After a managed agent subprocess completes successfully, the infrastructure performs a deterministic `git push` of the work branch. This is **not** delegated to the agent via prompt instructions — it is an infrastructure guarantee.
+After a managed agent subprocess completes successfully in MoonMind-managed `branch` or `pr` mode, the infrastructure performs a deterministic `git push` of the work branch. This is **not** delegated to the agent via prompt instructions — it is an infrastructure guarantee.
 
-GitHub publishing resolves credentials through the canonical GitHub resolver
-before the push. The push command receives `GITHUB_TOKEN`, `GH_TOKEN`, and
-`GIT_TERMINAL_PROMPT=0` in its subprocess environment when a token is available,
-so managed publishing does not depend on machine-level git credential caches.
+In `auto` mode, the post-agent infrastructure push is not the publish owner. The agent or selected skill owns commit/push/merge decisions and must write the auto publish evidence artifact. MoonMind finalization consumes that evidence instead of running the generic managed publish stage.
+
+GitHub publishing resolves credentials through the canonical GitHub resolver before the push. The push command receives `GITHUB_TOKEN`, `GH_TOKEN`, and `GIT_TERMINAL_PROMPT=0` in its subprocess environment when a token is available, so managed publishing does not depend on machine-level git credential caches.
 
 ### Safety Guard
 
-Before pushing, the runtime resolves the current branch name (`git rev-parse --abbrev-ref HEAD`) and **refuses to push** if the branch is:
+Before pushing in MoonMind-managed modes, the runtime resolves the current branch name (`git rev-parse --abbrev-ref HEAD`) and **refuses to push** if the branch is:
 
 - `main`
 - `master`
@@ -152,15 +312,9 @@ If the branch is protected, the push is skipped with a warning log. This prevent
 
 ## Pull Request Creation
 
-For GitHub repositories, managed PR publishing uses the GitHub REST API when the
-runtime has a resolved repository credential. This keeps fine-grained PAT
-permission failures tied to the exact endpoint and exposes GitHub diagnostics
-such as the response message, documentation URL, and accepted-permissions
-header.
+For GitHub repositories, managed PR publishing uses the GitHub REST API when the runtime has a resolved repository credential. This keeps fine-grained PAT permission failures tied to the exact endpoint and exposes GitHub diagnostics such as the response message, documentation URL, and accepted-permissions header.
 
-If no repository-scoped token is available, the runtime may fall back to
-`gh pr create` with explicit `GH_TOKEN` / `GITHUB_TOKEN` environment injection.
-Ambient `gh auth` state is not a reliable managed-runtime contract.
+If no repository-scoped token is available, the runtime may fall back to `gh pr create` with explicit `GH_TOKEN` / `GITHUB_TOKEN` environment injection. Ambient `gh auth` state is not a reliable managed-runtime contract.
 
 The minimum fine-grained PAT permissions for PR publishing are:
 
@@ -178,13 +332,15 @@ Readiness evaluation additionally needs:
 
 Pull request titles and bodies are semantic review artifacts. They must describe the implemented change, not the orchestration mechanics that produced the change.
 
-MoonMind publishing owns the durable side-effect boundary: selecting the repository and base branch, resolving credentials, pushing the work branch, creating or updating the pull request, recording the confirmed pull request URL, and enforcing downstream gates such as Jira Code Review transitions. Agents own the semantic description of their work: summary, rationale, test evidence, remaining risks, and reviewer-facing pull request metadata.
+MoonMind publishing owns the durable side-effect boundary for managed `branch` and `pr` modes: selecting the repository and base branch, resolving credentials, pushing the work branch, creating or updating the pull request, recording the confirmed pull request URL, and enforcing downstream gates such as Jira Code Review transitions. Agents own the semantic description of their work: summary, rationale, test evidence, remaining risks, and reviewer-facing pull request metadata.
+
+In `auto` mode, the agent or selected skill owns the durable repository side effect as well. It still must keep semantic metadata separate from workflow control text and record the confirmed URL, branch, commit, merge, and verification evidence in `artifacts/publish_result.json`.
 
 Managed runtimes should therefore treat pull request metadata as a structured work product produced by the agent and consumed by the publisher. The preferred contract is:
 
 1. The agent proposes a concise pull request title and body after it has seen the final diff and verification evidence.
 2. MoonMind validates the proposed metadata against simple invariants.
-3. MoonMind creates or updates the pull request through the managed publishing path.
+3. MoonMind creates or updates the pull request through the managed publishing path, or the auto-publish skill records the resulting PR URL in publish evidence.
 4. Downstream workflows consume the confirmed pull request URL and validated metadata, not free-form log output.
 
 For Jira-backed work, the pull request title must include the canonical Jira issue key and should normally use the format:
@@ -238,28 +394,23 @@ Workflows that include MoonSpec verification gates must use the latest structure
 
 Non-retryable blocking verdicts, including `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE`, block publication without waiting for additional remediation attempts unless the workflow explicitly models the missing evidence as recoverable work inside the same bounded plan.
 
-When MoonSpec verification blocks publication, the workflow records
-`publicationBlockedBy: "moonspec_verify"` in publish context, preserves the
-latest verification report and evidence refs, writes a compact
-`failureSummary.type = "moonspec_verification_gate"` block in
-`reports/run_summary.json`, and marks downstream publication or Jira handoff
-steps skipped rather than creating a pull request with known incomplete work.
+When MoonSpec verification blocks publication, the workflow records `publicationBlockedBy: "moonspec_verify"` in publish context, preserves the latest verification report and evidence refs, writes a compact `failureSummary.type = "moonspec_verification_gate"` block in `reports/run_summary.json`, and marks downstream publication or Jira handoff steps skipped rather than creating a pull request with known incomplete work.
 
 ### Agent Instructions
 
-Agents receive a commit-only instruction:
+For MoonMind-managed `branch` and `pr` modes, agents receive a commit-only instruction:
 
 > After completing the changes above, commit your work (`git add -A && git commit -m '<summary>'`). Do NOT push or create a pull request — that is handled automatically.
 
-Some higher-level presets may include an explicit pull-request handoff step
-because a later trusted side effect needs the PR URL before workflow finalization
-(for example, Jira Orchestrate moving an issue to Code Review). In those cases,
-the step-specific handoff instruction is the controlling instruction for that
-step, but the handoff must still use validated pull request metadata derived
-from the completed implementation and verification evidence. It must not use
-earlier control-plane step text, such as Jira status-transition instructions, as
-the pull request title or body. The resulting PR URL must be recorded for the
-workflow to consume.
+For `none`, agents receive a publish-disabled instruction:
+
+> Do NOT commit or push. Publishing is disabled for this task.
+
+For `auto`, agents receive an agent-owned publish instruction:
+
+> Publishing is in auto mode. Determine the correct publish action for this task. You may commit, push, or merge only when required by the selected skill. Write `artifacts/publish_result.json` proving the outcome before reporting success.
+
+Some higher-level presets may include an explicit pull-request handoff step because a later trusted side effect needs the PR URL before workflow finalization (for example, Jira Orchestrate moving an issue to Code Review). In those cases, the step-specific handoff instruction is the controlling instruction for that step, but the handoff must still use validated pull request metadata derived from the completed implementation and verification evidence. It must not use earlier control-plane step text, such as Jira status-transition instructions, as the pull request title or body. The resulting PR URL must be recorded for the workflow to consume.
 
 ## Jules: Special Case
 
@@ -277,6 +428,8 @@ Jules is an external agent provider with its own PR creation mechanism. Unlike m
 ### `automationMode`
 
 When `publishMode` is `pr` or `branch`, the Jules adapter sets `automationMode: AUTO_CREATE_PR` on the session creation request. This tells the Jules API to automatically create a PR when the agent finishes.
+
+`publishMode = "auto"` is valid for Jules only when the adapter declares provider-native auto publish support and returns equivalent publish evidence. Otherwise, auto mode should block before launch rather than silently falling back to managed PR publication.
 
 The Jules adapter extracts the resulting PR URL from:
 1. The `pull_request_url` field on the Jules task response
