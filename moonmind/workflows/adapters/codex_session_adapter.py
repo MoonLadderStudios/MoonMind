@@ -175,6 +175,7 @@ _SESSION_INTERVENTION_FIELDS = (
     "fromSessionEpoch",
     "toSessionEpoch",
 )
+_EMPTY_ASSISTANT_MAX_CLEAR_SESSION_ATTEMPTS = 2
 _JIRA_CREATED_ISSUE_KEYS_PATTERN = re.compile(
     r"\b(?:created\s+(?:jira\s+)?(?:issues?|stories?|tickets?)|"
     r"created\s+(?:issue\s+)?keys?|issue\s+keys?\s+created)\b"
@@ -757,67 +758,90 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     turn_error.type == "CodexTransientTurnError"
                     and _is_empty_assistant_turn_failure(turn_metadata)
                 ):
-                    previous_locator = current_locator
-                    reset_thread_id = _reset_thread_id_for_empty_turn(previous_locator)
-                    reset_handle = await self.clear_session(
-                        binding=binding,
-                        new_thread_id=reset_thread_id,
-                        reason="retry_after_empty_assistant_output",
-                        request_id=(
-                            f"{binding.agent_run_id}:empty-assistant-clear:"
-                            f"{previous_locator.session_epoch}:"
-                            f"{previous_locator.thread_id}"
-                        ),
-                    )
-                    current_locator = self._locator_from_state(
-                        session_state=reset_handle.session_state,
-                        runtime_epoch=reset_handle.session_state.session_epoch,
-                    )
-                    current_active_turn_id = reset_handle.session_state.active_turn_id
-                    session_interventions.append(
-                        {
-                            "action": "clear_session",
-                            "reason": "retry_after_empty_assistant_output",
-                            "fromThreadId": previous_locator.thread_id,
-                            "toThreadId": current_locator.thread_id,
-                            "fromSessionEpoch": previous_locator.session_epoch,
-                            "toSessionEpoch": current_locator.session_epoch,
-                        }
-                    )
-                    try:
-                        turn_response = await _send_current_turn()
-                    except ActivityError as retry_exc:
-                        retry_error = (
-                            retry_exc.cause
-                            if isinstance(retry_exc.cause, ApplicationError)
-                            else None
+                    prior_turn_failures: list[dict[str, Any]] = [dict(turn_metadata)]
+                    for _attempt in range(
+                        1, _EMPTY_ASSISTANT_MAX_CLEAR_SESSION_ATTEMPTS + 1
+                    ):
+                        previous_locator = current_locator
+                        reset_thread_id = _reset_thread_id_for_empty_turn(
+                            previous_locator
                         )
-                        if retry_error is None or retry_error.type not in (
-                            "CodexTransientTurnError",
-                            "CodexPermanentTurnError",
-                        ):
-                            raise
-                        retry_metadata = _turn_failure_metadata_from_activity_error(
-                            retry_error
+                        reset_handle = await self.clear_session(
+                            binding=binding,
+                            new_thread_id=reset_thread_id,
+                            reason="retry_after_empty_assistant_output",
+                            request_id=(
+                                f"{binding.agent_run_id}:empty-assistant-clear:"
+                                f"{previous_locator.session_epoch}:"
+                                f"{previous_locator.thread_id}"
+                            ),
                         )
-                        if _is_empty_assistant_turn_failure(retry_metadata):
-                            retry_metadata["selfHealExhausted"] = True
-                            retry_metadata["selfHealAction"] = "clear_session"
-                            retry_metadata["selfHealAttempts"] = 1
-                        retry_metadata["sessionInterventions"] = session_interventions
-                        retry_metadata["priorTurnFailure"] = turn_metadata
-                        publication = await self._publish_failure_artifacts(
-                            locator=current_locator,
-                            managed_run_id=binding.agent_run_id,
-                            run_id=run_id,
+                        current_locator = self._locator_from_state(
+                            session_state=reset_handle.session_state,
+                            runtime_epoch=reset_handle.session_state.session_epoch,
                         )
-                        failure_error = _publish_activity_error_result(
-                            retry_error,
-                            retry_metadata,
-                            publication,
+                        current_active_turn_id = reset_handle.session_state.active_turn_id
+                        session_interventions.append(
+                            {
+                                "action": "clear_session",
+                                "reason": "retry_after_empty_assistant_output",
+                                "fromThreadId": previous_locator.thread_id,
+                                "toThreadId": current_locator.thread_id,
+                                "fromSessionEpoch": previous_locator.session_epoch,
+                                "toSessionEpoch": current_locator.session_epoch,
+                            }
                         )
-                        failed_state_persisted = True
-                        raise failure_error from retry_exc
+                        try:
+                            turn_response = await _send_current_turn()
+                            break
+                        except ActivityError as retry_exc:
+                            retry_error = (
+                                retry_exc.cause
+                                if isinstance(retry_exc.cause, ApplicationError)
+                                else None
+                            )
+                            if retry_error is None or retry_error.type not in (
+                                "CodexTransientTurnError",
+                                "CodexPermanentTurnError",
+                            ):
+                                raise
+                            retry_metadata = _turn_failure_metadata_from_activity_error(
+                                retry_error
+                            )
+                            is_empty_retry = _is_empty_assistant_turn_failure(
+                                retry_metadata
+                            )
+                            can_retry_empty_turn = (
+                                retry_error.type == "CodexTransientTurnError"
+                                and is_empty_retry
+                                and _attempt
+                                < _EMPTY_ASSISTANT_MAX_CLEAR_SESSION_ATTEMPTS
+                            )
+                            if can_retry_empty_turn:
+                                prior_turn_failures.append(dict(retry_metadata))
+                                continue
+                            if is_empty_retry:
+                                retry_metadata["selfHealExhausted"] = True
+                                retry_metadata["selfHealAction"] = "clear_session"
+                                retry_metadata["selfHealAttempts"] = len(
+                                    session_interventions
+                                )
+                            retry_metadata["sessionInterventions"] = session_interventions
+                            retry_metadata["priorTurnFailure"] = prior_turn_failures[0]
+                            if len(prior_turn_failures) > 1:
+                                retry_metadata["priorTurnFailures"] = prior_turn_failures
+                            publication = await self._publish_failure_artifacts(
+                                locator=current_locator,
+                                managed_run_id=binding.agent_run_id,
+                                run_id=run_id,
+                            )
+                            failure_error = _publish_activity_error_result(
+                                retry_error,
+                                retry_metadata,
+                                publication,
+                            )
+                            failed_state_persisted = True
+                            raise failure_error from retry_exc
                 else:
                     publication = await self._publish_failure_artifacts(
                         locator=current_locator,
