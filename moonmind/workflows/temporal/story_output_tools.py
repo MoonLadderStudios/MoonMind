@@ -29,6 +29,11 @@ from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 JIRA_CREATE_ISSUES_TOOL_NAME = "story.create_jira_issues"
 JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
 JIRA_IMPLEMENT_TASKS_TOOL_NAME = "story.create_jira_implement_tasks"
+GITHUB_CREATE_ISSUES_TOOL_NAME = "story.create_github_issues"
+GITHUB_ISSUE_ORCHESTRATE_TASKS_TOOL_NAME = (
+    "story.create_github_issue_orchestrate_tasks"
+)
+GITHUB_ISSUE_IMPLEMENT_TASKS_TOOL_NAME = "story.create_github_issue_implement_tasks"
 JIRA_CHECK_BLOCKERS_TOOL_NAME = "jira.check_blockers"
 JIRA_LOAD_PRESET_BRIEF_TOOL_NAME = "jira.load_preset_brief"
 GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
@@ -47,6 +52,8 @@ _SOURCE_DOCUMENT_PATH_RE = re.compile(
 )
 _DOWNSTREAM_PRESET_ORCHESTRATE = "orchestrate"
 _DOWNSTREAM_PRESET_IMPLEMENT = "implement"
+_DOWNSTREAM_PRESET_GITHUB_ORCHESTRATE = "github_orchestrate"
+_DOWNSTREAM_PRESET_GITHUB_IMPLEMENT = "github_implement"
 _DOWNSTREAM_PRESETS: dict[str, dict[str, str]] = {
     _DOWNSTREAM_PRESET_ORCHESTRATE: {
         "slug": "jira-orchestrate",
@@ -57,6 +64,16 @@ _DOWNSTREAM_PRESETS: dict[str, dict[str, str]] = {
         "slug": "jira-implement",
         "label": "Jira Implement",
         "idempotencyPrefix": "jira-implement",
+    },
+    _DOWNSTREAM_PRESET_GITHUB_ORCHESTRATE: {
+        "slug": "moonspec-orchestrate",
+        "label": "GitHub Issue Orchestrate",
+        "idempotencyPrefix": "github-issue-orchestrate",
+    },
+    _DOWNSTREAM_PRESET_GITHUB_IMPLEMENT: {
+        "slug": "github-issue-implement",
+        "label": "GitHub Issue Implement",
+        "idempotencyPrefix": "github-issue-implement",
     },
 }
 JIRA_DESCRIPTION_MAX_CHARS = 32767
@@ -117,6 +134,7 @@ ArtifactReader = Callable[
     str | bytes | Awaitable[str | bytes],
 ]
 JiraServiceFactory = Callable[[], JiraToolService]
+GitHubServiceFactory = Callable[[], GitHubService]
 ExecutionCreator = Callable[..., Mapping[str, Any] | Awaitable[Mapping[str, Any]]]
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -1113,8 +1131,11 @@ def _issue_mappings_from_inputs(
     inputs: Mapping[str, Any],
     *,
     context: Mapping[str, Any] | None = None,
+    provider: str = "jira",
 ) -> list[dict[str, Any]]:
+    provider_payload = _mapping(inputs.get(provider))
     jira_payload = _mapping(inputs.get("jira"))
+    github_payload = _mapping(inputs.get("github"))
     input_previous_outputs = _mapping(
         inputs.get("previousOutputs")
         or inputs.get("previous_outputs")
@@ -1125,25 +1146,33 @@ def _issue_mappings_from_inputs(
     )
     input_previous_jira_payload = _mapping(input_previous_outputs.get("jira"))
     context_previous_jira_payload = _mapping(context_previous_outputs.get("jira"))
+    input_previous_provider_payload = _mapping(input_previous_outputs.get(provider))
+    context_previous_provider_payload = _mapping(
+        context_previous_outputs.get(provider)
+    )
     candidates = (
-        jira_payload.get("issueMappings")
-        or jira_payload.get("issue_mappings")
+        provider_payload.get("issueMappings")
+        or provider_payload.get("issue_mappings")
         or inputs.get("issueMappings")
         or inputs.get("issue_mappings")
-        or jira_payload.get("createdIssues")
+        or provider_payload.get("createdIssues")
         or inputs.get("createdIssues")
-        or input_previous_jira_payload.get("issueMappings")
-        or input_previous_jira_payload.get("issue_mappings")
-        or input_previous_jira_payload.get("createdIssues")
+        or input_previous_provider_payload.get("issueMappings")
+        or input_previous_provider_payload.get("issue_mappings")
+        or input_previous_provider_payload.get("createdIssues")
         or input_previous_outputs.get("issueMappings")
         or input_previous_outputs.get("issue_mappings")
         or input_previous_outputs.get("createdIssues")
-        or context_previous_jira_payload.get("issueMappings")
-        or context_previous_jira_payload.get("issue_mappings")
-        or context_previous_jira_payload.get("createdIssues")
+        or context_previous_provider_payload.get("issueMappings")
+        or context_previous_provider_payload.get("issue_mappings")
+        or context_previous_provider_payload.get("createdIssues")
         or context_previous_outputs.get("issueMappings")
         or context_previous_outputs.get("issue_mappings")
         or context_previous_outputs.get("createdIssues")
+        or (jira_payload.get("issueMappings") if provider != "jira" else None)
+        or (github_payload.get("issueMappings") if provider != "github" else None)
+        or input_previous_jira_payload.get("issueMappings")
+        or context_previous_jira_payload.get("issueMappings")
         or []
     )
     mappings = [dict(item) for item in _list(candidates) if isinstance(item, Mapping)]
@@ -1614,6 +1643,353 @@ async def create_jira_implement_tasks_from_issue_mappings(
     )
 
 
+def _github_issue_input_from_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    repository = _github_repository_slug(mapping.get("repository"))
+    number_text = _string(
+        mapping.get("issueNumber")
+        or mapping.get("issue_number")
+        or mapping.get("number")
+    )
+    try:
+        number: int | str = int(number_text)
+    except (TypeError, ValueError):
+        number = number_text
+    issue = {
+        "repository": repository,
+        "number": number,
+    }
+    summary = _string(mapping.get("summary"))
+    url = _string(
+        mapping.get("issueUrl") or mapping.get("issue_url") or mapping.get("url")
+    )
+    if summary:
+        issue["title"] = summary
+    if url:
+        issue["url"] = url
+    return issue
+
+
+def _github_downstream_task_payload(
+    *,
+    mapping: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+    traceability: Mapping[str, Any],
+    depends_on: list[str],
+    source_issue_key: str,
+    target_preset: str,
+) -> tuple[str, dict[str, Any]]:
+    preset = _DOWNSTREAM_PRESETS[target_preset]
+    preset_label = preset["label"]
+    preset_slug = preset["slug"]
+    issue = _github_issue_input_from_mapping(mapping)
+    repository = _github_repository_slug(
+        issue.get("repository")
+        or task_payload.get("repository")
+        or task_payload.get("repo")
+    )
+    issue_number = _string(issue.get("number"))
+    issue_ref = f"{repository}#{issue_number}" if repository and issue_number else ""
+    story_id = _string(mapping.get("storyId") or mapping.get("story_id"))
+    summary = _string(mapping.get("summary")) or issue_ref
+    source_brief_ref = _string(
+        traceability.get("sourceBriefRef") or traceability.get("source_brief_ref")
+    )
+    source_design_path = _string(
+        mapping.get("sourceDesignPath") or mapping.get("source_design_path")
+    )
+    source_claim_ids = [
+        _string(item)
+        for item in _list(
+            mapping.get("sourceClaimIds") or mapping.get("source_claim_ids")
+        )
+        if _string(item)
+    ]
+    instructions = (
+        f"Run {preset_label} for {issue_ref}.\n\n"
+        f"Source story: {story_id or summary}.\n"
+        f"Source summary: {summary}.\n"
+        f"Source issue: {source_issue_key or 'unknown'}.\n"
+        f"Source design document: {source_design_path or 'not provided'}.\n"
+        "Source canonical claim IDs: "
+        + (", ".join(source_claim_ids) if source_claim_ids else "not provided")
+        + ".\n"
+        f"Original brief reference: {source_brief_ref or 'not provided'}.\n\n"
+        f"Use the existing {preset_label} workflow for this GitHub issue. "
+        "Do not run implementation inline inside the breakdown task."
+    )
+    runtime = _mapping(task_payload.get("runtime"))
+    publish = _mapping(task_payload.get("publish"))
+    task: dict[str, Any] = {
+        "title": f"Run {preset_label} for {issue_ref}: {summary}",
+        "instructions": instructions,
+        "inputs": {
+            "github_issue": issue,
+            "github_issue_ref": issue_ref,
+            "source_design_path": source_design_path,
+            "source_claim_ids": source_claim_ids,
+            "constraints": (
+                f"Preserve source issue {source_issue_key} traceability."
+                if source_issue_key
+                else ""
+            ),
+        },
+        "taskTemplate": {
+            "slug": preset_slug,
+        },
+    }
+    if runtime:
+        task["runtime"] = runtime
+    if publish:
+        task["publish"] = publish
+    if repository:
+        task["repository"] = repository
+    if depends_on:
+        task["dependsOn"] = list(depends_on)
+    return task["title"], task
+
+
+async def _create_github_downstream_tasks_from_issue_mappings(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    execution_creator: ExecutionCreator | None = None,
+    target_preset: str,
+) -> ToolResult:
+    preset = _DOWNSTREAM_PRESETS[target_preset]
+    preset_label = preset["label"]
+    preset_idempotency_prefix = preset["idempotencyPrefix"]
+    if execution_creator is None:
+        raise ValueError(
+            f"execution_creator is required for {preset_label} task creation."
+        )
+
+    context = _context or {}
+    issue_mappings = _issue_mappings_from_inputs(
+        inputs,
+        context=context,
+        provider="github",
+    )
+    orchestration_payload = _mapping(
+        inputs.get("githubOrchestration") or inputs.get("github_orchestration")
+    )
+    task_payload = _mapping(orchestration_payload.get("task") or inputs.get("task"))
+    traceability = _mapping(
+        orchestration_payload.get("traceability")
+        or inputs.get("traceability")
+        or _mapping(inputs.get("github")).get("traceability")
+    )
+    source_issue_key = _source_issue_key(inputs=inputs, traceability=traceability)
+    source_brief_ref = _string(
+        traceability.get("sourceBriefRef") or traceability.get("source_brief_ref")
+    )
+    repository = _github_repository_slug(
+        task_payload.get("repository")
+        or task_payload.get("repo")
+        or _mapping(inputs.get("github")).get("repository")
+        or context.get("repository")
+    )
+    owner_id = (
+        _string(task_payload.get("ownerId") or task_payload.get("owner_id"))
+        or _string(inputs.get("ownerId") or inputs.get("owner_id"))
+        or _string(context.get("ownerId") or context.get("owner_id"))
+        or None
+    )
+    owner_type = (
+        _string(task_payload.get("ownerType") or task_payload.get("owner_type"))
+        or _string(inputs.get("ownerType") or inputs.get("owner_type"))
+        or _string(context.get("ownerType") or context.get("owner_type"))
+        or None
+    )
+
+    tasks: list[dict[str, Any]] = []
+    dependencies: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    skipped_stories: list[dict[str, Any]] = []
+    previous_workflow_id = ""
+
+    for index, mapping in enumerate(issue_mappings, start=1):
+        story_id = (
+            _string(mapping.get("storyId") or mapping.get("story_id"))
+            or f"STORY-{index:03d}"
+        )
+        story_index = mapping.get("storyIndex") or mapping.get("story_index") or index
+        issue = _github_issue_input_from_mapping(mapping)
+        issue_number = _string(issue.get("number"))
+        issue_repository = _github_repository_slug(issue.get("repository")) or repository
+        issue_ref = (
+            f"{issue_repository}#{issue_number}"
+            if issue_repository and issue_number
+            else ""
+        )
+        summary = _string(mapping.get("summary"))
+        base_result = {
+            "storyId": story_id,
+            "storyIndex": story_index,
+            "githubIssueRef": issue_ref,
+        }
+        if not issue_repository or not issue_number:
+            failures.append(
+                {
+                    **base_result,
+                    "errorCode": "missing_github_issue",
+                    "message": (
+                        f"{preset_label} task creation requires repository "
+                        "and issueNumber."
+                    ),
+                }
+            )
+            skipped_stories.append({**base_result, "summary": summary})
+            continue
+
+        depends_on = [previous_workflow_id] if previous_workflow_id else []
+        title, task = _github_downstream_task_payload(
+            mapping={**dict(mapping), "repository": issue_repository},
+            task_payload=task_payload,
+            traceability=traceability,
+            depends_on=depends_on,
+            source_issue_key=source_issue_key,
+            target_preset=target_preset,
+        )
+        idempotency_key = _stable_idempotency_key(
+            source_issue_key=source_issue_key,
+            story_id=story_id,
+            issue_key=issue_ref,
+            prefix=preset_idempotency_prefix,
+        )
+        try:
+            created = execution_creator(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                owner_type=owner_type,
+                title=title,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "requestType": "workflow",
+                    "repository": issue_repository,
+                    "targetRuntime": _string(
+                        _mapping(task.get("runtime")).get("mode")
+                    )
+                    or None,
+                    "publishMode": _string(
+                        _mapping(task.get("publish")).get("mode")
+                    )
+                    or None,
+                    "workflow": task,
+                    "traceability": {
+                        "sourceIssueKey": source_issue_key,
+                        "sourceBriefRef": source_brief_ref,
+                    },
+                },
+                idempotency_key=idempotency_key,
+                repository=issue_repository,
+                integration="github",
+                summary=f"{preset_label} task for {issue_ref}.",
+            )
+            if inspect.isawaitable(created):
+                created = await created  # type: ignore[assignment]
+        except Exception as exc:
+            failures.append(
+                {
+                    **base_result,
+                    "errorCode": "task_creation_failed",
+                    "message": str(exc) or "Downstream task creation failed.",
+                    "dependsOn": depends_on,
+                }
+            )
+            break
+
+        created_mapping = dict(created)
+        workflow_id = _string(
+            created_mapping.get("workflowId") or created_mapping.get("workflow_id")
+        )
+        task_result = {
+            **base_result,
+            "workflowId": workflow_id,
+            "runId": _string(
+                created_mapping.get("runId") or created_mapping.get("run_id")
+            ),
+            "title": _string(created_mapping.get("title")) or title,
+            "created": not bool(created_mapping.get("existing")),
+            "existing": bool(created_mapping.get("existing")),
+            "dependsOn": depends_on,
+            "idempotencyKey": idempotency_key,
+        }
+        tasks.append(task_result)
+        if depends_on:
+            dependencies.append(
+                {
+                    "fromWorkflowId": depends_on[0],
+                    "toWorkflowId": workflow_id,
+                    "fromStoryId": tasks[-2]["storyId"] if len(tasks) > 1 else "",
+                    "toStoryId": story_id,
+                    "status": "created",
+                }
+            )
+        previous_workflow_id = workflow_id
+
+    if not issue_mappings:
+        status = "no_downstream_tasks"
+    elif failures or skipped_stories:
+        status = "partial" if tasks else "no_downstream_tasks"
+    else:
+        status = "completed"
+
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "githubOrchestration": {
+                "status": status,
+                "storyCount": len(issue_mappings),
+                "createdTaskCount": len(tasks),
+                "dependencyCount": len(dependencies),
+                "tasks": tasks,
+                "dependencies": dependencies,
+                "skippedStories": skipped_stories,
+                "failures": failures,
+                "traceability": {
+                    "sourceIssueKey": source_issue_key,
+                    "sourceBriefRef": source_brief_ref,
+                },
+            }
+        },
+    )
+
+
+async def create_github_issue_orchestrate_tasks_from_issue_mappings(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    execution_creator: ExecutionCreator | None = None,
+) -> ToolResult:
+    """Create dependent GitHub Issue Orchestrate workflows from ordered mappings."""
+
+    return await _create_github_downstream_tasks_from_issue_mappings(
+        inputs,
+        _context,
+        execution_creator=execution_creator,
+        target_preset=_DOWNSTREAM_PRESET_GITHUB_ORCHESTRATE,
+    )
+
+
+async def create_github_issue_implement_tasks_from_issue_mappings(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    execution_creator: ExecutionCreator | None = None,
+) -> ToolResult:
+    """Create dependent GitHub Issue Implement workflows from ordered mappings."""
+
+    return await _create_github_downstream_tasks_from_issue_mappings(
+        inputs,
+        _context,
+        execution_creator=execution_creator,
+        target_preset=_DOWNSTREAM_PRESET_GITHUB_IMPLEMENT,
+    )
+
+
 def _dependency_mode(
     *,
     inputs: Mapping[str, Any],
@@ -1914,6 +2290,263 @@ def _issue_mapping(
     mapping["sourceDesignPath"] = _string(source_reference.get("path"))
     mapping["sourceClaimIds"] = _story_source_claim_ids(source_reference)
     return mapping
+
+
+def _github_issue_mapping(
+    *,
+    story: Mapping[str, Any],
+    issue_number: str,
+    issue_url: str,
+    repository: str,
+    index: int,
+    summary: str,
+    fallback_source_path: str = "",
+) -> dict[str, Any]:
+    mapping = {
+        "storyId": _story_id(story, index=index),
+        "storyIndex": index,
+        "summary": summary,
+        "repository": repository,
+        "issueNumber": issue_number,
+        "issueKey": f"{repository}#{issue_number}" if issue_number else "",
+        "issueUrl": issue_url,
+    }
+    source_reference = _story_source_reference(
+        story, fallback_path=fallback_source_path
+    )
+    mapping["sourceDesignPath"] = _string(source_reference.get("path"))
+    mapping["sourceClaimIds"] = _story_source_claim_ids(source_reference)
+    return mapping
+
+
+def _github_issue_body(
+    *,
+    story: Mapping[str, Any],
+    source_issue_key: str,
+    source_brief_ref: str,
+    source_document_path: str,
+) -> str:
+    description = _story_description(story)
+    source_lines = [
+        f"Source issue: {source_issue_key or 'not provided'}",
+        f"Source document path: {source_document_path or 'not provided'}",
+        f"Source brief reference: {source_brief_ref or 'not provided'}",
+        "Generated by MoonMind GitHub issue breakdown.",
+    ]
+    source_reference = _story_source_reference(
+        story,
+        fallback_path=source_document_path,
+    )
+    claim_ids = _story_source_claim_ids(source_reference)
+    if claim_ids:
+        source_lines.append("Source canonical claim IDs: " + ", ".join(claim_ids))
+    coverage_ids = _list(
+        source_reference.get("coverageIds") or source_reference.get("coverage_ids")
+    )
+    if coverage_ids:
+        source_lines.append(
+            "Source coverage IDs: "
+            + ", ".join(_string(item) for item in coverage_ids if _string(item))
+        )
+    return "Source Reference\n" + "\n".join(source_lines) + "\n\n" + description
+
+
+async def create_github_issues_from_stories(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: GitHubServiceFactory = GitHubService,
+    artifact_reader: ArtifactReader | None = None,
+) -> ToolResult:
+    """Create GitHub issues from ordered story breakdown output."""
+
+    github_payload = _mapping(inputs.get("github"))
+    repository = _github_repository_slug(
+        github_payload.get("repository")
+        or inputs.get("repository")
+        or inputs.get("repo")
+        or (_context or {}).get("repository")
+    )
+    if not repository:
+        raise ValueError("GitHub repository is required for GitHub issue creation.")
+
+    traceability = _mapping(github_payload.get("traceability") or inputs.get("traceability"))
+    source_issue_key = _source_issue_key(inputs=inputs, traceability=traceability)
+    source_brief_ref = _string(
+        traceability.get("sourceBriefRef") or traceability.get("source_brief_ref")
+    )
+    labels = [
+        _string(item)
+        for item in _list(github_payload.get("labels") or inputs.get("labels"))
+        if _string(item)
+    ]
+    raw_story_payload = (
+        inputs.get("stories")
+        or inputs.get("storyBreakdown")
+        or inputs.get("story_breakdown")
+        or inputs.get("storyBreakdownJson")
+        or _mapping(
+            inputs.get("previousOutputs") or inputs.get("previous_outputs")
+        ).get("stories")
+        or _mapping(
+            inputs.get("previousOutputs") or inputs.get("previous_outputs")
+        ).get("storyBreakdown")
+    )
+    parsed_story_payload = _parse_story_breakdown_payload(raw_story_payload)
+    breakdown_source_path = _breakdown_source_path(parsed_story_payload)
+    stories = _coerce_story_payload(parsed_story_payload)
+    artifact_ref = ""
+    artifact_ref_was_read = False
+    if not stories:
+        artifact_ref = _string(
+            inputs.get("storyBreakdownArtifactRef")
+            or inputs.get("story_breakdown_artifact_ref")
+            or _mapping(inputs.get("storyOutput") or inputs.get("story_output")).get(
+                "storyBreakdownArtifactRef"
+            )
+        )
+        if artifact_ref:
+            if artifact_reader is None:
+                raise ValueError(
+                    "storyBreakdownArtifactRef was provided, but this worker "
+                    "has no artifact reader configured."
+                )
+            artifact_payload = artifact_reader(artifact_ref)
+            if inspect.isawaitable(artifact_payload):
+                artifact_payload = await artifact_payload  # type: ignore[assignment]
+            parsed_story_payload = _parse_story_breakdown_payload(artifact_payload)
+            breakdown_source_path = _breakdown_source_path(parsed_story_payload)
+            stories = _coerce_story_payload(parsed_story_payload)
+            artifact_ref_was_read = True
+    if not stories:
+        if artifact_ref_was_read and _has_explicit_empty_story_list(parsed_story_payload):
+            return ToolResult(
+                status="COMPLETED",
+                outputs={
+                    "github": {
+                        "status": "no_issues",
+                        "originalStoryCount": 0,
+                        "createdIssueCount": 0,
+                        "issueMappings": [],
+                        "skippedStories": [],
+                        "failures": [],
+                        "traceability": {
+                            "sourceIssueKey": source_issue_key,
+                            "sourceBriefRef": source_brief_ref,
+                        },
+                    }
+                },
+            )
+        raise ValueError("No stories were available for GitHub issue creation.")
+
+    original_story_count = len(stories)
+    (
+        stories,
+        skipped_stories,
+        blocked_stories,
+        partial_stories_adjusted,
+    ) = _reconcile_stories_for_jira_creation(stories)
+    if not stories:
+        return ToolResult(
+            status="COMPLETED",
+            outputs={
+                "github": {
+                    "status": "no_issues",
+                    "originalStoryCount": original_story_count,
+                    "createdIssueCount": 0,
+                    "issueMappings": [],
+                    "skippedStories": skipped_stories,
+                    "blockedStories": blocked_stories,
+                    "partialStoriesAdjusted": partial_stories_adjusted,
+                    "failures": [],
+                    "traceability": {
+                        "sourceIssueKey": source_issue_key,
+                        "sourceBriefRef": source_brief_ref,
+                    },
+                }
+            },
+        )
+
+    service = github_service_factory()
+    created_issues: list[dict[str, Any]] = []
+    issue_mappings: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for index, story in enumerate(stories, start=1):
+        summary = _story_summary(story, index=index)
+        source_reference = _story_source_reference(
+            story,
+            fallback_path=breakdown_source_path,
+        )
+        source_document_path = _string(source_reference.get("path"))
+        body = _github_issue_body(
+            story=story,
+            source_issue_key=source_issue_key,
+            source_brief_ref=source_brief_ref,
+            source_document_path=source_document_path,
+        )
+        result = await service.create_issue(
+            repo=repository,
+            title=summary,
+            body=body,
+            labels=labels,
+        )
+        issue_number = _string(result.external_key)
+        if not result.created or not issue_number:
+            failures.append(
+                {
+                    "storyId": _story_id(story, index=index),
+                    "storyIndex": index,
+                    "summary": summary,
+                    "errorCode": "github_issue_creation_failed",
+                    "message": result.summary,
+                }
+            )
+            continue
+        issue = {
+            "repository": repository,
+            "issueNumber": issue_number,
+            "issueUrl": _string(result.external_url),
+            "summary": summary,
+            "created": True,
+        }
+        created_issues.append(issue)
+        issue_mappings.append(
+            _github_issue_mapping(
+                story=story,
+                issue_number=issue_number,
+                issue_url=_string(result.external_url),
+                repository=repository,
+                index=index,
+                summary=summary,
+                fallback_source_path=breakdown_source_path,
+            )
+        )
+
+    status = "completed" if created_issues and not failures else "partial"
+    if not created_issues:
+        status = "no_issues"
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "github": {
+                "status": status,
+                "repository": repository,
+                "originalStoryCount": original_story_count,
+                "createdIssueCount": len(created_issues),
+                "createdIssues": created_issues,
+                "issueMappings": issue_mappings,
+                "skippedStories": skipped_stories,
+                "blockedStories": blocked_stories,
+                "partialStoriesAdjusted": partial_stories_adjusted,
+                "failures": failures,
+                "storyBreakdownArtifactRef": artifact_ref,
+                "traceability": {
+                    "sourceIssueKey": source_issue_key,
+                    "sourceBriefRef": source_brief_ref,
+                },
+            }
+        },
+    )
 
 async def _create_dependency_links(
     *,
@@ -3708,6 +4341,51 @@ def register_story_output_tool_handlers(
         handler=_create_jira_implement_tasks,
     )
 
+    async def _create_github_issues(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await create_github_issues_from_stories(
+            inputs,
+            context,
+            artifact_reader=artifact_reader,
+        )
+
+    dispatcher.register_skill(
+        skill_name=GITHUB_CREATE_ISSUES_TOOL_NAME,
+        handler=_create_github_issues,
+    )
+
+    async def _create_github_issue_orchestrate_tasks(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await create_github_issue_orchestrate_tasks_from_issue_mappings(
+            inputs,
+            context,
+            execution_creator=execution_creator,
+        )
+
+    dispatcher.register_skill(
+        skill_name=GITHUB_ISSUE_ORCHESTRATE_TASKS_TOOL_NAME,
+        handler=_create_github_issue_orchestrate_tasks,
+    )
+
+    async def _create_github_issue_implement_tasks(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await create_github_issue_implement_tasks_from_issue_mappings(
+            inputs,
+            context,
+            execution_creator=execution_creator,
+        )
+
+    dispatcher.register_skill(
+        skill_name=GITHUB_ISSUE_IMPLEMENT_TASKS_TOOL_NAME,
+        handler=_create_github_issue_implement_tasks,
+    )
+
     async def _check_jira_blockers(
         inputs: Mapping[str, Any],
         context: Mapping[str, Any] | None = None,
@@ -3792,6 +4470,9 @@ def register_story_output_tool_handlers(
 __all__ = [
     "JIRA_CHECK_BLOCKERS_TOOL_NAME",
     "JIRA_CREATE_ISSUES_TOOL_NAME",
+    "GITHUB_CREATE_ISSUES_TOOL_NAME",
+    "GITHUB_ISSUE_IMPLEMENT_TASKS_TOOL_NAME",
+    "GITHUB_ISSUE_ORCHESTRATE_TASKS_TOOL_NAME",
     "JIRA_IMPLEMENT_TASKS_TOOL_NAME",
     "JIRA_LOAD_PRESET_BRIEF_TOOL_NAME",
     "GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME",
@@ -3800,6 +4481,9 @@ __all__ = [
     "JIRA_ORCHESTRATE_TASKS_TOOL_NAME",
     "JIRA_STORY_TOOL_NAMES",
     "check_jira_blockers",
+    "create_github_issues_from_stories",
+    "create_github_issue_implement_tasks_from_issue_mappings",
+    "create_github_issue_orchestrate_tasks_from_issue_mappings",
     "create_jira_issues_from_stories",
     "create_jira_orchestrate_tasks_from_issue_mappings",
     "create_jira_implement_tasks_from_issue_mappings",

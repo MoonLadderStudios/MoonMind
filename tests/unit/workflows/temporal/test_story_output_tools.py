@@ -9,6 +9,9 @@ from moonmind.workflows.temporal import story_output_tools as story_tools
 from moonmind.workflows.temporal.story_output_tools import (
     check_jira_blockers,
     create_document_update_tasks_from_paths,
+    create_github_issue_implement_tasks_from_issue_mappings,
+    create_github_issue_orchestrate_tasks_from_issue_mappings,
+    create_github_issues_from_stories,
     create_jira_implement_tasks_from_issue_mappings,
     create_jira_issues_from_stories,
     create_jira_orchestrate_tasks_from_issue_mappings,
@@ -98,6 +101,36 @@ class _FakeExecutionCreator:
             "runId": f"run-{index}",
             "title": kwargs.get("title"),
         }
+
+
+class _FakeGitHubIssueResult:
+    def __init__(
+        self,
+        *,
+        external_key: str = "",
+        external_url: str = "",
+        created: bool = True,
+        summary: str = "",
+    ) -> None:
+        self.external_key = external_key
+        self.external_url = external_url
+        self.created = created
+        self.summary = summary
+
+
+class _FakeGitHubService:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, Any]] = []
+
+    async def create_issue(self, **kwargs):
+        self.requests.append(kwargs)
+        number = str(len(self.requests))
+        return _FakeGitHubIssueResult(
+            external_key=number,
+            external_url=f"https://github.com/{kwargs['repo']}/issues/{number}",
+            created=True,
+            summary="created",
+        )
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_from_inline_story_breakdown():
@@ -2319,6 +2352,156 @@ async def test_create_jira_orchestrate_tasks_uses_previous_step_mappings_and_own
     assert "orchestration_mode" not in task["inputs"]
     assert task["inputs"]["constraints"] == "Preserve source issue MM-404 traceability."
     assert "Source Jira issue: MM-404." in task["instructions"]
+
+
+@pytest.mark.asyncio
+async def test_create_github_issues_preserves_order_and_traceability():
+    service = _FakeGitHubService()
+
+    result = await create_github_issues_from_stories(
+        {
+            "github": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "traceability": {
+                    "sourceIssueKey": "MM-1063",
+                    "sourceBriefRef": "artifacts/source-brief.json",
+                },
+            },
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "First GitHub story",
+                    "description": "Create the first issue.",
+                    "sourceReference": {
+                        "path": "docs/Designs/GitHubBreakdown.md",
+                        "claimIds": ["claim:github-breakdown"],
+                    },
+                },
+                {
+                    "id": "STORY-002",
+                    "summary": "Skip implemented story",
+                    "implementationStatus": "fully_implemented",
+                },
+            ],
+        },
+        github_service_factory=lambda: service,
+    )
+
+    github = result.outputs["github"]
+    assert github["status"] == "completed"
+    assert github["originalStoryCount"] == 2
+    assert github["createdIssueCount"] == 1
+    assert github["issueMappings"] == [
+        {
+            "storyId": "STORY-001",
+            "storyIndex": 1,
+            "summary": "First GitHub story",
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": "1",
+            "issueKey": "MoonLadderStudios/MoonMind#1",
+            "issueUrl": "https://github.com/MoonLadderStudios/MoonMind/issues/1",
+            "sourceDesignPath": "docs/Designs/GitHubBreakdown.md",
+            "sourceClaimIds": ["claim:github-breakdown"],
+        }
+    ]
+    assert github["skippedStories"][0]["storyId"] == "STORY-002"
+    assert github["traceability"] == {
+        "sourceIssueKey": "MM-1063",
+        "sourceBriefRef": "artifacts/source-brief.json",
+    }
+    assert service.requests[0]["repo"] == "MoonLadderStudios/MoonMind"
+    assert "Source issue: MM-1063" in service.requests[0]["body"]
+    assert "Source document path: docs/Designs/GitHubBreakdown.md" in (
+        service.requests[0]["body"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_github_issue_downstream_tasks_preserve_dependencies_and_traceability():
+    creator = _FakeExecutionCreator()
+
+    result = await create_github_issue_implement_tasks_from_issue_mappings(
+        {
+            "github": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-002",
+                        "storyIndex": 2,
+                        "summary": "Second",
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "issueNumber": "102",
+                    },
+                    {
+                        "storyId": "STORY-001",
+                        "storyIndex": 1,
+                        "summary": "First",
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "issueNumber": "101",
+                        "sourceDesignPath": "docs/Designs/GitHubBreakdown.md",
+                        "sourceClaimIds": ["claim:first"],
+                    },
+                ],
+                "traceability": {"sourceIssueKey": "MM-1063"},
+            },
+            "githubOrchestration": {
+                "task": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {"mode": "pr"},
+                },
+                "traceability": {"sourceIssueKey": "MM-1063"},
+            },
+        },
+        execution_creator=creator,
+    )
+
+    orchestration = result.outputs["githubOrchestration"]
+    assert orchestration["status"] == "completed"
+    assert orchestration["createdTaskCount"] == 2
+    assert orchestration["tasks"][0]["githubIssueRef"] == (
+        "MoonLadderStudios/MoonMind#101"
+    )
+    assert orchestration["tasks"][1]["dependsOn"] == ["mm:story-1"]
+    first_workflow = creator.requests[0]["initial_parameters"]["workflow"]
+    assert first_workflow["taskTemplate"]["slug"] == "github-issue-implement"
+    assert first_workflow["inputs"]["github_issue"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "number": 101,
+        "title": "First",
+    }
+    assert first_workflow["inputs"]["github_issue_ref"] == (
+        "MoonLadderStudios/MoonMind#101"
+    )
+    assert first_workflow["inputs"]["source_design_path"] == (
+        "docs/Designs/GitHubBreakdown.md"
+    )
+    assert first_workflow["inputs"]["constraints"] == (
+        "Preserve source issue MM-1063 traceability."
+    )
+
+    orchestrate_creator = _FakeExecutionCreator()
+    await create_github_issue_orchestrate_tasks_from_issue_mappings(
+        {
+            "github": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-001",
+                        "storyIndex": 1,
+                        "summary": "First",
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "issueNumber": "101",
+                    }
+                ]
+            },
+            "traceability": {"sourceIssueKey": "MM-1063"},
+        },
+        execution_creator=orchestrate_creator,
+    )
+    orchestrate_workflow = orchestrate_creator.requests[0]["initial_parameters"][
+        "workflow"
+    ]
+    assert orchestrate_workflow["taskTemplate"]["slug"] == "moonspec-orchestrate"
+    assert "GitHub Issue Orchestrate" in orchestrate_workflow["title"]
 
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_uses_input_previous_outputs_mappings():

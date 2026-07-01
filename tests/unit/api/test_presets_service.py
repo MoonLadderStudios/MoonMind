@@ -3174,6 +3174,106 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
         "sourceIssueKey": "MM-404"
     }
 
+
+@pytest.mark.parametrize(
+    ("slug", "title", "downstream_tool", "downstream_title"),
+    [
+        (
+            "github-issue-breakdown-implement",
+            "Breakdown and GitHub Issue Implement",
+            "story.create_github_issue_implement_tasks",
+            "Create dependent GitHub Issue Implement workflows",
+        ),
+        (
+            "github-issue-breakdown-orchestrate",
+            "Breakdown and GitHub Issue Orchestrate",
+            "story.create_github_issue_orchestrate_tasks",
+            "Create dependent GitHub Issue Orchestrate workflows",
+        ),
+    ],
+)
+async def test_seed_catalog_includes_github_issue_breakdown_composite_presets(
+    tmp_path,
+    slug: str,
+    title: str,
+    downstream_tool: str,
+    downstream_title: str,
+):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "presets"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service.get_template(
+                slug=slug,
+                scope="global",
+                scope_ref=None,
+            )
+            expanded = await service.expand_template(
+                slug=slug,
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "feature_request": "Break docs/Designs/GitHubBreakdown.md into stories.",
+                    "source_design_path": "docs/Designs/GitHubBreakdown.md",
+                    "github_repository": "MoonLadderStudios/MoonMind",
+                    "publish_mode": "pr",
+                    "source_issue_key": "MM-1063",
+                },
+                context={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                },
+            )
+
+    assert template["title"] == title
+    assert template["annotations"]["traceability"] == {
+        "implementationIssueKey": "MM-1069",
+        "sourceIssueKey": "MM-1063",
+        "coverageIds": [
+            "DESIGN-REQ-001",
+            "DESIGN-REQ-005",
+            "DESIGN-REQ-006",
+            "DESIGN-REQ-008",
+            "DESIGN-REQ-014",
+            "DESIGN-REQ-015",
+        ],
+    }
+    assert [step["skill"]["id"] for step in expanded["steps"]] == [
+        "moonspec-breakdown",
+        "story-reconcile-implementation",
+        "story.create_github_issues",
+        downstream_tool,
+    ]
+    issue_step = expanded["steps"][2]
+    assert issue_step["storyOutput"] == {
+        "mode": "github",
+        "fallback": "fail",
+        "github": {
+            "repository": "MoonLadderStudios/MoonMind",
+            "sourceIssueKey": "MM-1063",
+        },
+    }
+    downstream = expanded["steps"][3]
+    assert downstream["title"] == downstream_title
+    assert "must not run implementation inline" in downstream["instructions"]
+    assert "MM-1063" in downstream["instructions"]
+    assert downstream["githubOrchestration"] == {
+        "task": {
+            "repository": "MoonLadderStudios/MoonMind",
+            "runtime": {"mode": "codex_cli"},
+            "publish": {"mode": "pr"},
+        },
+        "traceability": {"sourceIssueKey": "MM-1063"},
+    }
+
 async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path):
     seed_dir = (
         Path(__file__).resolve().parents[3]
