@@ -25,15 +25,80 @@ import {
   CAPABILITY_CATALOG,
   capabilityChipProvenanceLabel,
   LIQUID_GL_OPTIONS,
+  buildEditParametersPatch,
   preferredTemplate,
   resolveDefaultProviderProfileId,
   resolveObjectiveInstructions,
+  WORKFLOW_START_HEADING_QUOTES,
   WorkflowStartPage,
 } from "./workflow-start";
 
 vi.mock("../lib/navigation", () => ({
   navigateTo: vi.fn(),
 }));
+
+describe("buildEditParametersPatch", () => {
+  it("uses submitted runtime fields as authoritative when canonical edit metadata is cleared", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-runtime-clear",
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          model: "gpt-5.4",
+          requestedModel: "gpt-5.4",
+          resolvedModel: "gpt-5.4",
+          effort: "high",
+          profileId: "profile:codex-default",
+          workflow: {
+            instructions: "Keep the objective.",
+            runtime: {
+              mode: "codex_cli",
+              model: "gpt-5.4",
+              effort: "high",
+              profileId: "profile:codex-default",
+            },
+          },
+        },
+      },
+      submittedPayload: {
+        targetRuntime: "codex_cli",
+        task: {
+          instructions: "Keep the objective.",
+          runtime: {
+            mode: "codex_cli",
+          },
+        },
+      },
+      submittedWorkflow: {
+        instructions: "Keep the objective.",
+        runtime: {
+          mode: "codex_cli",
+        },
+      },
+    });
+
+    expect(patch).toMatchObject({
+      targetRuntime: "codex_cli",
+      model: null,
+      requestedModel: null,
+      resolvedModel: null,
+      effort: null,
+      profileId: null,
+      workflow: {
+        runtime: {
+          mode: "codex_cli",
+        },
+      },
+    });
+    expect(patch.workflow).not.toMatchObject({
+      runtime: {
+        model: "gpt-5.4",
+        effort: "high",
+        profileId: "profile:codex-default",
+      },
+    });
+  });
+});
 
 const mockPayload: BootPayload = {
   page: "workflow-start",
@@ -2764,7 +2829,8 @@ describe.skip("Task Create Entrypoint", () => {
   it("does not load an execution detail draft in create mode", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Start Workflow" })).toBeTruthy();
+    const heading = await screen.findByRole("heading", { level: 2 });
+    expect(WORKFLOW_START_HEADING_QUOTES).toContain(heading.textContent);
     expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Create Task" })).toBeNull();
     expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
@@ -4657,6 +4723,11 @@ describe.skip("Task Create Entrypoint", () => {
         repository: "MoonLadderStudios/MoonMind",
         operatorNote: "Keep this unedited top-level value.",
         targetRuntime: "gemini_cli",
+        model: "gemini-2.5-pro",
+        requestedModel: "gemini-2.5-pro",
+        resolvedModel: "gemini-2.5-pro",
+        effort: "high",
+        profileId: "profile:gemini-default",
         task: {
           instructions: "Save edited Temporal inputs.",
           proposeTasks: true,
@@ -5162,10 +5233,10 @@ describe.skip("Task Create Entrypoint", () => {
   it("submits the Temporal task payload and redirects on success", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
+    const heading = await screen.findByRole("heading", { level: 2 });
+    expect(WORKFLOW_START_HEADING_QUOTES).toContain(heading.textContent);
     expect(
-      (await screen.findByRole("heading", { name: "Start Workflow" })).closest(
-        ".workflow-start-page",
-      ),
+      heading.closest(".workflow-start-page"),
     ).not.toBeNull();
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
@@ -18293,7 +18364,10 @@ describe("Task Create MM-937 step hover containment", () => {
 
   it("keeps context chip remove buttons compact after the generic icon-button rules", () => {
     expect(dashboardCss).toMatch(
-      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s*\{[^}]*width:\s*1rem;[^}]*height:\s*1rem;[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*padding:\s*0;[^}]*box-shadow:\s*none;/s,
+      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s*\{[^}]*width:\s*0\.78rem;[^}]*height:\s*0\.78rem;[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*padding:\s*0;[^}]*box-shadow:\s*none;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove\s+svg,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s+svg\s*\{[^}]*width:\s*0\.46rem;[^}]*height:\s*0\.46rem;/s,
     );
     expect(dashboardCss).toMatch(
       /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove:hover,[^{]+\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\.is-clicked\s*\{[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*box-shadow:\s*none;[^}]*transform:\s*none;[^}]*filter:\s*none;/s,
@@ -18303,6 +18377,12 @@ describe("Task Create MM-937 step hover containment", () => {
   it("keeps dependency remove buttons in a fixed right column beside wrapping text", () => {
     expect(dashboardCss).toMatch(
       /#queue-dependency-list\s+li\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;[^}]*align-items:\s*center;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /#queue-dependency-list\s+li\s*>\s*span:first-child\s*\{[^}]*display:\s*block;[^}]*grid-column:\s*1;[^}]*grid-row:\s*1;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /#queue-dependency-list\s+\.queue-step-icon-button\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*align-self:\s*center;[^}]*justify-self:\s*end;/s,
     );
   });
 });

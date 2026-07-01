@@ -6,7 +6,7 @@ import {
   Ban,
   CalendarClock,
   Check,
-  GitBranch,
+  Link,
   Hand,
   Hourglass,
   Lightbulb,
@@ -265,7 +265,7 @@ function workflowWorkspaceListQuery(search: URLSearchParams): string {
 const WORKFLOW_STATUS_ICONS = {
   scheduled: CalendarClock,
   initializing: Power,
-  waiting_on_dependencies: GitBranch,
+  waiting_on_dependencies: Link,
   planning: MapIcon,
   awaiting_slot: Hourglass,
   executing: Play,
@@ -403,6 +403,15 @@ function WorkflowSidebarControls({
       >
         {SIDEBAR_TOGGLE_ICON}
       </button>
+      <a
+        href={workflowListHrefFromContext(search, { markDetailReturn: true })}
+        className="secondary workflow-workspace-expand-list"
+        onClick={markWorkflowListReturnFocusIntent}
+        aria-label="Expand to full list"
+        title="Expand to full list"
+      >
+        <ArrowRight aria-hidden="true" focusable="false" />
+      </a>
     </div>
   );
 }

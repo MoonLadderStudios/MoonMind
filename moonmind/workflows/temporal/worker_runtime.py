@@ -140,6 +140,7 @@ from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_r
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 from moonmind.workflows.temporal.story_output_tools import (
     DOCUMENT_UPDATE_TASKS_TOOL_NAME,
+    GITHUB_STORY_TOOL_NAMES,
     JIRA_STORY_TOOL_NAMES,
     register_story_output_tool_handlers,
 )
@@ -866,6 +867,7 @@ _JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _STORY_OUTPUT_TASK_TOOLS = frozenset(
     {
         *JIRA_STORY_TOOL_NAMES,
+        *GITHUB_STORY_TOOL_NAMES,
         DOCUMENT_UPDATE_TASKS_TOOL_NAME,
     }
 )

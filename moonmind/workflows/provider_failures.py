@@ -44,6 +44,7 @@ _RATE_LIMIT_MARKERS = (
     "usage limit",
     "usage_limit_reached",
     "hit your limit",
+    "hit your weekly limit",
     "hit your session limit",
     "send a request to your admin",
 )

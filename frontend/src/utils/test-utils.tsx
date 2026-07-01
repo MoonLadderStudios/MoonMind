@@ -1,6 +1,7 @@
 import { ReactElement } from 'react';
 import { render, RenderOptions } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { DashboardToastProvider } from '../components/dashboard/DashboardToast';
 
 const createTestQueryClient = () => new QueryClient({
   defaultOptions: {
@@ -16,14 +17,18 @@ export function renderWithClient(
 ) {
   const testQueryClient = createTestQueryClient();
   const { rerender, ...result } = render(
-    <QueryClientProvider client={testQueryClient}>{ui}</QueryClientProvider>,
+    <QueryClientProvider client={testQueryClient}>
+      <DashboardToastProvider>{ui}</DashboardToastProvider>
+    </QueryClientProvider>,
     options
   );
   return {
     ...result,
     rerender: (rerenderUi: ReactElement) =>
       rerender(
-        <QueryClientProvider client={testQueryClient}>{rerenderUi}</QueryClientProvider>
+        <QueryClientProvider client={testQueryClient}>
+          <DashboardToastProvider>{rerenderUi}</DashboardToastProvider>
+        </QueryClientProvider>
       ),
   };
 }
