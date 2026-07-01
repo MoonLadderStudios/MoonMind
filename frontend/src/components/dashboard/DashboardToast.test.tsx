@@ -85,4 +85,3 @@ describe('DashboardToast (MM-1033)', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 });
-

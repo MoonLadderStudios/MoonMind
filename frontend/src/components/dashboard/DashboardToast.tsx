@@ -89,7 +89,6 @@ export function DashboardToastProvider({ children }: { children: ReactNode }) {
     </DashboardToastContext.Provider>
   );
 }
-
 export function useDashboardToast(): DashboardToastContextValue {
   const context = useContext(DashboardToastContext);
   if (!context) {
@@ -185,4 +184,3 @@ function DashboardToast({
     </section>
   );
 }
-
