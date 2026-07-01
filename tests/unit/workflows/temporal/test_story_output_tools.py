@@ -622,6 +622,59 @@ async def test_create_github_issues_narrows_partial_story_to_remaining_work():
 
 
 @pytest.mark.asyncio
+async def test_create_github_issues_uses_story_output_github_and_previous_artifact():
+    service = _FakeGitHubService()
+    artifact_reads: list[str] = []
+
+    async def read_artifact(ref: str) -> dict[str, Any]:
+        artifact_reads.append(ref)
+        return {
+            "source": {"referencePath": "docs/Designs/GitHubBreakdown.md"},
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "Artifact GitHub story",
+                    "description": "Create this from a previous breakdown artifact.",
+                    "sourceReference": {
+                        "claimIds": ["claim:github-breakdown"],
+                        "sourceIssueKey": "TargetOrg/TargetRepo#77",
+                    },
+                }
+            ],
+        }
+
+    result = await create_github_issues_from_stories(
+        {
+            "storyOutput": {
+                "github": {
+                    "repository": "TargetOrg/TargetRepo",
+                    "traceability": {"sourceIssueKey": "TargetOrg/TargetRepo#77"},
+                },
+            },
+            "previousOutputs": {
+                "storyOutput": {
+                    "storyBreakdownArtifactRef": "art_previous_github_breakdown"
+                }
+            },
+        },
+        github_service_factory=lambda: service,
+        artifact_reader=read_artifact,
+    )
+
+    github = result.outputs["github"]
+    assert result.outputs["storyOutput"]["status"] == "github_created"
+    assert github["issueMappings"][0]["repository"] == "TargetOrg/TargetRepo"
+    assert github["issueMappings"][0]["sourceDesignPath"] == (
+        "docs/Designs/GitHubBreakdown.md"
+    )
+    assert artifact_reads == ["art_previous_github_breakdown"]
+    assert service.create_issue_requests[0]["repo"] == "TargetOrg/TargetRepo"
+    assert "Source Issue: TargetOrg/TargetRepo#77" in service.create_issue_requests[0][
+        "body"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_create_github_issue_workflows_from_issue_mappings():
     creator = _FakeExecutionCreator()
 
@@ -685,6 +738,81 @@ async def test_create_github_issue_workflows_from_issue_mappings():
     assert workflow["inputs"]["github_issue_ref"] == "MoonLadderStudios/MoonMind#11"
     assert "Source issue: MM-1063." in workflow["instructions"]
     assert "Source canonical claim IDs: DESIGN-REQ-007." in workflow["instructions"]
+
+
+@pytest.mark.asyncio
+async def test_create_github_issue_workflows_mark_remaining_after_failure():
+    creator = _FakeExecutionCreator(fail_at=2)
+
+    result = await create_github_issue_implement_workflows_from_issue_mappings(
+        {
+            "github": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-001",
+                        "storyIndex": 1,
+                        "summary": "First",
+                        "issueNumber": "101",
+                    },
+                    {
+                        "storyId": "STORY-002",
+                        "storyIndex": 2,
+                        "summary": "Second",
+                        "issueNumber": "102",
+                    },
+                    {
+                        "storyId": "STORY-003",
+                        "storyIndex": 3,
+                        "summary": "Third",
+                        "issueNumber": "103",
+                    },
+                ],
+            },
+            "githubOrchestration": {
+                "task": {"repository": "MoonLadderStudios/MoonMind"},
+                "traceability": {"sourceIssueKey": "MM-1063"},
+            },
+        },
+        execution_creator=creator,
+    )
+
+    orchestration = result.outputs["githubWorkflowOrchestration"]
+    assert orchestration["status"] == "partial"
+    assert orchestration["createdWorkflowCount"] == 1
+    assert orchestration["failures"][0]["storyId"] == "STORY-002"
+    assert orchestration["failures"][0]["errorCode"] == "workflow_creation_failed"
+    assert orchestration["skippedStories"] == [
+        {
+            "storyId": "STORY-003",
+            "storyIndex": 3,
+            "repository": "MoonLadderStudios/MoonMind",
+            "githubIssueNumber": "103",
+            "errorCode": "dependency_not_created",
+            "message": "Earlier downstream workflow creation failed.",
+        }
+    ]
+
+
+def test_github_downstream_workflow_payload_propagates_fallback_repository():
+    _title, task = story_tools._github_downstream_workflow_payload(
+        mapping={
+            "storyId": "STORY-001",
+            "summary": "Fallback repo issue",
+            "issueNumber": "101",
+        },
+        task_payload={"repository": "MoonLadderStudios/MoonMind"},
+        traceability={},
+        depends_on=[],
+        source_issue_key="",
+        target_preset="implement",
+    )
+
+    assert task["inputs"]["github_issue"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "number": 101,
+        "title": "Fallback repo issue",
+    }
+    assert task["inputs"]["github_issue_ref"] == "MoonLadderStudios/MoonMind#101"
 
 
 @pytest.mark.asyncio

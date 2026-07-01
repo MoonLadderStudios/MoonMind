@@ -1,9 +1,9 @@
-"""Catalog-boundary tests for the MM-885 ``batch-workflows`` seed preset.
+"""Catalog-boundary tests for the MM-1062 ``batch-workflows`` seed preset.
 
 These exercise the real preset validation + expansion path (the adapter boundary
 for presets): the seed YAML must validate, expose the documented batch contract
-(source discriminator, both source field sets, target-preset selector, default
-issue bindings, runtimeInheritance=caller, and a single shared publish policy),
+(Jira project/status source, run capability selector, default issue bindings,
+runtimeInheritance=caller, and a shared advanced publish policy),
 and expand into an orchestration step that queues child workflows.
 """
 
@@ -76,86 +76,92 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             assert template.title == "Batch Workflows"
             assert template.scope_type is PresetScopeType.GLOBAL
 
-            # Source discriminator with both options.
             schema = annotations["inputSchema"]
-            assert schema["properties"]["source_kind"]["enum"] == [
-                "jira_board_column",
-                "github_repo_issues",
+            assert schema["required"] == [
+                "jira_project_key",
+                "jira_status",
+                "run_ref",
             ]
-            assert "source_kind" in schema["required"]
-
-            # Jira board-column source field set.
             for name in (
+                "jira_project_key",
+                "jira_status",
+                "run_ref",
+                "max_workflows",
+                "constraints",
+                "additional_jql",
+                "repository",
+                "publish_mode",
+            ):
+                assert name in schema["properties"]
+            removed = {
+                "source_kind",
                 "jira_board_id",
                 "jira_column",
-                "jira_label_filter",
-                "jira_issue_type_filter",
-                "jira_assignee_filter",
-            ):
-                assert name in schema["properties"]
-            # GitHub repo issues source field set.
-            for name in (
                 "github_repository",
-                "github_issue_state",
-                "github_label_filter",
-                "github_assignee_filter",
-                "github_milestone_filter",
-                "github_search_query",
-            ):
-                assert name in schema["properties"]
-
-            # Target preset selector (slug/scope/scopeRef).
-            for name in (
                 "target_preset_slug",
                 "target_preset_scope",
                 "target_preset_scope_ref",
-            ):
-                assert name in schema["properties"]
-            assert "target_preset_version" not in schema["properties"]
-            assert "target_preset_version" not in schema["required"]
+                "sort",
+            }
+            assert removed.isdisjoint(schema["properties"])
+            assert schema["properties"]["run_ref"]["enum"] == [
+                "skill:jira-verify",
+                "preset:jira-implement",
+            ]
 
-            # Single shared publish policy normalized around none/branch/pr.
             assert schema["properties"]["publish_mode"]["enum"] == [
                 "none",
                 "branch",
                 "pr",
             ]
 
-            # Cascading board -> column discriminator wiring in the UI schema.
+            # UI schema uses only registered widgets or advanced flags.
             ui_schema = annotations["uiSchema"]
-            assert ui_schema["source_kind"]["widget"] == "discriminator"
-            assert ui_schema["jira_column"]["dependsOn"] == "jira_board_id"
-            assert ui_schema["target_preset_slug"]["highlightCompatible"] == [
-                "jira-implement",
-                "github-issue-implement",
-            ]
+            assert ui_schema["run_ref"]["widget"] == "select"
+            assert ui_schema["constraints"] == {"widget": "textarea", "advanced": True}
+            assert ui_schema["additional_jql"] == {
+                "widget": "textarea",
+                "advanced": True,
+            }
+            assert ui_schema["repository"]["advanced"] is True
+            assert ui_schema["publish_mode"] == {"widget": "select", "advanced": True}
 
             # Default issue bindings for the known issue presets.
             bindings = annotations["bindings"]
-            assert bindings["jira-implement"]["jira_issue"] == "{{ target.jiraIssue }}"
             assert (
-                bindings["jira-implement"]["jira_issue_key"]
+                bindings["skill:jira-verify"]["jira_issue"]
+                == "{{ target.jiraIssue }}"
+            )
+            assert (
+                bindings["skill:jira-verify"]["jira_issue_key"]
                 == "{{ target.jiraIssue.key }}"
             )
             assert (
-                bindings["github-issue-implement"]["github_issue"]
+                bindings["skill:jira-verify"]["repository"]
+                == "{{ target.repository }}"
+            )
+            assert (
+                bindings["preset:jira-implement"]["jira_issue"]
+                == "{{ target.jiraIssue }}"
+            )
+            assert (
+                bindings["preset:jira-implement"]["jira_issue_key"]
+                == "{{ target.jiraIssue.key }}"
+            )
+            assert (
+                bindings["preset:github-issue-implement"]["github_issue"]
                 == "{{ target.githubIssue }}"
             )
             assert (
-                bindings["github-issue-implement"]["github_issue_ref"]
+                bindings["preset:github-issue-implement"]["github_issue_ref"]
                 == "{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}"
             )
 
             # Runtime inheritance directive.
             assert annotations["runtimeInheritance"] == "caller"
 
-            # The board input keeps the existing jira_board input type.
-            board_input = next(
-                item
-                for item in template.inputs_schema
-                if item["name"] == "jira_board_id"
-            )
-            assert board_input["type"] == "jira_board"
+            exposed_inputs = {item["name"] for item in template.inputs_schema}
+            assert exposed_inputs == set(schema["properties"])
 
             # Orchestration step references the batch-workflows skill.
             assert len(template.steps) == 1
@@ -182,12 +188,13 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
                 scope="global",
                 scope_ref=None,
                 inputs={
-                    "source_kind": "jira_board_column",
-                    "jira_board_id": "42",
-                    "jira_column": "In Progress",
-                    "target_preset_slug": "jira-implement",
-                    "publish_mode": "pr",
+                    "jira_project_key": "MM",
+                    "jira_status": "In Progress",
+                    "run_ref": "skill:jira-verify",
+                    "publish_mode": "none",
                     "constraints": "Be careful",
+                    "additional_jql": "assignee = currentUser()",
+                    "repository": "MoonLadderStudios/MoonMind",
                     "max_workflows": "10",
                 },
             )
@@ -198,12 +205,19 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             assert step["skill"]["id"] == "batch-workflows"
 
             orchestration = step["batchOrchestration"]
-            assert orchestration["source"]["kind"] == "jira_board_column"
-            assert orchestration["source"]["jiraBoardColumn"]["boardId"] == "42"
-            assert orchestration["source"]["jiraBoardColumn"]["column"] == "In Progress"
-            assert orchestration["targetPreset"]["slug"] == "jira-implement"
-            assert "version" not in orchestration["targetPreset"]
-            assert orchestration["publish"]["mode"] == "pr"
+            assert orchestration["source"]["kind"] == "jira_status"
+            assert orchestration["source"]["jiraStatus"]["projectKey"] == "MM"
+            assert orchestration["source"]["jiraStatus"]["status"] == "In Progress"
+            assert (
+                orchestration["source"]["jiraStatus"]["additionalJql"]
+                == "assignee = currentUser()"
+            )
+            assert (
+                orchestration["source"]["jiraStatus"]["repository"]
+                == "MoonLadderStudios/MoonMind"
+            )
+            assert orchestration["target"]["runRef"] == "skill:jira-verify"
+            assert orchestration["publish"]["mode"] == "none"
             # Every child inherits the caller runtime.
             assert orchestration["runtime"]["inherit"] == "caller"
             assert orchestration["maxWorkflows"] == "10"
@@ -235,16 +249,14 @@ async def test_batch_workflows_ignores_removed_target_preset_version_input(tmp_p
                 scope="global",
                 scope_ref=None,
                 inputs={
-                    "source_kind": "jira_board_column",
-                    "jira_board_id": "42",
-                    "jira_column": "In Progress",
-                    "target_preset_slug": "jira-implement",
+                    "jira_project_key": "MM",
+                    "jira_status": "In Progress",
+                    "run_ref": "preset:jira-implement",
                     "target_preset_version": "1.1.0",
-                    "publish_mode": "pr",
+                    "publish_mode": "branch",
                 },
             )
 
     orchestration = expanded["steps"][0]["batchOrchestration"]
-    assert orchestration["targetPreset"]["slug"] == "jira-implement"
-    assert orchestration["targetPreset"]["scope"] == "global"
-    assert "version" not in orchestration["targetPreset"]
+    assert orchestration["target"]["runRef"] == "preset:jira-implement"
+    assert "targetPreset" not in orchestration

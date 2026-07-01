@@ -95,8 +95,8 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
         "feature_request",
         "source_design_path",
         "github_repository",
-        "github_labels",
         "publish_mode",
+        "source_issue_key",
     ]
     assert [
         (step.get("skill") or step.get("tool"))["id"]
@@ -114,19 +114,17 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
         "fallback": "fail",
         "github": {
             "repository": "{{ inputs.github_repository }}",
-            "labels": "{{ inputs.github_labels }}",
-            "dependencyMode": "none",
+            "sourceIssueKey": "{{ inputs.source_issue_key }}",
         },
     }
     downstream_step = template.steps[3]
     assert "workflow execution" in downstream_step["instructions"]
     assert "MoonMind task" not in downstream_step["instructions"]
-    assert "traceability" not in downstream_step["githubOrchestration"]
+    assert downstream_step["githubOrchestration"]["traceability"] == {
+        "sourceIssueKey": "{{ inputs.source_issue_key }}"
+    }
     assert downstream_step["githubOrchestration"]["task"]["publish"] == {
-        "mode": "pr",
-        "mergeAutomation": {
-            "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
-        },
+        "mode": "{{ inputs.publish_mode }}",
     }
 
 
@@ -144,8 +142,8 @@ async def test_github_issue_breakdown_implement_expands_downstream_contract(tmp_
                     "feature_request": "Split MM-1063 work.",
                     "source_design_path": "",
                     "github_repository": "MoonLadderStudios/MoonMind",
-                    "github_labels": "MM-1063",
                     "publish_mode": "pr",
+                    "source_issue_key": "MM-1063",
                 },
                 context={"targetRuntime": "codex"},
             )
@@ -160,7 +158,9 @@ async def test_github_issue_breakdown_implement_expands_downstream_contract(tmp_
         "MoonLadderStudios/MoonMind"
     )
     assert steps[3]["githubOrchestration"]["task"]["runtime"]["mode"] == "codex"
-    assert "traceability" not in steps[3]["githubOrchestration"]
+    assert steps[3]["githubOrchestration"]["traceability"] == {
+        "sourceIssueKey": "MM-1063"
+    }
 
 
 async def test_github_issue_breakdown_requires_source_input(tmp_path):
@@ -178,8 +178,8 @@ async def test_github_issue_breakdown_requires_source_input(tmp_path):
                         "feature_request": "",
                         "source_design_path": "",
                         "github_repository": "MoonLadderStudios/MoonMind",
-                        "github_labels": "",
                         "publish_mode": "pr",
+                        "source_issue_key": "MM-1063",
                     },
                     context={"targetRuntime": "codex"},
                 )

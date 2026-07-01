@@ -12,6 +12,42 @@ metadata:
   required-capabilities:
     - jira
     - git
+inputSchema:
+  type: object
+  required:
+    - jira_issue_key
+  properties:
+    jira_issue_key:
+      type: string
+      title: Jira issue
+      x-moonmind-semantic-type: issue-reference
+      x-moonmind-provider: jira
+    repository:
+      type: string
+      title: Repository
+      x-moonmind-context-default: repository
+    verification_mode:
+      type: string
+      title: Verification mode
+      enum:
+        - auto
+        - branch
+        - main
+      default: auto
+    update_status:
+      type: boolean
+      title: Update Jira status on PASS
+      default: false
+    constraints:
+      type: string
+      title: Extra verification instructions
+      x-moonmind-multiline: true
+uiSchema:
+  constraints:
+    widget: textarea
+defaults:
+  verification_mode: auto
+  update_status: false
 ---
 
 # Jira Verify

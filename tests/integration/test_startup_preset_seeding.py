@@ -489,8 +489,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             github_create_step = github_breakdown_template.steps[2]
             assert github_create_step["storyOutput"]["github"] == {
                 "repository": "{{ inputs.github_repository }}",
-                "labels": "{{ inputs.github_labels }}",
-                "dependencyMode": "none",
+                "sourceIssueKey": "{{ inputs.source_issue_key }}",
             }
             github_downstream_step = github_breakdown_template.steps[3]
             assert "workflow execution" in github_downstream_step["instructions"]
@@ -498,10 +497,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 github_downstream_step["instructions"]
             )
             assert github_downstream_step["githubOrchestration"]["task"]["publish"] == {
-                "mode": "pr",
-                "mergeAutomation": {
-                    "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
-                },
+                "mode": "{{ inputs.publish_mode }}",
+            }
+            assert github_downstream_step["githubOrchestration"]["traceability"] == {
+                "sourceIssueKey": "{{ inputs.source_issue_key }}"
             }
 
         result = await session.execute(
@@ -566,26 +565,42 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert batch_template is not None
         batch_annotations = batch_template.annotations or {}
         assert batch_annotations["runtimeInheritance"] == "caller"
-        assert batch_annotations["inputSchema"]["properties"]["source_kind"][
-            "enum"
-        ] == ["jira_board_column", "github_repo_issues"]
-        assert (
-            "target_preset_version"
-            not in batch_annotations["inputSchema"]["properties"]
-        )
-        assert batch_annotations["bindings"]["jira-implement"]["jira_issue_key"] == (
-            "{{ target.jiraIssue.key }}"
-        )
-        assert batch_annotations["bindings"]["github-issue-implement"][
+        batch_schema = batch_annotations["inputSchema"]
+        assert batch_schema["required"] == [
+            "jira_project_key",
+            "jira_status",
+            "run_ref",
+        ]
+        assert batch_schema["properties"]["run_ref"]["enum"] == [
+            "skill:jira-verify",
+            "preset:jira-implement",
+        ]
+        assert "source_kind" not in batch_schema["properties"]
+        assert "target_preset_slug" not in batch_schema["properties"]
+        assert "target_preset_version" not in batch_schema["properties"]
+        assert batch_annotations["uiSchema"]["run_ref"]["widget"] == "select"
+        assert batch_annotations["uiSchema"]["constraints"]["widget"] == "textarea"
+        assert batch_annotations["bindings"]["skill:jira-verify"][
+            "jira_issue_key"
+        ] == "{{ target.jiraIssue.key }}"
+        assert batch_annotations["bindings"]["preset:jira-implement"][
+            "jira_issue_key"
+        ] == "{{ target.jiraIssue.key }}"
+        assert batch_annotations["bindings"]["preset:github-issue-implement"][
             "github_issue_ref"
         ] == "{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}"
         batch_steps = batch_template.steps
         assert len(batch_steps) == 1
         assert batch_steps[0]["skill"]["id"] == "batch-workflows"
         assert batch_steps[0]["batchOrchestration"]["runtime"]["inherit"] == "caller"
+        assert batch_steps[0]["batchOrchestration"]["source"]["kind"] == "jira_status"
         assert (
             batch_steps[0]["batchOrchestration"]["publish"]["mode"]
             == "{{ inputs.publish_mode }}"
+        )
+        assert (
+            batch_steps[0]["batchOrchestration"]["target"]["runRef"]
+            == "{{ inputs.run_ref }}"
         )
 
 @pytest.mark.asyncio

@@ -11,8 +11,8 @@ requiredCapabilities:
   - git
   - gh
 annotations:
-  sourceSkill: moonspec-breakdown
-  githubIssueWorkflow: breakdown-to-dependent-orchestrate
+  sourceSkill: github-issue-breakdown
+  githubWorkflow: breakdown-to-dependent-orchestrate
   output: dependent-github-issue-orchestrate-workflows
 inputs:
   - name: feature_request
@@ -30,19 +30,20 @@ inputs:
     type: text
     required: true
     default: ""
-  - name: github_labels
-    label: GitHub Labels
-    type: text
-    required: false
-    default: ""
   - name: publish_mode
     label: Publish Mode
     type: enum
     required: true
-    default: pr_with_merge_automation
+    default: pr
     options:
       - pr
-      - pr_with_merge_automation
+      - branch
+      - none
+  - name: source_issue_key
+    label: Source Issue Key
+    type: text
+    required: false
+    default: ""
 steps:
   - title: Break down preferred source input
     instructions: |-
@@ -54,12 +55,16 @@ steps:
       Source document path:
       {{ inputs.source_design_path }}
 
+      Source issue key:
+      {{ inputs.source_issue_key }}
+
       Workflow instructions:
       {{ inputs.feature_request }}
 
+      Preserve story order, dependencies, source issue, source document path, sourceReference, and traceability in the breakdown output.
       If the selected input is a readable repo path under docs/ (except docs/tmp/) or AGENTS.md, use that file as the canonical declarative document and preserve its path plus stable canonical claim IDs in every story's sourceReference.path and sourceReference.claimIds.
       If the selected input is a non-canonical file-backed source, preserve that source path in source.path, source.referencePath, and story sourceReference.path, record sourceReference.claimIds as an empty list, and use sourceReference.coverageIds for run-local traceability.
-      If the selected input is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds as an empty list.
+      If the selected input is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
       The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).
       Classify the selected input before extracting stories. Prefer declarative sources when one is selected or resolved. If the selected input is primarily framed as steps, phases, recommendations, checklist items, status, or a roadmap, record sourceDocumentClass as imperative-input and decompose the underlying actionable desired system behavior into GitHub-ready MoonSpec stories instead of failing solely because the source is imperative. Otherwise record sourceDocumentClass as canonical-declarative or declarative-text as appropriate.
       Record sourceDocumentClass in the breakdown output.
@@ -89,18 +94,17 @@ steps:
       Create one GitHub issue in {{ inputs.github_repository }} for each eligible story from the reconciled MoonSpec breakdown.
 
       Use the runtime-provided story breakdown JSON path.
-      Every GitHub issue must include the Source Document path and canonical claim IDs from the story breakdown when present; otherwise include the source title.
+      Every GitHub issue must include the Source Document path and canonical claim IDs from the story breakdown when present; otherwise include the source title and Source issue key when present.
       Do not create GitHub issues for stories where jiraCreation.action is skip or manual_review.
       For stories where jiraCreation.action is create_remaining_work_issue, create the GitHub issue from the story's remainingWork while preserving the original story traceability.
-      Apply these comma-separated labels when provided: {{ inputs.github_labels }}.
+      Preserve story order in the returned issue mappings.
       Return the created GitHub issue numbers, URLs, source traceability, skipped stories, and blocked stories.
     storyOutput:
       mode: github
       fallback: fail
       github:
         repository: "{{ inputs.github_repository }}"
-        labels: "{{ inputs.github_labels }}"
-        dependencyMode: none
+        sourceIssueKey: "{{ inputs.source_issue_key }}"
     skill:
       id: story.create_github_issues
       requiredCapabilities:
@@ -111,11 +115,11 @@ steps:
       Create one GitHub Issue Orchestrate workflow execution for each GitHub issue created from the trusted GitHub story output.
 
       Use the ordered issue mappings returned by story.create_github_issues. Preserve the generated story order when creating downstream workflow executions.
-      Each downstream workflow execution must carry the story's sourceReference.path as its source_design_path input when present so the downstream GitHub Issue Orchestrate doc-reconciliation step knows the canonical source document. If the source path is absent because the story came from workflow instructions, preserve the source title instead of inventing a document path.
+      Each downstream workflow execution must carry the story's sourceReference.path as its source_design_path input when present so the downstream GitHub Issue Orchestrate doc-reconciliation step knows the canonical source document. If the source path is absent because the story came from workflow instructions, preserve the source title and source issue traceability instead of inventing a document path.
       Do not create downstream workflow executions for skipped fully implemented stories or manual-review stories that did not produce GitHub issue mappings.
       Each downstream workflow execution must run GitHub Issue Orchestrate on its corresponding GitHub issue and must not run implementation inline inside this breakdown run.
       Create workflow dependencies with dependsOn so each later generated workflow execution waits for the immediately earlier generated workflow ID.
-      Preserve the original source brief in downstream workflow instructions and result traceability.
+      Preserve source issue {{ inputs.source_issue_key }}, source document path, dependencies, and traceability in downstream workflow inputs.
       Report created workflow executions, skipped stories, dependency edges, partial failures, and no-downstream-workflow outcomes honestly.
     githubOrchestration:
       task:
@@ -123,9 +127,9 @@ steps:
         runtime:
           mode: "{{ context.targetRuntime }}"
         publish:
-          mode: "pr"
-          mergeAutomation:
-            enabled: "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
+          mode: "{{ inputs.publish_mode }}"
+      traceability:
+        sourceIssueKey: "{{ inputs.source_issue_key }}"
     skill:
       id: story.create_github_issue_orchestrate_workflows
       requiredCapabilities:

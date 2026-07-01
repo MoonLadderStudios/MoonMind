@@ -1875,6 +1875,11 @@ tbody tr:hover {
   background: rgb(var(--mm-accent) / 0.18);
 }
 
+.dark .workflow-list-data-slab tbody tr:nth-child(2n):not(:hover),
+.workflow-list-data-slab tbody tr:nth-child(2n):not(:hover) {
+  background: transparent;
+}
+
 .queue-layouts {
   display: grid;
   gap: 1rem;
@@ -5146,6 +5151,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   object-fit: contain;
 }
 
+.workflow-start-heading {
+  margin-bottom: 0.35rem;
+}
+
 .queue-advanced-settings-body {
   margin-top: 0.75rem;
 }
@@ -5500,6 +5509,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding-inline-end: 2.25rem;
 }
 
+.skill-combobox-input-row--with-description > input {
+  padding-inline-end: 4.5rem;
+}
+
 .skill-combobox-toggle {
   position: absolute;
   inset-block: 0;
@@ -5531,6 +5544,19 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .skill-combobox-toggle svg {
   transition: transform 0.15s ease;
+}
+
+.skill-combobox-description-toggle {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  min-width: 44px;
+  min-height: 44px;
+  touch-action: manipulation;
 }
 
 .skill-combobox-listbox {
@@ -6892,7 +6918,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 /* The sidebar controls are compact icon buttons rather than full-text buttons. */
 .workflow-workspace-expand-list,
 .workflow-workspace-close-sidebar,
-.workflow-workspace-expand-list,
 .workflow-workspace-open-sidebar {
   display: inline-flex;
   align-items: center;
@@ -6910,15 +6935,22 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-expand-list:hover,
-.workflow-workspace-expand-list:focus-visible {
-  background: rgb(var(--mm-accent) / 0.08);
-  border-color: rgb(var(--mm-accent));
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
+.workflow-workspace-expand-list:focus-visible,
+.workflow-workspace-close-sidebar:hover,
+.workflow-workspace-close-sidebar:focus-visible,
+.workflow-workspace-open-sidebar:hover,
+.workflow-workspace-open-sidebar:focus-visible {
+  background: rgb(var(--mm-ink) / 0.06);
+  border-color: rgb(var(--mm-border));
+  box-shadow: 0 10px 22px -20px rgb(var(--mm-ink) / 0.5);
   color: rgb(var(--mm-ink));
 }
 
-.workflow-workspace-expand-list:focus-visible {
+.workflow-workspace-expand-list:focus-visible,
+.workflow-workspace-close-sidebar:focus-visible,
+.workflow-workspace-open-sidebar:focus-visible {
   outline: none;
+  box-shadow: var(--mm-control-focus-ring);
 }
 
 .workflow-workspace-control-icon,
@@ -6926,21 +6958,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 1.05rem;
   height: 1.05rem;
   flex: 0 0 auto;
-}
-
-/* The expand-to-list control keeps the accent emphasis so it stays visually
- * distinct from the neutral collapse control. */
-.workflow-workspace-expand-list {
-  background: rgb(var(--mm-accent) / 0.16);
-  border-color: rgb(var(--mm-accent) / 0.45);
-  color: rgb(var(--mm-accent));
-  box-shadow: none;
-}
-
-.workflow-workspace-expand-list:hover,
-.workflow-workspace-expand-list:focus-visible {
-  background: rgb(var(--mm-accent) / 0.24);
-  border-color: rgb(var(--mm-accent) / 0.82);
 }
 
 .workflow-workspace-sidebar-list {
@@ -6992,8 +7009,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   min-height: 3.75rem;
+  padding: 0.58rem 0.55rem;
   gap: 0.55rem;
-  padding: 0.5rem 0.45rem;
   border: 0;
   border-radius: 0.4rem;
   background: transparent;
@@ -7978,20 +7995,39 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: inline-flex;
   width: 1.75rem;
   height: 1.75rem;
+  padding: 0;
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
   border-radius: 0.45rem;
   background: transparent;
   color: rgb(var(--mm-ink) / 0.68);
+  line-height: 1;
+  box-shadow: none;
   cursor: pointer;
 }
 
+.dashboard-toast__close svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
 .dashboard-toast__close:hover,
-.dashboard-toast__close:focus-visible {
+.dashboard-toast__close:focus-visible,
+.dashboard-toast__close:active {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+  background-image: none;
   border-color: rgb(var(--mm-border) / 0.82);
   background: rgb(var(--mm-ink) / 0.06);
   color: rgb(var(--mm-ink));
+}
+
+.dashboard-toast__close:active {
+  background: rgb(var(--mm-ink) / 0.12);
 }
 
 @keyframes dashboard-toast-enter {
