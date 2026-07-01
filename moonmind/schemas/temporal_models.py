@@ -18,6 +18,11 @@ from pydantic.json_schema import SkipJsonSchema
 
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
+from moonmind.statuses.step_execution import (
+    StepExecutionReason,
+    StepExecutionStatus,
+    StepExecutionTerminalDisposition,
+)
 
 SUPPORTED_WORKFLOW_TYPES = (
     "MoonMind.UserWorkflow",
@@ -65,39 +70,6 @@ STEP_EXECUTION_MANIFEST_CONTENT_TYPE = (
 STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE = (
     "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
 )
-
-StepExecutionReason = Literal[
-    "initial_execution",
-    "quality_gate_failed",
-    "tests_failed",
-    "runtime_recovered",
-    "recover_from_failed_step",
-    "remediation_context",
-    "operator_requested",
-    "dependency_invalidated",
-    "policy_revalidation",
-]
-StepExecutionStatus = Literal[
-    "pending",
-    "preparing",
-    "running",
-    "checking",
-    "succeeded",
-    "failed",
-    "blocked",
-    "canceled",
-    "superseded",
-]
-StepExecutionTerminalDisposition = Literal[
-    "accepted",
-    "retryable",
-    "blocked",
-    "needs_human",
-    "discarded",
-    "superseded",
-    "failed_unrecoverable",
-    "failed_with_remaining_work",
-]
 
 EvidenceCategory = Literal[
     "checkpoint",

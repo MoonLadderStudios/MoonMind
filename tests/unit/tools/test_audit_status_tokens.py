@@ -129,3 +129,48 @@ def test_csv_report_is_parseable(tmp_path: Path, capsys) -> None:
             "action": "keep_canonical",
         }
     ]
+
+
+def test_fail_on_unknown_exits_nonzero_after_report(tmp_path: Path, capsys) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "status.md").write_text("mystery_status\n", encoding="utf-8")
+
+    exit_code = audit_status_tokens.main(
+        [
+            "--root",
+            str(tmp_path),
+            "--scan-root",
+            "docs",
+            "--token",
+            "mystery_status",
+            "--fail-on-unknown",
+        ]
+    )
+
+    assert exit_code == 1
+    parsed = list(csv.DictReader(capsys.readouterr().out.splitlines()))
+    assert parsed[0]["token"] == "mystery_status"
+    assert parsed[0]["guessed_domain"] == "unknown"
+
+
+def test_fail_on_unknown_allows_known_tokens(tmp_path: Path, capsys) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "status.md").write_text("mm_state\n", encoding="utf-8")
+
+    exit_code = audit_status_tokens.main(
+        [
+            "--root",
+            str(tmp_path),
+            "--scan-root",
+            "docs",
+            "--token",
+            "mm_state",
+            "--fail-on-unknown",
+        ]
+    )
+
+    assert exit_code == 0
+    parsed = list(csv.DictReader(capsys.readouterr().out.splitlines()))
+    assert parsed[0]["action"] == "keep_canonical"

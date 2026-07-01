@@ -221,7 +221,27 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         dest="scan_roots",
         help="Relative path to scan. May be repeated.",
     )
+    parser.add_argument(
+        "--fail-on-unknown",
+        action="store_true",
+        help=(
+            "Exit nonzero after writing the CSV report when a scanned token is "
+            "unknown or assigned to the unknown domain."
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def has_unknown_or_misplaced_rows(rows: list[dict[str, str]]) -> bool:
+    for row in rows:
+        has_files = bool(row.get("files"))
+        if not has_files:
+            continue
+        if row.get("guessed_domain") == "unknown":
+            return True
+        if row.get("canonicality") == "unknown":
+            return True
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -231,7 +251,10 @@ def main(argv: list[str] | None = None) -> int:
     scan_roots = tuple(args.scan_roots or DEFAULT_SCAN_ROOTS)
     writer = csv.DictWriter(sys.stdout, fieldnames=REPORT_COLUMNS)
     writer.writeheader()
-    writer.writerows(build_report_rows(root=root, scan_roots=scan_roots, tokens=tokens))
+    rows = build_report_rows(root=root, scan_roots=scan_roots, tokens=tokens)
+    writer.writerows(rows)
+    if args.fail_on_unknown and has_unknown_or_misplaced_rows(rows):
+        return 1
     return 0
 
 

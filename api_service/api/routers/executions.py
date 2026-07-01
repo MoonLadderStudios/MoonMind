@@ -45,6 +45,10 @@ from api_service.db.models import (
     User,
 )
 from moonmind.config.settings import settings
+from moonmind.statuses.compat import (
+    canonicalize_finish_outcome_code_alias,
+    normalize_no_commit_finish_summary,
+)
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
 from moonmind.workflows.executions.routing import _coerce_bool
@@ -2756,9 +2760,10 @@ def _serialize_execution(
         else memo_finish_summary
     )
     finish_summary = _normalize_no_commit_finish_summary(finish_summary)
-    finish_outcome_code = getattr(record, "finish_outcome_code", None)
-    if str(finish_outcome_code or "").strip().upper() == "NO_CHANGES":
-        finish_outcome_code = "NO_COMMIT"
+    finish_outcome_code = canonicalize_finish_outcome_code_alias(
+        getattr(record, "finish_outcome_code", None),
+        logger=logger,
+    )
     proposal_summary = _proposal_summary_from_memo(memo)
     if isinstance(finish_summary, Mapping):
         finish_proposals = finish_summary.get("proposals")
@@ -3173,7 +3178,7 @@ def _recommended_next_action(
             if not pr_url
             else "Review published pull request."
         )
-    if code in {"NO_COMMIT", "NO_CHANGES"}:
+    if canonicalize_finish_outcome_code_alias(code) == "NO_COMMIT":
         return "No follow-up required unless the outcome is unexpected."
     if code == "PUBLISH_DISABLED":
         return "Review generated artifacts; publishing was disabled."
@@ -5782,41 +5787,7 @@ def _build_debug_fields(
 def _normalize_no_commit_finish_summary(
     finish_summary: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    if not isinstance(finish_summary, Mapping):
-        return None
-    normalized = dict(finish_summary)
-    finish_outcome = normalized.get("finishOutcome")
-    if isinstance(finish_outcome, Mapping):
-        outcome = dict(finish_outcome)
-        if str(outcome.get("code") or "").strip().upper() == "NO_CHANGES":
-            outcome["code"] = "NO_COMMIT"
-            reason = str(outcome.get("reason") or "").strip().lower()
-            if reason in {
-                "publish skipped: no local changes",
-                "no local changes",
-                "workflow completed with no changes.",
-            }:
-                outcome["reason"] = "No repository commit was needed."
-        normalized["finishOutcome"] = outcome
-    publish = normalized.get("publish")
-    if isinstance(publish, Mapping):
-        publish_payload = dict(publish)
-        reason_code = str(
-            publish_payload.get("reasonCode")
-            or publish_payload.get("reason_code")
-            or ""
-        ).strip()
-        reason = str(publish_payload.get("reason") or "").strip().lower()
-        if reason_code == "no_changes" or reason in {
-            "publish skipped: no local changes",
-            "no local changes",
-        }:
-            publish_payload["reasonCode"] = "no_commit"
-            publish_payload["reason"] = (
-                "No repository changes were available to commit or publish."
-            )
-        normalized["publish"] = publish_payload
-    return normalized
+    return normalize_no_commit_finish_summary(finish_summary, logger=logger)
 
 def _coerce_artifact_ref(value: Any) -> str | None:
     if value is None:

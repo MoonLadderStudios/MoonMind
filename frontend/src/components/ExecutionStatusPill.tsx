@@ -1,7 +1,6 @@
 import { useMemo, type CSSProperties } from 'react';
 
-import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
-import { formatStatusLabel } from '../utils/formatters';
+import { formatWorkflowStatusLabel, workflowStatusPillProps } from '../status/workflowStatus';
 
 type GlyphStyle = CSSProperties & {
   '--mm-letter-count'?: number;
@@ -30,7 +29,7 @@ function splitGraphemes(value: string): string[] {
 }
 
 function visibleStatusLabel(status: string | null | undefined): string {
-  return formatStatusLabel(status);
+  return formatWorkflowStatusLabel(status, '-');
 }
 
 export function ExecutionStatusPill({
@@ -41,7 +40,7 @@ export function ExecutionStatusPill({
   enableMotion?: boolean;
 }) {
   const label = visibleStatusLabel(status);
-  const pillProps = executionStatusPillProps(status, { enableMotion });
+  const pillProps = workflowStatusPillProps(status, { enableMotion });
   const hasShimmerSweep = pillProps['data-effect'] === 'shimmer-sweep';
   const glyphs = useMemo(() => splitGraphemes(label), [label]);
 
