@@ -2563,6 +2563,181 @@ async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
 
 
 @pytest.mark.asyncio
+async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    node_inputs = {
+        "agentKind": "external",
+        "agentId": "omnigent",
+        "workspaceRoot": "/work/agent_jobs/run-1/repo",
+        "baseCommit": "abc123",
+    }
+    captured: list[dict[str, Any]] = []
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": node_inputs}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "implement",
+        updated_at=now,
+        summary="Implementing",
+    )
+    request = workflow._build_agent_execution_request(
+        node_inputs=dict(node_inputs),
+        node_id="implement",
+        tool_name="external",
+        step_execution=1,
+    )
+    workflow._record_step_workspace_capture_input("implement", node_inputs)
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload, "kwargs": kwargs})
+        if activity == "workspace.capture_checkpoint":
+            assert payload["kind"] == "external_state_ref"
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": "external_state_ref",
+                    "externalStateRef": "artifact://omnigent/state",
+                    "createdAt": "2026-06-13T12:00:00+00:00",
+                },
+                "diagnosticRefs": ["artifact://omnigent/manifest"],
+            }
+        assert activity == "step_checkpoint.create"
+        return _checkpoint_create_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    result = await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="before_execution",
+        updated_at=now,
+    )
+
+    assert request.agent_kind == "external"
+    assert request.agent_id == "omnigent"
+    assert request.step_execution is not None
+    assert request.step_execution.runtime_selection == {
+        "runtimeId": "omnigent",
+        "agentKind": "external",
+    }
+    assert result == "artifact://checkpoint/before_execution"
+    assert [(call["activity"], call["payload"]["boundary"]) for call in captured] == [
+        ("workspace.capture_checkpoint", "before_execution"),
+        ("step_checkpoint.create", "before_execution"),
+    ]
+    assert captured[0]["payload"]["kind"] == "external_state_ref"
+    assert captured[1]["payload"]["workspace"]["kind"] == "external_state_ref"
+    assert "patchRef" not in captured[1]["payload"]["workspace"]
+    assert "archiveRef" not in captured[1]["payload"]["workspace"]
+
+
+@pytest.mark.asyncio
+async def test_run_keeps_non_omnigent_and_legacy_checkpoint_capture_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    captured: list[dict[str, Any]] = []
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {"id": "external-control", "inputs": {"title": "External control"}},
+            {"id": "legacy", "inputs": {"title": "Legacy shape"}},
+        ],
+        dependency_map={"external-control": [], "legacy": []},
+        updated_at=now,
+    )
+    for logical_step_id in ("external-control", "legacy"):
+        workflow._mark_step_running(
+            logical_step_id,
+            updated_at=now,
+            summary="Implementing",
+        )
+    workflow._record_step_workspace_capture_input(
+        "external-control",
+        {
+            "agentKind": "external",
+            "agentId": "jules",
+            "workspaceRoot": "/work/agent_jobs/run-1/repo",
+            "baseCommit": "abc123",
+        },
+    )
+    workflow._record_step_workspace_capture_input(
+        "legacy",
+        {
+            "workspaceRoot": "/work/agent_jobs/run-1/repo",
+            "baseCommit": "abc123",
+        },
+    )
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload, "kwargs": kwargs})
+        if activity == "workspace.capture_checkpoint":
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": payload["kind"],
+                    "baseCommit": payload["baseCommit"],
+                    "patchRef": f"artifact://patch/{payload['identity']['logicalStepId']}",
+                    "manifestRef": (
+                        f"artifact://patch-manifest/{payload['identity']['logicalStepId']}"
+                    ),
+                    "createdAt": "2026-06-13T12:00:00+00:00",
+                },
+                "diagnosticRefs": [
+                    f"artifact://patch-manifest/{payload['identity']['logicalStepId']}"
+                ],
+            }
+        assert activity == "step_checkpoint.create"
+        return _checkpoint_create_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    await workflow._record_canonical_step_checkpoint(
+        "external-control",
+        boundary="before_execution",
+        updated_at=now,
+    )
+    await workflow._record_canonical_step_checkpoint(
+        "legacy",
+        boundary="before_execution",
+        updated_at=now,
+    )
+
+    capture_kinds = [
+        call["payload"]["kind"]
+        for call in captured
+        if call["activity"] == "workspace.capture_checkpoint"
+    ]
+    assert capture_kinds == ["git_patch", "git_patch"]
+
+
+@pytest.mark.asyncio
 async def test_run_skips_no_capture_ephemeral_checkpoint_for_pre_emit_histories(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

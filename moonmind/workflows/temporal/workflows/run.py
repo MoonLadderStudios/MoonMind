@@ -1013,6 +1013,7 @@ class MoonMindRunWorkflow:
         self._previous_step_checkpoint_refs: dict[str, str] = {}
         self._step_checkpoint_refs_by_boundary: dict[str, dict[str, str]] = {}
         self._step_workspace_capture_inputs: dict[str, dict[str, Any]] = {}
+        self._step_external_agent_ids: dict[str, str] = {}
         self._step_execution_launch_blocks: set[str] = set()
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
         self._step_terminal_dispositions: dict[str, str] = {}
@@ -3949,6 +3950,15 @@ class MoonMindRunWorkflow:
         logical_step_id: str,
         outputs: Mapping[str, Any],
     ) -> None:
+        raw_agent_kind = outputs.get("agentKind") or outputs.get("agent_kind")
+        raw_agent_id = outputs.get("agentId") or outputs.get("agent_id")
+        if str(raw_agent_kind or "").strip() == "external" and isinstance(
+            raw_agent_id, str
+        ):
+            external_agent_id = raw_agent_id.strip()
+            if external_agent_id:
+                self._step_external_agent_ids[logical_step_id] = external_agent_id
+
         candidates: list[Mapping[str, Any]] = [outputs]
         workspace_spec = outputs.get("workspaceSpec") or outputs.get("workspace_spec")
         if isinstance(workspace_spec, Mapping):
@@ -4007,10 +4017,11 @@ class MoonMindRunWorkflow:
             )
             if checkpoint_kind:
                 capture_input["kind"] = checkpoint_kind
-            elif base_commit:
-                capture_input["kind"] = "git_patch"
-            else:
-                capture_input["kind"] = "worktree_archive"
+            elif self._step_external_agent_ids.get(logical_step_id) != "omnigent":
+                if base_commit:
+                    capture_input["kind"] = "git_patch"
+                else:
+                    capture_input["kind"] = "worktree_archive"
             break
 
         if capture_input:
@@ -4039,6 +4050,7 @@ class MoonMindRunWorkflow:
             if isinstance(self._recovery_source, Mapping)
             else None,
             runtime_kind=self._target_runtime,
+            external_agent_id=self._step_external_agent_ids.get(logical_step_id),
         )
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
@@ -12857,8 +12869,10 @@ class MoonMindRunWorkflow:
         )
         return str(
             runtime_block.get("mode")
+            or runtime_block.get("agentId")
             or runtime_block.get("agent_id")
             or node_inputs.get("targetRuntime")
+            or node_inputs.get("agentId")
             or fallback_name
             or ""
         ).strip()

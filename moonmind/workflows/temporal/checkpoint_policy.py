@@ -85,11 +85,13 @@ def resolve_checkpoint_policy(
     boundary: str,
     recovery_source: Mapping[str, Any] | None = None,
     runtime_kind: str | None = None,
+    external_agent_id: str | None = None,
 ) -> ResolvedCheckpointPolicy:
     """Return the shared policy used for capture, manifests, and recovery apply."""
 
     boundary_token = _boundary_token(boundary)
-    if _is_omnigent_runtime(runtime_kind):
+    is_omnigent_external_agent = str(external_agent_id or "").strip() == "omnigent"
+    if is_omnigent_external_agent or _is_omnigent_runtime(runtime_kind):
         external_policy = _omnigent_checkpoint_policy(boundary_token)
         if external_policy is not None:
             return external_policy
