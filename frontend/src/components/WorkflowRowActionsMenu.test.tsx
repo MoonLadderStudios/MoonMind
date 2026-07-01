@@ -218,6 +218,46 @@ describe('WorkflowRowActionsMenu', () => {
     expect(action.getAttribute('href')).toBe('/workflows/wf-123?source=temporal');
   });
 
+  it('links rerun success to the returned execution when a separate workflow is created', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => detailResponse,
+        } as Response);
+      }
+      if (url === '/api/executions/wf-123/update') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            execution: {
+              workflowId: 'mm:rerun-created',
+              redirectPath: '/workflows/mm:rerun-created?source=temporal',
+            },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderWithClient(
+      <WorkflowRowActionsMenu
+        workflowId="wf-123"
+        apiBase="/api"
+        actionsEnabled
+        taskEditingEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    await waitForActionAvailability();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+
+    const toast = await screen.findByRole('status');
+    const action = within(toast).getByRole('link', { name: 'View workflow' });
+    expect(action.getAttribute('href')).toBe('/workflows/mm:rerun-created?source=temporal');
+  });
+
   it('dismisses rerun success toasts manually', async () => {
     renderWithClient(
       <WorkflowRowActionsMenu
@@ -273,6 +313,39 @@ describe('WorkflowRowActionsMenu', () => {
     const toast = within(viewport).getByRole('alert');
     expect(within(toast).getByText('Workflow action failed')).toBeTruthy();
     expect(within(toast).getByText('Workflow no longer accepts rerun requests.')).toBeTruthy();
+  });
+
+  it('shows non-Error mutation failures without crashing the error toast', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => detailResponse,
+        } as Response);
+      }
+      if (url === '/api/executions/wf-123/update') {
+        return Promise.reject({ message: '  Custom action failure.  ' });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderWithClient(
+      <WorkflowRowActionsMenu
+        workflowId="wf-123"
+        apiBase="/api"
+        actionsEnabled
+        taskEditingEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    await waitForActionAvailability();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+
+    const viewport = await screen.findByLabelText('Dashboard notifications');
+    const toast = within(viewport).getByRole('alert');
+    expect(within(toast).getByText('Workflow action failed')).toBeTruthy();
+    expect(within(toast).getByText('Custom action failure.')).toBeTruthy();
   });
 
   it('posts a graceful cancel request directly from the row menu', async () => {

@@ -122,6 +122,7 @@ function DashboardToast({
   onDismiss: (id: string) => void;
 }) {
   const [isPaused, setIsPaused] = useState(false);
+  const isPausedRef = useRef(false);
   const remainingMs = useRef(toast.durationMs ?? null);
   const startedAt = useRef<number | null>(null);
   const timer = useRef<number | null>(null);
@@ -144,12 +145,17 @@ function DashboardToast({
   }, [clearTimer, isPaused, onDismiss, toast.id]);
 
   const pause = () => {
+    if (isPausedRef.current) return;
+    isPausedRef.current = true;
     if (remainingMs.current !== null && startedAt.current !== null) {
       remainingMs.current = Math.max(0, remainingMs.current - (Date.now() - startedAt.current));
     }
     setIsPaused(true);
   };
-  const resume = () => setIsPaused(false);
+  const resume = () => {
+    isPausedRef.current = false;
+    setIsPaused(false);
+  };
 
   return (
     <section

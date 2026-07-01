@@ -77,6 +77,7 @@ const KEBAB_ICON = (
 );
 
 const ACTION_AVAILABILITY_PENDING_REASON = 'Checking availability…';
+const DEFAULT_WORKFLOW_ACTION_ERROR = 'The workflow action could not be completed.';
 
 const PENDING_WORKFLOW_ACTION_CAPABILITIES = {
   canSetTitle: true,
@@ -93,9 +94,21 @@ const PENDING_WORKFLOW_ACTION_CAPABILITIES = {
   canBypassDependencies: true,
 } satisfies RowActionsExecution['actions'];
 
-function readableWorkflowActionError(error: Error): string {
-  const message = error.message.trim();
-  if (!message) return 'The workflow action could not be completed.';
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readableWorkflowActionError(error: unknown): string {
+  const rawMessage =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : isRecord(error) && typeof error.message === 'string'
+          ? error.message
+          : '';
+  const message = rawMessage.trim();
+  if (!message) return DEFAULT_WORKFLOW_ACTION_ERROR;
   try {
     const parsed = JSON.parse(message) as { detail?: unknown; message?: unknown };
     const parsedMessage =
@@ -109,6 +122,21 @@ function readableWorkflowActionError(error: Error): string {
     // Plain text API errors are already user-readable enough for this surface.
   }
   return message.replace(/\s+/g, ' ').slice(0, 240);
+}
+
+function workflowActionResultHref(result: unknown, fallbackHref: string): string {
+  const execution = isRecord(result) && isRecord(result.execution) ? result.execution : null;
+  const redirectPath =
+    execution && typeof execution.redirectPath === 'string' ? execution.redirectPath.trim() : '';
+  if (redirectPath) return redirectPath;
+
+  const resultWorkflowId =
+    execution && typeof execution.workflowId === 'string' ? execution.workflowId.trim() : '';
+  if (resultWorkflowId) {
+    return workflowDetailHref(resultWorkflowId, new URLSearchParams(window.location.search));
+  }
+
+  return fallbackHref;
 }
 
 export type WorkflowRowActionsMenuProps = {
@@ -161,7 +189,7 @@ export function WorkflowRowActionsMenu({
   }, [queryClient, workflowId]);
 
   const onMutationError = useCallback(
-    (error: Error) => {
+    (error: unknown) => {
       const message = readableWorkflowActionError(error);
       setActionError(message);
       toast.error({
@@ -367,13 +395,13 @@ export function WorkflowRowActionsMenu({
           updateMutation.mutate(
             { updateName: 'RequestRerun' },
             {
-              onSuccess: () => {
+              onSuccess: (result) => {
                 toast.success({
                   title: 'Rerun requested',
                   message: `${workflowSubject} has been queued.`,
                   action: {
                     label: 'View workflow',
-                    href: detailHref,
+                    href: workflowActionResultHref(result, detailHref),
                   },
                 });
               },
