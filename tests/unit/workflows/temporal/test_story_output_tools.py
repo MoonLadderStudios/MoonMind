@@ -2417,6 +2417,56 @@ async def test_create_github_issues_preserves_order_and_traceability():
 
 
 @pytest.mark.asyncio
+async def test_create_github_issues_uses_story_output_github_and_previous_artifact():
+    service = _FakeGitHubService()
+    artifact_reads: list[str] = []
+
+    async def read_artifact(ref: str) -> dict[str, Any]:
+        artifact_reads.append(ref)
+        return {
+            "source": {"referencePath": "docs/Designs/GitHubBreakdown.md"},
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "Artifact GitHub story",
+                    "description": "Create this from a previous breakdown artifact.",
+                    "sourceReference": {
+                        "claimIds": ["claim:github-breakdown"],
+                    },
+                }
+            ],
+        }
+
+    result = await create_github_issues_from_stories(
+        {
+            "storyOutput": {
+                "github": {
+                    "repository": "TargetOrg/TargetRepo",
+                    "traceability": {"sourceIssueKey": "TargetOrg/TargetRepo#77"},
+                },
+            },
+            "previousOutputs": {
+                "storyOutput": {
+                    "storyBreakdownArtifactRef": "art_previous_github_breakdown"
+                }
+            },
+        },
+        github_service_factory=lambda: service,
+        artifact_reader=read_artifact,
+    )
+
+    github = result.outputs["github"]
+    assert github["status"] == "completed"
+    assert github["issueMappings"][0]["repository"] == "TargetOrg/TargetRepo"
+    assert github["issueMappings"][0]["sourceDesignPath"] == (
+        "docs/Designs/GitHubBreakdown.md"
+    )
+    assert artifact_reads == ["art_previous_github_breakdown"]
+    assert service.requests[0]["repo"] == "TargetOrg/TargetRepo"
+    assert "Source issue: TargetOrg/TargetRepo#77" in service.requests[0]["body"]
+
+
+@pytest.mark.asyncio
 async def test_create_github_issue_downstream_tasks_preserve_dependencies_and_traceability():
     creator = _FakeExecutionCreator()
 
@@ -2520,6 +2570,81 @@ async def test_create_github_issue_downstream_tasks_preserve_dependencies_and_tr
         "sourceIssueKey": "MM-1063",
         "sourceBriefRef": "",
     }
+
+
+@pytest.mark.asyncio
+async def test_create_github_issue_downstream_tasks_marks_remaining_after_failure():
+    creator = _FakeExecutionCreator(fail_at=2)
+
+    result = await create_github_issue_implement_tasks_from_issue_mappings(
+        {
+            "github": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-001",
+                        "storyIndex": 1,
+                        "summary": "First",
+                        "issueNumber": "101",
+                    },
+                    {
+                        "storyId": "STORY-002",
+                        "storyIndex": 2,
+                        "summary": "Second",
+                        "issueNumber": "102",
+                    },
+                    {
+                        "storyId": "STORY-003",
+                        "storyIndex": 3,
+                        "summary": "Third",
+                        "issueNumber": "103",
+                    },
+                ],
+            },
+            "githubOrchestration": {
+                "task": {"repository": "MoonLadderStudios/MoonMind"},
+                "traceability": {"sourceIssueKey": "MM-1063"},
+            },
+        },
+        execution_creator=creator,
+    )
+
+    orchestration = result.outputs["githubOrchestration"]
+    assert orchestration["status"] == "partial"
+    assert orchestration["createdTaskCount"] == 1
+    assert orchestration["failures"][0]["storyId"] == "STORY-002"
+    assert orchestration["failures"][0]["errorCode"] == "task_creation_failed"
+    assert orchestration["skippedStories"] == [
+        {
+            "storyId": "STORY-003",
+            "storyIndex": 3,
+            "githubIssueRef": "MoonLadderStudios/MoonMind#103",
+            "errorCode": "dependency_not_created",
+            "message": "Earlier downstream task creation failed.",
+        }
+    ]
+
+
+def test_github_downstream_task_payload_propagates_fallback_repository():
+    _title, task = story_tools._github_downstream_task_payload(
+        mapping={
+            "storyId": "STORY-001",
+            "summary": "Fallback repo issue",
+            "issueNumber": "101",
+        },
+        task_payload={"repository": "MoonLadderStudios/MoonMind"},
+        traceability={},
+        depends_on=[],
+        source_issue_key="",
+        target_preset="github_orchestrate",
+    )
+
+    assert task["inputs"]["github_issue"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "number": 101,
+        "title": "Fallback repo issue",
+    }
+    assert task["inputs"]["github_issue_ref"] == "MoonLadderStudios/MoonMind#101"
+
 
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_uses_input_previous_outputs_mappings():

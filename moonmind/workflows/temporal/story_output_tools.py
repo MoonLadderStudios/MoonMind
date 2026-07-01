@@ -1687,6 +1687,8 @@ def _github_downstream_task_payload(
         or task_payload.get("repository")
         or task_payload.get("repo")
     )
+    if repository:
+        issue["repository"] = repository
     issue_number = _string(issue.get("number"))
     issue_ref = f"{repository}#{issue_number}" if repository and issue_number else ""
     story_id = _string(mapping.get("storyId") or mapping.get("story_id"))
@@ -1900,6 +1902,30 @@ async def _create_github_downstream_tasks_from_issue_mappings(
                     "dependsOn": depends_on,
                 }
             )
+            for skipped in issue_mappings[index:]:
+                skipped_issue = _github_issue_input_from_mapping(skipped)
+                skipped_number = _string(skipped_issue.get("number"))
+                skipped_repo = (
+                    _github_repository_slug(skipped_issue.get("repository"))
+                    or repository
+                )
+                skipped_ref = (
+                    f"{skipped_repo}#{skipped_number}"
+                    if skipped_repo and skipped_number
+                    else ""
+                )
+                skipped_stories.append(
+                    {
+                        "storyId": _string(
+                            skipped.get("storyId") or skipped.get("story_id")
+                        ),
+                        "storyIndex": skipped.get("storyIndex")
+                        or skipped.get("story_index"),
+                        "githubIssueRef": skipped_ref,
+                        "errorCode": "dependency_not_created",
+                        "message": "Earlier downstream task creation failed.",
+                    }
+                )
             break
 
         created_mapping = dict(created)
@@ -2361,7 +2387,17 @@ async def create_github_issues_from_stories(
 ) -> ToolResult:
     """Create GitHub issues from ordered story breakdown output."""
 
-    github_payload = _mapping(inputs.get("github"))
+    previous_outputs = _mapping(
+        (_context or {}).get("previousOutputs")
+        or (_context or {}).get("previous_outputs")
+        or inputs.get("previousOutputs")
+        or inputs.get("previous_outputs")
+    )
+    story_output = _mapping(inputs.get("storyOutput") or inputs.get("story_output"))
+    previous_story_output = _mapping(
+        previous_outputs.get("storyOutput") or previous_outputs.get("story_output")
+    )
+    github_payload = _mapping(story_output.get("github") or inputs.get("github"))
     repository = _github_repository_slug(
         github_payload.get("repository")
         or inputs.get("repository")
@@ -2386,12 +2422,14 @@ async def create_github_issues_from_stories(
         or inputs.get("storyBreakdown")
         or inputs.get("story_breakdown")
         or inputs.get("storyBreakdownJson")
-        or _mapping(
-            inputs.get("previousOutputs") or inputs.get("previous_outputs")
-        ).get("stories")
-        or _mapping(
-            inputs.get("previousOutputs") or inputs.get("previous_outputs")
-        ).get("storyBreakdown")
+        or previous_outputs.get("stories")
+        or previous_outputs.get("storyBreakdown")
+        or previous_outputs.get("story_breakdown")
+        or previous_outputs.get("storyBreakdownJson")
+        or previous_story_output.get("stories")
+        or previous_story_output.get("storyBreakdown")
+        or previous_story_output.get("story_breakdown")
+        or previous_story_output.get("storyBreakdownJson")
     )
     parsed_story_payload = _parse_story_breakdown_payload(raw_story_payload)
     breakdown_source_path = _breakdown_source_path(parsed_story_payload)
@@ -2402,9 +2440,12 @@ async def create_github_issues_from_stories(
         artifact_ref = _string(
             inputs.get("storyBreakdownArtifactRef")
             or inputs.get("story_breakdown_artifact_ref")
-            or _mapping(inputs.get("storyOutput") or inputs.get("story_output")).get(
-                "storyBreakdownArtifactRef"
-            )
+            or story_output.get("storyBreakdownArtifactRef")
+            or story_output.get("story_breakdown_artifact_ref")
+            or previous_outputs.get("storyBreakdownArtifactRef")
+            or previous_outputs.get("story_breakdown_artifact_ref")
+            or previous_story_output.get("storyBreakdownArtifactRef")
+            or previous_story_output.get("story_breakdown_artifact_ref")
         )
         if artifact_ref:
             if artifact_reader is None:
