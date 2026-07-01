@@ -18,6 +18,9 @@ from pydantic.json_schema import SkipJsonSchema
 
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
+from moonmind.statuses.step_execution import StepExecutionArtifactStatusValue
+from moonmind.statuses.step_ledger import StepLedgerStatusValue
+from moonmind.statuses.temporal_status import TemporalStatusValue
 
 SUPPORTED_WORKFLOW_TYPES = (
     "MoonMind.UserWorkflow",
@@ -76,17 +79,6 @@ StepExecutionReason = Literal[
     "operator_requested",
     "dependency_invalidated",
     "policy_revalidation",
-]
-StepExecutionStatus = Literal[
-    "pending",
-    "preparing",
-    "running",
-    "checking",
-    "succeeded",
-    "failed",
-    "blocked",
-    "canceled",
-    "superseded",
 ]
 StepExecutionTerminalDisposition = Literal[
     "accepted",
@@ -782,7 +774,7 @@ class StepExecutionSummaryRefModel(BaseModel):
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
     reason: StepExecutionReason = Field(..., alias="reason")
-    status: StepExecutionStatus = Field(..., alias="status")
+    status: StepExecutionArtifactStatusValue = Field(..., alias="status")
     terminal_disposition: StepExecutionTerminalDisposition | None = Field(
         None, alias="terminalDisposition"
     )
@@ -803,7 +795,7 @@ class StepExecutionManifestModel(BaseModel):
     execution_scope: Literal["run"] = Field("run", alias="executionScope")
     lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
     reason: StepExecutionReason = Field(..., alias="reason")
-    status: StepExecutionStatus = Field(..., alias="status")
+    status: StepExecutionArtifactStatusValue = Field(..., alias="status")
     terminal_disposition: StepExecutionTerminalDisposition | None = Field(
         None, alias="terminalDisposition"
     )
@@ -2804,17 +2796,7 @@ class StepLedgerRowModel(BaseModel):
     title: str = Field(..., alias="title", min_length=1)
     tool: dict[str, Any] = Field(default_factory=dict, alias="tool")
     depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
-    status: Literal[
-        "pending",
-        "ready",
-        "running",
-        "awaiting_external",
-        "reviewing",
-        "succeeded",
-        "failed",
-        "skipped",
-        "canceled",
-    ] = Field(..., alias="status")
+    status: StepLedgerStatusValue = Field(..., alias="status")
     waiting_reason: str | None = Field(None, alias="waitingReason")
     attention_required: bool = Field(False, alias="attentionRequired")
     execution_ordinal: int = Field(
@@ -2882,7 +2864,7 @@ class StepExecutionProjectionModel(BaseModel):
     source_execution_ordinal: int | None = Field(None, alias="sourceExecutionOrdinal", ge=1)
     lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
     reason: StepExecutionReason | None = Field(None, alias="reason")
-    status: StepExecutionStatus | None = Field(None, alias="status")
+    status: StepExecutionArtifactStatusValue | None = Field(None, alias="status")
     terminal_disposition: StepExecutionTerminalDisposition | None = Field(
         None, alias="terminalDisposition"
     )
@@ -3147,7 +3129,7 @@ class ExecutionModel(BaseModel):
     ] = Field(..., alias="dashboardStatus")
     state: str = Field(..., alias="state")
     raw_state: str = Field(..., alias="rawState")
-    temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
+    temporal_status: TemporalStatusValue = Field(
         ..., alias="temporalStatus"
     )
     close_status: Optional[str] = Field(None, alias="closeStatus")
@@ -3318,7 +3300,7 @@ class ExecutionListItemModel(BaseModel):
     ] = Field(..., alias="dashboardStatus")
     state: str = Field(..., alias="state")
     raw_state: str = Field(..., alias="rawState")
-    temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
+    temporal_status: TemporalStatusValue = Field(
         ..., alias="temporalStatus"
     )
     close_status: Optional[str] = Field(None, alias="closeStatus")

@@ -19,6 +19,11 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
+from moonmind.statuses.workflow import (
+    PRE_WORKFLOW_STATES,
+    WORKFLOW_STATE_TO_CLOSE_STATUS,
+    coerce_workflow_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,22 +60,8 @@ LOCAL_ONLY_EXECUTION_FIELDS = (
 # scheduled, even while it is awaiting capacity. ``mm_started_at`` is the
 # canonical source for "real work began"; see
 # moonmind.workflows.temporal.workflows.run.MoonMindRunWorkflow._mark_real_work_started.
-PRE_WORK_STATES = frozenset(
-    {
-        MoonMindWorkflowState.SCHEDULED,
-        MoonMindWorkflowState.INITIALIZING,
-        MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,
-        MoonMindWorkflowState.PLANNING,
-        MoonMindWorkflowState.AWAITING_SLOT,
-    }
-)
-
-TERMINAL_DOMAIN_STATE_TO_CLOSE_STATUS = {
-    MoonMindWorkflowState.NO_COMMIT: TemporalExecutionCloseStatus.COMPLETED,
-    MoonMindWorkflowState.COMPLETED: TemporalExecutionCloseStatus.COMPLETED,
-    MoonMindWorkflowState.FAILED: TemporalExecutionCloseStatus.FAILED,
-    MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
-}
+PRE_WORK_STATES = PRE_WORKFLOW_STATES
+TERMINAL_DOMAIN_STATE_TO_CLOSE_STATUS = WORKFLOW_STATE_TO_CLOSE_STATUS
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
@@ -145,9 +136,7 @@ def _coerce_mm_state(search_attributes: dict[str, Any]) -> MoonMindWorkflowState
     if raw_state is None:
         return None
     try:
-        if raw_state == "no_changes":
-            return MoonMindWorkflowState.NO_COMMIT
-        return MoonMindWorkflowState(raw_state)
+        return coerce_workflow_state(raw_state)
     except ValueError:
         logger.warning("Invalid value for mm_state search attribute: '%s'", raw_state)
         return None

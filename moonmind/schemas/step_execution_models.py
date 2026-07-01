@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.statuses.step_execution import StepExecutionArtifactStatusValue
+
 STEP_EXECUTION_CONTENT_TYPE = "application/vnd.moonmind.step-execution+json;version=1"
 
 StepExecutionReason = Literal[
@@ -20,17 +22,6 @@ StepExecutionReason = Literal[
     "operator_requested",
     "dependency_invalidated",
     "policy_revalidation",
-]
-StepExecutionStatus = Literal[
-    "pending",
-    "preparing",
-    "running",
-    "checking",
-    "succeeded",
-    "failed",
-    "blocked",
-    "canceled",
-    "superseded",
 ]
 StepExecutionTerminalDisposition = Literal[
     "accepted",
@@ -331,7 +322,7 @@ class StepExecutionManifestModel(BaseModel):
     execution_scope: Literal["run"] = Field("run", alias="executionScope")
     lineage: dict[str, Any] | None = Field(None, alias="lineage")
     reason: StepExecutionReason = Field(..., alias="reason")
-    status: StepExecutionStatus = Field(..., alias="status")
+    status: StepExecutionArtifactStatusValue = Field(..., alias="status")
     terminal_disposition: StepExecutionTerminalDisposition | None = Field(
         None,
         alias="terminalDisposition",
