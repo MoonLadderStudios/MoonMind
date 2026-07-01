@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import sys
 
@@ -24,6 +25,7 @@ DEFAULT_TOKENS = (
 DEFAULT_SCAN_ROOTS = (
     "api_service",
     "docs",
+    "frontend/src",
     "moonmind",
     "tests",
     "tools",
@@ -144,17 +146,15 @@ def iter_text_files(root: Path, scan_roots: tuple[str, ...]) -> list[Path]:
         if not base.exists():
             continue
         if base.is_file():
-            candidates = [base]
-        else:
-            candidates = [
-                path
-                for path in base.rglob("*")
-                if path.is_file()
-                and not any(part in SKIP_DIRS for part in path.relative_to(root).parts)
-            ]
-        for path in candidates:
-            if path.suffix in TEXT_SUFFIXES:
-                files.append(path)
+            if base.suffix in TEXT_SUFFIXES:
+                files.append(base)
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [dirname for dirname in dirnames if dirname not in SKIP_DIRS]
+            for filename in filenames:
+                path = Path(dirpath) / filename
+                if path.suffix in TEXT_SUFFIXES:
+                    files.append(path)
     return sorted(set(files))
 
 
@@ -168,11 +168,15 @@ def find_token_files(
     for path in iter_text_files(root, scan_roots):
         try:
             text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
+        except (OSError, UnicodeDecodeError, ValueError):
             continue
         for token in tokens:
             if token in text:
-                matches[token].append(path.relative_to(root).as_posix())
+                try:
+                    rel_path = path.relative_to(root).as_posix()
+                except ValueError:
+                    rel_path = path.as_posix()
+                matches[token].append(rel_path)
     return matches
 
 

@@ -71,6 +71,44 @@ def test_report_emits_required_columns_and_file_matches(tmp_path: Path) -> None:
     assert by_token["in-progress"]["files"] == "moonmind/provider.py"
 
 
+def test_default_scan_roots_include_frontend_sources() -> None:
+    assert "frontend/src" in audit_status_tokens.DEFAULT_SCAN_ROOTS
+
+
+def test_iter_text_files_skips_pruned_directories(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    skipped = docs / "node_modules" / "package"
+    docs.mkdir()
+    skipped.mkdir(parents=True)
+    included = docs / "status.md"
+    excluded = skipped / "status.md"
+    included.write_text("mm_state\n", encoding="utf-8")
+    excluded.write_text("queued\n", encoding="utf-8")
+
+    files = audit_status_tokens.iter_text_files(tmp_path, ("docs",))
+
+    assert files == [included]
+
+
+def test_find_token_files_handles_unreadable_and_external_paths(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    external = tmp_path.parent / f"{tmp_path.name}-external"
+    docs.mkdir()
+    external.mkdir()
+    (docs / "status.md").write_text("mm_state\n", encoding="utf-8")
+    (external / "status.md").write_text("queued\n", encoding="utf-8")
+    (docs / "missing.py").symlink_to(docs / "does-not-exist.py")
+
+    matches = audit_status_tokens.find_token_files(
+        root=tmp_path,
+        scan_roots=("docs", str(external)),
+        tokens=("mm_state", "queued"),
+    )
+
+    assert matches["mm_state"] == ["docs/status.md"]
+    assert matches["queued"] == [(external / "status.md").as_posix()]
+
+
 def test_csv_report_is_parseable(tmp_path: Path, capsys) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
