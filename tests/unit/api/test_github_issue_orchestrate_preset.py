@@ -110,6 +110,9 @@ async def test_github_issue_orchestrate_seed_exposes_issue_picker_and_tools(tmp_
         "github.update_issue_status",
     ]
     assert template.steps[1]["slug"] == "issue-implement-assessment"
+    assert template.steps[0]["tool"]["inputs"]["artifactPath"] == (
+        "artifacts/github-issue-orchestrate-brief.json"
+    )
     assert template.steps[1]["inputMapping"] == {
         "issue_provider": "github",
         "issue_ref": "{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}",
@@ -117,6 +120,9 @@ async def test_github_issue_orchestrate_seed_exposes_issue_picker_and_tools(tmp_
         "brief_artifact_path": "artifacts/github-issue-orchestrate-brief.json",
         "assessment_artifact_path": "artifacts/github-issue-orchestrate-assessment.json",
     }
+    assert template.steps[3]["tool"]["inputs"]["assessmentArtifactPath"] == (
+        "artifacts/github-issue-orchestrate-assessment.json"
+    )
 
 
 async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_path):
@@ -154,6 +160,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
     assert steps[0]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
         "issueNumber": "1063",
+        "artifactPath": "artifacts/github-issue-orchestrate-brief.json",
     }
     assert steps[1]["skill"]["id"] == "auto"
     assert "artifacts/github-issue-orchestrate-assessment.json" in steps[1][
@@ -172,6 +179,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
             "issueNumber": "1063",
             "targetStatus": "In Progress",
             "mode": "start",
+            "assessmentArtifactPath": "artifacts/github-issue-orchestrate-assessment.json",
         },
     }
 

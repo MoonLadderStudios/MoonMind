@@ -3031,9 +3031,17 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
     assert expanded["steps"][0]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
         "issueNumber": "1067",
+        "artifactPath": "artifacts/github-issue-orchestrate-brief.json",
     }
     assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
     assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
+    assert expanded["steps"][3]["tool"]["inputs"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": "1067",
+        "targetStatus": "In Progress",
+        "mode": "start",
+        "assessmentArtifactPath": "artifacts/github-issue-orchestrate-assessment.json",
+    }
     assert expanded["steps"][26]["tool"]["id"] == "github.update_issue_status"
     assert expanded["steps"][26]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",

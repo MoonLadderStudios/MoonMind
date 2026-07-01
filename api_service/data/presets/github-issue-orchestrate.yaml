@@ -114,6 +114,7 @@ steps:
     inputs:
       repository: '{{ inputs.github_issue.repository }}'
       issueNumber: '{{ inputs.github_issue.number }}'
+      artifactPath: artifacts/github-issue-orchestrate-brief.json
 - kind: include
   slug: issue-implement-assessment
   alias: assess
@@ -167,6 +168,7 @@ steps:
       issueNumber: '{{ inputs.github_issue.number }}'
       targetStatus: In Progress
       mode: start
+      assessmentArtifactPath: artifacts/github-issue-orchestrate-assessment.json
 - title: Classify request and resume point
   instructions: 'Use the GitHub issue preset brief for {{ inputs.github_issue.repository }}#{{
     inputs.github_issue.number }} as the canonical Moon Spec orchestration input.
