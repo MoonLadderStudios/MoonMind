@@ -102,8 +102,12 @@ def run_ref_for_config(config: TargetConfig) -> str:
     return f"{config.target_kind}:{config.target_slug}"
 
 
-def _required_capabilities_for(provider: str) -> list[str]:
+def _required_capabilities_for(
+    provider: str, target_kind: str | None = None, target_slug: str | None = None
+) -> list[str]:
     base = ["git"]
+    if provider == "jira" and target_kind == "skill" and target_slug == "jira-verify":
+        return base + ["jira"]
     if provider == "jira":
         base += ["jira", "gh"]
     elif provider == "github":
@@ -296,7 +300,9 @@ def build_child_request(
 
     publish_mode = _normalize_publish_mode(config.publish_mode)
     required_capabilities = config.required_capabilities or _required_capabilities_for(
-        provider
+        provider,
+        config.target_kind,
+        config.target_slug,
     )
 
     task_payload: dict[str, Any] = {
@@ -381,9 +387,10 @@ def build_child_requests(
     submissions: list[ChildSubmission] = []
     skipped: list[SkippedTarget] = []
 
-    capped = targets[: max(0, int(max_workflows))] if max_workflows else targets
-    if max_workflows and len(targets) > max_workflows:
-        for overflow in targets[max_workflows:]:
+    limit = max(0, int(max_workflows))
+    capped = targets[:limit]
+    if len(targets) > limit:
+        for overflow in targets[limit:]:
             skipped.append(
                 SkippedTarget(
                     ref=str(overflow.get("ref") or "(unknown)"),

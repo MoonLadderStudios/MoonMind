@@ -198,6 +198,7 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     assert payload["task"]["publish"] == {"mode": "none"}
     assert payload["repository"] == "MoonLadderStudios/MoonMind"
     assert payload["task"]["inputs"]["jira_issue_key"] == "THOR-123"
+    assert payload["requiredCapabilities"] == ["git", "jira"]
     # The selected skill is authored as a direct skill task.
     assert payload["task"]["tool"] == {"type": "skill", "name": "jira-verify"}
     assert "taskTemplate" not in payload["task"]
@@ -307,6 +308,44 @@ def test_build_child_requests_caps_at_max_workflows():
     assert len(submissions) == 2
     overflow = [item for item in skipped if item.reason == "max_workflows_exceeded"]
     assert len(overflow) == 3
+
+
+def test_build_child_requests_zero_max_workflows_skips_all_targets():
+    module = _load_module()
+    targets = [
+        {**_JIRA_TARGET, "ref": f"THOR-{n}", "jiraIssue": {"key": f"THOR-{n}"}}
+        for n in range(3)
+    ]
+    submissions, skipped = module["build_child_requests"](
+        targets,
+        config=_jira_config(module),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        max_workflows=0,
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+    assert submissions == []
+    assert [item.ref for item in skipped] == ["THOR-0", "THOR-1", "THOR-2"]
+    assert {item.reason for item in skipped} == {"max_workflows_exceeded"}
+
+
+def test_build_child_requests_negative_max_workflows_skips_all_targets():
+    module = _load_module()
+    targets = [
+        {**_JIRA_TARGET, "ref": f"THOR-{n}", "jiraIssue": {"key": f"THOR-{n}"}}
+        for n in range(3)
+    ]
+    submissions, skipped = module["build_child_requests"](
+        targets,
+        config=_jira_config(module),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        max_workflows=-2,
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+    assert submissions == []
+    assert [item.ref for item in skipped] == ["THOR-0", "THOR-1", "THOR-2"]
+    assert {item.reason for item in skipped} == {"max_workflows_exceeded"}
 
 
 def test_build_child_requests_skips_unsupported_target():
