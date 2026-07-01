@@ -84,6 +84,15 @@ def _normalize_publish_mode(value: str | None) -> str:
     return candidate
 
 
+def _normalize_repo(value: Any) -> str | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    if candidate.endswith(".git"):
+        candidate = candidate[:-4]
+    return candidate or None
+
+
 def parse_run_ref(value: str | None) -> tuple[str, str]:
     candidate = str(value or "").strip()
     if ":" not in candidate:
@@ -170,7 +179,11 @@ def child_goal_for_target(
 
 
 def bind_child_inputs(
-    target: dict[str, Any], target_kind: str, target_slug: str, constraints: str
+    target: dict[str, Any],
+    target_kind: str,
+    target_slug: str,
+    constraints: str,
+    fallback_repository: str | None = None,
 ) -> dict[str, Any] | None:
     """Apply the default issue bindings for the selected child target.
 
@@ -179,6 +192,7 @@ def bind_child_inputs(
     """
 
     provider = str(target.get("provider") or "").strip().lower()
+    normalized_fallback = _normalize_repo(fallback_repository)
     shared = _text(constraints)
     if (
         target_kind == "skill"
@@ -194,7 +208,9 @@ def bind_child_inputs(
         inputs: dict[str, Any] = {
             "jira_issue": dict(issue) if issue else {"key": key},
             "jira_issue_key": key,
-            "repository": _text(target.get("repository")) or "",
+            "repository": (
+                _text(target.get("repository")) or normalized_fallback or ""
+            ),
             "verification_mode": "auto",
             "update_status": False,
             "constraints": shared or "",
@@ -227,7 +243,11 @@ def bind_child_inputs(
             if isinstance(target.get("githubIssue"), dict)
             else {}
         )
-        repository = _text(issue.get("repository")) or _text(target.get("repository"))
+        repository = (
+            _text(issue.get("repository"))
+            or _text(target.get("repository"))
+            or normalized_fallback
+        )
         number = issue.get("number")
         if not repository or number is None:
             return None
@@ -276,6 +296,7 @@ def build_child_request(
     runtime: RuntimeSelection,
     batch_scope: str | None = None,
     inherit_runtime_from_caller: bool = False,
+    default_repository: str | None = None,
 ) -> dict[str, Any] | None:
     """Build a single ``POST /api/executions`` request for one resolved target.
 
@@ -284,7 +305,11 @@ def build_child_request(
 
     provider = str(target.get("provider") or "").strip().lower()
     ref = _text(target.get("ref")) or ""
-    repository = _text(target.get("repository"))
+    repository = (
+        _text(target.get("repository"))
+        or _normalize_repo(target.get("batch_repository"))
+        or _normalize_repo(default_repository)
+    )
     if not ref:
         return None
 
@@ -294,6 +319,7 @@ def build_child_request(
         config.target_kind,
         config.target_slug,
         config.constraints,
+        fallback_repository=repository,
     )
     if goal is None or inputs is None:
         return None
@@ -381,6 +407,7 @@ def build_child_requests(
     max_workflows: int,
     batch_scope: str | None = None,
     inherit_runtime_from_caller: bool = False,
+    default_repository: str | None = None,
 ) -> tuple[list[ChildSubmission], list[SkippedTarget]]:
     """Build child requests, capped at ``max_workflows`` resolved targets."""
 
@@ -406,6 +433,7 @@ def build_child_requests(
             runtime=runtime,
             batch_scope=batch_scope,
             inherit_runtime_from_caller=inherit_runtime_from_caller,
+            default_repository=default_repository,
         )
         if request is None:
             skipped.append(SkippedTarget(ref=ref, reason="unsupported_target"))
@@ -492,6 +520,27 @@ def _load_parent_runtime_selection(
                 or runtime_node.get("profileId")
             ),
         )
+    return None
+
+
+def _load_parent_repository(task_context_path: str | None = None) -> str | None:
+    seen: set[str] = set()
+    for candidate in _task_context_candidates(task_context_path):
+        identity = str(candidate.expanduser())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        normalized = _normalize_repo(payload.get("repository"))
+        if normalized:
+            return normalized
     return None
 
 
@@ -718,6 +767,7 @@ async def main(argv: list[str] | None = None) -> int:
     targets = _read_targets(targets_path)
     constraints = _read_constraints(args)
     runtime = _resolve_runtime_selection(args.task_context_path)
+    batch_repository = _load_parent_repository(args.task_context_path)
     batch_scope = _parent_run_scope(args.task_context_path)
     inherit_from_caller = _task_workflow_id_from_env() is not None
     target_kind, target_slug = parse_run_ref(args.run_ref)
@@ -736,6 +786,7 @@ async def main(argv: list[str] | None = None) -> int:
         max_workflows=args.max_workflows,
         batch_scope=batch_scope,
         inherit_runtime_from_caller=inherit_from_caller,
+        default_repository=batch_repository,
     )
     created, errors = await _submit_jobs(submissions)
 

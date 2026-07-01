@@ -998,6 +998,18 @@ def _apply_contextual_input_overrides(
         submitted=dict(submitted),
     )
 
+    if slug == _BATCH_WORKFLOWS_SLUG:
+        repository = _repository_from_context(context)
+        schema_defaults = _input_schema_defaults_by_name(inputs_schema)
+        submitted_repository = str(adjusted.get("repository") or "").strip()
+        schema_repository = str(schema_defaults.get("repository", "")).strip()
+        if (
+            repository
+            and (not submitted_repository or submitted_repository == schema_repository)
+        ):
+            adjusted["repository"] = repository
+        return adjusted
+
     if slug not in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
         return adjusted
 
