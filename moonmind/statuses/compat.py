@@ -11,7 +11,7 @@ WORKFLOW_STATE_COMPATIBILITY_ALIASES: dict[str, str] = {
 def normalize_workflow_state_alias(raw: str) -> str:
     """Normalize legacy workflow state aliases before canonical parsing."""
 
-    candidate = str(raw).strip()
+    candidate = str(raw).strip().lower()
     return WORKFLOW_STATE_COMPATIBILITY_ALIASES.get(candidate, candidate)
 
 

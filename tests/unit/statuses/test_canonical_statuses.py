@@ -81,6 +81,7 @@ def test_workflow_close_status_mapping_covers_terminal_states() -> None:
 
 def test_workflow_state_parsing_fails_fast_outside_compat_boundary() -> None:
     assert coerce_workflow_state("no_changes") is MoonMindWorkflowState.NO_COMMIT
+    assert coerce_workflow_state(" No_Changes ") is MoonMindWorkflowState.NO_COMMIT
     assert WORKFLOW_STATE_COMPATIBILITY_ALIASES == {"no_changes": "no_commit"}
 
     with pytest.raises(ValueError):

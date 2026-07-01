@@ -95,7 +95,7 @@ from moonmind.workflows.executions.preset_expansion import (
     has_unexpanded_task_template,
 )
 
-TERMINAL_STATES: set[MoonMindWorkflowState] = set(TERMINAL_WORKFLOW_STATES)
+TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
 SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
 FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
@@ -312,8 +312,8 @@ ALLOWED_WAITING_REASONS: set[str] = {
     "retry_backoff",
     "unknown_external",
 }
-ALLOWED_INTEGRATION_STATUSES: set[str] = set(INTEGRATION_STATUS_VALUES)
-TERMINAL_INTEGRATION_STATUSES: set[str] = set(TERMINAL_INTEGRATION_STATUS_VALUES)
+ALLOWED_INTEGRATION_STATUSES: frozenset[str] = INTEGRATION_STATUS_VALUES
+TERMINAL_INTEGRATION_STATUSES: frozenset[str] = TERMINAL_INTEGRATION_STATUS_VALUES
 _SEEN_PROVIDER_EVENT_LIMIT = 50
 _CORRELATION_EXPIRY_DAYS = 30
 PAGINATION_ORDERING = "mm_updated_at_desc__workflow_id_desc"
@@ -2296,9 +2296,9 @@ class TemporalExecutionService:
             )
 
         normalized_close_status = str(close_status or "").strip().lower()
-        close_status_by_value = {item.value: item for item in TemporalExecutionCloseStatus}
-        target_close_status = close_status_by_value.get(normalized_close_status)
-        if target_close_status is None:
+        try:
+            target_close_status = TemporalExecutionCloseStatus(normalized_close_status)
+        except ValueError:
             target_close_status = TERMINAL_STATE_TO_CLOSE_STATUS[target_state]
 
         source_record = await self._load_source_execution(workflow_id)
