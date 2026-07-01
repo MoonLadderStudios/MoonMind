@@ -118,8 +118,8 @@ steps:
 
     If verification returns ADDITIONAL_WORK_NEEDED, produce structured remaining
     work with implementation gaps, verification gaps, required tests, and concrete
-    next files or commands so remediation can consume it. Fix those gaps before
-    proceeding to pull request creation.
+    next files or commands so the following remediation step can consume it. Do
+    not modify source code or tests in this read-only verification step.
 
 
     If verification returns NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or
@@ -128,6 +128,63 @@ steps:
 
     Do not create a pull request until the controlling moonspec-verify verdict is
     FULLY_IMPLEMENTED and the relevant tests pass.'
+  skill:
+    id: moonspec-verify
+    args: {}
+    requiredCapabilities:
+    - git
+- title: Remediate verification gaps
+  instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }} before doing any work.
+
+
+    If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
+    that remediation is skipped because verification already passed.
+
+
+    If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report''s
+    gaps and remaining work as the authoritative bounded implementation backlog.
+    Fix only those reported implementation or verification gaps, update or add the
+    required tests, and run the focused checks named by the verification report when
+    feasible.
+
+
+    If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
+    is recoverable in this runtime, such as by running a skipped command or inspecting
+    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
+    treat it as terminal for issue implementation remediation and do not create a
+    pull request.
+
+
+    Do not broaden the issue scope, do not create a pull request, and do not change
+    {{ inputs.issue_provider }} issue status during remediation.'
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+- title: Verify remediation
+  instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
+    remediation result before doing anything.
+
+
+    Run moonspec-verify in issue-brief verification mode for {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }} after remediation, even when remediation was
+    skipped because the prior verdict was FULLY_IMPLEMENTED. Use {{ inputs.brief_artifact_path
+    }} as the authoritative issue brief and {{ inputs.assessment_artifact_path }}
+    as the initial state assessment.
+
+
+    This is the controlling verification gate for pull request creation. If the verdict
+    is ADDITIONAL_WORK_NEEDED or NO_DETERMINATION, stop and report the gaps or missing
+    evidence; do not continue to pull request creation. If the verdict is BLOCKED,
+    FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify
+    runtime or infrastructure causes as environment failure, stop immediately, and
+    do not create a pull request.
+
+
+    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
   skill:
     id: moonspec-verify
     args: {}
@@ -151,8 +208,8 @@ steps:
 
 
     Otherwise create a pull request for the completed work for {{ inputs.issue_provider
-    }} issue {{ inputs.issue_ref }} only after the immediately preceding controlling
-    moonspec-verify verdict is FULLY_IMPLEMENTED. If the verifier reported ADDITIONAL_WORK_NEEDED,
+    }} issue {{ inputs.issue_ref }} only after the controlling post-remediation moonspec-verify
+    verdict is FULLY_IMPLEMENTED. If the verifier reported ADDITIONAL_WORK_NEEDED,
     NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
     stop without creating a pull request and report the verifier evidence.
 

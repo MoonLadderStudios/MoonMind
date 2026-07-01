@@ -12,7 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, Preset, PresetScopeType
-from api_service.services.presets.catalog import PresetCatalogService
+from api_service.services.presets.catalog import (
+    PresetCatalogService,
+    PresetValidationError,
+)
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -87,6 +90,7 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
 
     assert template.title == title
     assert sorted(template.required_capabilities) == ["gh", "git"]
+    assert "sourceReference" not in template.annotations
     assert [item["name"] for item in template.inputs_schema] == [
         "feature_request",
         "source_design_path",
@@ -117,6 +121,7 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
     downstream_step = template.steps[3]
     assert "workflow execution" in downstream_step["instructions"]
     assert "MoonMind task" not in downstream_step["instructions"]
+    assert "traceability" not in downstream_step["githubOrchestration"]
     assert downstream_step["githubOrchestration"]["task"]["publish"] == {
         "mode": "pr",
         "mergeAutomation": {
@@ -155,3 +160,35 @@ async def test_github_issue_breakdown_implement_expands_downstream_contract(tmp_
         "MoonLadderStudios/MoonMind"
     )
     assert steps[3]["githubOrchestration"]["task"]["runtime"]["mode"] == "codex"
+    assert "traceability" not in steps[3]["githubOrchestration"]
+
+
+async def test_github_issue_breakdown_requires_source_input(tmp_path):
+    async with _catalog_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+
+            with pytest.raises(PresetValidationError) as excinfo:
+                await service.expand_template(
+                    slug="github-issue-breakdown-implement",
+                    scope="global",
+                    scope_ref=None,
+                    inputs={
+                        "feature_request": "",
+                        "source_design_path": "",
+                        "github_repository": "MoonLadderStudios/MoonMind",
+                        "github_labels": "",
+                        "publish_mode": "pr",
+                    },
+                    context={"targetRuntime": "codex"},
+                )
+
+    assert excinfo.value.errors == [
+        {
+            "path": "preset.inputs",
+            "message": "Provide a Source Document Path or Workflow Instructions.",
+            "code": "required",
+            "recoverable": True,
+        }
+    ]

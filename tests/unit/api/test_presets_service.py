@@ -2949,6 +2949,8 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "Mark GitHub issue In Progress",
         "Implement the issue",
         "Verify implementation",
+        "Remediate verification gaps",
+        "Verify remediation",
         "Create pull request",
         "Finalize GitHub issue status",
     ]
@@ -2957,8 +2959,12 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
     assert expanded["steps"][5]["skill"]["id"] == "moonspec-verify"
     assert "issue-brief verification mode" in expanded["steps"][5]["instructions"]
-    assert "controlling moonspec-verify verdict is FULLY_IMPLEMENTED" in (
-        expanded["steps"][6]["instructions"]
+    assert expanded["steps"][6]["skill"]["id"] == "auto"
+    assert "ADDITIONAL_WORK_NEEDED" in expanded["steps"][6]["instructions"]
+    assert expanded["steps"][7]["skill"]["id"] == "moonspec-verify"
+    assert "controlling verification gate" in expanded["steps"][7]["instructions"]
+    assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
+        expanded["steps"][8]["instructions"]
     )
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
         "github-issue-implement",

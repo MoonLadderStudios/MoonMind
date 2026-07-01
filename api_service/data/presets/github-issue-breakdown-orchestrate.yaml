@@ -14,7 +14,6 @@ annotations:
   sourceSkill: moonspec-breakdown
   githubIssueWorkflow: breakdown-to-dependent-orchestrate
   output: dependent-github-issue-orchestrate-workflows
-  sourceReference: MM-1063
 inputs:
   - name: feature_request
     label: Workflow Instructions
@@ -127,8 +126,6 @@ steps:
           mode: "pr"
           mergeAutomation:
             enabled: "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
-      traceability:
-        sourceIssueKey: MM-1063
     skill:
       id: story.create_github_issue_orchestrate_workflows
       requiredCapabilities:
