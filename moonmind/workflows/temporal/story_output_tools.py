@@ -3308,7 +3308,7 @@ async def create_github_issues_from_stories(
                 github_payload=github_payload,
                 marker_label=marker_label,
             ),
-            github_token=_string(github_payload.get("token") or github_payload.get("githubToken")),
+            github_token=None,
         )
         issue_result = (
             result.model_dump(by_alias=True)

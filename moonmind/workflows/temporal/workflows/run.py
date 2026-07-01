@@ -7782,9 +7782,10 @@ class MoonMindRunWorkflow:
                         require_pull_request_url = False
                         self._publish_status = "published"
                         self._publish_reason = (
-                            "Jira issue output succeeded; no PR output required"
+                            f"{story_output_mode.title()} issue output succeeded; "
+                            "no PR output required"
                         )
-                        self._publish_context["storyOutputMode"] = "jira"
+                        self._publish_context["storyOutputMode"] = story_output_mode
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
 
@@ -10116,11 +10117,19 @@ class MoonMindRunWorkflow:
 
     @staticmethod
     def _is_successful_jira_story_output(*, mode: str, status: str) -> bool:
-        return mode == "jira" and status in {
-            "jira_created",
-            "jira_partial",
-            "jira_noop",
-        }
+        if mode == "jira":
+            return status in {
+                "jira_created",
+                "jira_partial",
+                "jira_noop",
+            }
+        if mode == "github":
+            return status in {
+                "github_created",
+                "github_partial",
+                "github_noop",
+            }
+        return False
 
     @staticmethod
     def _trusted_jira_output_summary(outputs: Mapping[str, Any]) -> str | None:

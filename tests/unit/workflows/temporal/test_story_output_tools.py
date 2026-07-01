@@ -490,7 +490,11 @@ async def test_create_github_issues_from_reconciled_story_breakdown():
         {
             "repository": "MoonLadderStudios/MoonMind",
             "workflowId": "mm-1068-run",
-            "github": {"labels": ["moonmind", "MM-1068"]},
+            "github": {
+                "labels": ["moonmind", "MM-1068"],
+                "token": "workflow-payload-token",
+                "githubToken": "workflow-payload-token-alias",
+            },
             "stories": {
                 "source": {
                     "referencePath": "docs/Workflows/SkillAndPlanContracts.md",
@@ -573,6 +577,7 @@ async def test_create_github_issues_from_reconciled_story_breakdown():
     assert "DESIGN-REQ-007" in request["body"]
     assert "DESIGN-REQ-014" in request["body"]
     assert "One issue is created." in request["body"]
+    assert request["github_token"] is None
 
 
 @pytest.mark.asyncio
