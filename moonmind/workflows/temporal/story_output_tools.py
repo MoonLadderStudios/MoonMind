@@ -1031,6 +1031,11 @@ def _story_description_with_source(
     source_lines: list[str] = []
     if source_path:
         source_lines.append(f"Source Document: {source_path}")
+    source_issue_key = _string(
+        reference.get("sourceIssueKey") or reference.get("source_issue_key")
+    )
+    if source_issue_key:
+        source_lines.append(f"Source Issue: {source_issue_key}")
     title = _string(reference.get("title"))
     if title:
         source_lines.append(f"Source Title: {title}")
@@ -1979,11 +1984,14 @@ async def _create_github_downstream_workflows_from_issue_mappings(
             )
             remaining = issue_mappings[index:]
             for skipped in remaining:
+                skipped_repository = _string(
+                    skipped.get("repository") or skipped.get("repo") or repository
+                )
                 skipped_stories.append(
                     {
                         "storyId": _string(skipped.get("storyId") or skipped.get("story_id")),
                         "storyIndex": skipped.get("storyIndex") or skipped.get("story_index"),
-                        "repository": _string(skipped.get("repository") or skipped.get("repo")),
+                        "repository": skipped_repository,
                         "githubIssueNumber": _string(
                             skipped.get("issueNumber")
                             or skipped.get("issue_number")
