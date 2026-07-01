@@ -6888,8 +6888,25 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 2rem;
   height: 2rem;
   padding: 0;
+  border: 1px solid rgb(var(--mm-border));
   border-radius: 0.5rem;
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-ink));
   flex: 0 0 auto;
+  text-decoration: none;
+  transition: var(--mm-control-transition);
+}
+
+.workflow-workspace-expand-list:hover,
+.workflow-workspace-expand-list:focus-visible {
+  background: rgb(var(--mm-accent) / 0.08);
+  border-color: rgb(var(--mm-accent));
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
+  color: rgb(var(--mm-ink));
+}
+
+.workflow-workspace-expand-list:focus-visible {
+  outline: none;
 }
 
 .workflow-workspace-control-icon,

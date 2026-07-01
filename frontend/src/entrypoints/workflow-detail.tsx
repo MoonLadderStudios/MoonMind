@@ -386,7 +386,7 @@ function WorkflowSidebarControls({
     <div className="workflow-workspace-sidebar-controls">
       <a
         href={workflowListHrefFromContext(search, { markDetailReturn: true })}
-        className="button secondary workflow-workspace-expand-list"
+        className="secondary workflow-workspace-expand-list"
         onClick={markWorkflowListReturnFocusIntent}
         aria-label="Expand to full list"
         title="Expand to full list"

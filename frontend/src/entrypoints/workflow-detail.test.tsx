@@ -1044,6 +1044,7 @@ describe('Workflow Detail Entrypoint', () => {
     );
     expect(expandList.getAttribute('class') || '').toContain('workflow-workspace-expand-list');
     expect(expandList.getAttribute('class') || '').toContain('secondary');
+    expect(expandList.getAttribute('class') || '').not.toContain('button');
     expect(expandList.querySelector('svg.lucide-arrow-right')).toBeTruthy();
     expect(within(sidebar).getByRole('button', { name: 'Close sidebar' }).getAttribute('class') || '').toContain(
       'workflow-workspace-close-sidebar',
