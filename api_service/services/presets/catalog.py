@@ -104,7 +104,7 @@ _GITHUB_ISSUE_BREAKDOWN_SOURCE_INPUTS = (
 )
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 _UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
-_NATIVE_BOOLEAN_TEMPLATE_PATTERN = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
+_NATIVE_SCALAR_TEMPLATE_PATTERN = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
 _SECRET_LIKE_KEY_PATTERN = re.compile(
     r"(authorization|cookie|password|secret|token|api[_-]?key|access[_-]?key)",
     re.IGNORECASE,
@@ -638,6 +638,7 @@ def _render_value(
     value: Any,
     *,
     variables: dict[str, Any],
+    key: str | None = None,
 ) -> Any:
     if isinstance(value, str):
         try:
@@ -651,17 +652,27 @@ def _render_value(
                 f"Template rendering failed: {exc}."
             ) from exc
         stripped = rendered.strip()
-        if _NATIVE_BOOLEAN_TEMPLATE_PATTERN.match(value.strip()):
+        if _NATIVE_SCALAR_TEMPLATE_PATTERN.match(value.strip()):
             lowered = stripped.lower()
             if lowered in {"true", "false"}:
                 return lowered == "true"
+            if key == "moonSpecRemediationMaxAttempts" and re.fullmatch(
+                r"[+-]?\d+",
+                stripped,
+            ):
+                return int(stripped)
         return stripped
     if isinstance(value, list):
         return [_render_value(env, item, variables=variables) for item in value]
     if isinstance(value, dict):
         return {
-            str(key): _render_value(env, item, variables=variables)
-            for key, item in value.items()
+            str(item_key): _render_value(
+                env,
+                item,
+                variables=variables,
+                key=str(item_key),
+            )
+            for item_key, item in value.items()
         }
     return value
 

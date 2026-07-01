@@ -4202,9 +4202,10 @@ class MoonMindRunWorkflow:
         node_inputs = self._node_inputs_mapping(node)
         annotations = node_inputs.get("annotations") or node.get("annotations")
         if isinstance(annotations, Mapping):
-            role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
-            if role == "moonspec-remediation":
-                return True
+            for key in ("jiraOrchestrateRole", "issueImplementRole"):
+                role = str(annotations.get(key) or "").strip().lower()
+                if role == "moonspec-remediation":
+                    return True
         skill_node = node.get("skill")
         skill_id_from_node = (
             skill_node.get("id") or skill_node.get("name")

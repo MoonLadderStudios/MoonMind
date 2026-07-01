@@ -2456,6 +2456,31 @@ def test_moonspec_verify_gate_detects_remaining_remediation_budget(
     )
 
 
+def test_moonspec_verify_gate_detects_issue_implement_remediation_role(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    ordered_nodes = [
+        {
+            "id": "verify-1",
+            "inputs": {
+                "title": "Verify implementation",
+                "selectedSkill": "moonspec-verify",
+            },
+        },
+        {
+            "id": "remediate-1",
+            "annotations": {"issueImplementRole": "moonspec-remediation"},
+            "skill": {"id": "auto"},
+            "inputs": {"title": "Remediate verification gaps"},
+        },
+    ]
+
+    assert mock_run_workflow._has_remaining_moonspec_remediation_step(
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+
+
 def test_moonspec_verify_text_verdict_parser_is_not_a_branch_boundary(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:

@@ -173,6 +173,9 @@ steps:
     brief_artifact_path: artifacts/github-issue-implement-brief.json
     assessment_artifact_path: artifacts/github-issue-implement-assessment.json
     pr_artifact_path: artifacts/github-issue-implement-pr.json
+    verify_artifact_path: artifacts/github-issue-implement-verify.json
+    verification_target: issue_brief
+    remediation_max_attempts: '1'
     constraints: '{{ inputs.constraints }}'
 - title: Finalize GitHub issue status
   type: tool
@@ -182,11 +185,15 @@ steps:
 
     If the recorded verdict is BLOCKED, stop without changing GitHub and report the
     blocking evidence. If the recorded verdict is FULLY_IMPLEMENTED, apply the configured
-    Done strategy. Otherwise read artifacts/github-issue-implement-pr.json, verify
+    Done strategy. Otherwise read artifacts/github-issue-implement-verify.json and
+    require the latest controlling verifier result to report FULLY_IMPLEMENTED before
+    any Code Review update. Then read artifacts/github-issue-implement-pr.json, verify
     it contains a pull_request_url for {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
-    }}, and apply the configured Code Review strategy with the pull request URL. Do
-    not assume a single organization''s workflow; use the configured label/comment/close
-    strategy exposed by the trusted GitHub update tool.'
+    }}, and apply the configured Code Review strategy with the pull request URL.
+    If the verifier artifact is missing, terminal, or still reports ADDITIONAL_WORK_NEEDED
+    after remediation is exhausted, stop without changing GitHub. Do not assume a
+    single organization''s workflow; use the configured label/comment/close strategy
+    exposed by the trusted GitHub update tool.'
   tool:
     id: github.update_issue_status
     requiredCapabilities:
@@ -196,3 +203,4 @@ steps:
       issueNumber: '{{ inputs.github_issue.number }}'
       mode: finalize_after_pr_or_done
       pullRequestArtifactPath: artifacts/github-issue-implement-pr.json
+      verificationArtifactPath: artifacts/github-issue-implement-verify.json

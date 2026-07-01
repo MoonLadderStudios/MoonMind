@@ -4124,6 +4124,38 @@ def _assessment_verdict_from_artifact(
     return verdict, True
 
 
+def _github_status_verification_verdict_from_artifact(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[str, bool]:
+    artifact_path = _string(
+        inputs.get("verificationArtifactPath")
+        or inputs.get("verification_artifact_path")
+    )
+    if not artifact_path:
+        return "", True
+    payload = _local_json_artifact_from_path(
+        artifact_path=artifact_path,
+        inputs=inputs,
+        context=context,
+    )
+    if payload is None:
+        return "", False
+    for key in (
+        "verdict",
+        "gateVerdict",
+        "gate_verdict",
+        "moonSpecVerdict",
+        "moonspecVerdict",
+        "verificationVerdict",
+        "verification_verdict",
+    ):
+        verdict = _string(payload.get(key)).upper()
+        if verdict:
+            return verdict, True
+    return "", True
+
+
 def _github_status_pull_request_url(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
@@ -4182,6 +4214,32 @@ async def update_github_issue_status(
             )
     pull_request_url = _github_status_pull_request_url(inputs, _context)
     if mode == "finalize_after_pr_or_done":
+        if pull_request_url:
+            verification_verdict, verification_available = (
+                _github_status_verification_verdict_from_artifact(inputs, _context)
+            )
+            if not verification_available:
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "decision": "blocked",
+                        "summary": "GitHub issue Code Review update requires a verification artifact, but it was unavailable.",
+                    },
+                )
+            if (
+                inputs.get("verificationArtifactPath")
+                or inputs.get("verification_artifact_path")
+            ) and verification_verdict != "FULLY_IMPLEMENTED":
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "decision": "blocked",
+                        "verificationVerdict": verification_verdict,
+                        "summary": f"Skipped GitHub issue Code Review update for {issue_ref} because verification verdict is not FULLY_IMPLEMENTED.",
+                    },
+                )
         mode = "code_review" if pull_request_url else "done"
     actions = _GITHUB_STATUS_ACTIONS.get(mode, {})
     service = github_service_factory()
