@@ -8,6 +8,10 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
+    CheckpointBranchKind,
+    CheckpointBranchPublishStatus,
+    CheckpointBranchRuntimeContextPolicy,
+    CheckpointBranchWorkspacePolicy,
     WorkflowCheckpointBranch,
     WorkflowCheckpointBranchArtifact,
     WorkflowCheckpointBranchGitBinding,
@@ -16,6 +20,10 @@ from api_service.db.models import (
 from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchCreateModel,
     CheckpointBranchTurnCreateModel,
+)
+from moonmind.statuses.checkpoint_branch import (
+    CheckpointBranchState,
+    CheckpointBranchTurnState,
 )
 
 SOURCE_TRACEABILITY_ISSUES = ("MM-1087", "MM-1088")
@@ -70,10 +78,12 @@ class CheckpointBranchService:
             parent_branch_id=model.parent_branch_id,
             parent_turn_id=model.parent_turn_id,
             label=model.label,
-            state=model.state,
-            branch_kind=model.branch_kind,
-            workspace_policy=model.workspace_policy,
-            runtime_context_policy=model.runtime_context_policy,
+            state=CheckpointBranchState(model.state),
+            branch_kind=CheckpointBranchKind(model.branch_kind),
+            workspace_policy=CheckpointBranchWorkspacePolicy(model.workspace_policy),
+            runtime_context_policy=CheckpointBranchRuntimeContextPolicy(
+                model.runtime_context_policy
+            ),
             git_repository=model.git_repository,
             git_base_branch=model.git_base_branch,
             git_base_commit=model.git_base_commit,
@@ -111,7 +121,7 @@ class CheckpointBranchService:
             runtime_agent_run_id=model.runtime_agent_run_id,
             provider_session_id=model.provider_session_id,
             idempotency_key=model.idempotency_key,
-            status=model.status,
+            status=CheckpointBranchTurnState(model.status),
         )
         self._session.add(record)
         await self._session.flush()
@@ -141,7 +151,7 @@ class CheckpointBranchService:
             head_commit=model.head_commit,
             patch_ref=model.patch_ref,
             pull_request_url=model.pull_request_url,
-            publish_status=model.publish_status,
+            publish_status=CheckpointBranchPublishStatus(model.publish_status),
         )
         self._session.add(record)
         await self._session.flush()
