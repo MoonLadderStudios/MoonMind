@@ -1054,8 +1054,11 @@ def _state_include_clause(values: list[str]) -> str | None:
         for status in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE.get(value, ())
     ))
     unknown = [
-        value
+        expanded
         for value in deduped
+        for expanded in (
+            ("no_commit", "no_changes") if value == "no_commit" else (value,)
+        )
         if value not in _NON_TERMINAL_MM_STATES
         and value not in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE
     ]
@@ -1114,7 +1117,13 @@ def _append_state_temporal_filter(
                 escaped = _escape_temporal_value(status_value)
                 query_parts.append(f'ExecutionStatus!="{escaped}"')
             continue
-        query_parts.append(f'mm_state!="{_escape_temporal_value(normalized)}"')
+        excluded_values = (
+            ("no_commit", "no_changes") if normalized == "no_commit" else (normalized,)
+        )
+        for excluded_value in excluded_values:
+            query_parts.append(
+                f'mm_state!="{_escape_temporal_value(excluded_value)}"'
+            )
 
 
 def _append_exact_or_multi_temporal_filter(
@@ -2762,12 +2771,10 @@ def _serialize_execution(
     finish_summary = _normalize_no_commit_finish_summary(finish_summary)
     finish_outcome_code = getattr(record, "finish_outcome_code", None)
     finish_outcome_code = canonicalize_legacy_finish_outcome_code(
-        str(finish_outcome_code or ""),
+        finish_outcome_code,
         domain="execution_api.finishOutcomeCode",
         logger=logger,
     )
-    if not finish_outcome_code:
-        finish_outcome_code = None
     proposal_summary = _proposal_summary_from_memo(memo)
     if isinstance(finish_summary, Mapping):
         finish_proposals = finish_summary.get("proposals")
@@ -3182,11 +3189,12 @@ def _recommended_next_action(
             if not pr_url
             else "Review published pull request."
         )
-    code = canonicalize_legacy_finish_outcome_code(
-        code,
-        domain="execution_api.nextAction.finishOutcome.code",
-        logger=logger,
-    )
+    if code:
+        code = canonicalize_legacy_finish_outcome_code(
+            code,
+            domain="execution_api.nextAction.finishOutcome.code",
+            logger=logger,
+        )
     if code == "NO_COMMIT":
         return "No follow-up required unless the outcome is unexpected."
     if code == "PUBLISH_DISABLED":

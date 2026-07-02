@@ -1587,6 +1587,80 @@ def test_list_executions_temporal_query_supports_repeated_canonical_filters() ->
     assert '(mm_target_runtime="codex_cli" OR mm_target_runtime="claude_code")' in query
     assert '(mm_repo="Moon/Mind" OR mm_repo="moon/sidecar")' in query
 
+
+def test_list_executions_temporal_query_includes_legacy_no_commit_visibility_alias() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(custom_attributes={})
+            )
+        ),
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "state": "no_commit"},
+        )
+
+    assert response.status_code == 200
+    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    assert '(mm_state="no_commit" OR mm_state="no_changes")' in query
+
+
+def test_list_executions_temporal_query_excludes_legacy_no_commit_visibility_alias() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(custom_attributes={})
+            )
+        ),
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "stateNotIn": "no_commit"},
+        )
+
+    assert response.status_code == 200
+    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    assert 'mm_state!="no_commit"' in query
+    assert 'mm_state!="no_changes"' in query
+
+
 def test_list_executions_temporal_query_ignores_empty_canonical_state_for_legacy_state() -> None:
     app = FastAPI()
     app.include_router(router)

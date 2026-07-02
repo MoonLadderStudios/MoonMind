@@ -75,13 +75,15 @@ def parse_canonical_workflow_state(value: str) -> str:
 
 
 def canonicalize_legacy_finish_outcome_code(
-    value: str,
+    value: str | None,
     *,
     domain: str,
     logger: logging.Logger,
-) -> str:
+) -> str | None:
     """Translate legacy finish outcome aliases at artifact/history boundaries."""
 
+    if value is None:
+        return None
     candidate = str(value).strip().upper()
     canonical = LEGACY_FINISH_OUTCOME_ALIASES.get(candidate)
     if canonical is None:
@@ -139,7 +141,7 @@ def normalize_no_commit_finish_summary_aliases(
         outcome = dict(finish_outcome)
         original_outcome = dict(outcome)
         outcome_code = canonicalize_legacy_finish_outcome_code(
-            str(outcome.get("code") or ""),
+            outcome.get("code"),
             domain=f"{domain}.finishOutcome.code",
             logger=logger,
         )
@@ -155,11 +157,14 @@ def normalize_no_commit_finish_summary_aliases(
     if isinstance(publish, Mapping):
         publish_payload = dict(publish)
         original_publish_payload = dict(publish_payload)
-        reason_code = str(
-            publish_payload.get("reasonCode")
-            or publish_payload.get("reason_code")
-            or ""
-        ).strip()
+        reason_code_key = (
+            "reasonCode"
+            if "reasonCode" in publish_payload
+            else "reason_code"
+            if "reason_code" in publish_payload
+            else "reasonCode"
+        )
+        reason_code = str(publish_payload.get(reason_code_key) or "").strip()
         canonical_reason_code = canonicalize_legacy_publish_reason_code(
             reason_code,
             domain=f"{domain}.publish.reasonCode",
@@ -168,6 +173,8 @@ def normalize_no_commit_finish_summary_aliases(
         reason = str(publish_payload.get("reason") or "").strip().lower()
         if canonical_reason_code == "no_commit" or reason in _NO_COMMIT_LEGACY_REASONS:
             publish_payload["reasonCode"] = "no_commit"
+            if "reason_code" in publish_payload:
+                publish_payload["reason_code"] = "no_commit"
             publish_payload["reason"] = (
                 "No repository changes were available to commit or publish."
             )
