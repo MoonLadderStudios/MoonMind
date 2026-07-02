@@ -513,7 +513,7 @@ class RemediationApprovalDecisionResponse(BaseModel):
     workflowId: str
     requestId: str
     decision: str
-_PROTECTED_BRANCH_REFS = {"main", "master", "develop", "trunk", "prod", "production"}
+_PROTECTED_BRANCH_REFS = {"head", "main", "master", "develop", "trunk", "prod", "production"}
 _SAFE_PROMOTION_SIDE_EFFECT_STATES = {
     "none",
     "isolated",
@@ -521,7 +521,7 @@ _SAFE_PROMOTION_SIDE_EFFECT_STATES = {
     "approved",
     "accepted",
 }
-_PASSING_GATE_VERDICTS = {"passed", "pass", "success", "FULLY_IMPLEMENTED"}
+_PASSING_GATE_VERDICTS = {"passed", "pass", "success", "fully_implemented"}
 
 
 def _operation_digest(payload: BaseModel | Mapping[str, Any]) -> str:
@@ -531,6 +531,19 @@ def _operation_digest(payload: BaseModel | Mapping[str, Any]) -> str:
         raw = dict(payload)
     encoded = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _scoped_operation_digest(
+    payload: BaseModel, *, scope: Mapping[str, Any]
+) -> str:
+    return _operation_digest(
+        {
+            "scope": dict(scope),
+            "payload": payload.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+        }
+    )
 
 
 def _new_checkpoint_branch_id() -> str:
@@ -632,6 +645,12 @@ def _branch_comparison_record(
     return record_payload
 
 
+def _checkpoint_ref_artifact_value(ref: object) -> str:
+    if isinstance(ref, Mapping):
+        ref = ref.get("artifactRef") or ref.get("checkpointRef") or ref.get("ref")
+    return str(ref or "").strip()
+
+
 def _branch_to_model(branch: WorkflowCheckpointBranch) -> CheckpointBranchModel:
     return CheckpointBranchModel.model_validate(branch)
 
@@ -658,7 +677,9 @@ def _checkpoint_summaries_from_record(record: Any) -> list[CheckpointSummaryMode
         execution_ordinal: object | None = None,
         digest: object | None = None,
     ) -> None:
-        ref_value = str(ref or "").strip()
+        if isinstance(ref, Mapping) and digest is None:
+            digest = ref.get("checkpointDigest") or ref.get("digest")
+        ref_value = _checkpoint_ref_artifact_value(ref)
         boundary_value = str(boundary or "after_execution").strip()
         if not ref_value.startswith("artifact://") or not boundary_value:
             return
@@ -11123,7 +11144,9 @@ async def _record_branch_turn_operation(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "invalid_branch_state", "state": branch.state},
         )
-    request_digest = _operation_digest(payload)
+    request_digest = _scoped_operation_digest(
+        payload, scope={"branchId": branch.branch_id}
+    )
     existing_op = await session.execute(
         select(WorkflowCheckpointBranchOperation).where(
             WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
@@ -11135,6 +11158,7 @@ async def _record_branch_turn_operation(
     if operation is not None:
         if (
             operation.operation != operation_name
+            or operation.branch_id != branch.branch_id
             or operation.request_digest != request_digest
         ):
             raise HTTPException(
@@ -11239,7 +11263,32 @@ async def fork_checkpoint_branch(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "invalid_branch_state", "state": parent.state},
         )
-    request_digest = _operation_digest(payload)
+    parent_turn = None
+    if payload.parent_turn_id:
+        parent_turn_result = await session.execute(
+            select(WorkflowCheckpointBranchTurn).where(
+                WorkflowCheckpointBranchTurn.branch_turn_id == payload.parent_turn_id
+            )
+        )
+        parent_turn = parent_turn_result.scalar_one_or_none()
+        if parent_turn is None or parent_turn.branch_id != parent.branch_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "invalid_parent_turn"},
+            )
+    fork_source_ref = (
+        parent_turn.source_checkpoint_ref
+        if parent_turn is not None
+        else parent.current_head_checkpoint_ref or parent.source_checkpoint_ref
+    )
+    fork_source_digest = (
+        parent_turn.source_checkpoint_digest
+        if parent_turn is not None
+        else parent.source_checkpoint_digest
+    )
+    request_digest = _scoped_operation_digest(
+        payload, scope={"parentBranchId": parent.branch_id}
+    )
     existing_op = await session.execute(
         select(WorkflowCheckpointBranchOperation).where(
             WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
@@ -11272,9 +11321,8 @@ async def fork_checkpoint_branch(
         logical_step_id=parent.logical_step_id,
         source_execution_ordinal=parent.source_execution_ordinal,
         source_checkpoint_boundary=parent.source_checkpoint_boundary,
-        source_checkpoint_ref=parent.current_head_checkpoint_ref
-        or parent.source_checkpoint_ref,
-        source_checkpoint_digest=parent.source_checkpoint_digest,
+        source_checkpoint_ref=fork_source_ref,
+        source_checkpoint_digest=fork_source_digest,
         parent_branch_id=parent.branch_id,
         parent_turn_id=payload.parent_turn_id,
         label=payload.label or f"Fork of {parent.label}",
@@ -11282,7 +11330,7 @@ async def fork_checkpoint_branch(
         branch_kind="fork",
         workspace_policy=payload.workspace_policy,
         runtime_context_policy=payload.runtime_context_policy,
-        current_head_checkpoint_ref=parent.current_head_checkpoint_ref,
+        current_head_checkpoint_ref=fork_source_ref,
         publish_status="unpublished",
         idempotency_key=payload.idempotency_key,
         created_by=getattr(user, "email", None) or _owner_id(user),
@@ -11430,9 +11478,16 @@ async def promote_checkpoint_branch(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "invalid_branch_state", "state": branch.state},
         )
+    if not branch.current_head_step_execution_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "checkpoint_head_missing",
+                "reason": "checkpoint_head_missing",
+            },
+        )
     if (
-        branch.current_head_step_execution_id
-        and payload.expected_head_step_execution_id
+        payload.expected_head_step_execution_id
         != branch.current_head_step_execution_id
     ):
         raise HTTPException(
@@ -11458,7 +11513,7 @@ async def promote_checkpoint_branch(
         payload.gate_evidence.get("verdict")
         or payload.gate_evidence.get("status")
         or ""
-    )
+    ).strip().lower()
     if gate_verdict not in _PASSING_GATE_VERDICTS:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -11484,6 +11539,22 @@ async def promote_checkpoint_branch(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "approval_required", "reason": "approval_required"},
+        )
+    promoted_sibling_result = await session.execute(
+        select(WorkflowCheckpointBranch).where(
+            WorkflowCheckpointBranch.workflow_id == workflow_id,
+            WorkflowCheckpointBranch.branch_id != branch.branch_id,
+            WorkflowCheckpointBranch.source_checkpoint_ref == branch.source_checkpoint_ref,
+            WorkflowCheckpointBranch.state == "promoted",
+        )
+    )
+    if promoted_sibling_result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "promoted_branch_conflict",
+                "reason": "promoted_branch_conflict",
+            },
         )
     now = datetime.now(UTC)
     branch.state = "promoted"
@@ -11581,6 +11652,11 @@ async def publish_checkpoint_branch(
     branch = await _load_checkpoint_branch(
         session, workflow_id=workflow_id, branch_id=branch_id
     )
+    if branch.state in {"archived", "superseded"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_branch_state", "state": branch.state},
+        )
     if payload.provider != "github":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

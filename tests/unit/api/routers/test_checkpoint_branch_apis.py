@@ -80,7 +80,10 @@ async def checkpoint_branch_client(tmp_path):
                     "logicalStepId": "implement",
                     "executionOrdinal": 2,
                     "checkpointRefsByBoundary": {
-                        "after_execution": "artifact://checkpoints/after-implement"
+                        "after_execution": {
+                            "artifactRef": "artifact://checkpoints/after-implement",
+                            "checkpointDigest": "sha256:checkpointdigest",
+                        }
                     },
                     "checkpointRef": "artifact://checkpoints/after-implement",
                     "checkpointDigest": "sha256:checkpointdigest",
@@ -177,6 +180,24 @@ async def checkpoint_branch_denied_client(tmp_path):
     await engine.dispose()
 
 
+async def _set_branch_head(
+    client: AsyncClient,
+    branch_id: str,
+    step_execution_id: str = "mm:wf-branch:run:implement:execution:2",
+) -> None:
+    async for session in client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        result = await session.execute(
+            select(WorkflowCheckpointBranch).where(
+                WorkflowCheckpointBranch.branch_id == branch_id
+            )
+        )
+        branch = result.scalar_one()
+        branch.current_head_step_execution_id = step_execution_id
+        await session.commit()
+
+
 def _create_payload(idempotency_key: str = "mm-1091:create") -> dict[str, object]:
     return {
         "source": {
@@ -269,6 +290,17 @@ async def test_checkpoint_branch_publish_does_not_promote_and_archive_hides_acti
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/archive",
         json={"reason": "No longer active", "idempotencyKey": "mm-1091:archive"},
     )
+    publish_archived = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/publish",
+        json={
+            "mode": "branch",
+            "repository": "Moon/Mind",
+            "baseBranch": "main",
+            "headBranch": "mm/mm-1091/archived",
+            "provider": "github",
+            "idempotencyKey": "mm-1091:publish-archived",
+        },
+    )
     active = await checkpoint_branch_client.get(
         "/api/executions/mm:wf-branch/checkpoint-branches"
     )
@@ -278,6 +310,8 @@ async def test_checkpoint_branch_publish_does_not_promote_and_archive_hides_acti
 
     assert archived.status_code == 200
     assert archived.json()["state"] == "archived"
+    assert publish_archived.status_code == 409
+    assert publish_archived.json()["detail"]["code"] == "invalid_branch_state"
     assert active.json()["items"] == []
     assert all_branches.json()["items"][0]["branchId"] == branch_id
 
@@ -362,6 +396,7 @@ async def test_checkpoint_branch_promotion_requires_head_gate_side_effects_and_a
         json=_create_payload("mm-1091:create-promote"),
     )
     branch_id = created.json()["branchId"]
+    await _set_branch_head(checkpoint_branch_client, branch_id)
 
     missing_approval = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
@@ -499,8 +534,21 @@ async def test_checkpoint_branch_api_fails_closed_for_invalid_source_provider_bu
             "idempotencyKey": "mm-1091:protected-ref",
         },
     )
+    protected_head_ref = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/publish",
+        json={
+            "mode": "branch",
+            "repository": "Moon/Mind",
+            "baseBranch": "main",
+            "headBranch": "HEAD",
+            "provider": "github",
+            "idempotencyKey": "mm-1091:protected-head-ref",
+        },
+    )
     assert protected_ref.status_code == 409
     assert protected_ref.json()["detail"]["code"] == "protected_branch_ref"
+    assert protected_head_ref.status_code == 409
+    assert protected_head_ref.json()["detail"]["code"] == "protected_branch_ref"
 
     unsupported_provider = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/publish",
@@ -517,6 +565,8 @@ async def test_checkpoint_branch_api_fails_closed_for_invalid_source_provider_bu
     assert unsupported_provider.json()["detail"]["code"] == (
         "provider_continuation_unsupported"
     )
+
+    await _set_branch_head(checkpoint_branch_client, created.json()["branchId"])
 
     bad_gate = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/promote",
