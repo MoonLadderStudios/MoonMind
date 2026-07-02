@@ -7279,6 +7279,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 
   .workflow-detail-page .queue-table-wrapper {
+    display: block;
     max-width: 100%;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
