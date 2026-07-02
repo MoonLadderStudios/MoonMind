@@ -24,6 +24,7 @@ from api_service.db.models import (
     TemporalExecutionCanonicalRecord,
     TemporalExecutionOwnerType,
     TemporalWorkflowType,
+    WorkflowCheckpointBranch,
     WorkflowCheckpointBranchOperation,
 )
 
@@ -592,3 +593,67 @@ async def test_checkpoint_branch_compare_records_operation_payload(
         operation = result.scalar_one()
     assert operation is not None
     assert operation.response_payload["summaryRef"] == compared.json()["summaryRef"]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_refreshes_when_branch_head_changes(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1091:create-compare-refresh"),
+    )
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for comparison refresh."},
+            "idempotencyKey": "mm-1091:fork-compare-refresh",
+        },
+    )
+    branch_id = created.json()["branchId"]
+    fork_id = forked.json()["branchId"]
+
+    first_compare = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+        params={"against": fork_id},
+    )
+    assert first_compare.status_code == 200
+
+    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        result = await session.execute(
+            select(WorkflowCheckpointBranch).where(
+                WorkflowCheckpointBranch.branch_id == branch_id
+            )
+        )
+        branch = result.scalar_one()
+        branch.current_head_checkpoint_ref = "artifact://checkpoints/after-review"
+        branch.current_head_commit = "review-head"
+        await session.commit()
+
+    second_compare = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+        params={"against": fork_id},
+    )
+    assert second_compare.status_code == 200
+    assert second_compare.json()["summaryRef"] != first_compare.json()["summaryRef"]
+    assert second_compare.json()["comparisonRecord"]["summary"]["branchHeadCommit"] == (
+        "review-head"
+    )
+    assert second_compare.json()["comparisonRecord"]["evidenceRefs"][
+        "branchCheckpointRef"
+    ] == "artifact://checkpoints/after-review"
+
+    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        result = await session.execute(
+            select(WorkflowCheckpointBranchOperation).where(
+                WorkflowCheckpointBranchOperation.operation
+                == "checkpoint_branch.compare"
+            )
+        )
+        operations = result.scalars().all()
+    assert len(operations) == 2

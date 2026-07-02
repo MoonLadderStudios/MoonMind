@@ -556,6 +556,14 @@ def _instruction_identity(instructions: Any) -> tuple[str, str]:
     )
 
 
+def _checkpoint_branch_head_identity(branch: WorkflowCheckpointBranch) -> str:
+    return (
+        branch.current_head_commit
+        or branch.current_head_checkpoint_ref
+        or branch.source_checkpoint_ref
+    )
+
+
 def _branch_comparison_record(
     *,
     workflow_id: str,
@@ -11341,8 +11349,11 @@ async def compare_checkpoint_branches(
             "againstBranchId": other.branch_id,
         }
     )
+    branch_head = _checkpoint_branch_head_identity(branch)
+    other_head = _checkpoint_branch_head_identity(other)
     idempotency_key = (
-        f"checkpoint_branch.compare:{branch.branch_id}:against:{other.branch_id}"
+        f"checkpoint_branch.compare:{branch.branch_id}:{branch_head}:"
+        f"against:{other.branch_id}:{other_head}"
     )
     existing_op = await session.execute(
         select(WorkflowCheckpointBranchOperation).where(
