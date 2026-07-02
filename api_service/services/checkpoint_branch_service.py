@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
@@ -100,11 +100,11 @@ class CheckpointBranchService:
 
     async def _turn_count(self, branch_id: str) -> int:
         result = await self._session.execute(
-            select(WorkflowCheckpointBranchTurn).where(
+            select(func.count()).select_from(WorkflowCheckpointBranchTurn).where(
                 WorkflowCheckpointBranchTurn.branch_id == branch_id
             )
         )
-        return len(result.scalars().all())
+        return result.scalar_one()
 
     async def _latest_turn(
         self,
@@ -312,7 +312,6 @@ class CheckpointBranchService:
         branch.current_head_step_execution_id = turn.created_step_execution_id
         branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
         await self._session.flush()
-        await self._session.refresh(branch)
         return await self._branch_graph(branch)
 
     async def continue_branch(
@@ -364,7 +363,6 @@ class CheckpointBranchService:
         branch.current_head_step_execution_id = turn.created_step_execution_id
         branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
         await self._session.flush()
-        await self._session.refresh(branch)
         return turn
 
     async def fork_branch(
@@ -443,7 +441,6 @@ class CheckpointBranchService:
             }
         )
         await self._session.flush()
-        await self._session.refresh(child)
         return await self._branch_graph(child)
 
     async def archive_branch(
@@ -469,7 +466,6 @@ class CheckpointBranchService:
                 artifact_kind="operation_archive",
             )
         await self._session.flush()
-        await self._session.refresh(branch)
         return CheckpointBranchStateUpdateModel.model_validate(branch)
 
     async def mark_failed(
@@ -526,7 +522,6 @@ class CheckpointBranchService:
                 artifact_kind=artifact_kind,
             )
         await self._session.flush()
-        await self._session.refresh(branch)
         return CheckpointBranchStateUpdateModel.model_validate(branch)
 
     async def mark_publish_ready(
@@ -534,13 +529,13 @@ class CheckpointBranchService:
         *,
         workflow_id: str,
         branch_id: str,
+        payload: CheckpointBranchPublishReadyModel | dict[str, Any],
         artifact_ref: str | None = None,
-        payload: CheckpointBranchPublishReadyModel | dict[str, Any] | None = None,
     ) -> CheckpointBranchStateUpdateModel:
         model = (
             payload
             if isinstance(payload, CheckpointBranchPublishReadyModel)
-            else CheckpointBranchPublishReadyModel.model_validate(payload or {})
+            else CheckpointBranchPublishReadyModel.model_validate(payload)
         )
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
         if await self._operation_artifact(
@@ -574,7 +569,6 @@ class CheckpointBranchService:
             artifact_kind="operation_publish_ready",
         )
         await self._session.flush()
-        await self._session.refresh(branch)
         return CheckpointBranchStateUpdateModel.model_validate(branch)
 
     async def list_branch_graphs(
