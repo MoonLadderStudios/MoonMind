@@ -117,7 +117,7 @@ const TABLE_COLUMNS: TableColumnDef[] = [
   { field: 'title', label: 'Workflow', sortable: true, colClassName: 'queue-table-column-workflow' },
   { field: 'status', label: 'Status', sortable: true, colClassName: 'queue-table-column-status' },
   { field: 'progress', label: 'Progress', sortable: true, colClassName: 'queue-table-column-progress' },
-  { field: 'repository', label: 'Repository', sortable: true, colClassName: 'queue-table-column-repository' },
+  { field: 'repository', label: 'Repo', sortable: true, colClassName: 'queue-table-column-repository' },
   { field: 'targetRuntime', label: 'Runtime', sortable: true, colClassName: 'queue-table-column-runtime' },
   { field: 'updatedAt', label: 'Updated', sortable: true, colClassName: 'queue-table-column-date' },
 ];
@@ -137,7 +137,7 @@ const FILTER_FIELDS = [
   ['title', 'Title'],
   ['status', 'Status'],
   ['progress', 'Progress'],
-  ['repository', 'Repository'],
+  ['repository', 'Repo'],
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
   ['updatedAt', 'Updated'],
@@ -168,7 +168,7 @@ const DRAWER_FILTER_FIELDS: Array<[FilterField, string]> = [
   ['title', 'Title'],
   ['status', 'Status'],
   ['progress', 'Progress'],
-  ['repository', 'Repository'],
+  ['repository', 'Repo'],
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
   ['updatedAt', 'Updated'],
@@ -2637,7 +2637,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <dd>{formatRuntimeLabel(row.targetRuntime)}</dd>
                       </div>
                       <div>
-                        <dt>Repository</dt>
+                        <dt>Repo</dt>
                         <dd>{row.repository || '—'}</dd>
                       </div>
                       <div>

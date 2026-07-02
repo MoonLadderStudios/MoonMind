@@ -1393,7 +1393,7 @@ describe('Workflows Entrypoint', () => {
     );
     await screen.findAllByText('Example task');
 
-    fireEvent.click(screen.getByRole('button', { name: /Repository filter: owner\/repo/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Repo filter: owner\/repo/i }));
     fireEvent.change(screen.getByLabelText('Repository filter value'), {
       target: { value: 'owner/repo ' },
     });
@@ -2098,7 +2098,7 @@ describe('Workflows Entrypoint', () => {
       expect(activeFilterText).toContain('Codex CLI');
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Repository filter: owner/repo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Repo filter: owner/repo' }));
     expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
@@ -2745,25 +2745,25 @@ describe('Workflows Entrypoint — dashboard preferences (MM-964)', () => {
 
     // Repository column is visible by default.
     expect(
-      screen.getByRole('button', { name: /Repository\. .*sort/i }),
+      screen.getByRole('button', { name: /Repo\. .*sort/i }),
     ).toBeTruthy();
 
     // The repository value is present in the desktop table before hiding.
     expect(document.querySelector('table')?.textContent).toContain('octo/widgets');
 
     openViewOptions();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Repository' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Repo' }));
 
     // Header and cell for the repository column are removed from the table.
     // (The responsive mobile card layout is a separate surface and is out of
     // scope for the column-visibility preference.)
-    expect(screen.queryByRole('button', { name: /Repository\. .*sort/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Repo\. .*sort/i })).toBeNull();
     expect(document.querySelector('table')?.textContent).not.toContain('octo/widgets');
 
     view.unmount();
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
     await screen.findAllByText('Example task');
-    expect(screen.queryByRole('button', { name: /Repository\. .*sort/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Repo\. .*sort/i })).toBeNull();
   });
 
   it('resets density and column preferences back to defaults', async () => {
@@ -2772,7 +2772,7 @@ describe('Workflows Entrypoint — dashboard preferences (MM-964)', () => {
 
     openViewOptions();
     fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Repository' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Repo' }));
     expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
       'compact',
     );
@@ -2782,7 +2782,7 @@ describe('Workflows Entrypoint — dashboard preferences (MM-964)', () => {
     expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
       'comfortable',
     );
-    expect(screen.getByRole('button', { name: /Repository\. .*sort/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Repo\. .*sort/i })).toBeTruthy();
     expect(window.localStorage.getItem('moonmind.dashboard.preferences')).toBeNull();
   });
 
