@@ -1,8 +1,53 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatStepStatusLabel, stepStatusPillProps } from './stepStatus';
+import {
+  STEP_EXECUTION_STATUS_KEYS,
+  STEP_LEDGER_STATUS_KEYS,
+  formatStepStatusLabel,
+  stepStatusPillProps,
+} from './stepStatus';
 
 describe('step status helpers', () => {
+  it('covers every canonical step ledger status', () => {
+    expect(STEP_LEDGER_STATUS_KEYS).toEqual([
+      'pending',
+      'ready',
+      'executing',
+      'awaiting_external',
+      'reviewing',
+      'completed',
+      'failed',
+      'skipped',
+      'canceled',
+    ]);
+
+    for (const status of STEP_LEDGER_STATUS_KEYS) {
+      expect(formatStepStatusLabel(status, 'Unknown')).not.toBe('Unknown');
+      expect(stepStatusPillProps(status).className).toContain('status');
+    }
+  });
+
+  it('covers every step execution artifact status accepted by step helpers', () => {
+    expect(STEP_EXECUTION_STATUS_KEYS).toEqual([
+      'pending',
+      'preparing',
+      'executing',
+      'running',
+      'checking',
+      'completed',
+      'succeeded',
+      'failed',
+      'blocked',
+      'canceled',
+      'superseded',
+    ]);
+
+    for (const status of STEP_EXECUTION_STATUS_KEYS) {
+      expect(formatStepStatusLabel(status, 'Unknown')).not.toBe('Unknown');
+      expect(stepStatusPillProps(status).className).toContain('status');
+    }
+  });
+
   it('formats step ledger and execution statuses with visible labels', () => {
     expect(formatStepStatusLabel('ready')).toBe('Ready');
     expect(formatStepStatusLabel('reviewing')).toBe('Reviewing');
