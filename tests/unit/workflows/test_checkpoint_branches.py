@@ -58,6 +58,22 @@ def test_generated_checkpoint_branch_name_is_deterministic_and_sanitized() -> No
     assert "!" not in first
 
 
+def test_generated_checkpoint_branch_name_caps_long_components() -> None:
+    branch = generate_checkpoint_branch_name(
+        workflow_id="workflow-" + ("x" * 255),
+        logical_step_id="step-" + ("y" * 255),
+        checkpoint_ref="artifact://checkpoint/root",
+        product_branch_id="cbr_MM-1090",
+        label="Fix Git Isolation!",
+        idempotency_key="MM-1090:MM-1087:checkpoint",
+    )
+
+    parts = branch.split("/")
+    assert len(branch) <= 255
+    assert len(parts[1]) == 40
+    assert len(parts[2]) == 40
+
+
 def test_prepare_binding_separates_product_branch_from_git_work_branch() -> None:
     created_at = datetime(2026, 7, 2, 12, 0, tzinfo=UTC)
 
@@ -81,6 +97,16 @@ def test_prepare_binding_separates_product_branch_from_git_work_branch() -> None
         == binding["workspacePolicy"]
     )
     assert result.diagnostics["workspacePolicy"] == binding["workspacePolicy"]
+
+
+def test_prepare_binding_accepts_normalized_protected_base_ref() -> None:
+    result = prepare_checkpoint_branch_git_binding(
+        _binding_input(baseBranch="main"),
+        known_refs={"refs/heads/main"},
+        current_ref="main",
+    )
+
+    assert result.binding.base_branch == "main"
 
 
 def test_prepare_binding_emits_workspace_restore_and_git_binding_artifacts() -> None:
@@ -134,7 +160,31 @@ def test_prepare_binding_emits_workspace_restore_and_git_binding_artifacts() -> 
             "feature/mm-1087-source",
             "protected_branch_ref",
         ),
-        ({"baseBranch": "main"}, {"main"}, "main", "protected_branch_ref"),
+        (
+            {"requestedWorkBranch": ".foo/bar"},
+            {"feature/mm-1087-source"},
+            "feature/mm-1087-source",
+            "protected_branch_ref",
+        ),
+        (
+            {"requestedWorkBranch": "mm/foo.lock/bar"},
+            {"feature/mm-1087-source"},
+            "feature/mm-1087-source",
+            "protected_branch_ref",
+        ),
+        (
+            {"requestedWorkBranch": "mm/foo."},
+            {"feature/mm-1087-source"},
+            "feature/mm-1087-source",
+            "protected_branch_ref",
+        ),
+        (
+            {"requestedWorkBranch": "mm/" + ("x" * 253)},
+            {"feature/mm-1087-source"},
+            "feature/mm-1087-source",
+            "protected_branch_ref",
+        ),
+        ({"branchTurnId": None}, {"feature/mm-1087-source"}, "main", "invalid_binding"),
     ],
 )
 def test_prepare_binding_fails_closed_for_unsafe_refs(
@@ -163,12 +213,23 @@ def test_prepare_binding_reuses_matching_collision_idempotently() -> None:
         existing_bindings_by_work_branch={
             work_branch: {
                 "productBranchId": "cbr_MM-1090",
-                "repository": "MoonLadderStudios/MoonMind",
+                "repository": "moonladderstudios/moonmind",
             }
         },
     )
 
     assert result.binding.work_branch == work_branch
+
+
+def test_prepare_binding_rejects_work_branch_that_already_exists_as_repo_ref() -> None:
+    with pytest.raises(CheckpointBranchGitBindingError) as exc_info:
+        prepare_checkpoint_branch_git_binding(
+            _binding_input(requestedWorkBranch="feature/existing-work"),
+            known_refs={"feature/mm-1087-source", "refs/heads/feature/existing-work"},
+            current_ref="feature/mm-1087-source",
+        )
+
+    assert exc_info.value.failure_code == "git_branch_collision"
 
 
 def test_prepare_binding_rejects_mismatched_collision() -> None:

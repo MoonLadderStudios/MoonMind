@@ -17,6 +17,7 @@ from api_service.db.models import (
     WorkflowCheckpointBranchTurn,
 )
 from api_service.services.checkpoint_branches import (
+    _existing_bindings_by_work_branch,
     prepare_checkpoint_branch_workspace,
 )
 from moonmind.workflows.checkpoint_branches import CheckpointBranchGitBindingError
@@ -110,6 +111,7 @@ async def test_prepare_checkpoint_branch_workspace_persists_binding_and_artifact
     branch = await session.get(WorkflowCheckpointBranch, "cbr_MM-1090")
     assert branch is not None
     assert branch.logical_step_id == "Implement MM-1090"
+    assert branch.label == "Fix Git Isolation"
     assert branch.workspace_policy == "apply_previous_execution_diff_to_clean_baseline"
     assert branch.git_work_branch == result.git_work_branch
     assert branch.artifact_refs["workspace_restore"] == result.workspace_restore_ref
@@ -175,6 +177,105 @@ async def test_prepare_checkpoint_branch_workspace_reuses_matching_binding(
         await session.execute(select(WorkflowCheckpointBranchArtifact))
     ).scalars().all()
     assert len(artifacts) == 2
+
+
+async def test_prepare_checkpoint_branch_workspace_validates_input_before_query(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_query(*args: object, **kwargs: object) -> dict[str, dict[str, str]]:
+        raise AssertionError("input validation must run before database lookup")
+
+    monkeypatch.setattr(
+        "api_service.services.checkpoint_branches._existing_bindings_by_work_branch",
+        fail_query,
+    )
+
+    async def write_artifact(
+        artifact_kind: str,
+        payload: Mapping[str, Any],
+        content_type: str,
+    ) -> tuple[str, None]:
+        raise AssertionError("invalid input must fail before artifact emission")
+
+    with pytest.raises(CheckpointBranchGitBindingError) as exc_info:
+        await prepare_checkpoint_branch_workspace(
+            session=session,
+            binding_input={**_binding_input(), "repository": None},
+            known_refs={"feature/mm-1087-source"},
+            current_ref="feature/mm-1087-source",
+            instruction_ref="artifact://MM-1090/input.branch_turn.instructions.md",
+            instruction_digest="sha256:instructions",
+            artifact_writer=write_artifact,
+        )
+
+    assert exc_info.value.failure_code == "invalid_binding"
+
+
+async def test_existing_bindings_match_repository_case_insensitively(
+    session: AsyncSession,
+) -> None:
+    session.add(
+        WorkflowCheckpointBranch(
+            branch_id="cbr_MM-1090",
+            workflow_id="MM-1087",
+            source_checkpoint_boundary="after_execution",
+            source_checkpoint_ref="artifact://checkpoint/root",
+            workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+        )
+    )
+    session.add(
+        WorkflowCheckpointBranchGitBinding(
+            branch_id="cbr_MM-1090",
+            repository="MoonLadderStudios/MoonMind",
+            base_branch="feature/mm-1087-source",
+            work_branch="mm/mm-1087/implement/cp-12345678/cbr-mm-1090",
+            workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+            creation_mode="from_checkpoint_patch",
+        )
+    )
+    await session.flush()
+
+    bindings = await _existing_bindings_by_work_branch(
+        session=session,
+        repository="moonladderstudios/moonmind",
+    )
+
+    assert "mm/mm-1087/implement/cp-12345678/cbr-mm-1090" in bindings
+
+
+async def test_prepare_checkpoint_branch_workspace_rejects_mismatched_turn_reuse(
+    session: AsyncSession,
+) -> None:
+    async def write_artifact(
+        artifact_kind: str,
+        payload: Mapping[str, Any],
+        content_type: str,
+    ) -> tuple[str, None]:
+        return f"artifact://MM-1090/{artifact_kind}", None
+
+    await prepare_checkpoint_branch_workspace(
+        session=session,
+        binding_input=_binding_input(),
+        known_refs={"feature/mm-1087-source"},
+        current_ref="feature/mm-1087-source",
+        instruction_ref="artifact://MM-1090/input.branch_turn.instructions.md",
+        instruction_digest="sha256:instructions",
+        artifact_writer=write_artifact,
+    )
+
+    with pytest.raises(CheckpointBranchGitBindingError) as exc_info:
+        await prepare_checkpoint_branch_workspace(
+            session=session,
+            binding_input=_binding_input(idempotencyKey="MM-1090:different"),
+            known_refs={"feature/mm-1087-source"},
+            current_ref="feature/mm-1087-source",
+            instruction_ref="artifact://MM-1090/input.branch_turn.instructions.md",
+            instruction_digest="sha256:instructions",
+            artifact_writer=write_artifact,
+        )
+
+    assert exc_info.value.failure_code == "invalid_binding"
 
 
 async def test_prepare_checkpoint_branch_workspace_rejects_mismatched_collision(

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
@@ -24,6 +24,8 @@ from api_service.db.models import (
 from moonmind.workflows.checkpoint_branches import (
     CHECKPOINT_BRANCH_GIT_BINDING_CONTENT_TYPE,
     CHECKPOINT_BRANCH_WORKSPACE_RESTORE_CONTENT_TYPE,
+    CheckpointBranchGitBindingError,
+    CheckpointBranchGitBindingInput,
     CheckpointBranchGitBindingResult,
     prepare_checkpoint_branch_git_binding,
 )
@@ -70,9 +72,16 @@ async def prepare_checkpoint_branch_workspace(
 ) -> CheckpointBranchWorkspacePreparation:
     """Validate, emit artifacts, and persist a checkpoint branch git binding."""
 
+    try:
+        validated_input = CheckpointBranchGitBindingInput.model_validate(binding_input)
+    except ValueError as exc:
+        raise CheckpointBranchGitBindingError(
+            "invalid_binding", f"checkpoint branch git binding input invalid: {exc}"
+        ) from exc
+
     existing_bindings = await _existing_bindings_by_work_branch(
         session=session,
-        repository=str(binding_input.get("repository") or "").strip(),
+        repository=validated_input.repository,
     )
     prepared = prepare_checkpoint_branch_git_binding(
         binding_input,
@@ -132,7 +141,8 @@ async def _existing_bindings_by_work_branch(
         return {}
     result = await session.execute(
         select(WorkflowCheckpointBranchGitBinding).where(
-            WorkflowCheckpointBranchGitBinding.repository == repository
+            func.lower(WorkflowCheckpointBranchGitBinding.repository)
+            == repository.lower()
         )
     )
     bindings: dict[str, dict[str, str]] = {}
@@ -188,7 +198,7 @@ async def _persist_prepared_checkpoint_branch(
             source_checkpoint_digest=binding.source_checkpoint_digest,
             parent_branch_id=parent_branch_id,
             parent_turn_id=parent_turn_id,
-            label=None,
+            label=binding.label,
             state="preparing",
             workspace_policy=str(binding.workspace_policy),
             runtime_context_policy=runtime_context_policy,
@@ -205,6 +215,7 @@ async def _persist_prepared_checkpoint_branch(
         branch.workspace_policy = str(binding.workspace_policy)
         branch.runtime_context_policy = runtime_context_policy
         branch.logical_step_id = binding.logical_step_id
+        branch.label = binding.label
         branch.git_repository = binding.repository
         branch.git_base_branch = binding.base_branch
         branch.git_base_commit = binding.base_commit
@@ -318,18 +329,28 @@ async def _persist_branch_turn(
         )
         session.add(turn)
         return
-    turn.parent_turn_id = parent_turn_id
-    turn.source_checkpoint_ref = binding.source_checkpoint_ref
-    turn.source_checkpoint_digest = binding.source_checkpoint_digest
-    turn.instruction_ref = instruction_ref
-    turn.instruction_digest = instruction_digest
-    turn.idempotency_key = binding.idempotency_key
-    turn.workspace_policy = str(binding.workspace_policy)
-    turn.git_work_branch = binding.work_branch
+    expected = {
+        "branch_id": binding.product_branch_id,
+        "parent_turn_id": parent_turn_id,
+        "source_checkpoint_ref": binding.source_checkpoint_ref,
+        "source_checkpoint_digest": binding.source_checkpoint_digest,
+        "instruction_ref": instruction_ref,
+        "instruction_digest": instruction_digest,
+        "idempotency_key": binding.idempotency_key,
+        "workspace_policy": str(binding.workspace_policy),
+        "git_work_branch": binding.work_branch,
+        "step_execution_manifest_ref": step_execution_manifest_ref,
+        "created_step_execution_id": created_step_execution_id,
+    }
+    for field_name, expected_value in expected.items():
+        if getattr(turn, field_name) != expected_value:
+            raise CheckpointBranchGitBindingError(
+                "invalid_binding",
+                f"existing branch turn {binding.branch_turn_id!r} has "
+                f"different {field_name}",
+            )
     turn.workspace_restore_ref = workspace_restore_ref
     turn.git_binding_ref = git_binding_ref
-    turn.step_execution_manifest_ref = step_execution_manifest_ref
-    turn.created_step_execution_id = created_step_execution_id
     turn.status = "preparing"
     turn.diagnostics = {**(turn.diagnostics or {}), **diagnostics}
 

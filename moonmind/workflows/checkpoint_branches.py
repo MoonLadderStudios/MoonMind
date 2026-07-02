@@ -41,6 +41,8 @@ CheckpointBranchBindingFailureCode = Literal[
     "workspace_policy_incompatible",
     "invalid_binding",
 ]
+MAX_GIT_BRANCH_LENGTH = 255
+_GENERATED_BRANCH_COMPONENT_LENGTH = 40
 
 _PROTECTED_REFS = frozenset(
     {
@@ -68,7 +70,7 @@ class CheckpointBranchGitBindingInput(BaseModel):
     product_branch_id: str = Field(
         ..., alias="productBranchId", min_length=1, max_length=255
     )
-    branch_turn_id: str | None = Field(None, alias="branchTurnId", max_length=255)
+    branch_turn_id: str = Field(..., alias="branchTurnId", min_length=1, max_length=255)
     source_checkpoint_ref: str = Field(
         ..., alias="sourceCheckpointRef", min_length=1, max_length=1024
     )
@@ -85,9 +87,7 @@ class CheckpointBranchGitBindingInput(BaseModel):
     idempotency_key: str = Field(
         ..., alias="idempotencyKey", min_length=1, max_length=512
     )
-    requested_work_branch: str | None = Field(
-        None, alias="requestedWorkBranch", max_length=255
-    )
+    requested_work_branch: str | None = Field(None, alias="requestedWorkBranch")
     worktree_ref: str | None = Field(None, alias="worktreeRef", max_length=1024)
     provider_workspace_ref: str | None = Field(
         None, alias="providerWorkspaceRef", max_length=1024
@@ -124,8 +124,9 @@ class CheckpointBranchGitBindingModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     product_branch_id: str = Field(..., alias="productBranchId")
-    branch_turn_id: str | None = Field(None, alias="branchTurnId")
+    branch_turn_id: str = Field(..., alias="branchTurnId")
     logical_step_id: str | None = Field(None, alias="logicalStepId")
+    label: str | None = None
     idempotency_key: str = Field(..., alias="idempotencyKey")
     repository: str
     base_branch: str = Field(..., alias="baseBranch")
@@ -175,8 +176,12 @@ def generate_checkpoint_branch_name(
 ) -> str:
     """Generate a deterministic sanitized checkpoint branch work ref."""
 
-    workflow_slug = sanitize_branch_component(workflow_id)
-    step_slug = sanitize_branch_component(logical_step_id or "workflow")
+    workflow_slug = sanitize_branch_component(workflow_id)[
+        :_GENERATED_BRANCH_COMPONENT_LENGTH
+    ]
+    step_slug = sanitize_branch_component(logical_step_id or "workflow")[
+        :_GENERATED_BRANCH_COMPONENT_LENGTH
+    ]
     checkpoint_source = f"{checkpoint_ref}:{idempotency_key}"
     checkpoint_short = hashlib.sha256(
         checkpoint_source.encode("utf-8")
@@ -207,7 +212,8 @@ def prepare_checkpoint_branch_git_binding(
         ) from exc
 
     _validate_ref_is_not_detached(current_ref)
-    _validate_base_ref(model.base_branch, known_refs)
+    normalized_known_refs = {_normalize_ref(ref) for ref in known_refs}
+    _validate_base_ref(model.base_branch, normalized_known_refs)
     work_branch = model.requested_work_branch or generate_checkpoint_branch_name(
         workflow_id=model.workflow_id,
         logical_step_id=model.logical_step_id,
@@ -222,6 +228,7 @@ def prepare_checkpoint_branch_git_binding(
         model=model,
         work_branch=work_branch,
         existing_bindings_by_work_branch=existing_bindings_by_work_branch or {},
+        normalized_known_refs=normalized_known_refs,
     )
 
     now = created_at or datetime.now(UTC)
@@ -229,6 +236,7 @@ def prepare_checkpoint_branch_git_binding(
         productBranchId=model.product_branch_id,
         branchTurnId=model.branch_turn_id,
         logicalStepId=model.logical_step_id,
+        label=model.label,
         idempotencyKey=model.idempotency_key,
         repository=model.repository,
         baseBranch=model.base_branch,
@@ -250,14 +258,12 @@ def prepare_checkpoint_branch_git_binding(
         "workspaceMode": model.creation_mode,
         "gitBinding": binding_payload,
     }
-    turn_metadata = None
-    if model.branch_turn_id:
-        turn_metadata = {
-            "branchId": model.product_branch_id,
-            "branchTurnId": model.branch_turn_id,
-            "workspacePolicy": model.workspace_policy,
-            "gitWorkBranch": work_branch,
-        }
+    turn_metadata = {
+        "branchId": model.product_branch_id,
+        "branchTurnId": model.branch_turn_id,
+        "workspacePolicy": model.workspace_policy,
+        "gitWorkBranch": work_branch,
+    }
     workspace_restore = {
         "contentType": CHECKPOINT_BRANCH_WORKSPACE_RESTORE_CONTENT_TYPE,
         "workflowId": model.workflow_id,
@@ -330,17 +336,13 @@ def _validate_ref_is_not_detached(current_ref: str | None) -> None:
         )
 
 
-def _validate_base_ref(base_branch: str, known_refs: set[str] | frozenset[str]) -> None:
+def _validate_base_ref(base_branch: str, normalized_known_refs: set[str]) -> None:
     normalized = _normalize_ref(base_branch)
-    if normalized in _PROTECTED_REFS:
-        raise CheckpointBranchGitBindingError(
-            "protected_branch_ref", f"base ref {base_branch!r} is protected"
-        )
     if _HEX_COMMIT_RE.fullmatch(base_branch):
         raise CheckpointBranchGitBindingError(
             "detached_head", "base ref must be a named branch, not a detached commit"
         )
-    if not known_refs or base_branch not in known_refs:
+    if not normalized_known_refs or normalized not in normalized_known_refs:
         raise CheckpointBranchGitBindingError(
             "unknown_ref", f"base ref {base_branch!r} is not a known repository ref"
         )
@@ -348,21 +350,31 @@ def _validate_base_ref(base_branch: str, known_refs: set[str] | frozenset[str]) 
 
 def _validate_work_branch(work_branch: str) -> None:
     normalized = _normalize_ref(work_branch)
+    branch_parts = work_branch.split("/")
+    if len(work_branch) > MAX_GIT_BRANCH_LENGTH:
+        raise CheckpointBranchGitBindingError(
+            "protected_branch_ref",
+            f"work branch {work_branch!r} exceeds maximum length of 255 characters",
+        )
     if (
         normalized in _PROTECTED_REFS
         or work_branch.startswith("refs/")
         or work_branch.startswith("/")
         or work_branch.endswith("/")
+        or work_branch.endswith(".")
         or work_branch.endswith(".lock")
+        or any(part.startswith(".") for part in branch_parts)
+        or any(part.endswith(".lock") for part in branch_parts)
     ):
         raise CheckpointBranchGitBindingError(
             "protected_branch_ref", f"work branch {work_branch!r} is not allowed"
         )
-    branch_parts = work_branch.split("/")
     if (
         work_branch.strip() != work_branch
         or "//" in work_branch
         or ".." in work_branch
+        or "@{" in work_branch
+        or "\\" in work_branch
         or any(part != sanitize_branch_component(part) for part in branch_parts)
     ):
         raise CheckpointBranchGitBindingError(
@@ -389,23 +401,28 @@ def _validate_collision(
     model: CheckpointBranchGitBindingInput,
     work_branch: str,
     existing_bindings_by_work_branch: Mapping[str, Mapping[str, Any]],
+    normalized_known_refs: set[str],
 ) -> None:
     existing = existing_bindings_by_work_branch.get(work_branch)
-    if not existing:
-        return
-    existing_branch_id = str(
-        existing.get("productBranchId") or existing.get("branch_id") or ""
-    ).strip()
-    existing_repository = str(existing.get("repository") or "").strip()
-    if (
-        existing_branch_id == model.product_branch_id
-        and existing_repository == model.repository
-    ):
-        return
-    raise CheckpointBranchGitBindingError(
-        "git_branch_collision",
-        "existing work branch belongs to a different checkpoint branch binding",
-    )
+    if existing:
+        existing_branch_id = str(
+            existing.get("productBranchId") or existing.get("branch_id") or ""
+        ).strip()
+        existing_repository = str(existing.get("repository") or "").strip()
+        if (
+            existing_branch_id == model.product_branch_id
+            and existing_repository.lower() == model.repository.lower()
+        ):
+            return
+        raise CheckpointBranchGitBindingError(
+            "git_branch_collision",
+            "existing work branch belongs to a different checkpoint branch binding",
+        )
+    if _normalize_ref(work_branch) in normalized_known_refs:
+        raise CheckpointBranchGitBindingError(
+            "git_branch_collision",
+            f"work branch {work_branch!r} already exists as a repository ref",
+        )
 
 
 def _normalize_ref(ref: str) -> str:
