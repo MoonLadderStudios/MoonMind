@@ -603,7 +603,7 @@ def mark_step_checkpoint_evidence(
             row["refs"] = refs
         existing_checkpoint = str(row.get("stateCheckpointRef") or "").strip()
         status = _normalize_replayed_step_status(row.get("status"))
-        if status not in {"completed", "skipped"}:
+        if status not in READY_DEPENDENCY_STATUSES:
             preservation = _recovery_preservation(
                 eligible=False,
                 reason="not_completed",
