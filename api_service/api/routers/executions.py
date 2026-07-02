@@ -556,6 +556,74 @@ def _instruction_identity(instructions: Any) -> tuple[str, str]:
     )
 
 
+def _branch_comparison_record(
+    *,
+    workflow_id: str,
+    branch: WorkflowCheckpointBranch,
+    other: WorkflowCheckpointBranch,
+) -> dict[str, Any]:
+    summary_text = (
+        f"Branch {branch.branch_id} is {branch.state}; "
+        f"comparison branch {other.branch_id} is {other.state}."
+    )
+    summary = {
+        "text": summary_text,
+        "branchState": branch.state,
+        "againstState": other.state,
+        "branchHeadStepExecutionId": branch.current_head_step_execution_id,
+        "againstHeadStepExecutionId": other.current_head_step_execution_id,
+        "branchHeadCheckpointRef": branch.current_head_checkpoint_ref,
+        "againstHeadCheckpointRef": other.current_head_checkpoint_ref,
+        "branchHeadCommit": branch.current_head_commit,
+        "againstHeadCommit": other.current_head_commit,
+    }
+    evidence_refs = {
+        key: value
+        for key, value in {
+            "branchCheckpointRef": branch.current_head_checkpoint_ref
+            or branch.source_checkpoint_ref,
+            "againstCheckpointRef": other.current_head_checkpoint_ref
+            or other.source_checkpoint_ref,
+            "branchGitRange": {
+                "base": branch.git_base_commit,
+                "head": branch.current_head_commit,
+            }
+            if branch.git_base_commit or branch.current_head_commit
+            else None,
+            "againstGitRange": {
+                "base": other.git_base_commit,
+                "head": other.current_head_commit,
+            }
+            if other.git_base_commit or other.current_head_commit
+            else None,
+            "branchPromotionEvidence": branch.promotion_evidence,
+            "againstPromotionEvidence": other.promotion_evidence,
+        }.items()
+        if value
+    }
+    record_payload = {
+        "schemaVersion": 1,
+        "recordType": "checkpoint_branch_comparison",
+        "workflowId": workflow_id,
+        "branchId": branch.branch_id,
+        "againstBranchId": other.branch_id,
+        "summaryText": summary_text,
+        "summary": summary,
+        "evidenceRefs": evidence_refs,
+        "diagnosticsRefs": [],
+        "createdAt": datetime.now(UTC).isoformat(),
+    }
+    record_digest = _operation_digest(record_payload)
+    summary_ref = (
+        "artifact://checkpoint-branch-comparisons/"
+        f"{workflow_id}/{branch.branch_id}/against/{other.branch_id}/"
+        f"{record_digest.removeprefix('sha256:')}.json"
+    )
+    record_payload["summaryRef"] = summary_ref
+    record_payload["digest"] = record_digest
+    return record_payload
+
+
 def _branch_to_model(branch: WorkflowCheckpointBranch) -> CheckpointBranchModel:
     return CheckpointBranchModel.model_validate(branch)
 
@@ -587,9 +655,6 @@ def _checkpoint_summaries_from_record(record: Any) -> list[CheckpointSummaryMode
         if not ref_value.startswith("artifact://") or not boundary_value:
             return
         key = (ref_value, boundary_value)
-        if key in seen:
-            return
-        seen.add(key)
         ordinal_value: int | None = None
         if isinstance(execution_ordinal, int) and not isinstance(
             execution_ordinal, bool
@@ -598,6 +663,18 @@ def _checkpoint_summaries_from_record(record: Any) -> list[CheckpointSummaryMode
         elif isinstance(execution_ordinal, str) and execution_ordinal.isdigit():
             ordinal_value = int(execution_ordinal)
         digest_value = str(digest or "").strip() or None
+        if key in seen:
+            if digest_value:
+                for item in items:
+                    if (
+                        item.checkpoint_ref == ref_value
+                        and item.checkpoint_boundary == boundary_value
+                        and not item.checkpoint_digest
+                    ):
+                        item.checkpoint_digest = digest_value
+                        break
+            return
+        seen.add(key)
         items.append(
             CheckpointSummaryModel(
                 checkpointRef=ref_value,
@@ -11254,6 +11331,40 @@ async def compare_checkpoint_branches(
     other = await _load_checkpoint_branch(
         session, workflow_id=workflow_id, branch_id=against
     )
+    comparison_record = _branch_comparison_record(
+        workflow_id=workflow_id, branch=branch, other=other
+    )
+    request_digest = _operation_digest(
+        {
+            "workflowId": workflow_id,
+            "branchId": branch.branch_id,
+            "againstBranchId": other.branch_id,
+        }
+    )
+    idempotency_key = (
+        f"checkpoint_branch.compare:{branch.branch_id}:against:{other.branch_id}"
+    )
+    existing_op = await session.execute(
+        select(WorkflowCheckpointBranchOperation).where(
+            WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+            WorkflowCheckpointBranchOperation.idempotency_key == idempotency_key,
+        )
+    )
+    operation = existing_op.scalar_one_or_none()
+    if operation is None:
+        session.add(
+            WorkflowCheckpointBranchOperation(
+                workflow_id=workflow_id,
+                branch_id=branch.branch_id,
+                operation="checkpoint_branch.compare",
+                idempotency_key=idempotency_key,
+                request_digest=request_digest,
+                response_payload=comparison_record,
+            )
+        )
+        await session.commit()
+    else:
+        comparison_record = dict(operation.response_payload or comparison_record)
     return CheckpointBranchCompareResponse(
         branchId=branch.branch_id,
         againstBranchId=other.branch_id,
@@ -11262,8 +11373,9 @@ async def compare_checkpoint_branches(
         againstState=other.state,
         branchHeadStepExecutionId=branch.current_head_step_execution_id,
         againstHeadStepExecutionId=other.current_head_step_execution_id,
-        summaryRef=None,
-        diagnosticsRefs=[],
+        summaryRef=comparison_record["summaryRef"],
+        diagnosticsRefs=list(comparison_record.get("diagnosticsRefs") or []),
+        comparisonRecord=comparison_record,
     )
 
 

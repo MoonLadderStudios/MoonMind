@@ -269,3 +269,6 @@ class CheckpointBranchCompareResponse(BaseModel):
     )
     summary_ref: str | None = Field(None, alias="summaryRef")
     diagnostics_refs: list[str] = Field(default_factory=list, alias="diagnosticsRefs")
+    comparison_record: dict[str, Any] = Field(
+        default_factory=dict, alias="comparisonRecord"
+    )
