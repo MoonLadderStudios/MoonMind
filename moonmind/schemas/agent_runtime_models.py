@@ -114,6 +114,10 @@ class AgentRuntimeStepExecutionLaunch(BaseModel):
     external_provider_continuation: dict[str, Any] | None = Field(
         None, alias="externalProviderContinuation"
     )
+    branch: dict[str, Any] | None = None
+    branch_artifact_manifest: dict[str, Any] | None = Field(
+        None, alias="branchArtifactManifest"
+    )
     skill_source_policy: dict[str, Any] = Field(
         default_factory=dict, alias="skillSourcePolicy"
     )
@@ -142,6 +146,8 @@ class AgentRuntimeStepExecutionLaunch(BaseModel):
         "runtime_selection",
         "runtime_session_reset",
         "external_provider_continuation",
+        "branch",
+        "branch_artifact_manifest",
         "skill_source_policy",
         mode="after",
     )

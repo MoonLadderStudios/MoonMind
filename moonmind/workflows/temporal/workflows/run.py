@@ -54,6 +54,9 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.executions.routing import _coerce_bool
     from moonmind.workflows.executions.prepared_context import (
         ExecutionContextBundle,
+        branch_turn_step_execution_manifest_projection,
+        build_branch_turn_artifact_manifest,
+        build_branch_turn_context_bundle,
         build_durable_retrieval_manifest_artifact,
         build_execution_context_bundle,
         build_prepared_input_manifest,
@@ -1021,6 +1024,12 @@ class MoonMindRunWorkflow:
         self._step_execution_context_projections: dict[
             tuple[str, int], dict[str, Any]
         ] = {}
+        self._step_execution_branch_projections: dict[
+            tuple[str, int], dict[str, Any]
+        ] = {}
+        self._step_execution_branch_artifact_manifests: dict[
+            tuple[str, int], dict[str, Any]
+        ] = {}
         self._step_execution_retrieval_manifest_artifacts: dict[
             tuple[str, int], dict[str, Any]
         ] = {}
@@ -1449,6 +1458,10 @@ class MoonMindRunWorkflow:
             logicalStepId=identity.logical_step_id,
             executionOrdinal=identity.execution_ordinal,
             lineage=dict(lineage) if lineage is not None else None,
+            branch=self._step_execution_branch_metadata(
+                logical_step_id,
+                attempt=identity.execution_ordinal,
+            ),
             reason=reason,
             status=resolved_status,
             terminalDisposition=resolved_terminal_disposition,
@@ -1496,6 +1509,22 @@ class MoonMindRunWorkflow:
             )
         self._sync_progress_snapshot(updated_at=updated_at)
         return manifest_ref
+
+    def _step_execution_branch_metadata(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+    ) -> dict[str, Any] | None:
+        branch_projection = self._step_execution_branch_projections.get(
+            (logical_step_id, attempt)
+        )
+        if not isinstance(branch_projection, Mapping):
+            return None
+        branch = branch_projection.get("branch")
+        if not isinstance(branch, Mapping):
+            return None
+        return dict(branch)
 
     async def _persist_step_execution_retrieval_manifest(
         self,
@@ -6770,17 +6799,24 @@ class MoonMindRunWorkflow:
                     node_id,
                     capture_input_source,
                 )
+                checkpoint_branch_turn = self._checkpoint_branch_turn_input(
+                    node_inputs
+                )
                 current_step_execution = self._step_execution_for(node_id) or 1
                 attempt_reason = (
-                    "quality_gate_failed"
-                    if previous_review_feedback
+                    "checkpoint_branch"
+                    if checkpoint_branch_turn is not None
                     else (
-                        "recover_from_failed_step"
-                        if node_id == self._recovery_failed_step_id
+                        "quality_gate_failed"
+                        if previous_review_feedback
                         else (
-                            "initial_execution"
-                            if current_step_execution == 1
-                            else "runtime_recovered"
+                            "recover_from_failed_step"
+                            if node_id == self._recovery_failed_step_id
+                            else (
+                                "initial_execution"
+                                if current_step_execution == 1
+                                else "runtime_recovered"
+                            )
                         )
                     )
                 )
@@ -12184,6 +12220,60 @@ class MoonMindRunWorkflow:
             payload.pop(key, None)
         return payload
 
+    @staticmethod
+    def _branch_input_value(source: Mapping[str, Any], *keys: str) -> Any:
+        for key in keys:
+            value = source.get(key)
+            if value is not None:
+                return value
+        return None
+
+    def _checkpoint_branch_turn_input(
+        self,
+        node_inputs: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        raw = self._branch_input_value(
+            node_inputs,
+            "checkpointBranch",
+            "checkpoint_branch",
+            "branchTurn",
+            "branch_turn",
+        )
+        if raw is None:
+            return None
+        if not isinstance(raw, Mapping):
+            raise ValueError("checkpointBranch must be an object")
+        return raw
+
+    def _checkpoint_branch_text(
+        self,
+        branch_turn: Mapping[str, Any],
+        *keys: str,
+        field_name: str,
+        required: bool = True,
+    ) -> str | None:
+        candidate = self._branch_input_value(branch_turn, *keys)
+        text = self._coerce_text(candidate, flatten=False)
+        if text:
+            return text
+        if required:
+            raise ValueError(f"checkpointBranch.{field_name} is required")
+        return None
+
+    def _checkpoint_branch_mapping(
+        self,
+        branch_turn: Mapping[str, Any],
+        *keys: str,
+        field_name: str,
+        required: bool = True,
+    ) -> Mapping[str, Any] | None:
+        value = self._branch_input_value(branch_turn, *keys)
+        if isinstance(value, Mapping):
+            return value
+        if required:
+            raise ValueError(f"checkpointBranch.{field_name} must be an object")
+        return None
+
     def _build_agent_execution_request(
         self,
         *,
@@ -12421,8 +12511,8 @@ class MoonMindRunWorkflow:
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
 
-        step_execution = self._step_execution_for(node_id)
-        if step_execution is not None:
+        resolved_step_execution = step_execution or self._step_execution_for(node_id)
+        if resolved_step_execution is not None:
             metadata_payload = (
                 parameters.get("metadata")
                 if isinstance(parameters.get("metadata"), dict)
@@ -12438,9 +12528,9 @@ class MoonMindRunWorkflow:
                 "scope": "step",
             }
             if workflow.patched(RUN_STEP_EXECUTION_NAMING_PATCH):
-                step_ledger_payload["executionOrdinal"] = step_execution
+                step_ledger_payload["executionOrdinal"] = resolved_step_execution
             else:
-                step_ledger_payload["attempt"] = step_execution
+                step_ledger_payload["attempt"] = resolved_step_execution
             moonmind_payload["stepLedger"] = step_ledger_payload
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
@@ -12501,7 +12591,7 @@ class MoonMindRunWorkflow:
             skill_source_policy["resolvedSkillsetRef"] = resolved_skillset_ref
         if selected_skill:
             skill_source_policy["selectedSkill"] = selected_skill
-        execution_ordinal = step_execution or 1
+        execution_ordinal = resolved_step_execution or 1
         context_workspace = self._step_execution_workspace(
             node_id,
             attempt=execution_ordinal,
@@ -12515,6 +12605,7 @@ class MoonMindRunWorkflow:
         }
         if execution_profile_ref:
             context_policy_refs["executionProfileRef"] = execution_profile_ref
+        branch_turn_input = self._checkpoint_branch_turn_input(node_inputs)
         retrieval_context = None
         retrieval_manifest_artifact = None
         memory_proposals = None
@@ -12564,24 +12655,196 @@ class MoonMindRunWorkflow:
                     for pattern in raw_fix_patterns
                     if isinstance(pattern, Mapping)
                 ]
-        attempt_context = build_execution_context_bundle(
-            workflow_id=wf_info.workflow_id,
-            run_id=wf_info.run_id,
-            logical_step_id=node_id,
-            execution_ordinal=execution_ordinal,
-            prepared_context=prepared_context,
-            **self._step_execution_context_kwargs(
-                node_id,
-                attempt=execution_ordinal,
-                workspace=context_workspace,
-                policy_refs=context_policy_refs,
-            ),
-            runtime_selection=runtime_selection,
-            retrieval=retrieval_context,
-            memory_proposals=memory_proposals,
-            memory_context=memory_context,
-            fix_patterns=fix_patterns,
+        context_kwargs = self._step_execution_context_kwargs(
+            node_id,
+            attempt=execution_ordinal,
+            workspace=context_workspace,
+            policy_refs=context_policy_refs,
         )
+        branch_projection: dict[str, Any] | None = None
+        branch_artifact_manifest: dict[str, Any] | None = None
+        runtime_context_policy = (
+            "fresh_agent_run"
+            if agent_kind == "managed"
+            else "external_provider_continuation"
+        )
+        if branch_turn_input is not None:
+            source_checkpoint = self._checkpoint_branch_mapping(
+                branch_turn_input,
+                "sourceCheckpoint",
+                "source_checkpoint",
+                field_name="sourceCheckpoint",
+            )
+            instruction_artifact_ref = (
+                self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "instructionArtifactRef",
+                    "instruction_artifact_ref",
+                    "instructionRef",
+                    "instruction_ref",
+                    field_name="instructionArtifactRef",
+                    required=False,
+                )
+                or self._coerce_text(node_inputs.get("instructions"), flatten=False)
+                or self._coerce_text(node_inputs.get("instructionRef"), flatten=False)
+            )
+            if not instruction_artifact_ref:
+                raise ValueError(
+                    "checkpointBranch.instructionArtifactRef is required"
+                )
+            branch_runtime_policy = self._checkpoint_branch_text(
+                branch_turn_input,
+                "runtimeContextPolicy",
+                "runtime_context_policy",
+                field_name="runtimeContextPolicy",
+                required=False,
+            ) or runtime_context_policy
+            branch_workspace_policy = self._checkpoint_branch_text(
+                branch_turn_input,
+                "workspacePolicy",
+                "workspace_policy",
+                field_name="workspacePolicy",
+                required=False,
+            ) or str(context_kwargs.get("workspace_policy") or "")
+            attempt_context = build_branch_turn_context_bundle(
+                workflow_id=wf_info.workflow_id,
+                run_id=wf_info.run_id,
+                logical_step_id=node_id,
+                execution_ordinal=execution_ordinal,
+                branch_id=self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "branchId",
+                    "branch_id",
+                    field_name="branchId",
+                )
+                or "",
+                branch_turn_id=self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "branchTurnId",
+                    "branch_turn_id",
+                    field_name="branchTurnId",
+                )
+                or "",
+                source_checkpoint=source_checkpoint or {},
+                instruction_artifact_ref=instruction_artifact_ref,
+                instruction_digest=self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "instructionDigest",
+                    "instruction_digest",
+                    field_name="instructionDigest",
+                )
+                or "",
+                runtime_context_policy=branch_runtime_policy,  # type: ignore[arg-type]
+                workspace_policy=branch_workspace_policy,
+                task_input_snapshot_ref=(
+                    self._checkpoint_branch_text(
+                        branch_turn_input,
+                        "taskInputSnapshotRef",
+                        "task_input_snapshot_ref",
+                        field_name="taskInputSnapshotRef",
+                        required=False,
+                    )
+                    or context_kwargs.get("task_input_snapshot_ref")
+                ),
+                plan_ref=self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "planRef",
+                    "plan_ref",
+                    field_name="planRef",
+                    required=False,
+                )
+                or context_kwargs.get("plan_ref"),
+                plan_digest=self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "planDigest",
+                    "plan_digest",
+                    field_name="planDigest",
+                    required=False,
+                )
+                or context_kwargs.get("plan_digest"),
+                initial_instruction_ref=self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "initialInstructionRef",
+                    "initial_instruction_ref",
+                    field_name="initialInstructionRef",
+                    required=False,
+                ),
+                initial_instruction_digest=self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "initialInstructionDigest",
+                    "initial_instruction_digest",
+                    field_name="initialInstructionDigest",
+                    required=False,
+                ),
+                parent_branch_id=self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "parentBranchId",
+                    "parent_branch_id",
+                    field_name="parentBranchId",
+                    required=False,
+                ),
+                parent_turn_id=self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "parentTurnId",
+                    "parent_turn_id",
+                    field_name="parentTurnId",
+                    required=False,
+                ),
+                label=self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "label",
+                    field_name="label",
+                    required=False,
+                ),
+                git_work_branch=self._checkpoint_branch_text(
+                    branch_turn_input,
+                    "gitWorkBranch",
+                    "git_work_branch",
+                    field_name="gitWorkBranch",
+                    required=False,
+                ),
+                workspace_baseline=context_kwargs.get("workspace_baseline"),
+                prior_evidence_refs=context_kwargs.get("prior_evidence_refs"),
+                bounded_summaries=branch_turn_input.get("boundedSummaries")
+                if isinstance(branch_turn_input.get("boundedSummaries"), Sequence)
+                and not isinstance(branch_turn_input.get("boundedSummaries"), str)
+                else None,
+                branch_comparison_refs=branch_turn_input.get("branchComparisonRefs")
+                if isinstance(branch_turn_input.get("branchComparisonRefs"), Sequence)
+                and not isinstance(branch_turn_input.get("branchComparisonRefs"), str)
+                else None,
+                runtime_selection=runtime_selection,
+                policy_refs=context_kwargs.get("policy_refs"),
+            )
+            branch_projection = branch_turn_step_execution_manifest_projection(
+                attempt_context
+            )
+            branch_artifact_manifest = build_branch_turn_artifact_manifest(
+                branch_id=attempt_context.branch["branchId"],
+                branch_turn_id=attempt_context.branch["branchTurnId"],
+                context_bundle=attempt_context,
+            )
+            runtime_context_policy = branch_runtime_policy
+            self._step_execution_branch_projections[(node_id, execution_ordinal)] = (
+                dict(branch_projection)
+            )
+            self._step_execution_branch_artifact_manifests[
+                (node_id, execution_ordinal)
+            ] = dict(branch_artifact_manifest)
+        else:
+            attempt_context = build_execution_context_bundle(
+                workflow_id=wf_info.workflow_id,
+                run_id=wf_info.run_id,
+                logical_step_id=node_id,
+                execution_ordinal=execution_ordinal,
+                prepared_context=prepared_context,
+                **context_kwargs,
+                runtime_selection=runtime_selection,
+                retrieval=retrieval_context,
+                memory_proposals=memory_proposals,
+                memory_context=memory_context,
+                fix_patterns=fix_patterns,
+            )
         metadata_payload = (
             parameters.get("metadata")
             if isinstance(parameters.get("metadata"), dict)
@@ -12599,6 +12862,12 @@ class MoonMindRunWorkflow:
         moonmind_payload["stepExecutionManifestProjection"] = (
             attempt_context.to_manifest_projection()
         )
+        if branch_projection is not None:
+            moonmind_payload["checkpointBranch"] = dict(branch_projection)
+        if branch_artifact_manifest is not None:
+            moonmind_payload["checkpointBranchArtifactManifest"] = dict(
+                branch_artifact_manifest
+            )
         if retrieval_manifest_artifact is not None:
             moonmind_payload["retrievalManifestArtifact"] = retrieval_manifest_artifact
             self._step_execution_retrieval_manifest_artifacts[
@@ -12620,12 +12889,7 @@ class MoonMindRunWorkflow:
             workflowId=wf_info.workflow_id,
             runId=wf_info.run_id,
             logicalStepId=node_id,
-            executionOrdinal=step_execution or 1,
-        )
-        runtime_context_policy = (
-            "fresh_agent_run"
-            if agent_kind == "managed"
-            else "external_provider_continuation"
+            executionOrdinal=execution_ordinal,
         )
         step_execution_payload: dict[str, Any] = {
             "schemaVersion": "v1",
@@ -12643,6 +12907,14 @@ class MoonMindRunWorkflow:
             "runtimeSelection": dict(runtime_selection),
             "skillSourcePolicy": skill_source_policy,
         }
+        if branch_projection is not None:
+            step_execution_payload["branch"] = dict(
+                branch_projection.get("branch") or {}
+            )
+        if branch_artifact_manifest is not None:
+            step_execution_payload["branchArtifactManifest"] = dict(
+                branch_artifact_manifest
+            )
         if attempt_context.retrieval_manifest_ref:
             step_execution_payload["retrievalManifestRef"] = (
                 attempt_context.retrieval_manifest_ref

@@ -961,6 +961,103 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "prohibited",
         )
 
+    def test_checkpoint_branch_turn_request_records_typed_launch_evidence(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+        wf._input_ref = "artifact://inputs/task"
+        wf._plan_ref = "artifact://plans/plan"
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=False,
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "instructions": "artifact://branch-turn/instructions",
+                    "runtime": {"mode": "codex_cli"},
+                    "checkpointBranch": {
+                        "branchId": "cbr_01",
+                        "branchTurnId": "cbt_01",
+                        "sourceCheckpoint": {
+                            "workflowId": "test-wf-id",
+                            "runId": "source-run",
+                            "logicalStepId": "implement",
+                            "executionOrdinal": 1,
+                            "checkpointBoundary": "after_execution",
+                            "checkpointRef": "artifact://checkpoints/source",
+                            "checkpointDigest": "sha256:checkpoint",
+                        },
+                        "instructionDigest": "sha256:turn",
+                        "runtimeContextPolicy": "fresh_agent_run",
+                        "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+                        "boundedSummaries": ["Source attempt failed the unit gate."],
+                    },
+                },
+                node_id="implement",
+                tool_name="codex_cli",
+                step_execution=3,
+                attempt_reason="checkpoint_branch",
+            )
+
+        step_execution = request.step_execution
+        assert step_execution is not None
+        self.assertEqual(step_execution.reason, "checkpoint_branch")
+        self.assertEqual(step_execution.execution_ordinal, 3)
+        self.assertEqual(step_execution.runtime_context_policy, "fresh_agent_run")
+        self.assertEqual(
+            step_execution.branch,
+            {
+                "branchId": "cbr_01",
+                "branchTurnId": "cbt_01",
+                "rootCheckpointRef": "artifact://checkpoints/source",
+                "parentBranchId": None,
+                "parentTurnId": None,
+                "gitWorkBranch": None,
+            },
+        )
+        assert step_execution.branch_artifact_manifest is not None
+        artifact_names = [
+            artifact["name"]
+            for artifact in step_execution.branch_artifact_manifest["artifacts"]
+        ]
+        self.assertIn("runtime.branch_turn.context_bundle.json", artifact_names)
+        self.assertIn(
+            "output.branch_turn.step_execution_manifest.json", artifact_names
+        )
+        moonmind_metadata = request.parameters["metadata"]["moonmind"]
+        self.assertEqual(
+            moonmind_metadata["executionContext"]["reason"],
+            "checkpoint_branch",
+        )
+        self.assertEqual(
+            moonmind_metadata["executionContext"]["instructionRefs"],
+            ["artifact://branch-turn/instructions"],
+        )
+        self.assertEqual(
+            moonmind_metadata["executionContext"]["instructionDigests"],
+            {"artifact://branch-turn/instructions": "sha256:turn"},
+        )
+        self.assertEqual(
+            moonmind_metadata["stepExecutionManifestProjection"]["context"][
+                "runtimeContextPolicy"
+            ],
+            "fresh_agent_run",
+        )
+        self.assertEqual(
+            wf._step_execution_branch_projections[("implement", 3)]["branch"][
+                "branchTurnId"
+            ],
+            "cbt_01",
+        )
+
     def test_managed_reattempt_records_session_reset_launch_evidence(self) -> None:
         from unittest.mock import patch
 
