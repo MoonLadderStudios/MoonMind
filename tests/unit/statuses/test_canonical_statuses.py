@@ -60,12 +60,46 @@ def _status_table_values(markdown: str) -> set[str]:
     }
 
 
+def _matrix_values_for_domain(markdown: str, domain: str) -> set[str]:
+    for line in markdown.splitlines():
+        if line.startswith(f"| {domain} |"):
+            columns = [column.strip() for column in line.strip().strip("|").split("|")]
+            assert len(columns) >= 3
+            return set(re.findall(r"`([^`]+)`", columns[2]))
+    raise AssertionError(f"Missing status-domain matrix row for {domain}")
+
+
 def test_workflow_state_values_match_temporal_visibility_doc() -> None:
     markdown = _read_doc("docs/Temporal/VisibilityAndUiQueryModel.md")
 
     assert WORKFLOW_STATE_VALUES == _fenced_values_after_heading(
         markdown,
         "5.1 `mm_state` value set",
+    )
+
+
+def test_backend_status_domains_match_status_domain_matrix() -> None:
+    markdown = _read_doc("docs/Temporal/StatusDomainMatrix.md")
+
+    assert WORKFLOW_STATE_VALUES == _matrix_values_for_domain(
+        markdown,
+        "Workflow lifecycle state",
+    )
+    assert TEMPORAL_STATUS_VALUES == _matrix_values_for_domain(
+        markdown,
+        "`temporalStatus`",
+    )
+    assert STEP_LEDGER_STATUS_VALUES == _matrix_values_for_domain(
+        markdown,
+        "Step ledger status",
+    )
+    assert STEP_EXECUTION_ARTIFACT_STATUS_VALUES == _matrix_values_for_domain(
+        markdown,
+        "Step execution artifact status",
+    )
+    assert INTEGRATION_STATUS_VALUES <= _matrix_values_for_domain(
+        markdown,
+        "Provider normalized status",
     )
 
 
@@ -205,3 +239,13 @@ def test_workflow_domain_excludes_provider_aliases() -> None:
     }
 
     assert WORKFLOW_STATE_VALUES.isdisjoint(provider_aliases)
+
+
+def test_no_generic_global_status_vocabulary_is_reintroduced() -> None:
+    status_modules = {
+        path.name for path in (REPO_ROOT / "moonmind" / "statuses").glob("*.py")
+    }
+
+    assert "global.py" not in status_modules
+    assert "generic.py" not in status_modules
+    assert not (WORKFLOW_STATE_VALUES & {"queued", "running", "succeeded", "done"})

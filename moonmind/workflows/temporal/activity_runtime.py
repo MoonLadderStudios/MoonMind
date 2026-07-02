@@ -3151,7 +3151,7 @@ class TemporalSandboxActivities:
             )
             return WorkspaceCheckpointEvidenceModel(
                 kind="ephemeral_workspace_ref",
-                workspaceRef=workspace_ref,
+                workspaceArtifactRef=workspace_ref,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "external_state_ref":
@@ -3382,6 +3382,18 @@ class TemporalSandboxActivities:
         target: Path,
     ) -> None:
         if policy == "continue_from_previous_execution":
+            if workspace_payload.get("kind") == "external_state_ref":
+                raise TemporalActivityRuntimeError(
+                    "external_state_ref restoration is unsupported without an "
+                    "external provider restore bridge"
+                )
+            if workspace_payload.get("kind") == "ephemeral_workspace_ref" and str(
+                workspace_payload.get("workspaceArtifactRef") or ""
+            ).strip():
+                raise TemporalActivityRuntimeError(
+                    "artifact-backed ephemeral workspace evidence cannot be "
+                    "restored as a local sandbox path"
+                )
             workspace_ref = str(workspace_payload.get("workspaceRef") or "").strip()
             if workspace_ref:
                 source = self._resolve_workspace(workspace_ref, must_exist=True)
@@ -3402,6 +3414,11 @@ class TemporalSandboxActivities:
                 await self._checkout_commit_to_workspace(workspace_payload, target)
                 return
             if workspace_payload.get("kind") == "ephemeral_workspace_ref":
+                if str(workspace_payload.get("workspaceArtifactRef") or "").strip():
+                    raise TemporalActivityRuntimeError(
+                        "artifact-backed ephemeral workspace evidence cannot be "
+                        "restored as a local sandbox path"
+                    )
                 source = self._workspace_ref_source(workspace_payload)
                 self._replace_workspace_tree(source, target)
                 return
@@ -3597,6 +3614,7 @@ class TemporalSandboxActivities:
                 summary=summary,
                 checkpoint=checkpoint,
                 target_workspace_ref=target_workspace_ref or model.target_workspace_ref,
+                provider_refs=provider_refs,
             )
         )
         result = WorkspacePolicyApplyResult(
@@ -3618,20 +3636,37 @@ class TemporalSandboxActivities:
         summary: str,
         checkpoint: Mapping[str, Any] | None,
         target_workspace_ref: str | None,
+        provider_refs: list[str],
     ) -> str:
         source = checkpoint.get("source") if isinstance(checkpoint, Mapping) else None
         if not isinstance(source, Mapping):
             source = model.identity.model_dump(by_alias=True, mode="json")
+        workspace = (
+            checkpoint.get("workspace") if isinstance(checkpoint, Mapping) else None
+        )
+        if not isinstance(workspace, Mapping):
+            workspace = {}
+        checkpoint_kind = workspace.get("kind")
+        safe_correlation = {
+            "externalStateRef": workspace.get("externalStateRef"),
+            "workspaceArtifactRef": workspace.get("workspaceArtifactRef"),
+            "providerLeaseRefs": provider_refs,
+        }
+        safe_correlation = {
+            key: value for key, value in safe_correlation.items() if value
+        }
         payload = {
             "status": "blocked",
             "failureCode": failure_code,
             "summary": summary,
+            "checkpointKind": checkpoint_kind,
             "logicalStepId": source.get("logicalStepId"),
             "sourceWorkflowId": source.get("workflowId"),
             "sourceRunId": source.get("runId"),
             "checkpointRef": model.checkpoint_ref,
             "workspacePolicy": model.workspace_policy,
             "targetWorkspaceRef": target_workspace_ref,
+            "providerSessionCorrelation": safe_correlation,
             "recommendedNextAction": (
                 "Inspect checkpoint evidence and select a compatible workspace "
                 "policy before reattempting the Step Execution."

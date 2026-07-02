@@ -5448,6 +5448,7 @@ def _step_execution_projection_payload(
         "executionOrdinal": manifest.execution_ordinal,
         "sourceExecutionOrdinal": source_execution_ordinal,
         "lineage": manifest.lineage,
+        "branch": manifest.branch,
         "reason": manifest.reason,
         "status": manifest.status,
         "terminalDisposition": manifest.terminal_disposition,
