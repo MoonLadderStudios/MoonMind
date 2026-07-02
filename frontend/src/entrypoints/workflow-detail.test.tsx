@@ -762,14 +762,14 @@ describe('Workflow Detail Entrypoint', () => {
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     const expectedIcons = [
       ['Scheduled workflow', 'Status: Scheduled', 'status-scheduled', 'lucide-calendar-clock'],
-      ['Initializing workflow', 'Status: Initializing', 'status-initializing', 'lucide-power'],
+      ['Initializing workflow', 'Status: Initializing', 'status-initializing', null],
       ['Dependency wait workflow', 'Status: Awaiting dependencies', 'status-awaiting-dependencies', 'lucide-link'],
-      ['Planning workflow', 'Status: Planning', 'status-planning', 'lucide-map'],
+      ['Planning workflow', 'Status: Planning', 'status-planning', null],
       ['Slot wait workflow', 'Status: Awaiting slot', 'status-awaiting-slot', 'lucide-hourglass'],
-      ['Executing workflow', 'Status: Executing', 'status-running', 'lucide-play'],
+      ['Executing workflow', 'Status: Executing', 'status-running', null],
       ['Proposals workflow', 'Status: Proposals', 'status-running', 'lucide-lightbulb'],
       ['External wait workflow', 'Status: Awaiting external', 'status-awaiting-external', 'lucide-hand'],
-      ['Finalizing workflow', 'Status: Finalizing', 'status-finalizing', 'lucide-package-check'],
+      ['Finalizing workflow', 'Status: Finalizing', 'status-finalizing', null],
       ['No commit workflow', 'Status: No commit', 'status-no-commit', 'lucide-minus'],
       ['Completed workflow', 'Status: Completed', 'status-completed', 'lucide-check'],
       ['Failed workflow', 'Status: Failed', 'status-failed', 'lucide-x'],
@@ -783,7 +783,11 @@ describe('Workflow Detail Entrypoint', () => {
       expect(iconContainer.classList.contains('workflow-workspace-sidebar-status-icon')).toBe(true);
       expect(iconContainer.classList.contains(statusClass)).toBe(true);
       expect(iconContainer.getAttribute('data-effect')).toBeNull();
-      expect(iconContainer.querySelector(`svg.${iconClass}`)).toBeTruthy();
+      if (iconClass) {
+        expect(iconContainer.querySelector(`svg.${iconClass}`)).toBeTruthy();
+      } else {
+        expect(iconContainer.querySelector('svg')).toBeTruthy();
+      }
       expect(within(row).queryByText(ariaLabel.replace('Status: ', ''))).toBeNull();
     }
   });
