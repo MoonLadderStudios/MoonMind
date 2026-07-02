@@ -78,6 +78,7 @@ annotations:
         - none
         - branch
         - pr
+        - pr_with_merge_automation
   uiSchema:
     run_ref:
       widget: select
@@ -144,6 +145,7 @@ inputs:
   - none
   - branch
   - pr
+  - pr_with_merge_automation
 steps:
 - title: Resolve Jira targets and queue child workflows
   annotations:

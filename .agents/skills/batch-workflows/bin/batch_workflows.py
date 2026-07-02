@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 
 API_EXECUTIONS_ENDPOINT = "/api/executions"
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
+PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE = "pr_with_merge_automation"
+BATCH_PUBLISH_MODES = SUPPORTED_PUBLISH_MODES | {PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}
 
 
 @dataclass
@@ -79,9 +81,18 @@ def _text(value: Any) -> str | None:
 
 def _normalize_publish_mode(value: str | None) -> str:
     candidate = str(value or "").strip().lower()
-    if candidate not in SUPPORTED_PUBLISH_MODES:
+    if candidate not in BATCH_PUBLISH_MODES:
         return "pr"
     return candidate
+
+
+def _publish_payload_for_mode(publish_mode: str) -> dict[str, Any]:
+    if publish_mode == PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE:
+        return {
+            "mode": "pr",
+            "mergeAutomation": {"enabled": True},
+        }
+    return {"mode": publish_mode}
 
 
 def _normalize_repo(value: Any) -> str | None:
@@ -342,7 +353,7 @@ def build_child_request(
         "goal": goal,
         "instructions": goal,
         "inputs": inputs,
-        "publish": {"mode": publish_mode},
+        "publish": _publish_payload_for_mode(publish_mode),
     }
     if config.target_kind == "skill":
         task_payload["tool"] = {
