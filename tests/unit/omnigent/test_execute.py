@@ -880,6 +880,7 @@ async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[str] = []
 
@@ -926,6 +927,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    artifact_gateway = LocalOmnigentArtifactGateway(root=tmp_path)
 
     result = await run_omnigent_execution(
         AgentExecutionRequest(
@@ -942,15 +944,26 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
             },
         ),
         run_store=Store(),
+        artifact_gateway=artifact_gateway,
     )
 
     assert result.summary == "durably reattached"
     assert calls == []
+    assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")
+    external_state = json.loads(
+        await artifact_gateway.read_text(result.metadata["externalStateRef"])
+    )
+    assert external_state["retry"]["sessionResolution"] == "attached"
+    assert external_state["retry"]["attached"] is True
+    assert external_state["retry"]["attachSource"] == "durable_idempotency_mapping"
+    assert external_state["retry"]["firstMessageOutcome"] == "already_posted"
+    assert external_state["artifactRefs"]["diagnosticsRef"] == result.diagnostics_ref
 
 
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_reconciles_posting_state_without_duplicate_prompt(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[str] = []
     marker: dict[str, str] = {}
@@ -1013,6 +1026,7 @@ async def test_run_omnigent_execution_reconciles_posting_state_without_duplicate
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    artifact_gateway = LocalOmnigentArtifactGateway(root=tmp_path)
 
     result = await run_omnigent_execution(
         AgentExecutionRequest(
@@ -1029,17 +1043,26 @@ async def test_run_omnigent_execution_reconciles_posting_state_without_duplicate
             },
         ),
         run_store=Store(),
+        artifact_gateway=artifact_gateway,
     )
 
     assert result.summary == "reconciled"
     assert "mark_posted" in calls
     assert "create_session" not in calls
     assert "post_event" not in calls
+    external_state = json.loads(
+        await artifact_gateway.read_text(result.metadata["externalStateRef"])
+    )
+    assert external_state["retry"]["sessionResolution"] == "attached"
+    assert external_state["retry"]["firstMessageOutcome"] == "reconciled"
+    assert external_state["retry"]["reconciliationChecked"] is True
+    assert external_state["retry"]["markerFound"] is True
 
 
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_reconcile(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[str] = []
 
@@ -1079,6 +1102,7 @@ async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_rec
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    artifact_gateway = LocalOmnigentArtifactGateway(root=tmp_path)
 
     result = await run_omnigent_execution(
         AgentExecutionRequest(
@@ -1095,6 +1119,7 @@ async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_rec
             },
         ),
         run_store=Store(),
+        artifact_gateway=artifact_gateway,
     )
 
     assert result.failure_class == "execution_error"
@@ -1102,11 +1127,20 @@ async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_rec
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
     assert "post_event" not in calls
     assert "mark_posted" not in calls
+    external_state = json.loads(
+        await artifact_gateway.read_text(result.metadata["externalStateRef"])
+    )
+    assert external_state["retry"]["sessionResolution"] == "attached"
+    assert external_state["retry"]["firstMessageOutcome"] == "unrecoverable_mismatch"
+    assert external_state["retry"]["mismatchReason"] == "reconcile_failed"
+    assert external_state["retry"]["markerFound"] is False
+    assert external_state["artifactRefs"]["diagnosticsRef"] == result.diagnostics_ref
 
 
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_digest_mismatch_is_non_retryable_with_diagnostics(
     monkeypatch,
+    tmp_path,
 ) -> None:
     class Row:
         omnigent_session_id = "persisted-session"
@@ -1139,6 +1173,7 @@ async def test_run_omnigent_execution_digest_mismatch_is_non_retryable_with_diag
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    artifact_gateway = LocalOmnigentArtifactGateway(root=tmp_path)
 
     result = await run_omnigent_execution(
         AgentExecutionRequest(
@@ -1155,11 +1190,18 @@ async def test_run_omnigent_execution_digest_mismatch_is_non_retryable_with_diag
             },
         ),
         run_store=Store(),
+        artifact_gateway=artifact_gateway,
     )
 
     assert result.failure_class == "execution_error"
     assert result.provider_error_code == "omnigent_first_message_digest_mismatch"
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
+    external_state = json.loads(
+        await artifact_gateway.read_text(result.metadata["externalStateRef"])
+    )
+    assert external_state["retry"]["firstMessageOutcome"] == "unrecoverable_mismatch"
+    assert external_state["retry"]["mismatchReason"] == "digest_mismatch"
+    assert external_state["artifactRefs"]["diagnosticsRef"] == result.diagnostics_ref
 
 
 @pytest.mark.asyncio
