@@ -3742,9 +3742,12 @@ function stepCheckStatusClass(status: string | null | undefined): string {
 
 function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
   const checkStatusClass = stepCheckStatusClass(check.status);
-  const statusPillClassName = executionStatusPillProps(check.status).className;
+  const statusPillProps = executionStatusPillProps(check.status);
   return (
-    <span className={`step-check-badge ${checkStatusClass} ${statusPillClassName}`}>
+    <span
+      {...statusPillProps}
+      className={`step-check-badge ${checkStatusClass} ${statusPillProps.className}`}
+    >
       {check.kind.replaceAll('_', ' ')}: {formatStatusLabel(check.status)}
     </span>
   );
