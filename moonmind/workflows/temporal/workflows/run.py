@@ -348,7 +348,6 @@ _MOONSPEC_GATE_VERDICT_TEXT_PATTERN = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.UserWorkflow workflow."""
 
@@ -4333,6 +4332,44 @@ class MoonMindRunWorkflow:
             return None
         return self._normalize_moonspec_verify_verdict(match.group(1))
 
+    def _moonspec_verify_report_text(
+        self,
+        outputs: Mapping[str, Any],
+    ) -> str | None:
+        for source in self._moonspec_verify_sources(outputs):
+            for key in (
+                "moonSpecVerifyReport",
+                "moonspecVerifyReport",
+                "verificationReport",
+                "verification_report",
+                "lastAssistantText",
+                "assistantText",
+                "summary",
+                "message",
+            ):
+                value = source.get(key)
+                if not isinstance(value, str):
+                    continue
+                text = value.strip()
+                if (
+                    "# MoonSpec Verification Report" in text
+                    and "**Verdict**" in text
+                ):
+                    return text
+            turn_metadata = source.get("turnMetadata")
+            if isinstance(turn_metadata, Mapping):
+                for key in ("assistantText", "lastAssistantText"):
+                    value = turn_metadata.get(key)
+                    if not isinstance(value, str):
+                        continue
+                    text = value.strip()
+                    if (
+                        "# MoonSpec Verification Report" in text
+                        and "**Verdict**" in text
+                    ):
+                        return text
+        return None
+
     def _moonspec_verify_gate_result(
         self,
         outputs: Mapping[str, Any],
@@ -4381,19 +4418,25 @@ class MoonMindRunWorkflow:
     ) -> None:
         gate_result = self._moonspec_verify_gate_result(outputs)
         verdict = gate_result.verdict
-        reason = None
-        for source in self._moonspec_verify_sources(outputs):
-            reason = self._sanitize_operator_summary(
-                self._coerce_text(
-                    source.get("operator_summary")
-                    or source.get("operatorSummary")
-                    or source.get("summary")
-                    or source.get("message"),
-                    max_chars=700,
+        reason = (
+            "MoonSpec verification report was present but structured gate output "
+            "was missing."
+            if gate_result.degraded and self._moonspec_verify_report_text(outputs)
+            else None
+        )
+        if reason is None:
+            for source in self._moonspec_verify_sources(outputs):
+                reason = self._sanitize_operator_summary(
+                    self._coerce_text(
+                        source.get("operator_summary")
+                        or source.get("operatorSummary")
+                        or source.get("summary")
+                        or source.get("message"),
+                        max_chars=700,
+                    )
                 )
-            )
-            if reason:
-                break
+                if reason:
+                    break
         diagnostics_ref = None
         for source in self._moonspec_verify_sources(outputs):
             diagnostics_ref = self._coerce_text(
@@ -12206,6 +12249,41 @@ class MoonMindRunWorkflow:
             payload.pop(key, None)
         return payload
 
+    @staticmethod
+    def _default_moonspec_verify_artifact_path(node_id: str) -> str:
+        safe_node_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(node_id or "")).strip("-")
+        if not safe_node_id:
+            safe_node_id = "verify"
+        return f"var/artifacts/moonspec-verify/{safe_node_id}.json"
+
+    def _ensure_moonspec_verify_parameters(
+        self,
+        *,
+        parameters: dict[str, Any],
+        node_inputs: Mapping[str, Any],
+        node_id: str,
+    ) -> None:
+        nested_inputs = node_inputs.get("inputs")
+        skill_inputs = nested_inputs if isinstance(nested_inputs, Mapping) else {}
+        verify_artifact_path = None
+        for source in (parameters, node_inputs, skill_inputs):
+            for key in (
+                "verify_artifact_path",
+                "verifyArtifactPath",
+                "verification_artifact_path",
+                "verificationArtifactPath",
+            ):
+                value = source.get(key)
+                if isinstance(value, str) and value.strip():
+                    verify_artifact_path = value.strip()
+                    break
+            if verify_artifact_path:
+                break
+        parameters["verify_artifact_path"] = (
+            verify_artifact_path
+            or self._default_moonspec_verify_artifact_path(node_id)
+        )
+
     def _build_agent_execution_request(
         self,
         *,
@@ -12416,6 +12494,12 @@ class MoonMindRunWorkflow:
             if compact_skill_payload:
                 compact_skill_payload.setdefault("name", selected_skill)
                 parameters["skill"] = dict(compact_skill_payload)
+            if selected_skill.lower() == "moonspec-verify":
+                self._ensure_moonspec_verify_parameters(
+                    parameters=parameters,
+                    node_inputs=node_inputs,
+                    node_id=node_id,
+                )
         bundle_payload: dict[str, Any] = {}
         for bundle_key in (
             "bundleId",
@@ -13041,7 +13125,9 @@ class MoonMindRunWorkflow:
             outputs["providerErrorCode"] = provider_error_code
         if retry_recommendation:
             outputs["retryRecommendation"] = retry_recommendation
-        outputs.update(metadata)
+        if isinstance(metadata, Mapping):
+            for key, value in metadata.items():
+                outputs.setdefault(key, value)
 
         return {
             "status": status,
