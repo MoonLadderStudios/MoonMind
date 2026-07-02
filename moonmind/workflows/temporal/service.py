@@ -2292,7 +2292,8 @@ class TemporalExecutionService:
         finish_summary: dict[str, Any] | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         normalized_state = canonicalize_workflow_state_alias(
-            str(state or "").strip().lower()
+            str(state or "").strip().lower(),
+            logger=logger,
         )
         try:
             target_state = coerce_workflow_state(normalized_state or "")
@@ -2382,7 +2383,10 @@ class TemporalExecutionService:
     ) -> None:
         if finish_summary is None:
             return
-        normalized_summary = normalize_no_commit_finish_summary(finish_summary)
+        normalized_summary = normalize_no_commit_finish_summary(
+            finish_summary,
+            logger=logger,
+        )
         if normalized_summary is None:
             return
         finish_outcome = normalized_summary.get(
@@ -2396,7 +2400,10 @@ class TemporalExecutionService:
                 else None
             )
         )
-        outcome_code = canonicalize_finish_outcome_code_alias(outcome_code)
+        outcome_code = canonicalize_finish_outcome_code_alias(
+            outcome_code,
+            logger=logger,
+        )
         record.finish_outcome_code = str(outcome_code).strip() if outcome_code else None
         record.finish_summary_json = normalized_summary
 
@@ -3982,8 +3989,7 @@ class TemporalExecutionService:
 
     def _parse_state(self, raw: str) -> MoonMindWorkflowState:
         try:
-            state = canonicalize_workflow_state_alias(raw)
-            return coerce_workflow_state(state or "")
+            return coerce_workflow_state(raw)
         except ValueError as exc:
             raise TemporalExecutionValidationError(f"Unsupported state: {raw}") from exc
 

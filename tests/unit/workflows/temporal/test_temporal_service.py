@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -84,6 +85,47 @@ def test_legacy_no_changes_aliases_are_quarantined_in_compat_helpers() -> None:
             "reason": "No repository changes were available to commit or publish.",
         },
     }
+
+
+def test_finish_outcome_compat_boundary_observes_alias_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("tests.temporal_status_compat")
+
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        assert (
+            canonicalize_finish_outcome_code_alias("NO_CHANGES", logger=logger)
+            == "NO_COMMIT"
+        )
+
+    [record] = caplog.records
+    assert record.getMessage() == "Observed legacy status alias"
+    assert record.domain == "finish_outcome"
+    assert record.alias == "NO_CHANGES"
+    assert record.canonical == "NO_COMMIT"
+
+
+def test_finish_summary_compat_boundary_observes_publish_reason_alias_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("tests.temporal_finish_summary_compat")
+
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        assert normalize_no_commit_finish_summary(
+            {"publish": {"reasonCode": "no_changes"}},
+            logger=logger,
+        ) == {
+            "publish": {
+                "reasonCode": "no_commit",
+                "reason": "No repository changes were available to commit or publish.",
+            }
+        }
+
+    [record] = caplog.records
+    assert record.getMessage() == "Observed legacy status alias"
+    assert record.domain == "publish_reason"
+    assert record.alias == "no_changes"
+    assert record.canonical == "no_commit"
 
 
 def _valid_user_workflow_parameters() -> dict[str, object]:

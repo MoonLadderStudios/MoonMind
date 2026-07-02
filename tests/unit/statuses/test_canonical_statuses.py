@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
 import pytest
 
 from moonmind.statuses.close_status import TemporalExecutionCloseStatus
-from moonmind.statuses.compat import WORKFLOW_STATE_COMPATIBILITY_ALIASES
+from moonmind.statuses.compat import (
+    WORKFLOW_STATE_COMPATIBILITY_ALIASES,
+    canonicalize_workflow_state_alias,
+)
 from moonmind.statuses.integration import INTEGRATION_STATUS_VALUES
 from moonmind.schemas.temporal_activity_models import ExecutionTerminalStateInput
 from moonmind.statuses.step_execution import (
@@ -116,12 +120,31 @@ def test_workflow_close_status_mapping_covers_terminal_states() -> None:
 
 
 def test_workflow_state_parsing_fails_fast_outside_compat_boundary() -> None:
-    assert coerce_workflow_state("no_changes") is MoonMindWorkflowState.NO_COMMIT
-    assert coerce_workflow_state(" No_Changes ") is MoonMindWorkflowState.NO_COMMIT
+    assert coerce_workflow_state(" no_commit ") is MoonMindWorkflowState.NO_COMMIT
     assert WORKFLOW_STATE_COMPATIBILITY_ALIASES == {"no_changes": "no_commit"}
 
     with pytest.raises(ValueError):
+        coerce_workflow_state("no_changes")
+    with pytest.raises(ValueError):
         coerce_workflow_state("done")
+
+
+def test_workflow_state_compat_boundary_observes_alias_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("tests.status_compat")
+
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        assert (
+            canonicalize_workflow_state_alias("no_changes", logger=logger)
+            == "no_commit"
+        )
+
+    [record] = caplog.records
+    assert record.getMessage() == "Observed legacy status alias"
+    assert record.domain == "workflow_state"
+    assert record.alias == "no_changes"
+    assert record.canonical == "no_commit"
 
 
 def test_automation_status_type_decodes_legacy_persisted_value() -> None:

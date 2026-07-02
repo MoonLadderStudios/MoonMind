@@ -6,8 +6,6 @@ import enum
 from typing import Literal
 
 from moonmind.statuses.close_status import TemporalExecutionCloseStatus
-from moonmind.statuses.compat import normalize_workflow_state_alias
-
 
 class MoonMindWorkflowState(str, enum.Enum):
     """Domain lifecycle states exposed through Temporal Visibility mm_state."""
@@ -136,9 +134,9 @@ WORKFLOW_STATE_TO_CLOSE_STATUS: dict[
 
 
 def coerce_workflow_state(raw: str) -> MoonMindWorkflowState:
-    """Parse a canonical workflow state, accepting only explicit compat aliases."""
+    """Parse a canonical workflow state without accepting legacy aliases."""
 
-    return MoonMindWorkflowState(normalize_workflow_state_alias(raw))
+    return MoonMindWorkflowState(str(raw).strip().lower())
 
 
 def workflow_state_to_close_status(
