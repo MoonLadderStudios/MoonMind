@@ -40,10 +40,16 @@ def _bundle(**overrides: Any) -> OmnigentCaptureBundle:
         "output_refs": ["artifact://omnigent/corr-1/output.omnigent.snapshot.final.json"],
         "diagnostics_ref": "artifact://omnigent/corr-1/diagnostics.omnigent.json",
         "capture_manifest_ref": "artifact://omnigent/corr-1/output.omnigent.capture_manifest.json",
+        "external_state_ref": (
+            "artifact://omnigent/corr-1/checkpoint.omnigent.external_state.json"
+        ),
         "metadata_refs": {
             "captureManifestRef": (
                 "artifact://omnigent/corr-1/output.omnigent.capture_manifest.json"
-            )
+            ),
+            "externalStateRef": (
+                "artifact://omnigent/corr-1/checkpoint.omnigent.external_state.json"
+            ),
         },
     }
     payload.update(overrides)
@@ -880,6 +886,7 @@ async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[str] = []
 
@@ -927,6 +934,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
 
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
     result = await run_omnigent_execution(
         AgentExecutionRequest(
             agentKind="external",
@@ -941,16 +949,33 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
                 },
             },
         ),
+        artifact_gateway=gateway,
         run_store=Store(),
     )
 
     assert result.summary == "durably reattached"
     assert calls == []
+    external_state_ref = result.metadata["externalStateRef"]
+    external_state = json.loads(await gateway.read_text(external_state_ref))
+    assert external_state["sourceIssue"] == "MM-1078"
+    assert external_state["sourceIssueRefs"] == ["MM-1078", "MM-1074"]
+    assert external_state["diagnosticsRef"] == result.diagnostics_ref
+    assert external_state["retryEvidence"] == {
+        "outcome": "attached",
+        "source": "durable_mapping",
+        "reattached": True,
+        "reconciled": False,
+        "mismatch": False,
+        "firstMessageState": "posted",
+        "firstMessageDigest": external_state["retryEvidence"]["firstMessageDigest"],
+        "idempotencyMarkerPresent": True,
+    }
 
 
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_reconciles_posting_state_without_duplicate_prompt(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[str] = []
     marker: dict[str, str] = {}
@@ -1014,6 +1039,7 @@ async def test_run_omnigent_execution_reconciles_posting_state_without_duplicate
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
 
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
     result = await run_omnigent_execution(
         AgentExecutionRequest(
             agentKind="external",
@@ -1028,6 +1054,7 @@ async def test_run_omnigent_execution_reconciles_posting_state_without_duplicate
                 },
             },
         ),
+        artifact_gateway=gateway,
         run_store=Store(),
     )
 
@@ -1035,11 +1062,20 @@ async def test_run_omnigent_execution_reconciles_posting_state_without_duplicate
     assert "mark_posted" in calls
     assert "create_session" not in calls
     assert "post_event" not in calls
+    external_state = json.loads(await gateway.read_text(result.metadata["externalStateRef"]))
+    assert external_state["retryEvidence"]["outcome"] == "reconciled"
+    assert external_state["retryEvidence"]["source"] == "durable_mapping"
+    assert external_state["retryEvidence"]["reattached"] is True
+    assert external_state["retryEvidence"]["reconciled"] is True
+    assert external_state["retryEvidence"]["mismatch"] is False
+    assert external_state["retryEvidence"]["firstMessageState"] == "posted"
+    assert external_state["retryEvidence"]["idempotencyMarkerPresent"] is True
 
 
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_reconcile(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[str] = []
 
@@ -1080,6 +1116,7 @@ async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_rec
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
 
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
     result = await run_omnigent_execution(
         AgentExecutionRequest(
             agentKind="external",
@@ -1094,6 +1131,7 @@ async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_rec
                 },
             },
         ),
+        artifact_gateway=gateway,
         run_store=Store(),
     )
 
@@ -1102,11 +1140,23 @@ async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_rec
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
     assert "post_event" not in calls
     assert "mark_posted" not in calls
+    external_state = json.loads(await gateway.read_text(result.metadata["externalStateRef"]))
+    assert external_state["diagnosticsRef"] == result.diagnostics_ref
+    assert external_state["retryEvidence"]["outcome"] == "unrecoverable_mismatch"
+    assert external_state["retryEvidence"]["source"] == "durable_mapping"
+    assert external_state["retryEvidence"]["reattached"] is True
+    assert external_state["retryEvidence"]["reconciled"] is False
+    assert external_state["retryEvidence"]["mismatch"] is True
+    assert (
+        external_state["retryEvidence"]["diagnosticsCode"]
+        == "omnigent_first_message_reconcile_failed"
+    )
 
 
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_digest_mismatch_is_non_retryable_with_diagnostics(
     monkeypatch,
+    tmp_path,
 ) -> None:
     class Row:
         omnigent_session_id = "persisted-session"
@@ -1140,6 +1190,7 @@ async def test_run_omnigent_execution_digest_mismatch_is_non_retryable_with_diag
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
 
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
     result = await run_omnigent_execution(
         AgentExecutionRequest(
             agentKind="external",
@@ -1154,12 +1205,21 @@ async def test_run_omnigent_execution_digest_mismatch_is_non_retryable_with_diag
                 },
             },
         ),
+        artifact_gateway=gateway,
         run_store=Store(),
     )
 
     assert result.failure_class == "execution_error"
     assert result.provider_error_code == "omnigent_first_message_digest_mismatch"
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
+    external_state = json.loads(await gateway.read_text(result.metadata["externalStateRef"]))
+    assert external_state["diagnosticsRef"] == result.diagnostics_ref
+    assert external_state["retryEvidence"]["outcome"] == "unrecoverable_mismatch"
+    assert external_state["retryEvidence"]["mismatch"] is True
+    assert (
+        external_state["retryEvidence"]["diagnosticsCode"]
+        == "omnigent_first_message_digest_mismatch"
+    )
 
 
 @pytest.mark.asyncio
