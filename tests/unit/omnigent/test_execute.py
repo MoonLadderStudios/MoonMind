@@ -658,6 +658,10 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
     monkeypatch.setattr("moonmind.omnigent.execute.asyncio.sleep", cancel_immediately)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._heartbeat_state",
+        lambda: {"omnigentSessionId": "session-1"},
+    )
 
     with pytest.raises(asyncio.CancelledError):
         await run_omnigent_execution(
@@ -668,6 +672,7 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
                 idempotencyKey="idem-1",
                 parameters={
                     "omnigent": {
+                        "endpointRef": "omnigent:endpoint:retry",
                         "agent": {"agentName": "codex-native-ui"},
                         "session": {"allowEmptyWorkspace": True},
                         "prompt": {"text": "Do the task"},
@@ -691,6 +696,15 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["terminalStatus"] == "canceled"
     assert manifest["patchUnavailable"] is False
+    external_state_path = tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json"
+    external_state = json.loads(external_state_path.read_text(encoding="utf-8"))
+    assert external_state["endpointRef"] == "omnigent:endpoint:retry"
+    assert external_state["retry"]["sessionResolution"] == "attached"
+    assert external_state["retry"]["attached"] is True
+    assert external_state["retry"]["attachSource"] == "activity_heartbeat"
+    assert external_state["retry"]["firstMessageOutcome"] == "pending"
+    assert external_state["firstMessage"]["idempotencyMarkerPresent"] is True
+    assert external_state["firstMessage"]["posted"] is False
 
 
 @pytest.mark.asyncio
@@ -1030,6 +1044,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     assert result.summary == "durably reattached"
     assert calls == []
     assert result.metadata["checkpointKind"] == "external_state_ref"
+    assert result.metadata["stateCheckpointRef"] == result.metadata["externalStateRef"]
     assert "workspaceRootRef" not in result.metadata
     assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")
     external_state = json.loads(
@@ -1046,6 +1061,72 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
         "itemId": "item-1",
     }
     assert external_state["artifactRefs"]["diagnosticsRef"] == result.diagnostics_ref
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_reports_disabled_idempotency_marker(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    posted_events: list[dict[str, Any]] = []
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            posted_events.append(payload)
+            return {}
+
+        async def stream_events(self, session_id: str):
+            yield {"type": "response.completed"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            return {"status": "completed", "summary": "done"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    artifact_gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {
+                        "text": "continue",
+                        "includeIdempotencyMarker": False,
+                    },
+                },
+            },
+        ),
+        artifact_gateway=artifact_gateway,
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["stateCheckpointRef"] == result.metadata["externalStateRef"]
+    text = posted_events[0]["data"]["content"][0]["text"]
+    assert "moonmind:first-message" not in text
+    external_state = json.loads(
+        await artifact_gateway.read_text(result.metadata["externalStateRef"])
+    )
+    assert external_state["firstMessage"]["idempotencyMarkerPresent"] is False
 
 
 @pytest.mark.asyncio

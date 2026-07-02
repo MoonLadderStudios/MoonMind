@@ -621,6 +621,7 @@ def build_omnigent_result(
         metadata["captureManifestRef"] = capture_bundle.capture_manifest_ref
     if capture_bundle.external_state_ref:
         metadata["externalStateRef"] = capture_bundle.external_state_ref
+        metadata["stateCheckpointRef"] = capture_bundle.external_state_ref
         metadata["checkpointKind"] = "external_state_ref"
     metadata.update(capture_bundle.metadata_refs)
     snapshot_metadata_keys = {
@@ -687,9 +688,12 @@ async def _capture_cancelled_omnigent_session(
     initial_snapshot: dict[str, Any] | None,
     first_message_request: dict[str, Any] | None,
     first_message_response: dict[str, Any] | None,
+    first_message_posted: bool,
+    first_message_response_identifiers: dict[str, str],
     raw_events: list[dict[str, Any]],
     normalized_events: list[dict[str, Any]],
     capture_policy: dict[str, Any] | None,
+    external_state: dict[str, Any] | None = None,
 ) -> None:
     with suppress(Exception):
         final_snapshot = await client.get_session(session_id)
@@ -703,10 +707,8 @@ async def _capture_cancelled_omnigent_session(
             final_snapshot=final_snapshot or {"status": "canceled"},
             first_message_request=first_message_request,
             first_message_response=first_message_response,
-            first_message_posted=first_message_response is not None,
-            first_message_response_identifiers=_first_message_response_identifiers(
-                first_message_response
-            ),
+            first_message_posted=first_message_posted,
+            first_message_response_identifiers=first_message_response_identifiers,
             raw_events=raw_events,
             normalized_events=normalized_events,
             terminal_status="canceled",
@@ -716,6 +718,7 @@ async def _capture_cancelled_omnigent_session(
             },
             harvest_resources=True,
             capture_policy=capture_policy,
+            external_state=external_state,
         )
 
 
@@ -1936,9 +1939,12 @@ async def run_omnigent_execution(
                     initial_snapshot=initial_snapshot,
                     first_message_request=first_message,
                     first_message_response=first_message_response,
+                    first_message_posted=first_message_posted,
+                    first_message_response_identifiers=first_message_response_identifiers,
                     raw_events=raw_events,
                     normalized_events=normalized_events,
                     capture_policy=capture_policy,
+                    external_state=external_state,
                 )
                 if delete_after_harvest:
                     with suppress(Exception):
