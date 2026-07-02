@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { formatIntegrationStatusLabel, integrationStatusPillProps } from './integrationStatus';
+import { formatIntegrationStatusLabel, integrationStatusPillProps, isIntegrationStatus } from './integrationStatus';
 
 describe('integration status helpers', () => {
   afterEach(() => {
@@ -25,6 +25,9 @@ describe('integration status helpers', () => {
     expect(integrationStatusPillProps('awaiting_feedback')).toEqual({
       className: 'status status-awaiting-external',
     });
+
+    expect(isIntegrationStatus('queued')).toBe(true);
+    expect(isIntegrationStatus('awaiting_feedback')).toBe(true);
   });
 
   it('does not accept workflow lifecycle states as integration/provider statuses', () => {
@@ -33,6 +36,7 @@ describe('integration status helpers', () => {
     for (const status of ['scheduled', 'awaiting_slot', 'waiting_on_dependencies', 'no_commit']) {
       expect(integrationStatusPillProps(status)).toEqual({ className: 'status status-neutral' });
       expect(formatIntegrationStatusLabel(status, 'Unknown')).toBe('Unknown');
+      expect(isIntegrationStatus(status)).toBe(false);
     }
 
     expect(warn).toHaveBeenCalledWith('Unknown integration/provider status: scheduled');

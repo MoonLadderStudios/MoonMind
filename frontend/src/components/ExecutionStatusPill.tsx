@@ -6,6 +6,11 @@ import {
   isWorkflowLifecycleStatus,
   workflowStatusPillProps,
 } from '../status/workflowStatus';
+import {
+  formatIntegrationStatusLabel,
+  integrationStatusPillProps,
+  isIntegrationStatus,
+} from '../status/integrationStatus';
 
 type GlyphStyle = CSSProperties & {
   '--mm-letter-count'?: number;
@@ -47,6 +52,9 @@ function visibleStatusLabel(status: string | null | undefined): string {
   if (isStepLedgerStatus(status)) {
     return formatStepStatusLabel(status, '-');
   }
+  if (isIntegrationStatus(status)) {
+    return formatIntegrationStatusLabel(status, '-');
+  }
   return formatWorkflowStatusLabel(status, '-');
 }
 
@@ -59,6 +67,9 @@ function executionStatusPillProps(
   }
   if (isStepLedgerStatus(status)) {
     return stepStatusPillProps(status);
+  }
+  if (isIntegrationStatus(status)) {
+    return integrationStatusPillProps(status);
   }
   return workflowStatusPillProps(status, options);
 }

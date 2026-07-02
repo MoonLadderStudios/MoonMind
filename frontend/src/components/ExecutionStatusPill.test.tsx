@@ -25,6 +25,21 @@ describe('ExecutionStatusPill', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it('keeps integration statuses visible when they are not workflow or step states', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    render(
+      <>
+        <ExecutionStatusPill status="queued" />
+        <ExecutionStatusPill status="awaiting_feedback" />
+      </>,
+    );
+
+    expect(screen.getByText('Queued').className).toContain('status-scheduled');
+    expect(screen.getByText('Awaiting feedback').className).toContain('status-awaiting-external');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('still prefers workflow lifecycle styling when domains overlap', () => {
     render(<ExecutionStatusPill status="awaiting_external" />);
 

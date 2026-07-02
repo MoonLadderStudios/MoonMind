@@ -22,6 +22,11 @@ function normalizedIntegrationStatusKey(status: string | null | undefined): stri
   return String(status || '').toLowerCase().trim().replace(/\s+/g, '_');
 }
 
+export function isIntegrationStatus(status: string | null | undefined): boolean {
+  const key = normalizedIntegrationStatusKey(status);
+  return Object.prototype.hasOwnProperty.call(INTEGRATION_STATUS_LABELS, key);
+}
+
 function warnUnknownIntegrationStatus(key: string): void {
   if (key) {
     console.warn(`Unknown integration/provider status: ${key}`);
