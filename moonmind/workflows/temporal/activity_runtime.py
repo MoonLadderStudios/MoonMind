@@ -3083,7 +3083,7 @@ class TemporalSandboxActivities:
             pullAuth=pull_auth,
             providerLeaseRefs=provider_refs,
         )
-        return result.model_dump(by_alias=True, mode="json")
+        return result.model_dump(by_alias=True, mode="json", exclude_none=True)
 
     async def _capture_workspace_evidence(
         self,
@@ -3151,7 +3151,7 @@ class TemporalSandboxActivities:
             )
             return WorkspaceCheckpointEvidenceModel(
                 kind="ephemeral_workspace_ref",
-                workspaceRef=workspace_ref,
+                workspaceArtifactRef=workspace_ref,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "external_state_ref":
@@ -3298,6 +3298,32 @@ class TemporalSandboxActivities:
                 model,
                 failure_code="policy_incompatible",
                 summary="checkpoint kind does not satisfy workspace policy",
+                provider_refs=provider_refs,
+                diagnostic_refs=diagnostic_refs,
+                checkpoint=checkpoint,
+            )
+        if kind == "external_state_ref":
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="workspace_incompatible",
+                summary=(
+                    "external_state_ref checkpoint restore is unsupported without "
+                    "an Omnigent restore bridge"
+                ),
+                provider_refs=provider_refs,
+                diagnostic_refs=diagnostic_refs,
+                checkpoint=checkpoint,
+            )
+        if kind == "ephemeral_workspace_ref" and not workspace_payload.get(
+            "workspaceRef"
+        ):
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="workspace_incompatible",
+                summary=(
+                    "ephemeral workspace artifact evidence cannot be restored as a "
+                    "local sandbox workspace path"
+                ),
                 provider_refs=provider_refs,
                 diagnostic_refs=diagnostic_refs,
                 checkpoint=checkpoint,
@@ -3637,6 +3663,27 @@ class TemporalSandboxActivities:
                 "policy before reattempting the Step Execution."
             ),
         }
+        workspace = (
+            checkpoint.get("workspace") if isinstance(checkpoint, Mapping) else None
+        )
+        if isinstance(workspace, Mapping):
+            checkpoint_kind = str(workspace.get("kind") or "").strip()
+            if checkpoint_kind:
+                payload["checkpointKind"] = checkpoint_kind
+            external_state_ref = str(workspace.get("externalStateRef") or "").strip()
+            if external_state_ref:
+                payload["externalStateRef"] = external_state_ref
+            workspace_artifact_ref = str(
+                workspace.get("workspaceArtifactRef") or ""
+            ).strip()
+            if workspace_artifact_ref:
+                payload["workspaceArtifactRef"] = workspace_artifact_ref
+            omnigent_session_id = str(workspace.get("omnigentSessionId") or "").strip()
+            if omnigent_session_id:
+                payload["omnigentSessionId"] = omnigent_session_id
+            provider_session_ref = str(workspace.get("providerSessionRef") or "").strip()
+            if provider_session_ref:
+                payload["providerSessionRef"] = provider_session_ref
         return await self._put_checkpoint_bytes(
             _json_bytes(payload),
             content_type="application/json",

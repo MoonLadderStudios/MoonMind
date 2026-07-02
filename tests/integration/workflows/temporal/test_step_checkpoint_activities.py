@@ -226,7 +226,7 @@ async def test_capture_all_checkpoint_kinds_as_compact_refs(tmp_path: Path) -> N
     cases = [
         ("git_commit", {"baseCommit": base_commit}, ("headCommit",)),
         ("git_patch", {"baseCommit": base_commit}, ("patchRef", "manifestRef")),
-        ("ephemeral_workspace_ref", {}, ("workspaceRef",)),
+        ("ephemeral_workspace_ref", {}, ("workspaceArtifactRef",)),
         ("worktree_archive", {}, ("archiveRef", "manifestRef")),
         ("external_state_ref", {}, ("externalStateRef",)),
     ]
@@ -569,6 +569,92 @@ async def test_workspace_apply_policy_copies_to_nested_target_parent(
     assert (target / "README.md").read_text(encoding="utf-8") == "base\nchanged\n"
 
 
+async def test_workspace_apply_policy_rejects_artifact_backed_workspace_ref_ambiguity(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+    capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "ephemeral_workspace_ref",
+            "workspacePath": str(repo),
+            "workspaceRootRef": "artifact-workspace-root",
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "MM-1079:MM-1074:capture-boundary",
+        }
+    )
+    checkpoint_ref = _checkpoint_artifact(store, workspace=capture["workspace"])
+    target = root / "temporal_sandbox" / "artifact-backed-target"
+
+    policy = await sandbox.workspace_apply_policy(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "workspacePolicy": "continue_from_previous_execution",
+            "checkpointRef": checkpoint_ref,
+            "checkpoint": {},
+            "targetWorkspaceRef": str(target),
+            "idempotencyKey": "MM-1079:MM-1074:apply-boundary",
+        }
+    )
+
+    assert policy["status"] == "rejected"
+    assert policy["failureCode"] == "workspace_incompatible"
+    assert "artifact evidence cannot be restored" in policy["summary"]
+    assert not target.exists()
+    diagnostic = json.loads(store.get_bytes(policy["diagnosticRefs"][0]).decode())
+    assert diagnostic["checkpointKind"] == "ephemeral_workspace_ref"
+    assert (
+        diagnostic["workspaceArtifactRef"]
+        == capture["workspace"]["workspaceArtifactRef"]
+    )
+    assert "workspaceRef" not in capture["workspace"]
+
+
+async def test_workspace_apply_policy_rejects_external_ref_with_omnigent_diagnostic(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    target = root / "temporal_sandbox" / "external-state-target"
+    checkpoint_ref = _checkpoint_artifact(
+        store,
+        workspace={
+            "kind": "external_state_ref",
+            "externalStateRef": "artifact-omnigent-state",
+            "idempotencyKey": "omnigent-idem",
+            "omnigentSessionId": "omni-session-123",
+            "providerSessionRef": "artifact-provider-session-ref",
+        },
+    )
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    policy = await sandbox.workspace_apply_policy(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "workspacePolicy": "continue_from_previous_execution",
+            "checkpointRef": checkpoint_ref,
+            "checkpoint": {},
+            "targetWorkspaceRef": str(target),
+            "idempotencyKey": "MM-1079:external-state-ref-unsupported",
+        }
+    )
+
+    assert policy["status"] == "rejected"
+    assert policy["failureCode"] == "workspace_incompatible"
+    assert "Omnigent restore bridge" in policy["summary"]
+    assert not target.exists()
+    diagnostic = json.loads(store.get_bytes(policy["diagnosticRefs"][0]).decode())
+    assert diagnostic["checkpointKind"] == "external_state_ref"
+    assert diagnostic["externalStateRef"] == "artifact-omnigent-state"
+    assert diagnostic["omnigentSessionId"] == "omni-session-123"
+    assert diagnostic["providerSessionRef"] == "artifact-provider-session-ref"
+    _assert_secret_absent(diagnostic)
+
+
 async def test_workspace_apply_policy_rejects_sandbox_escape_before_mutation(
     tmp_path: Path,
 ) -> None:
@@ -742,7 +828,8 @@ async def test_sandbox_checkpoint_writes_use_artifact_service_when_available(
         }
     )
 
-    assert capture["workspace"]["workspaceRef"] == "artifact-completed"
+    assert capture["workspace"]["workspaceArtifactRef"] == "artifact-completed"
+    assert "workspaceRef" not in capture["workspace"]
     service.create.assert_awaited_once()
     service.write_complete.assert_awaited_once()
 
