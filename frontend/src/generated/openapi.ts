@@ -8477,7 +8477,7 @@ export interface components {
         };
         /**
          * StepExecutionBranchMetadataModel
-         * @description Optional Step Execution manifest lineage for checkpoint branch turns.
+         * @description Optional Checkpoint Branch lineage attached to a Step Execution manifest.
          */
         StepExecutionBranchMetadataModel: {
             /** Branchid */
@@ -8490,6 +8490,8 @@ export interface components {
             sourceStateKind?: string | null;
             /** Sourcestateref */
             sourceStateRef?: string | null;
+            /** Sourcestatedigest */
+            sourceStateDigest?: string | null;
             /** Parentbranchid */
             parentBranchId?: string | null;
             /** Parentturnid */
@@ -8519,7 +8521,7 @@ export interface components {
             lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
             branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
-            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation" | "checkpoint_branch") | null;
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
             status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
@@ -8644,7 +8646,7 @@ export interface components {
             lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
             branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
-            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation" | "checkpoint_branch") | null;
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
             status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */

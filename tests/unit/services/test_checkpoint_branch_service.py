@@ -116,13 +116,17 @@ def test_branch_manifest_metadata_is_optional_step_execution_lineage() -> None:
         }
     )
 
-    assert manifest.branch == StepExecutionBranchMetadataModel(
+    assert manifest.branch is not None
+    expected_branch = StepExecutionBranchMetadataModel(
         branchId="cbr-1",
         branchTurnId="cbt-1",
         rootCheckpointRef="artifact://checkpoint/after",
         parentBranchId="cbr-parent",
         parentTurnId="cbt-parent",
         gitWorkBranch="mm/wf-1/implement/cbr-1-focused-fix",
+    )
+    assert manifest.branch.model_dump(by_alias=True) == expected_branch.model_dump(
+        by_alias=True
     )
     assert manifest.model_dump(by_alias=True)["branch"]["branchId"] == "cbr-1"
 
