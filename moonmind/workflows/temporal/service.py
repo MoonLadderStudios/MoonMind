@@ -2388,17 +2388,16 @@ class TemporalExecutionService:
         finish_outcome = normalized_summary.get(
             "finishOutcome"
         ) or normalized_summary.get("finish_outcome")
-        outcome_code = str(
+        outcome_code = (
             finish_outcome_code
             or (
                 finish_outcome.get("code")
                 if isinstance(finish_outcome, dict)
                 else None
             )
-            or ""
-        ).strip()
-        outcome_code = canonicalize_finish_outcome_code_alias(outcome_code) or ""
-        record.finish_outcome_code = outcome_code or None
+        )
+        outcome_code = canonicalize_finish_outcome_code_alias(outcome_code)
+        record.finish_outcome_code = str(outcome_code).strip() if outcome_code else None
         record.finish_summary_json = normalized_summary
 
     async def mark_execution_planning(

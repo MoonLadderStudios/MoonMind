@@ -10,6 +10,7 @@ import pytest
 from moonmind.statuses.close_status import TemporalExecutionCloseStatus
 from moonmind.statuses.compat import WORKFLOW_STATE_COMPATIBILITY_ALIASES
 from moonmind.statuses.integration import INTEGRATION_STATUS_VALUES
+from moonmind.schemas.temporal_activity_models import ExecutionTerminalStateInput
 from moonmind.statuses.step_execution import (
     STEP_EXECUTION_ARTIFACT_STATUS_TO_LEDGER_STATUS,
     STEP_EXECUTION_ARTIFACT_STATUS_VALUES,
@@ -25,6 +26,7 @@ from moonmind.statuses.workflow import (
     coerce_workflow_state,
     workflow_state_to_close_status,
 )
+from moonmind.workflows.automation import models as automation_models
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -86,6 +88,27 @@ def test_workflow_state_parsing_fails_fast_outside_compat_boundary() -> None:
 
     with pytest.raises(ValueError):
         coerce_workflow_state("done")
+
+
+def test_automation_status_type_decodes_legacy_persisted_value() -> None:
+    status_type = automation_models.AutomationRunStatusType()
+
+    assert (
+        status_type.process_result_value("no_changes", None)
+        is automation_models.AutomationRunStatus.NO_COMMIT
+    )
+    assert (
+        status_type.process_bind_param("no_changes", None)
+        == automation_models.AutomationRunStatus.NO_COMMIT.value
+    )
+
+
+def test_terminal_state_activity_input_accepts_legacy_no_changes_state() -> None:
+    model = ExecutionTerminalStateInput.model_validate(
+        {"workflowId": "wf-1", "state": "no_changes"}
+    )
+
+    assert model.state == "no_changes"
 
 
 def test_step_ledger_values_match_step_ledger_doc() -> None:

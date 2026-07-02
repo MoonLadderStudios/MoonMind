@@ -1054,8 +1054,11 @@ def _state_include_clause(values: list[str]) -> str | None:
         for status in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE.get(value, ())
     ))
     unknown = [
-        value
+        expanded
         for value in deduped
+        for expanded in (
+            ("no_commit", "no_changes") if value == "no_commit" else (value,)
+        )
         if value not in _NON_TERMINAL_MM_STATES
         and value not in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE
     ]
@@ -1114,7 +1117,13 @@ def _append_state_temporal_filter(
                 escaped = _escape_temporal_value(status_value)
                 query_parts.append(f'ExecutionStatus!="{escaped}"')
             continue
-        query_parts.append(f'mm_state!="{_escape_temporal_value(normalized)}"')
+        excluded_values = (
+            ("no_commit", "no_changes") if normalized == "no_commit" else (normalized,)
+        )
+        for excluded_value in excluded_values:
+            query_parts.append(
+                f'mm_state!="{_escape_temporal_value(excluded_value)}"'
+            )
 
 
 def _append_exact_or_multi_temporal_filter(
