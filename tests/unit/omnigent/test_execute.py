@@ -594,6 +594,10 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
     monkeypatch.setattr("moonmind.omnigent.execute.asyncio.sleep", cancel_immediately)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._heartbeat_state",
+        lambda: {"omnigentSessionId": "session-1"},
+    )
 
     with pytest.raises(asyncio.CancelledError):
         await run_omnigent_execution(
@@ -604,6 +608,7 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
                 idempotencyKey="idem-1",
                 parameters={
                     "omnigent": {
+                        "endpointRef": "omnigent:endpoint:retry",
                         "agent": {"agentName": "codex-native-ui"},
                         "session": {"allowEmptyWorkspace": True},
                         "prompt": {"text": "Do the task"},
@@ -627,6 +632,17 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["terminalStatus"] == "canceled"
     assert manifest["patchUnavailable"] is False
+    external_state_path = tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json"
+    external_state = json.loads(external_state_path.read_text(encoding="utf-8"))
+    assert external_state["endpointRef"] == "omnigent:endpoint:retry"
+    assert external_state["retryEvidence"] == {
+        "outcome": "attached",
+        "source": "heartbeat",
+        "reattached": True,
+        "reconciled": False,
+        "mismatch": False,
+        "firstMessageState": "unknown",
+    }
 
 
 @pytest.mark.asyncio

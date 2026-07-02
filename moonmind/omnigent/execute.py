@@ -669,6 +669,8 @@ async def _capture_cancelled_omnigent_session(
     raw_events: list[dict[str, Any]],
     normalized_events: list[dict[str, Any]],
     capture_policy: dict[str, Any] | None,
+    endpoint_ref: str | None = None,
+    retry_evidence: dict[str, Any] | None = None,
 ) -> None:
     with suppress(Exception):
         final_snapshot = await client.get_session(session_id)
@@ -691,6 +693,8 @@ async def _capture_cancelled_omnigent_session(
             },
             harvest_resources=True,
             capture_policy=capture_policy,
+            endpoint_ref=endpoint_ref,
+            retry_evidence=retry_evidence,
         )
 
 
@@ -1786,6 +1790,8 @@ async def run_omnigent_execution(
                     raw_events=raw_events,
                     normalized_events=normalized_events,
                     capture_policy=capture_policy,
+                    endpoint_ref=endpoint_ref,
+                    retry_evidence=retry_evidence,
                 )
                 if delete_after_harvest:
                     with suppress(Exception):
