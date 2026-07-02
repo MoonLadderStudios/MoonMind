@@ -40,7 +40,7 @@ def test_archived_workflow_status_doc_is_not_cited_as_active_authority() -> None
             relative = path.relative_to(REPO_ROOT)
             if relative in ALLOWED_ARCHIVAL_POINTERS:
                 continue
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8", errors="ignore")
             if ARCHIVED_STATUS_DOC in text or "WorkflowStatus.md" in text:
                 offenders.append(relative.as_posix())
 

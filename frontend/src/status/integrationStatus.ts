@@ -22,10 +22,7 @@ const INTEGRATION_STATUS_LABELS: Record<IntegrationStatusKey | 'awaiting_feedbac
 function isIntegrationStatusKey(
   key: string,
 ): key is IntegrationStatusKey | 'awaiting_feedback' {
-  return (
-    (INTEGRATION_STATUS_KEYS as readonly string[]).includes(key) ||
-    key === 'awaiting_feedback'
-  );
+  return Object.prototype.hasOwnProperty.call(INTEGRATION_STATUS_LABELS, key);
 }
 
 export function formatIntegrationStatusLabel(

@@ -84,7 +84,7 @@ export function normalizedWorkflowStatusKey(status: string | null | undefined): 
 }
 
 function isWorkflowStatusKey(key: string): key is WorkflowStatusKey {
-  return (WORKFLOW_STATUS_KEYS as readonly string[]).includes(key);
+  return Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_LABELS, key);
 }
 
 export function formatWorkflowStatusLabel(

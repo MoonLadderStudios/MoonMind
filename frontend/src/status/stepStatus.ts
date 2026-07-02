@@ -65,10 +65,7 @@ const STEP_STATUS_CLASSES: Record<StepStatusKey, string> = {
 };
 
 function isStepStatusKey(key: string): key is StepStatusKey {
-  return (
-    (STEP_LEDGER_STATUS_KEYS as readonly string[]).includes(key) ||
-    (STEP_EXECUTION_STATUS_KEYS as readonly string[]).includes(key)
-  );
+  return Object.prototype.hasOwnProperty.call(STEP_STATUS_LABELS, key);
 }
 
 export function formatStepStatusLabel(
