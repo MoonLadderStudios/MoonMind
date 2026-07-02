@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. moonmind/models_cache.py (score: 1.000, trust: canonical)\n    line 370: self.refresh_models_sync()  # Sleep for a short duration before checking again.\n2. docs/DocumentationArchitecture.md (score: 1.000, trust: canonical)\n    line 6: **Purpose:** Establish the single canonical taxonomy that names the document types a MoonSpec durable docs tree uses, the authority rules that resolve conflicts between canonical documents of the same class, and where design rationale must live — so that anyone classifying, writing, or reconciling a doc has one authoritative vocabulary, one set of viewpoints, one precedence ladder, and one module-boundary policy to apply.\n3. moonmind/schemas/agent_skill_models.py (score: 1.000, trust: canonical)\n    line 115: SkillsOnDemandDeniedCode = Literal[\n4. docs/Steps/InputSchemaGuidance.md (score: 1.000, trust: canonical)\n    line 57: \"id\": \"jira-implement\",\n5. moonmind/schemas/manifest_v0_models.py (score: 1.000, trust: canonical)\n    line 79: \"\"\"Document transforms applied before indexing.\"\"\"\n6. docs/ManagedAgents/ManagedAgentArchitecture.md (score: 1.000, trust: canonical)\n    line 11: - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)\n7. docs/ManagedAgents/ManagedRuntimeCleanup.md (score: 1.000, trust: canonical)\n    line 13: - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)\n8. docs/ManagedAgents/ClaudeCodeManagedSessions.md (score: 1.000, trust: canonical)\n    line 1: # Claude Code Managed Sessions",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "moonmind/models_cache.py",
+      "text": "line 370: self.refresh_models_sync()  # Sleep for a short duration before checking again.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 370,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/DocumentationArchitecture.md",
+      "text": "line 6: **Purpose:** Establish the single canonical taxonomy that names the document types a MoonSpec durable docs tree uses, the authority rules that resolve conflicts between canonical documents of the same class, and where design rationale must live — so that anyone classifying, writing, or reconciling a doc has one authoritative vocabulary, one set of viewpoints, one precedence ladder, and one module-boundary policy to apply.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/schemas/agent_skill_models.py",
+      "text": "line 115: SkillsOnDemandDeniedCode = Literal[",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 115,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Steps/InputSchemaGuidance.md",
+      "text": "line 57: \"id\": \"jira-implement\",",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 57,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/schemas/manifest_v0_models.py",
+      "text": "line 79: \"\"\"Document transforms applied before indexing.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 79,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/ManagedAgentArchitecture.md",
+      "text": "line 11: - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 11,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "text": "line 13: - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 13,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/ClaudeCodeManagedSessions.md",
+      "text": "line 1: # Claude Code Managed Sessions",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-07-01T10:23:26Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

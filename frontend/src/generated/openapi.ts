@@ -3639,7 +3639,7 @@ export interface components {
          * @description Lifecycle states for workflow automation runs.
          * @enum {string}
          */
-        AutomationRunStatus: "queued" | "in_progress" | "completed" | "failed" | "no_commit" | "no_changes";
+        AutomationRunStatus: "queued" | "in_progress" | "completed" | "failed" | "no_commit";
         /**
          * AutomationTaskStatus
          * @description Per-phase task status values for workflow automation.
@@ -8476,6 +8476,30 @@ export interface components {
             diagnosticRefs?: components["schemas"]["EnvironmentDiagnosticReferenceModel"][];
         };
         /**
+         * StepExecutionBranchMetadataModel
+         * @description Optional Checkpoint Branch lineage attached to a Step Execution manifest.
+         */
+        StepExecutionBranchMetadataModel: {
+            /** Branchid */
+            branchId: string;
+            /** Branchturnid */
+            branchTurnId: string;
+            /** Rootcheckpointref */
+            rootCheckpointRef?: string | null;
+            /** Sourcestatekind */
+            sourceStateKind?: string | null;
+            /** Sourcestateref */
+            sourceStateRef?: string | null;
+            /** Sourcestatedigest */
+            sourceStateDigest?: string | null;
+            /** Parentbranchid */
+            parentBranchId?: string | null;
+            /** Parentturnid */
+            parentTurnId?: string | null;
+            /** Gitworkbranch */
+            gitWorkBranch?: string | null;
+        };
+        /**
          * StepExecutionDetailModel
          * @description Bounded Step Execution detail projection with section refs only.
          */
@@ -8495,8 +8519,9 @@ export interface components {
             /** Sourceexecutionordinal */
             sourceExecutionOrdinal?: number | null;
             lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
+            branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
-            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
             status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
@@ -8619,8 +8644,9 @@ export interface components {
             /** Sourceexecutionordinal */
             sourceExecutionOrdinal?: number | null;
             lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
+            branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
-            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
             status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
@@ -8676,6 +8702,8 @@ export interface components {
             stepExecutionManifestRef?: string | null;
             /** Stepexecutionmanifestrefs */
             stepExecutionManifestRefs?: string[];
+        } & {
+            [key: string]: unknown;
         };
         /**
          * StepLedgerCheckModel

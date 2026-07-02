@@ -465,7 +465,7 @@ Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`, `i
 
 ### 5.4 Story Output Tools
 
-Broad Moon Spec breakdown is an agent-runtime operation that writes story candidates as durable handoff files under `artifacts/story-breakdowns/`. It does not create `spec.md` files and does not write under `specs/`.
+Broad MoonSpec breakdown is an agent-runtime operation that writes story candidates as durable handoff files under `artifacts/story-breakdowns/`. It does not create `spec.md` files and does not write under `specs/`.
 
 MoonSpec doc slicing is the deterministic doc-native path between canonical
 documentation indexing and story breakdown. `tools/index_moonspec_docs.py`

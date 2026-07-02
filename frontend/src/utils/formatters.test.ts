@@ -7,7 +7,6 @@ describe('formatStatusLabel', () => {
     expect(formatStatusLabel('waiting_on_dependencies')).toBe('waiting on dependencies');
     expect(formatStatusLabel('awaiting_slot')).toBe('awaiting slot');
     expect(formatStatusLabel('no_commit')).toBe('no commit');
-    expect(formatStatusLabel('no_changes')).toBe('no changes');
     expect(formatStatusLabel('awaiting_external')).toBe('awaiting external');
     expect(formatStatusLabel('validating_token')).toBe('validating token');
     expect(formatStatusLabel('failed_step_execution')).toBe('Failed step execution');

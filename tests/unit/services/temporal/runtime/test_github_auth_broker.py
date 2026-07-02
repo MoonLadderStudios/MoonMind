@@ -10,6 +10,7 @@ import pytest
 
 from moonmind.workflows.temporal.runtime.github_auth_broker import (
     GitHubAuthBrokerManager,
+    build_github_socket_path,
     request_github_token,
     run_gh_wrapper,
 )
@@ -63,6 +64,43 @@ async def test_github_auth_broker_keeps_shared_mm_gh_root_traversable_only():
     finally:
         await manager.stop("run-1")
         shutil.rmtree(short_base, ignore_errors=True)
+
+
+def test_build_github_socket_path_prefers_shared_workspace_root():
+    workspace_root = Path("/tmp") / f"mm-gh-shared-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    support_root = workspace_root / "resolver:pr:2921:head:abc" / "session" / ".moonmind"
+
+    try:
+        socket_path = build_github_socket_path(
+            run_id="resolver:pr:2921:head:abc",
+            support_root=str(support_root),
+        )
+        path = Path(socket_path)
+
+        assert path.name == "github.sock"
+        assert path.parent.parent == workspace_root / ".moonmind-gh"
+        assert str(support_root) not in socket_path
+        assert len(str(path).encode("utf-8")) < 100
+    finally:
+        shutil.rmtree(workspace_root, ignore_errors=True)
+
+
+def test_build_github_socket_path_keeps_direct_run_root_owned():
+    support_root = Path("/tmp") / f"mm-gh-direct-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+    try:
+        socket_path = build_github_socket_path(
+            run_id="direct-run-1",
+            support_root=str(support_root),
+        )
+        path = Path(socket_path)
+
+        assert path.name == "github.sock"
+        assert path.parent.parent == support_root / ".moonmind-gh"
+        assert len(str(path).encode("utf-8")) < 100
+    finally:
+        shutil.rmtree(support_root, ignore_errors=True)
+
 
 def test_run_gh_wrapper_clears_ambient_gh_token(
     monkeypatch: pytest.MonkeyPatch,

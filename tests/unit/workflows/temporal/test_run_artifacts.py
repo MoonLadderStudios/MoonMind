@@ -1059,7 +1059,7 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
         "Workflow blocked by plan step: Required dependency is not done."
     )
     assert workflow._publish_status == "not_required"
-    assert steps[0]["status"] == "succeeded"
+    assert steps[0]["status"] == "completed"
     assert steps[1]["status"] == "skipped"
 
 @pytest.mark.asyncio
@@ -5858,3 +5858,43 @@ def test_moonspec_verify_gate_result_fails_closed_without_verdict() -> None:
     assert gate.verdict == "NO_DETERMINATION"
     assert gate.invalid is True
     assert gate.degraded is True
+
+
+def test_agent_run_result_mapping_preserves_canonical_diagnostics_ref() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    mapped = workflow._map_agent_run_result(
+        {
+            "summary": "Completed with status completed",
+            "diagnosticsRef": "art_verify_report",
+            "metadata": {
+                "diagnosticsRef": "sess:mm-example:codex_cli/diagnostics.json",
+                "lastAssistantText": "# MoonSpec Verification Report\n\n**Verdict**: `FULLY_IMPLEMENTED`",
+            },
+            "outputRefs": [],
+        }
+    )
+
+    outputs = mapped["outputs"]
+    assert outputs["diagnosticsRef"] == "art_verify_report"
+    assert (
+        outputs["lastAssistantText"]
+        == "# MoonSpec Verification Report\n\n**Verdict**: `FULLY_IMPLEMENTED`"
+    )
+
+
+def test_agent_run_result_mapping_ignores_malformed_metadata() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    mapped = workflow._map_agent_run_result(
+        {
+            "summary": "Completed with status completed",
+            "diagnosticsRef": "art_verify_report",
+            "metadata": ["not", "a", "mapping"],
+            "outputRefs": [],
+        }
+    )
+
+    outputs = mapped["outputs"]
+    assert outputs["diagnosticsRef"] == "art_verify_report"
+    assert outputs["summary"] == "Completed with status completed"

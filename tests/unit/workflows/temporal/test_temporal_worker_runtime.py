@@ -1698,7 +1698,7 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
                             "type": "skill",
                             "name": "story.create_jira_orchestrate_tasks",
                         },
-                        "instructions": "Create dependent Jira Orchestrate tasks.",
+                        "instructions": "Create dependent Jira Orchestrate workflow executions.",
                         "jiraOrchestration": {
                             "task": {
                                 "repository": "MoonLadderStudios/MoonMind",
@@ -1790,7 +1790,7 @@ def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
                             "type": "skill",
                             "name": "story.create_jira_implement_tasks",
                         },
-                        "instructions": "Create dependent Jira Implement tasks.",
+                        "instructions": "Create dependent Jira Implement workflow executions.",
                         "jiraOrchestration": {
                             "task": {
                                 "repository": "MoonLadderStudios/MoonMind",
@@ -1950,10 +1950,10 @@ def test_runtime_planner_dedupes_repeated_identical_preset_steps():
     }
     orchestrate_step = {
         "id": "tpl:jira-breakdown-orchestrate:1.0.0:03:6bfb1360",
-        "title": "Create dependent Jira Orchestrate tasks",
+        "title": "Create dependent Jira Orchestrate workflow executions",
         "type": "skill",
         "skill": {"id": "story.create_jira_orchestrate_tasks"},
-        "instructions": "Create dependent Jira Orchestrate tasks.",
+        "instructions": "Create dependent Jira Orchestrate workflow executions.",
         "jiraOrchestration": {
             "task": {
                 "repository": "MoonLadderStudios/Tactics",
@@ -2072,10 +2072,17 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
     assert "MM-501" in task["steps"][0]["instructions"]
     assert task["steps"][7]["skill"]["id"] == "moonspec-tasks"
     assert task["steps"][9]["skill"]["id"] == "moonspec-implement"
+    assert task["steps"][10]["skill"]["id"] == "moonspec-verify"
+    assert task["steps"][10]["skill"]["args"]["verify_artifact_path"] == (
+        "var/artifacts/moonspec-verify/jira-orchestrate.json"
+    )
     assert task["steps"][11]["title"] == "Remediate verification gaps 1 of 6"
     assert task["steps"][11]["skill"]["id"] == "moonspec-implement"
     assert task["steps"][22]["title"] == "Verify remediation 6 of 6"
     assert task["steps"][22]["skill"]["id"] == "moonspec-verify"
+    assert task["steps"][22]["skill"]["args"]["verify_artifact_path"] == (
+        "var/artifacts/moonspec-verify/jira-orchestrate.json"
+    )
     assert task["steps"][23]["title"] == "Reconcile declarative docs"
     assert task["steps"][23]["skill"]["id"] == "moonspec-doc-reconcile"
     assert task["steps"][24]["title"] == "Create pull request"

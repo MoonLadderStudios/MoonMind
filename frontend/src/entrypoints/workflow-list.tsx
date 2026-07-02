@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
-import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
+import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
 import {
@@ -1733,7 +1733,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             values={draft.values}
             options={[...TEMPORAL_STATUSES]}
             formatValue={formatStatusLabel}
-            renderValue={(value) => <ExecutionStatusPill status={value} enableMotion={false} />}
+            renderValue={(value) => <WorkflowLifecycleStatusPill status={value} enableMotion={false} />}
             disabled={!listEnabled}
             ariaLabelAdd="Status filter value"
             ariaLabelSelected="Selected status filters"
@@ -2558,7 +2558,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           </td>
                           {isColumnVisible('status') ? (
                             <td className="queue-table-cell-status">
-                              <ExecutionStatusPill status={row.rawState || row.state || row.status} />
+                              <WorkflowLifecycleStatusPill status={row.rawState || row.state || row.status} />
                               {statusSupplements.map((item) => (
                                 <div key={item} className="workflow-list-status-supplement small">
                                   {item}
@@ -2617,7 +2617,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         </a>
                       </div>
                       <div className="queue-card-status">
-                        <ExecutionStatusPill status={row.rawState || row.state || row.status} />
+                        <WorkflowLifecycleStatusPill status={row.rawState || row.state || row.status} />
                         {statusSupplements.map((item) => (
                           <div key={item} className="workflow-list-status-supplement small">
                             {item}

@@ -232,7 +232,8 @@ def test_run_request_records_durable_retrieval_manifest_artifact_metadata() -> N
     )
 
 
-def test_run_request_refreshes_runtime_metadata_after_retrieval_persistence() -> None:
+@pytest.mark.asyncio
+async def test_run_request_refreshes_runtime_metadata_after_retrieval_persistence() -> None:
     wf = MoonMindRunWorkflow()
     task_payload = {
         **_task_payload(),
@@ -259,7 +260,7 @@ def test_run_request_refreshes_runtime_metadata_after_retrieval_persistence() ->
         ("collect-evidence", 1)
     ]
     cached_artifact["persistedArtifactRef"] = "art_retrieval_1"
-    refreshed = wf._request_with_persisted_retrieval_ref(
+    refreshed = await wf._request_with_persisted_retrieval_ref(
         request,
         logical_step_id="collect-evidence",
         attempt=1,

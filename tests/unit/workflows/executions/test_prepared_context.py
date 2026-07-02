@@ -570,8 +570,6 @@ def test_mm_1089_branch_turn_context_records_immutable_launch_evidence() -> None
             "branchId": "cbr_01",
             "branchTurnId": "cbt_01",
             "rootCheckpointRef": "artifact://checkpoints/after-execution",
-            "parentBranchId": None,
-            "parentTurnId": None,
             "gitWorkBranch": "mm/workflow-1/implement-story/cbr-01",
         }
     }
@@ -611,6 +609,94 @@ def test_mm_1089_branch_turn_artifact_manifest_names_minimum_evidence() -> None:
     assert manifest["traceability"] == "MM-1089"
     assert manifest["contextBundleRef"] == bundle.context_bundle_ref
     assert manifest["artifactManifestDigest"].startswith("sha256:")
+    instruction_entry = next(
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact["name"] == "input.branch_turn.instructions.md"
+    )
+    assert instruction_entry["artifactRefStatus"] == "planned"
+    assert "artifactRef" not in instruction_entry
+
+
+def test_mm_1089_branch_turn_artifact_manifest_uses_real_refs_when_available() -> None:
+    bundle = build_branch_turn_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-branch-turn-1",
+        logical_step_id="implement-story",
+        execution_ordinal=3,
+        branch_id="cbr_01",
+        branch_turn_id="cbt_01",
+        source_checkpoint={
+            "workflowId": "workflow-1",
+            "runId": "run-source",
+            "checkpointBoundary": "after_execution",
+            "checkpointRef": "art_checkpoint",
+        },
+        instruction_artifact_ref="art_instruction",
+        instruction_digest="sha256:turn",
+        runtime_context_policy="reuse_session_new_epoch",
+        workspace_policy="continue_from_previous_execution",
+    )
+
+    manifest = build_branch_turn_artifact_manifest(
+        branch_id="cbr_01",
+        branch_turn_id="cbt_01",
+        context_bundle=bundle,
+        artifact_refs={
+            "input.branch.root_checkpoint.json": "art_checkpoint",
+            "input.branch_turn.instructions.md": "art_instruction",
+        },
+    )
+
+    by_name = {artifact["name"]: artifact for artifact in manifest["artifacts"]}
+    assert by_name["input.branch.root_checkpoint.json"]["artifactRef"] == (
+        "art_checkpoint"
+    )
+    assert by_name["input.branch.root_checkpoint.json"]["artifactRefStatus"] == (
+        "persisted"
+    )
+    assert by_name["input.branch_turn.instructions.md"]["artifactRef"] == (
+        "art_instruction"
+    )
+    assert by_name["runtime.branch_turn.agent_result.json"][
+        "artifactRefStatus"
+    ] == "planned"
+
+
+def test_mm_1089_branch_turn_context_accepts_typed_source_state() -> None:
+    bundle = build_branch_turn_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-branch-turn-1",
+        logical_step_id="implement-story",
+        execution_ordinal=3,
+        branch_id="cbr_01",
+        branch_turn_id="cbt_01",
+        source_checkpoint={
+            "workflowId": "workflow-1",
+            "runId": "run-source",
+            "sourceStateKind": "provider_session",
+            "sourceStateRef": "provider://session/1",
+            "sourceStateDigest": "sha256:provider-state",
+        },
+        instruction_artifact_ref="art_instruction",
+        instruction_digest="sha256:turn",
+        runtime_context_policy="external_provider_continuation",
+        workspace_policy="continue_from_previous_execution",
+    )
+
+    branch = bundle.model_dump(by_alias=True, exclude_none=True)["branch"]
+    assert branch["sourceStateKind"] == "provider_session"
+    assert branch["sourceStateRef"] == "provider://session/1"
+    assert "rootCheckpointRef" not in branch
+    assert branch_turn_step_execution_manifest_projection(bundle) == {
+        "branch": {
+            "branchId": "cbr_01",
+            "branchTurnId": "cbt_01",
+            "sourceStateKind": "provider_session",
+            "sourceStateRef": "provider://session/1",
+            "sourceStateDigest": "sha256:provider-state",
+        }
+    }
 
 
 @pytest.mark.parametrize(

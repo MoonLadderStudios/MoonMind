@@ -794,7 +794,7 @@ def update_step_row(
                 merged_artifacts.update(current_artifacts)
             if isinstance(artifacts, Mapping):
                 for key, value in artifacts.items():
-                    if key in merged_artifacts:
+                    if key in merged_artifacts or key == "externalStateRef":
                         merged_artifacts[key] = value
             history = merged_artifacts.get("stepExecutionManifestRefs")
             if not isinstance(history, list):

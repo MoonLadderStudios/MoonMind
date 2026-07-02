@@ -26,6 +26,21 @@ _NO_COMMIT_LEGACY_REASONS = {
 }
 
 
+def _observe_legacy_alias(
+    *,
+    logger: logging.Logger | None,
+    domain: str,
+    alias: str,
+    canonical: str,
+) -> None:
+    if logger is None:
+        return
+    logger.warning(
+        "Observed legacy status alias",
+        extra={"domain": domain, "alias": alias, "canonical": canonical},
+    )
+
+
 def normalize_workflow_state_alias(raw: str) -> str:
     """Normalize legacy workflow state aliases before canonical parsing."""
 
@@ -42,11 +57,12 @@ def canonicalize_workflow_state_alias(
     if not candidate:
         return None
     canonical = WORKFLOW_STATE_COMPATIBILITY_ALIASES.get(candidate, candidate)
-    if canonical != candidate and logger is not None:
-        logger.warning(
-            "Observed legacy workflow state alias '%s'; canonicalized to '%s'",
-            candidate,
-            canonical,
+    if canonical != candidate:
+        _observe_legacy_alias(
+            logger=logger,
+            domain="workflow_state",
+            alias=candidate,
+            canonical=canonical,
         )
     return canonical
 
@@ -59,21 +75,35 @@ def canonicalize_finish_outcome_code_alias(
     candidate = str(value or "").strip()
     if not candidate:
         return None
-    canonical = LEGACY_FINISH_OUTCOME_ALIASES.get(candidate.upper(), candidate.upper())
-    if canonical != candidate and logger is not None:
-        logger.warning(
-            "Observed legacy finish outcome alias '%s'; canonicalized to '%s'",
-            candidate,
-            canonical,
+    alias_key = candidate.upper()
+    canonical = LEGACY_FINISH_OUTCOME_ALIASES.get(alias_key, alias_key)
+    if alias_key in LEGACY_FINISH_OUTCOME_ALIASES:
+        _observe_legacy_alias(
+            logger=logger,
+            domain="finish_outcome",
+            alias=candidate,
+            canonical=canonical,
         )
     return canonical
 
 
-def canonicalize_publish_reason_alias(value: Any) -> str | None:
+def canonicalize_publish_reason_alias(
+    value: Any,
+    *,
+    logger: logging.Logger | None = None,
+) -> str | None:
     candidate = str(value or "").strip().lower()
     if not candidate:
         return None
-    return LEGACY_PUBLISH_REASON_ALIASES.get(candidate, candidate)
+    canonical = LEGACY_PUBLISH_REASON_ALIASES.get(candidate, candidate)
+    if canonical != candidate:
+        _observe_legacy_alias(
+            logger=logger,
+            domain="publish_reason",
+            alias=candidate,
+            canonical=canonical,
+        )
+    return canonical
 
 
 def normalize_no_commit_finish_summary(
@@ -103,15 +133,25 @@ def normalize_no_commit_finish_summary(
     publish = normalized.get("publish")
     if isinstance(publish, Mapping):
         publish_payload = dict(publish)
-        raw_reason_code = publish_payload.get("reasonCode") or publish_payload.get(
-            "reason_code"
+        reason_code_key = (
+            "reasonCode"
+            if "reasonCode" in publish_payload
+            else "reason_code"
+            if "reason_code" in publish_payload
+            else "reasonCode"
         )
-        reason_code = canonicalize_publish_reason_alias(raw_reason_code)
+        raw_reason_code = publish_payload.get(reason_code_key)
+        reason_code = canonicalize_publish_reason_alias(
+            raw_reason_code,
+            logger=logger,
+        )
         reason = str(publish_payload.get("reason") or "").strip().lower()
         if reason_code is not None:
             publish_payload["reasonCode"] = reason_code
         if reason_code == "no_commit" or reason in _NO_COMMIT_LEGACY_REASONS:
             publish_payload["reasonCode"] = "no_commit"
+            if "reason_code" in publish_payload:
+                publish_payload["reason_code"] = "no_commit"
             publish_payload["reason"] = (
                 "No repository changes were available to commit or publish."
             )

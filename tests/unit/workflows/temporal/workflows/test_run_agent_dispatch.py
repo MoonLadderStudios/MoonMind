@@ -23,6 +23,7 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet,
 )
 from moonmind.workflows.temporal.workflows.run import (
+    RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
     RUN_STEP_EXECUTION_NAMING_PATCH,
@@ -961,102 +962,162 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "prohibited",
         )
 
-    def test_checkpoint_branch_turn_request_records_typed_launch_evidence(self) -> None:
+    def test_build_agent_execution_request_launches_checkpoint_branch_turn_context(self) -> None:
         from unittest.mock import patch
 
         wf = MoonMindRunWorkflow()
-        wf._input_ref = "artifact://inputs/task"
-        wf._plan_ref = "artifact://plans/plan"
 
         class MockInfo:
+            namespace = "default"
             workflow_id = "test-wf-id"
             run_id = "test-run-id"
+
+        branch_turn = {
+            "branchId": "branch-1",
+            "branchTurnId": "turn-1",
+            "sourceWorkflowId": "source-wf",
+            "sourceRunId": "source-run",
+            "sourceLogicalStepId": "source-step",
+            "sourceCheckpointRef": "artifact://checkpoint/source",
+            "sourceCheckpointDigest": "sha256:" + "a" * 64,
+            "instructionArtifactRef": "artifact://instructions/turn-1",
+            "instructionDigest": "sha256:" + "b" * 64,
+            "workspacePolicy": "fresh_branch_from_source",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "gitWorkBranch": "mm/branch-1",
+        }
 
         with patch(
             "moonmind.workflows.temporal.workflows.run.workflow.info",
             return_value=MockInfo(),
         ), patch(
             "moonmind.workflows.temporal.workflows.run.workflow.patched",
-            return_value=False,
+            side_effect=lambda patch_id: (
+                patch_id == RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH
+            ),
         ):
             request = wf._build_agent_execution_request(
                 node_inputs={
-                    "instructions": "artifact://branch-turn/instructions",
-                    "runtime": {"mode": "codex_cli"},
-                    "checkpointBranch": {
-                        "branchId": "cbr_01",
-                        "branchTurnId": "cbt_01",
-                        "sourceCheckpoint": {
-                            "workflowId": "test-wf-id",
-                            "runId": "source-run",
-                            "logicalStepId": "implement",
-                            "executionOrdinal": 1,
-                            "checkpointBoundary": "after_execution",
-                            "checkpointRef": "artifact://checkpoints/source",
-                            "checkpointDigest": "sha256:checkpoint",
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "metadata": {
+                            "moonmind": {"checkpointBranchTurn": branch_turn}
                         },
-                        "instructionDigest": "sha256:turn",
-                        "runtimeContextPolicy": "fresh_agent_run",
-                        "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
-                        "boundedSummaries": ["Source attempt failed the unit gate."],
                     },
                 },
-                node_id="implement",
+                node_id="branch-implement",
                 tool_name="codex_cli",
-                step_execution=3,
-                attempt_reason="checkpoint_branch",
+                attempt_reason="runtime_recovered",
             )
 
-        step_execution = request.step_execution
-        assert step_execution is not None
-        self.assertEqual(step_execution.reason, "checkpoint_branch")
-        self.assertEqual(step_execution.execution_ordinal, 3)
-        self.assertEqual(step_execution.runtime_context_policy, "fresh_agent_run")
+        assert request.step_execution is not None
+        self.assertEqual(request.step_execution.reason, "checkpoint_branch")
         self.assertEqual(
-            step_execution.branch,
-            {
-                "branchId": "cbr_01",
-                "branchTurnId": "cbt_01",
-                "rootCheckpointRef": "artifact://checkpoints/source",
-                "parentBranchId": None,
-                "parentTurnId": None,
-                "gitWorkBranch": None,
-            },
-        )
-        assert step_execution.branch_artifact_manifest is not None
-        artifact_names = [
-            artifact["name"]
-            for artifact in step_execution.branch_artifact_manifest["artifacts"]
-        ]
-        self.assertIn("runtime.branch_turn.context_bundle.json", artifact_names)
-        self.assertIn(
-            "output.branch_turn.step_execution_manifest.json", artifact_names
-        )
-        moonmind_metadata = request.parameters["metadata"]["moonmind"]
-        self.assertEqual(
-            moonmind_metadata["executionContext"]["reason"],
-            "checkpoint_branch",
-        )
-        self.assertEqual(
-            moonmind_metadata["executionContext"]["instructionRefs"],
-            ["artifact://branch-turn/instructions"],
-        )
-        self.assertEqual(
-            moonmind_metadata["executionContext"]["instructionDigests"],
-            {"artifact://branch-turn/instructions": "sha256:turn"},
-        )
-        self.assertEqual(
-            moonmind_metadata["stepExecutionManifestProjection"]["context"][
-                "runtimeContextPolicy"
-            ],
+            request.step_execution.runtime_context_policy,
             "fresh_agent_run",
         )
         self.assertEqual(
-            wf._step_execution_branch_projections[("implement", 3)]["branch"][
+            request.step_execution.branch,
+            {
+                "branchId": "branch-1",
+                "branchTurnId": "turn-1",
+                "rootCheckpointRef": "artifact://checkpoint/source",
+                "gitWorkBranch": "mm/branch-1",
+            },
+        )
+        assert request.step_execution.branch_artifact_manifest is not None
+        self.assertEqual(request.instruction_ref, "artifact://instructions/turn-1")
+        moonmind_metadata = request.parameters["metadata"]["moonmind"]
+        execution_context = moonmind_metadata["executionContext"]
+        self.assertEqual(execution_context["reason"], "checkpoint_branch")
+        self.assertEqual(
+            execution_context["builderVersion"],
+            "branch-turn-context-builder-v1",
+        )
+        self.assertEqual(execution_context["branch"]["branchId"], "branch-1")
+        self.assertEqual(execution_context["branch"]["branchTurnId"], "turn-1")
+        self.assertEqual(
+            execution_context["instructionRefs"],
+            ["artifact://instructions/turn-1"],
+        )
+        self.assertEqual(
+            moonmind_metadata["checkpointBranchTurn"]["artifactManifestDigest"],
+            moonmind_metadata["checkpointBranchTurnArtifactManifest"][
+                "artifactManifestDigest"
+            ],
+        )
+        self.assertEqual(
+            request.step_execution.branch_artifact_manifest["artifactManifestDigest"],
+            moonmind_metadata["checkpointBranchTurnArtifactManifest"][
+                "artifactManifestDigest"
+            ],
+        )
+        artifact_names = {
+            artifact["name"]
+            for artifact in moonmind_metadata["checkpointBranchTurnArtifactManifest"][
+                "artifacts"
+            ]
+        }
+        self.assertIn(
+            "output.branch_turn.step_execution_manifest.json",
+            artifact_names,
+        )
+        self.assertEqual(
+            moonmind_metadata["stepExecutionManifestProjection"]["context"][
+                "branch"
+            ]["branchId"],
+            "branch-1",
+        )
+        self.assertEqual(
+            wf._step_execution_branch_projections[("branch-implement", 1)][
                 "branchTurnId"
             ],
-            "cbt_01",
+            "turn-1",
         )
+
+    def test_checkpoint_branch_turn_requires_source_identity_for_explicit_checkpoint_ref(
+        self,
+    ) -> None:
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        branch_turn = {
+            "branchId": "branch-1",
+            "branchTurnId": "turn-1",
+            "sourceCheckpointRef": "artifact://checkpoint/source",
+            "sourceCheckpointDigest": "sha256:" + "a" * 64,
+            "instructionArtifactRef": "artifact://instructions/turn-1",
+            "instructionDigest": "sha256:" + "b" * 64,
+            "workspacePolicy": "fresh_branch_from_source",
+            "runtimeContextPolicy": "fresh_agent_run",
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH
+            ),
+        ), pytest.raises(ValueError, match="source_checkpoint.workflowId"):
+            wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "metadata": {
+                            "moonmind": {"checkpointBranchTurn": branch_turn}
+                        },
+                    },
+                },
+                node_id="branch-implement",
+                tool_name="codex_cli",
+                attempt_reason="runtime_recovered",
+            )
 
     def test_managed_reattempt_records_session_reset_launch_evidence(self) -> None:
         from unittest.mock import patch

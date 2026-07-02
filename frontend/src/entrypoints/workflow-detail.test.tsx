@@ -770,7 +770,7 @@ describe('Workflow Detail Entrypoint', () => {
       ['Proposals workflow', 'Status: Proposals', 'status-running', 'lucide-lightbulb'],
       ['External wait workflow', 'Status: Awaiting external', 'status-awaiting-external', 'lucide-hand'],
       ['Finalizing workflow', 'Status: Finalizing', 'status-finalizing', 'lucide-package-check'],
-      ['No commit workflow', 'Status: No commit', 'status-no-commit', 'lucide-check'],
+      ['No commit workflow', 'Status: No commit', 'status-no-commit', 'lucide-minus'],
       ['Completed workflow', 'Status: Completed', 'status-completed', 'lucide-check'],
       ['Failed workflow', 'Status: Failed', 'status-failed', 'lucide-x'],
       ['Canceled workflow', 'Status: Canceled', 'status-canceled', 'lucide-ban'],

@@ -352,7 +352,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
     const shellPanel = document.querySelector('.panel');
-    const startLink = screen.getByRole('link', { name: 'Start Workflow' });
+    const startLink = screen.getByRole('link', { name: 'Create' });
     const workflowsLink = screen.getByRole('link', { name: 'Workflows' });
     expect(startLink.getAttribute('aria-current')).toBe('page');
     expect(workflowsLink.getAttribute('aria-current')).toBeNull();
@@ -573,6 +573,18 @@ describe('Dashboard shared entry', () => {
     const svgBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-status-icon svg');
     expect(svgBlock).toContain('width: 0.8125rem');
     expect(svgBlock).toContain('height: 0.8125rem');
+  });
+
+  it('keeps workflow detail step timeline icons large inside their status circles', async () => {
+    const iconBlock = cssRuleBlock(dashboardCss, '.step-tl-icon');
+    expect(iconBlock).toContain('width: 1.35rem');
+    expect(iconBlock).toContain('height: 1.35rem');
+    expect(iconBlock).toContain('border-radius: 50%');
+
+    const svgBlock = cssRuleBlock(dashboardCss, '.step-tl-icon svg');
+    expect(svgBlock).toContain('width: 1.05rem');
+    expect(svgBlock).toContain('height: 1.05rem');
+    expect(svgBlock).toContain('stroke-width: 2.4');
   });
 
   it('keeps checkbox label hit areas bounded to visible control text', async () => {

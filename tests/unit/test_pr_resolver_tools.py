@@ -1554,6 +1554,9 @@ def test_pr_resolver_skill_requires_orchestrated_merge_completion() -> None:
     assert "status=merged" in skill_text
     assert "merge_outcome=merged" in skill_text
     assert "reason `publish_unavailable`" in skill_text
+    assert "Never print raw environment variables" in skill_text
+    assert "status=blocked" in skill_text
+    assert "mergeAutomationDisposition=manual_review" in skill_text
     assert "branch is ahead of origin" in skill_text
 
     repeated_blocker_step = (
@@ -1577,3 +1580,6 @@ def test_fix_comments_skill_requires_fresh_comments_and_remote_verification() ->
     assert "verify the exact local `HEAD` SHA is visible" in skill_text
     assert "remote PR branch head SHA equals local `HEAD`" in skill_text
     assert "reason `publish_unavailable`" in skill_text
+    assert "Never print raw environment variables" in skill_text
+    assert "var/pr_resolver/result.json" in skill_text
+    assert "mergeAutomationDisposition=manual_review" in skill_text
