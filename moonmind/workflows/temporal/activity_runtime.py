@@ -10003,7 +10003,12 @@ class TemporalAgentRuntimeActivities:
         )
         commit_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(
-                workspace, "commit", "-m", normalized_message,
+                workspace,
+                "commit",
+                "-m",
+                normalized_message,
+                "--",
+                *publishable_staged_paths,
             ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
