@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -20,6 +21,12 @@ from api_service.db.models import (
 )
 from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchCreateModel,
+    CheckpointBranchContinueModel,
+    CheckpointBranchForkModel,
+    CheckpointBranchGraphCreateModel,
+    CheckpointBranchGraphModel,
+    CheckpointBranchPublishReadyModel,
+    CheckpointBranchStateUpdateModel,
     CheckpointBranchTurnCreateModel,
 )
 from moonmind.statuses.checkpoint_branch import (
@@ -28,6 +35,7 @@ from moonmind.statuses.checkpoint_branch import (
 )
 
 SOURCE_TRACEABILITY_ISSUES = ("MM-1087", "MM-1088")
+CHECKPOINT_BRANCH_GRAPH_TRACEABILITY_ISSUES = ("MM-1087", "MM-1099")
 _PROTECTED_GIT_WORK_BRANCHES = {"", "main", "master", "HEAD"}
 
 
@@ -52,6 +60,68 @@ class CheckpointBranchService:
 
     def __init__(self, session: AsyncSession):
         self._session = session
+
+    async def _get_branch(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+    ) -> WorkflowCheckpointBranch:
+        result = await self._session.execute(
+            select(WorkflowCheckpointBranch).where(
+                WorkflowCheckpointBranch.workflow_id == workflow_id,
+                WorkflowCheckpointBranch.branch_id == branch_id,
+            )
+        )
+        branch = result.scalar_one_or_none()
+        if branch is None:
+            raise ValueError("checkpoint branch not found")
+        return branch
+
+    async def _turn_count(self, branch_id: str) -> int:
+        result = await self._session.execute(
+            select(WorkflowCheckpointBranchTurn).where(
+                WorkflowCheckpointBranchTurn.branch_id == branch_id
+            )
+        )
+        return len(result.scalars().all())
+
+    async def _latest_turn(
+        self,
+        branch_id: str,
+    ) -> WorkflowCheckpointBranchTurn | None:
+        result = await self._session.execute(
+            select(WorkflowCheckpointBranchTurn)
+            .where(WorkflowCheckpointBranchTurn.branch_id == branch_id)
+            .order_by(WorkflowCheckpointBranchTurn.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def _branch_graph(
+        self,
+        branch: WorkflowCheckpointBranch,
+    ) -> CheckpointBranchGraphModel:
+        turns = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranchTurn)
+                .where(WorkflowCheckpointBranchTurn.branch_id == branch.branch_id)
+                .order_by(WorkflowCheckpointBranchTurn.created_at)
+            )
+        ).scalars().all()
+        artifacts = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranchArtifact)
+                .where(WorkflowCheckpointBranchArtifact.branch_id == branch.branch_id)
+                .order_by(WorkflowCheckpointBranchArtifact.created_at)
+            )
+        ).scalars().all()
+        return CheckpointBranchGraphModel.model_validate(
+            {"branch": branch, "turns": turns, "artifacts": artifacts}
+        )
+
+    def _next_turn_id(self, branch_id: str, count: int) -> str:
+        return f"{branch_id}-turn-{count + 1}"
 
     async def _require_turn_on_branch(
         self,
@@ -122,7 +192,230 @@ class CheckpointBranchService:
         )
         self._session.add(record)
         await self._session.flush()
+        await self._session.refresh(record)
         return record
+
+    async def create_branch_graph(
+        self,
+        payload: CheckpointBranchGraphCreateModel | dict[str, Any],
+    ) -> CheckpointBranchGraphModel:
+        model = (
+            payload
+            if isinstance(payload, CheckpointBranchGraphCreateModel)
+            else CheckpointBranchGraphCreateModel.model_validate(payload)
+        )
+        branch = await self.create_branch(model)
+        turn = await self.create_turn(
+            {
+                "branchTurnId": model.branch_turn_id
+                or self._next_turn_id(model.branch_id, 0),
+                "branchId": branch.branch_id,
+                "sourceCheckpointRef": model.source.checkpoint_ref,
+                "sourceCheckpointDigest": model.source.checkpoint_digest,
+                "sourceStateKind": model.source.source_state_kind,
+                "sourceStateRef": model.source.source_state_ref,
+                "sourceStateDigest": model.source.source_state_digest,
+                "workspacePolicy": model.workspace_policy,
+                "runtimeContextPolicy": model.runtime_context_policy,
+                "instructionRef": model.instruction_ref,
+                "instructionDigest": model.instruction_digest,
+                "contextBundleRef": model.context_bundle_ref,
+                "createdStepExecutionId": model.created_step_execution_id,
+                "runtimeAgentRunId": model.runtime_agent_run_id,
+                "providerSessionId": model.provider_session_id,
+                "idempotencyKey": model.idempotency_key,
+                "status": "created",
+            }
+        )
+        branch.current_head_step_execution_id = turn.created_step_execution_id
+        branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
+        await self._session.flush()
+        await self._session.refresh(branch)
+        return await self._branch_graph(branch)
+
+    async def continue_branch(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        payload: CheckpointBranchContinueModel | dict[str, Any],
+    ) -> WorkflowCheckpointBranchTurn:
+        model = (
+            payload
+            if isinstance(payload, CheckpointBranchContinueModel)
+            else CheckpointBranchContinueModel.model_validate(payload)
+        )
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        latest_turn = await self._latest_turn(branch_id)
+        turn = await self.create_turn(
+            {
+                "branchTurnId": model.branch_turn_id
+                or self._next_turn_id(branch_id, await self._turn_count(branch_id)),
+                "branchId": branch.branch_id,
+                "parentTurnId": latest_turn.branch_turn_id if latest_turn else None,
+                "sourceCheckpointRef": branch.current_head_checkpoint_ref
+                or branch.source_checkpoint_ref,
+                "sourceCheckpointDigest": branch.source_checkpoint_digest,
+                "sourceStateKind": branch.source_state_kind,
+                "sourceStateRef": branch.source_state_ref,
+                "sourceStateDigest": branch.source_state_digest,
+                "workspacePolicy": branch.workspace_policy.value,
+                "runtimeContextPolicy": branch.runtime_context_policy.value,
+                "instructionRef": model.instruction_ref,
+                "instructionDigest": model.instruction_digest,
+                "contextBundleRef": model.context_bundle_ref,
+                "createdStepExecutionId": model.created_step_execution_id,
+                "runtimeAgentRunId": model.runtime_agent_run_id,
+                "providerSessionId": model.provider_session_id,
+                "idempotencyKey": model.idempotency_key,
+                "status": "created",
+            }
+        )
+        branch.state = CheckpointBranchState.ACTIVE
+        branch.current_head_step_execution_id = turn.created_step_execution_id
+        branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
+        await self._session.flush()
+        await self._session.refresh(branch)
+        return turn
+
+    async def fork_branch(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        payload: CheckpointBranchForkModel | dict[str, Any],
+    ) -> CheckpointBranchGraphModel:
+        model = (
+            payload
+            if isinstance(payload, CheckpointBranchForkModel)
+            else CheckpointBranchForkModel.model_validate(payload)
+        )
+        parent = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        await self._require_turn_on_branch(
+            branch_id=parent.branch_id,
+            branch_turn_id=model.parent_turn_id,
+            relation="parentTurnId",
+        )
+        child = await self.create_branch(
+            {
+                "branchId": model.branch_id,
+                "source": {
+                    "workflowId": parent.workflow_id,
+                    "rootWorkflowId": parent.root_workflow_id,
+                    "runId": parent.source_run_id,
+                    "logicalStepId": parent.logical_step_id,
+                    "sourceExecutionOrdinal": parent.source_execution_ordinal,
+                    "checkpointBoundary": parent.source_checkpoint_boundary,
+                    "checkpointRef": parent.current_head_checkpoint_ref
+                    or parent.source_checkpoint_ref,
+                    "checkpointDigest": parent.source_checkpoint_digest,
+                    "sourceStateKind": parent.source_state_kind,
+                    "sourceStateRef": parent.source_state_ref,
+                    "sourceStateDigest": parent.source_state_digest,
+                },
+                "label": model.label,
+                "branchKind": "child_fork",
+                "workspacePolicy": model.workspace_policy,
+                "runtimeContextPolicy": model.runtime_context_policy,
+                "parentBranchId": parent.branch_id,
+                "parentTurnId": model.parent_turn_id,
+            }
+        )
+        await self.create_turn(
+            {
+                "branchTurnId": model.branch_turn_id
+                or self._next_turn_id(model.branch_id, 0),
+                "branchId": child.branch_id,
+                "parentTurnId": None,
+                "sourceCheckpointRef": child.source_checkpoint_ref,
+                "sourceCheckpointDigest": child.source_checkpoint_digest,
+                "sourceStateKind": child.source_state_kind,
+                "sourceStateRef": child.source_state_ref,
+                "sourceStateDigest": child.source_state_digest,
+                "workspacePolicy": model.workspace_policy,
+                "runtimeContextPolicy": model.runtime_context_policy,
+                "instructionRef": model.instruction_ref,
+                "instructionDigest": model.instruction_digest,
+                "contextBundleRef": model.context_bundle_ref,
+                "createdStepExecutionId": model.created_step_execution_id,
+                "idempotencyKey": model.idempotency_key,
+                "status": "created",
+            }
+        )
+        await self._session.flush()
+        await self._session.refresh(child)
+        return await self._branch_graph(child)
+
+    async def archive_branch(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+    ) -> CheckpointBranchStateUpdateModel:
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        branch.state = CheckpointBranchState.ARCHIVED
+        branch.archived_at = datetime.now(UTC)
+        await self._session.flush()
+        await self._session.refresh(branch)
+        return CheckpointBranchStateUpdateModel.model_validate(branch)
+
+    async def mark_publish_ready(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        artifact_ref: str | None = None,
+        payload: CheckpointBranchPublishReadyModel | dict[str, Any] | None = None,
+    ) -> CheckpointBranchStateUpdateModel:
+        model = (
+            payload
+            if isinstance(payload, CheckpointBranchPublishReadyModel)
+            else CheckpointBranchPublishReadyModel.model_validate(payload or {})
+        )
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        branch.state = CheckpointBranchState.PROMOTABLE
+        candidate_ref = artifact_ref or model.artifact_ref
+        if candidate_ref:
+            await self.record_artifact(
+                branch_id=branch.branch_id,
+                artifact_ref=candidate_ref,
+                artifact_kind="publish_ready",
+            )
+        await self._session.flush()
+        await self._session.refresh(branch)
+        return CheckpointBranchStateUpdateModel.model_validate(branch)
+
+    async def list_branch_graphs(
+        self,
+        *,
+        workflow_id: str,
+        active_only: bool = False,
+    ) -> list[CheckpointBranchGraphModel]:
+        statement = select(WorkflowCheckpointBranch).where(
+            WorkflowCheckpointBranch.workflow_id == workflow_id
+        )
+        if active_only:
+            statement = statement.where(
+                WorkflowCheckpointBranch.state.notin_(
+                    [
+                        CheckpointBranchState.ARCHIVED,
+                        CheckpointBranchState.FAILED,
+                        CheckpointBranchState.SUPERSEDED,
+                    ]
+                )
+            )
+        statement = statement.order_by(WorkflowCheckpointBranch.created_at)
+        branches = (await self._session.execute(statement)).scalars().all()
+        return [await self._branch_graph(branch) for branch in branches]
+
+    async def read_branch_graph(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+    ) -> CheckpointBranchGraphModel:
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        return await self._branch_graph(branch)
 
     async def create_turn(
         self,
@@ -167,6 +460,7 @@ class CheckpointBranchService:
         )
         self._session.add(record)
         await self._session.flush()
+        await self._session.refresh(record)
         return record
 
     async def record_git_binding(
@@ -211,6 +505,7 @@ class CheckpointBranchService:
         )
         self._session.add(record)
         await self._session.flush()
+        await self._session.refresh(record)
         return record
 
     async def record_artifact(
@@ -241,4 +536,5 @@ class CheckpointBranchService:
         )
         self._session.add(record)
         await self._session.flush()
+        await self._session.refresh(record)
         return record

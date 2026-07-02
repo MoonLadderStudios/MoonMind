@@ -16,6 +16,7 @@ from api_service.db.models import (
 )
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
+    CHECKPOINT_BRANCH_GRAPH_TRACEABILITY_ISSUES,
     SOURCE_TRACEABILITY_ISSUES,
 )
 from moonmind.schemas.checkpoint_branch_models import (
@@ -374,3 +375,119 @@ async def test_checkpoint_branch_service_rejects_duplicate_git_work_branch(
                 "work_branch": "mm/wf-1/implement/collision",
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_graph_operations_and_queries(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-graph", createdBy="MM-1099"),
+            "instructionRef": "artifact://instructions/root",
+            "instructionDigest": "sha256:root",
+            "idempotencyKey": "MM-1099:cbr-graph:create",
+        }
+    )
+    continued = await service.continue_branch(
+        workflow_id="wf-1",
+        branch_id="cbr-graph",
+        payload={
+            "instructionRef": "artifact://instructions/continue",
+            "instructionDigest": "sha256:continue",
+            "idempotencyKey": "MM-1099:cbr-graph:continue",
+            "createdStepExecutionId": "wf-1:run-branch:implement:execution:2",
+        },
+    )
+    child = await service.fork_branch(
+        workflow_id="wf-1",
+        branch_id="cbr-graph",
+        payload={
+            "branchId": "cbr-child",
+            "label": "Try child path",
+            "parentTurnId": continued.branch_turn_id,
+            "instructionRef": "artifact://instructions/child",
+            "instructionDigest": "sha256:child",
+            "idempotencyKey": "MM-1099:cbr-child:create",
+            "workspacePolicy": "continue_from_previous_execution",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
+    )
+    await service.archive_branch(workflow_id="wf-1", branch_id=child.branch.branch_id)
+    await service.mark_publish_ready(
+        workflow_id="wf-1",
+        branch_id="cbr-graph",
+        artifact_ref="artifact://publish/candidate",
+    )
+    await checkpoint_branch_session.commit()
+
+    assert graph.branch.branch_id == "cbr-graph"
+    assert graph.branch.source_checkpoint_ref == "artifact://checkpoint/after"
+    assert graph.turns[0].instruction_ref == "artifact://instructions/root"
+    assert continued.branch_id == "cbr-graph"
+
+    branches = await service.list_branch_graphs(workflow_id="wf-1")
+    branch_by_id = {item.branch.branch_id: item for item in branches}
+
+    assert branch_by_id["cbr-graph"].branch.state == "promotable"
+    assert branch_by_id["cbr-child"].branch.state == "archived"
+    assert branch_by_id["cbr-child"].branch.parent_branch_id == "cbr-graph"
+    assert branch_by_id["cbr-child"].branch.parent_turn_id == continued.branch_turn_id
+    assert any(
+        artifact.artifact_kind == "publish_ready"
+        for artifact in branch_by_id["cbr-graph"].artifacts
+    )
+    assert all(
+        turn.created_step_execution_id not in {turn.branch_id, turn.branch_turn_id}
+        for item in branches
+        for turn in item.turns
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_graph_rejects_invalid_product_operations(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    branch = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-invalid"),
+            "instructionRef": "artifact://instructions/root",
+            "instructionDigest": "sha256:root",
+            "idempotencyKey": "MM-1099:cbr-invalid:create",
+        }
+    )
+
+    with pytest.raises(ValueError, match="not found"):
+        await service.continue_branch(
+            workflow_id="wf-other",
+            branch_id=branch.branch.branch_id,
+            payload={
+                "instructionRef": "artifact://instructions/continue",
+                "instructionDigest": "sha256:continue",
+                "idempotencyKey": "MM-1099:cbr-invalid:continue",
+            },
+        )
+
+    with pytest.raises(ValueError, match="parentTurnId must reference"):
+        await service.fork_branch(
+            workflow_id="wf-1",
+            branch_id=branch.branch.branch_id,
+            payload={
+                "branchId": "cbr-invalid-child",
+                "label": "Invalid child",
+                "parentTurnId": "cbt-missing",
+                "instructionRef": "artifact://instructions/child",
+                "instructionDigest": "sha256:child",
+                "idempotencyKey": "MM-1099:cbr-invalid-child:create",
+                "workspacePolicy": "continue_from_previous_execution",
+                "runtimeContextPolicy": "fresh_agent_run",
+            },
+        )
+
+
+def test_checkpoint_branch_graph_traceability_preserves_source_issue() -> None:
+    assert SOURCE_TRACEABILITY_ISSUES == ("MM-1087", "MM-1088")
+    assert CHECKPOINT_BRANCH_GRAPH_TRACEABILITY_ISSUES == ("MM-1087", "MM-1099")

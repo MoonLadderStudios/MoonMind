@@ -1,0 +1,167 @@
+from __future__ import annotations
+
+import pytest
+import pytest_asyncio
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from api_service.api.routers.checkpoint_branches import router
+from api_service.db.base import get_async_session
+from api_service.db.models import (
+    Base,
+    TemporalExecutionCanonicalRecord,
+    TemporalWorkflowType,
+)
+
+
+@pytest_asyncio.fixture()
+async def checkpoint_branch_api_session(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/branches-api.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_maker() as session:
+        session.add(
+            TemporalExecutionCanonicalRecord(
+                workflow_id="wf-api",
+                run_id="run-api",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                entry="api",
+            )
+        )
+        await session.commit()
+        yield session
+
+    await engine.dispose()
+
+
+@pytest.fixture()
+def checkpoint_branch_client(checkpoint_branch_api_session: AsyncSession):
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_async_session] = lambda: checkpoint_branch_api_session
+    with TestClient(app) as client:
+        yield client
+    app.dependency_overrides.clear()
+
+
+def _create_payload(branch_id: str = "cbr-api") -> dict[str, object]:
+    return {
+        "branchId": branch_id,
+        "source": {
+            "workflowId": "wf-api",
+            "runId": "run-api",
+            "logicalStepId": "implement",
+            "sourceExecutionOrdinal": 2,
+            "checkpointBoundary": "after_execution",
+            "checkpointRef": "artifact://checkpoint/after",
+            "checkpointDigest": "sha256:checkpoint",
+        },
+        "label": "Try API branch",
+        "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+        "runtimeContextPolicy": "fresh_agent_run",
+        "instructionRef": "artifact://instructions/root",
+        "instructionDigest": "sha256:root",
+        "idempotencyKey": f"MM-1099:{branch_id}:create",
+    }
+
+
+def test_checkpoint_branch_api_create_continue_fork_archive_and_publish_ready(
+    checkpoint_branch_client: TestClient,
+) -> None:
+    created = checkpoint_branch_client.post(
+        "/api/executions/wf-api/checkpoint-branches",
+        json=_create_payload(),
+    )
+    assert created.status_code == 201
+    assert created.json()["branch"]["branchId"] == "cbr-api"
+    assert created.json()["branch"]["sourceCheckpointRef"] == "artifact://checkpoint/after"
+    assert created.json()["turns"][0]["instructionRef"] == "artifact://instructions/root"
+
+    continued = checkpoint_branch_client.post(
+        "/api/executions/wf-api/checkpoint-branches/cbr-api/continue",
+        json={
+            "instructionRef": "artifact://instructions/continue",
+            "instructionDigest": "sha256:continue",
+            "idempotencyKey": "MM-1099:cbr-api:continue",
+            "createdStepExecutionId": "wf-api:run-branch:implement:execution:2",
+        },
+    )
+    assert continued.status_code == 201
+    parent_turn_id = continued.json()["branchTurnId"]
+
+    forked = checkpoint_branch_client.post(
+        "/api/executions/wf-api/checkpoint-branches/cbr-api/fork",
+        json={
+            "branchId": "cbr-api-child",
+            "label": "Try child path",
+            "parentTurnId": parent_turn_id,
+            "instructionRef": "artifact://instructions/child",
+            "instructionDigest": "sha256:child",
+            "idempotencyKey": "MM-1099:cbr-api-child:create",
+            "workspacePolicy": "continue_from_previous_execution",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
+    )
+    assert forked.status_code == 201
+    assert forked.json()["branch"]["parentBranchId"] == "cbr-api"
+    assert forked.json()["branch"]["parentTurnId"] == parent_turn_id
+
+    archived = checkpoint_branch_client.post(
+        "/api/executions/wf-api/checkpoint-branches/cbr-api-child/archive",
+        json={},
+    )
+    assert archived.status_code == 200
+    assert archived.json()["state"] == "archived"
+
+    publish_ready = checkpoint_branch_client.post(
+        "/api/executions/wf-api/checkpoint-branches/cbr-api/publish-ready",
+        json={"artifactRef": "artifact://publish/candidate"},
+    )
+    assert publish_ready.status_code == 200
+    assert publish_ready.json()["state"] == "promotable"
+    assert publish_ready.json()["promotedAt"] is None
+
+    listed = checkpoint_branch_client.get(
+        "/api/executions/wf-api/checkpoint-branches"
+    )
+    assert listed.status_code == 200
+    ids = {item["branch"]["branchId"]: item for item in listed.json()["items"]}
+    assert ids["cbr-api"]["branch"]["state"] == "promotable"
+    assert ids["cbr-api-child"]["branch"]["state"] == "archived"
+    assert any(
+        artifact["artifactKind"] == "publish_ready"
+        for artifact in ids["cbr-api"]["artifacts"]
+    )
+
+
+def test_checkpoint_branch_api_rejects_missing_source_identity(
+    checkpoint_branch_client: TestClient,
+) -> None:
+    payload = _create_payload()
+    payload["source"] = {"workflowId": "wf-api", "runId": "run-api"}
+
+    response = checkpoint_branch_client.post(
+        "/api/executions/wf-api/checkpoint-branches",
+        json=payload,
+    )
+
+    assert response.status_code == 422
+
+
+def test_checkpoint_branch_api_scopes_reads_to_workflow(
+    checkpoint_branch_client: TestClient,
+) -> None:
+    assert checkpoint_branch_client.post(
+        "/api/executions/wf-api/checkpoint-branches",
+        json=_create_payload("cbr-scope"),
+    ).status_code == 201
+
+    response = checkpoint_branch_client.get(
+        "/api/executions/wf-other/checkpoint-branches/cbr-scope"
+    )
+
+    assert response.status_code == 404
