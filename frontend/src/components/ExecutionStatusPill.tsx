@@ -11,6 +11,7 @@ import {
   integrationStatusPillProps,
   isIntegrationStatus,
 } from '../status/integrationStatus';
+import type { WorkflowStatusPillOptions } from '../status/workflowStatus';
 
 type GlyphStyle = CSSProperties & {
   '--mm-letter-count'?: number;
@@ -74,15 +75,7 @@ function executionStatusPillProps(
   return workflowStatusPillProps(status, options);
 }
 
-export function ExecutionStatusPill({
-  status,
-  enableMotion = true,
-}: {
-  status: string | null | undefined;
-  enableMotion?: boolean;
-}) {
-  const label = visibleStatusLabel(status);
-  const pillProps = executionStatusPillProps(status, { enableMotion });
+function StatusPill({ label, pillProps }: { label: string; pillProps: ExecutionStatusPillClassProps }) {
   const hasShimmerSweep = pillProps['data-effect'] === 'shimmer-sweep';
   const glyphs = useMemo(() => splitGraphemes(label), [label]);
 
@@ -108,5 +101,46 @@ export function ExecutionStatusPill({
         })}
       </span>
     </span>
+  );
+}
+
+export function ExecutionStatusPill({
+  status,
+  enableMotion = true,
+}: {
+  status: string | null | undefined;
+  enableMotion?: boolean;
+}) {
+  return (
+    <StatusPill
+      label={visibleStatusLabel(status)}
+      pillProps={executionStatusPillProps(status, { enableMotion })}
+    />
+  );
+}
+
+type DomainStatusPillProps = WorkflowStatusPillOptions & {
+  status: string | null | undefined;
+};
+
+export function WorkflowLifecycleStatusPill({ status, enableMotion = true }: DomainStatusPillProps) {
+  return (
+    <StatusPill
+      label={formatWorkflowStatusLabel(status, '-')}
+      pillProps={workflowStatusPillProps(status, { enableMotion })}
+    />
+  );
+}
+
+export function StepLedgerStatusPill({ status }: DomainStatusPillProps) {
+  return <StatusPill label={formatStepStatusLabel(status, '-')} pillProps={stepStatusPillProps(status)} />;
+}
+
+export function IntegrationProviderStatusPill({ status }: DomainStatusPillProps) {
+  return (
+    <StatusPill
+      label={formatIntegrationStatusLabel(status, '-')}
+      pillProps={integrationStatusPillProps(status)}
+    />
   );
 }
