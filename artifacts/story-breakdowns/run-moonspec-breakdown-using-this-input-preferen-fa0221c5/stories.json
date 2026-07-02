@@ -1,0 +1,1202 @@
+{
+  "source": {
+    "title": "Checkpoint Branch System",
+    "path": "docs/Workflows/CheckpointBranchSystem.md",
+    "referencePath": "docs/Workflows/CheckpointBranchSystem.md",
+    "sourceDocumentClass": "canonical-declarative",
+    "jiraIssueKey": "MM-1087",
+    "originalDesignText": "# Checkpoint Branch System\n\nStatus: Proposed design\nOwners: MoonMind Platform + Workflow Runtime + Dashboard\nLast updated: 2026-07-01\n\n**Implementation tracking:** rollout notes, spikes, temporary handoffs, and migration checklists should live under `docs/tmp/` or gitignored local-only artifacts, not as mutable checklists in this canonical design document.\n\n## Related docs\n\n- `docs/Steps/StepExecutionsAndCheckpointing.md`\n- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`\n- `docs/Workflows/WorkflowRemediation.md`\n- `docs/Workflows/WorkflowPublishing.md`\n- `docs/Workflows/WorkflowRunsApi.md`\n- `docs/Temporal/StepLedgerAndProgressModel.md`\n- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`\n- `docs/Temporal/WorkflowArtifactSystemDesign.md`\n- `docs/Omnigent/OmnigentAdapter.md`\n- `docs/ManagedAgents/ManagedAgentsGit.md`\n\n---\n\n## 1. Purpose\n\nThis document defines the desired-state **Checkpoint Branch System** for MoonMind.\n\nCheckpoint Branches let an operator, workflow, or policy create one or more independent continuations from a durable workflow or step checkpoint. Each continuation branch may use different instructions, workspace policy, runtime policy, model/provider settings, and publish strategy. The mental model is similar to branching a ChatGPT conversation, but each branch is backed by MoonMind checkpoints, Step Execution evidence, artifact refs, and, when repository work is involved, an isolated git branch or worktree.\n\nThe system is not limited to failure recovery or remediation. Remediation is one consumer of the primitive. The broader primitive is:\n\n> From any eligible checkpoint, create a named continuation branch, execute one or more branch turns with branch-local instructions, compare competing branches, and explicitly promote zero or one branch back into the canonical workflow line.\n\nCore goals:\n\n1. allow multiple safe continuations from the same checkpoint;\n2. preserve every branch as durable, inspectable evidence;\n3. isolate code changes with git branches or worktrees;\n4. keep branch instructions immutable and auditable;\n5. allow repeated branch turns without losing provenance;\n6. support branch comparison and explicit promotion;\n7. keep runtime/provider continuation semantics behind typed policies;\n8. prevent branch exploration from silently advancing, publishing, or mutating canonical workflow state.\n\n---\n\n## 2. Architectural decision summary\n\n### 2.1 Add a product-level branch graph above Step Executions\n\nMoonMind already has Logical Steps, Step Executions, Step Execution manifests, and Step Execution checkpoints. Those remain the execution-plane source of truth. The Checkpoint Branch System adds a product-level graph over that substrate:\n\n```text\nWorkflow Execution\n  -> Logical Step\n      -> Step Execution\n          -> Checkpoint\n              -> Checkpoint Branch\n                  -> Branch Turn\n                      -> Step Execution\n                      -> Checkpoint\n                          -> Child Checkpoint Branch\n```\n\nA branch is not itself a Step Execution. A branch is a durable continuation lane. Each branch turn creates a new Step Execution or delegates to a typed runtime continuation operation that is still recorded as Step Execution evidence.\n\n### 2.2 Separate product branches from git branches\n\nA **Checkpoint Branch** is the MoonMind product concept. A **git branch** is the repository isolation mechanism used when the branch performs code work.\n\nThe two should usually have a one-to-one relationship for repository-mutating branches, but they are not the same identity. A product branch may exist for analysis-only work with no git branch. A git branch may be regenerated or pushed under infrastructure policy while the Checkpoint Branch identity remains stable.\n\n### 2.3 Branching is not ordinary retry\n\nA Checkpoint Branch turn is a new semantic execution of work. It must not be represented as a low-level retry of the same Activity or the same provider call.\n\nEvery branch turn that executes agent/tool work must:\n\n1. create a new Step Execution identity;\n2. record branch lineage;\n3. record source checkpoint identity;\n4. record immutable branch-turn instructions by artifact ref and digest;\n5. declare workspace policy before launch;\n6. declare runtime/session policy before launch;\n7. write or update Step Execution manifest evidence.\n\n### 2.4 Branches are candidates until promoted\n\nCreating, continuing, or publishing a branch does not automatically make it the canonical continuation of the workflow. A branch becomes canonical only through an explicit promotion operation.\n\nPromotion is a workflow-owned decision. It must be gated by structured evidence, side-effect classification, workspace validation, and approval policy where applicable.\n\n### 2.5 Provider sessions are runtime bindings, not branch authority\n\nExternal provider sessions, including Omnigent sessions, may be associated with a branch or branch turn. They do not become the branch source of truth.\n\nMoonMind-owned branch records, Step Execution manifests, checkpoints, artifact refs, git refs, and promotion records are authoritative. Provider ids, session ids, runner ids, file ids, and provider URLs are diagnostics/runtime binding metadata.\n\n---\n\n## 3. Conceptual model\n\n### 3.1 ChatGPT-style branching mapped to MoonMind\n\nThe familiar conversation model is:\n\n```text\nMessage 1\n  Message 2\n    Message 3a\n    Message 3b\n      Message 4b\n```\n\nMoonMind's checkpoint branch model is:\n\n```text\nCheckpoint C1\n  Branch A: \"try minimal fix\"\n    Turn A1 -> Step Execution A1 -> Checkpoint A1C\n    Turn A2 -> Step Execution A2 -> Checkpoint A2C\n  Branch B: \"try rewrite\"\n    Turn B1 -> Step Execution B1 -> Checkpoint B1C\n  Branch C: \"continue provider state\"\n    Turn C1 -> Step Execution C1 -> Checkpoint C1C\n```\n\nThe source checkpoint is the fork point. Branch turns are the branch-local instruction messages. Step Executions are the actual work attempts produced by those turns.\n\n### 3.2 Mainline vs branches\n\nThe **mainline** is the currently accepted path of the workflow. Branches are candidate continuations from a checkpoint.\n\nA branch may be:\n\n- exploratory and never promoted;\n- used for diagnosis only;\n- promoted to become the canonical continuation;\n- published as a pull request but not yet promoted;\n- archived after comparison;\n- forked into child branches.\n\nThe UI may visually emphasize a current mainline, but historical branches remain inspectable.\n\n### 3.3 Branch fan-out and fan-in\n\nBranch fan-out means creating several branches from one checkpoint. Branch fan-in means explicitly promoting one branch's result back to the canonical workflow line.\n\nMoonMind should not automatically merge multiple competing branch results. Combining two branch outputs requires a new explicit branch or Step Execution that names both branches as input evidence.\n\n---\n\n## 4. Terminology\n\n| Term | Meaning |\n|---|---|\n| Checkpoint | Durable evidence sufficient to restore or validate state at a workflow or step boundary. |\n| Checkpoint Branch | MoonMind product-level continuation lane forked from a checkpoint. |\n| Branch Turn | One branch-local instruction message that launches or continues work on a branch. |\n| Product branch | Synonym for Checkpoint Branch when contrasting with git branch. |\n| Git work branch | Repository branch used to isolate code changes for a product branch. |\n| Branch root checkpoint | The checkpoint from which a Checkpoint Branch was first created. |\n| Branch head | Latest Step Execution, checkpoint, git commit, or provider continuation state for a branch. |\n| Parent branch | The branch from which a child branch was forked. |\n| Parent turn | The branch turn or checkpoint from which a child branch was forked. |\n| Branch promotion | Explicit operation that accepts a branch result as canonical workflow progress. |\n| Branch comparison | Artifact-backed comparison between two or more branches. |\n| Branch archive | Non-destructive operation hiding a branch from active work while preserving evidence. |\n| Branch continuation | Adding another turn to an existing branch. |\n| Branch fork | Creating a new branch from a checkpoint, branch turn, or branch head. |\n\nTerms that must remain distinct:\n\n```text\nretry                 = same Step Execution, transient/idempotent low-level retry\nstep re-execution     = new Step Execution for the same logical step\nrecover failed step   = linked recovery flow from failed step checkpoint\ncheckpoint branch     = named continuation lane from a checkpoint\nbranch turn           = one instruction-bearing execution on a branch\npromotion             = accept a branch result into canonical workflow progress\npublication           = push git branch or create/update PR\n```\n\n---\n\n## 5. Core invariants\n\n1. **Checkpoint Branches are explicit.** A branch is never inferred solely from logs, git branch names, provider sessions, or dashboard projections.\n2. **Every branch has a root checkpoint.** A branch cannot exist without a source checkpoint ref or a typed source state ref that can be validated.\n3. **Branch source identity is pinned.** The root source must include workflow id, run id, logical step id when applicable, source execution ordinal when applicable, checkpoint boundary, checkpoint ref, and checkpoint digest when available.\n4. **Branch turns are immutable.** A turn's instruction artifact, digest, source checkpoint, workspace policy, and runtime policy cannot be edited after launch. Corrections create a new turn or child branch.\n5. **Branch work creates Step Execution evidence.** Any branch turn that executes agent/tool work must create or reference a Step Execution manifest.\n6. **Branch evidence is append-only.** Failed, archived, superseded, or unpromoted branch evidence remains durable.\n7. **Product branches and git branches are separate identities.** A git branch is a binding of the product branch, not a replacement for it.\n8. **Repository-mutating branches require isolation.** Code-changing branches must use a distinct git branch, worktree, or provider workspace binding.\n9. **Provider sessions are runtime bindings.** Provider state may support continuation, but MoonMind-owned records and artifacts remain authoritative.\n10. **Promotion is explicit.** A branch never becomes canonical merely because it completed, passed tests, pushed a branch, or opened a PR.\n11. **Publication is separate from promotion.** A branch may be published as a PR without becoming canonical workflow progress.\n12. **Side effects are branch-scoped until promoted.** External effects must be idempotent, isolated, compensated, or gated before branch execution and promotion.\n13. **Branch comparison is evidence-backed.** Comparisons must produce artifacts and should not be reconstructed from UI projections.\n14. **No silent fallback.** If checkpoint validation, workspace restoration, or provider continuation fails, MoonMind must fail closed or request a safer branch mode.\n\n---\n\n## 6. Branch lifecycle\n\n### 6.1 States\n\nCheckpoint Branch states:\n\n| State | Meaning |\n|---|---|\n| `created` | Branch record exists but no branch turn has launched. |\n| `preparing` | Workspace, git branch, context bundle, or provider binding is being prepared. |\n| `active` | At least one branch turn is running or ready for continuation. |\n| `blocked` | Branch cannot continue without approval, missing evidence, or external prerequisite. |\n| `failed` | Latest branch turn failed and no automatic continuation is active. |\n| `succeeded` | Latest branch turn completed and passed required gates. |\n| `promotable` | Branch has an accepted candidate result that can be promoted under policy. |\n| `promoted` | Branch result was accepted into canonical workflow progress. |\n| `archived` | Branch is hidden from active work but evidence remains inspectable. |\n| `superseded` | Another branch was promoted or this branch was replaced by a child branch. |\n\nBranch Turn states:\n\n| State | Meaning |\n|---|---|\n| `created` | Turn record and instruction artifact exist. |\n| `preparing` | Context bundle and workspace/provider state are being prepared. |\n| `running` | Agent/tool/provider continuation is active. |\n| `checking` | Verification/gates are active. |\n| `succeeded` | Turn completed and gates passed. |\n| `failed` | Turn failed or gates failed. |\n| `blocked` | Turn requires approval or missing prerequisite. |\n| `canceled` | Turn was canceled. |\n| `superseded` | Later turn or child branch replaced this candidate. |\n\n### 6.2 Operations\n\nCanonical operations:\n\n```text\ncheckpoint_branch.create\ncheckpoint_branch.continue\ncheckpoint_branch.fork\ncheckpoint_branch.compare\ncheckpoint_branch.promote\ncheckpoint_branch.archive\ncheckpoint_branch.publish\n```\n\nEach side-effecting operation must be idempotent and audit-backed.\n\n### 6.3 Promotion\n\nPromotion accepts one branch result as canonical workflow progress. Promotion must record:\n\n1. promoted branch id;\n2. promoted branch turn id;\n3. promoted Step Execution id;\n4. accepted output refs;\n5. git commit/branch/PR refs when applicable;\n6. gate verdict refs;\n7. side-effect disposition refs;\n8. downstream invalidation or revalidation effects;\n9. approval and policy evidence.\n\nPromotion does not delete competing branches.\n\n---\n\n## 7. Data model\n\n### 7.1 `workflow_checkpoint_branches`\n\nRepresentative fields:\n\n```text\nbranch_id primary key\nworkflow_id\nroot_workflow_id\nsource_run_id\nlogical_step_id null\nsource_execution_ordinal null\nsource_checkpoint_boundary\nsource_checkpoint_ref\nsource_checkpoint_digest null\nparent_branch_id null\nparent_turn_id null\nlabel\nstate\nbranch_kind\nworkspace_policy\nruntime_context_policy\ngit_repository null\ngit_base_branch null\ngit_base_commit null\ngit_work_branch null\ncurrent_head_step_execution_id null\ncurrent_head_checkpoint_ref null\ncurrent_head_commit null\npull_request_url null\npromoted_at null\narchived_at null\ncreated_by\ncreated_at\nupdated_at\n```\n\n### 7.2 `workflow_checkpoint_branch_turns`\n\nRepresentative fields:\n\n```text\nbranch_turn_id primary key\nbranch_id\nparent_turn_id null\nsource_checkpoint_ref\nsource_checkpoint_digest null\ninstruction_ref\ninstruction_digest\ncontext_bundle_ref null\ncreated_step_execution_id null\nruntime_agent_run_id null\nprovider_session_id null\nidempotency_key unique\nstatus\nstarted_at null\ncompleted_at null\ncreated_at\nupdated_at\n```\n\n### 7.3 `workflow_checkpoint_branch_git_bindings`\n\nRepresentative fields:\n\n```text\nbranch_id\nrepository\nbase_branch\nbase_commit\nwork_branch\nworktree_ref null\nhead_commit null\npatch_ref null\npull_request_url null\npublish_status\ncreated_at\nupdated_at\n```\n\n### 7.4 `workflow_checkpoint_branch_artifacts`\n\nRepresentative fields:\n\n```text\nbranch_id\nbranch_turn_id null\nartifact_ref\nartifact_kind\ncreated_at\n```\n\n### 7.5 Step Execution manifest extension\n\nStep Execution manifests should include optional branch metadata:\n\n```json\n{\n  \"branch\": {\n    \"branchId\": \"cbr_01J...\",\n    \"branchTurnId\": \"cbt_01J...\",\n    \"rootCheckpointRef\": \"art_checkpoint_after_execution\",\n    \"parentBranchId\": null,\n    \"parentTurnId\": null,\n    \"gitWorkBranch\": \"mm/mm-824/implement-story-s004/cbr-9f2-minimal-api-fix\"\n  }\n}\n```\n\nThis does not replace the Step Execution identity tuple. It adds lineage.\n\n---\n\n## 8. API surface\n\n### 8.1 Branch discovery\n\n```http\nGET /api/executions/{workflowId}/checkpoints\nGET /api/executions/{workflowId}/checkpoint-branches\nGET /api/executions/{workflowId}/checkpoint-branches/{branchId}\nGET /api/executions/{workflowId}/checkpoint-branches/{branchId}/turns\n```\n\n### 8.2 Create branch\n\n```http\nPOST /api/executions/{workflowId}/checkpoint-branches\n```\n\nRepresentative request:\n\n```json\n{\n  \"source\": {\n    \"runId\": \"run_abc\",\n    \"logicalStepId\": \"implement-story-S004\",\n    \"executionOrdinal\": 2,\n    \"checkpointBoundary\": \"after_execution\",\n    \"checkpointRef\": \"art_checkpoint_after_execution\"\n  },\n  \"label\": \"Try minimal API contract fix\",\n  \"instructions\": {\n    \"text\": \"Keep the useful changes. Fix only the API contract failure. Add one regression test. Do not create a duplicate PR.\"\n  },\n  \"workspacePolicy\": \"apply_previous_execution_diff_to_clean_baseline\",\n  \"runtimeContextPolicy\": \"fresh_agent_run\",\n  \"publishMode\": \"none\",\n  \"idempotencyKey\": \"mm:wf:checkpoint:after_execution:minimal-api-fix\"\n}\n```\n\n### 8.3 Continue branch\n\n```http\nPOST /api/executions/{workflowId}/checkpoint-branches/{branchId}/continue\n```\n\nRepresentative request:\n\n```json\n{\n  \"label\": \"Add focused regression coverage\",\n  \"instructions\": {\n    \"text\": \"Continue this branch. Add tests for the API contract fix. Do not broaden the public interface.\"\n  },\n  \"workspacePolicy\": \"continue_from_previous_execution\",\n  \"runtimeContextPolicy\": \"reuse_session_new_epoch\",\n  \"idempotencyKey\": \"mm:wf:cbr_01J:turn:add-tests\"\n}\n```\n\n### 8.4 Fork branch\n\n```http\nPOST /api/executions/{workflowId}/checkpoint-branches/{branchId}/fork\n```\n\nRepresentative request:\n\n```json\n{\n  \"parentTurnId\": \"cbt_01J...\",\n  \"label\": \"Alternative: remove adapter abstraction\",\n  \"instructions\": {\n    \"text\": \"Fork from the checkpoint after Turn 2. Instead of patching the adapter, remove the adapter abstraction and simplify the call path.\"\n  },\n  \"workspacePolicy\": \"apply_previous_execution_diff_to_clean_baseline\",\n  \"idempotencyKey\": \"mm:wf:cbr_01J:fork:remove-adapter-abstraction\"\n}\n```\n\n### 8.5 Compare branches\n\n```http\nGET /api/executions/{workflowId}/checkpoint-branches/{branchId}/compare?against={otherBranchId}\n```\n\nComparison produces an artifact-backed branch comparison record, including git range diff refs, gate verdict summaries, diagnostics refs, and a bounded natural-language summary.\n\n### 8.6 Promote branch\n\n```http\nPOST /api/executions/{workflowId}/checkpoint-branches/{branchId}/promote\n```\n\nRepresentative request:\n\n```json\n{\n  \"expectedHeadStepExecutionId\": \"mm:wf:run:implement-story-S004:execution:5\",\n  \"expectedHeadCommit\": \"def456\",\n  \"approvalToken\": \"approval_...\",\n  \"idempotencyKey\": \"mm:wf:cbr_01J:promote:def456\"\n}\n```\n\n### 8.7 Archive branch\n\n```http\nPOST /api/executions/{workflowId}/checkpoint-branches/{branchId}/archive\n```\n\nArchive is non-destructive. It hides the branch from active work but keeps records, artifacts, git refs, and provider diagnostics inspectable.\n\n---\n\n## 9. Workspace and git policy\n\n### 9.1 Branch creation modes\n\n| Mode | Meaning |\n|---|---|\n| `from_checkpoint_worktree` | Restore a durable worktree archive or live workspace ref into a new worktree/git branch. |\n| `from_checkpoint_patch` | Start from `baseCommit`, apply checkpoint patch, then create a new git work branch. |\n| `from_last_accepted_commit` | Start from latest accepted commit or published ref. |\n| `fresh_from_source_branch` | Create a clean git work branch from the repository source branch. |\n| `external_provider_state` | Use provider state only when adapter-specific validation allows it. |\n\n### 9.2 Workspace policies\n\nBranch turns reuse the Step Execution workspace policies:\n\n| Policy | Branch behavior |\n|---|---|\n| `continue_from_previous_execution` | Keep the branch head workspace and continue with a new turn. |\n| `restore_pre_execution` | Restore the workspace from the checkpoint before executing new branch work. |\n| `apply_previous_execution_diff_to_clean_baseline` | Reset to clean baseline, apply prior diff, then execute branch work. |\n| `start_from_last_passed_commit` | Start from latest accepted commit or published ref. |\n| `fresh_branch_from_source` | Start a new work branch from the source repository branch. |\n\nThe selected policy must be recorded in branch metadata, branch turn metadata, Step Execution manifest, and diagnostics.\n\n### 9.3 Git branch naming\n\nDefault generated branch name:\n\n```text\nmm/{workflow-slug}/{logical-step-slug}/{checkpoint-short}/{branch-short}-{label-slug}\n```\n\nExample:\n\n```text\nmm/mm-824/implement-story-s004/cp-a1b2c3/cbr-9f2-minimal-api-fix\n```\n\nRules:\n\n1. branch names must be deterministic under an idempotency key;\n2. branch names must be sanitized;\n3. protected branch names such as `main`, `master`, `HEAD`, empty strings, detached heads, and unknown refs must never be used as work branches;\n4. branch name collisions are allowed only when branch metadata proves the existing ref belongs to the same Checkpoint Branch;\n5. otherwise collisions fail closed.\n\n### 9.4 Publish vs promote\n\nPublication and promotion are separate.\n\n```text\npublication = push git branch or create/update PR\npromotion   = accept branch result into canonical workflow progress\n```\n\nA branch may be:\n\n1. unpublished and unpromoted;\n2. published but unpromoted;\n3. promoted but not yet published;\n4. both published and promoted.\n\n---\n\n## 10. Runtime/session policy\n\nBranch turns must declare a runtime context policy before launch.\n\n| Policy | Meaning |\n|---|---|\n| `fresh_agent_run` | Start a new MoonMind AgentRun child workflow for the branch turn. |\n| `reuse_session_new_epoch` | Reuse a workflow-scoped managed session container but clear/reset to a new epoch before the branch turn. |\n| `reuse_session_same_epoch` | Keep session continuity across branch turns; rare and explicit. |\n| `external_provider_continuation` | Delegate continuation to provider-specific semantics when MoonMind cannot directly control runtime state. |\n\nRecommended defaults:\n\n| Operation | Default runtime policy |\n|---|---|\n| Create new branch from checkpoint | `fresh_agent_run` |\n| Continue same branch | `reuse_session_new_epoch` or `fresh_agent_run` |\n| Fork from earlier turn | `fresh_agent_run` |\n| Same runtime conversation | `reuse_session_same_epoch`, approval/capability gated |\n| Omnigent v1 | `fresh_agent_run` with new Omnigent session |\n| Omnigent v2 same-session message | `external_provider_continuation` |\n\n---\n\n## 11. Context bundle\n\nA branch turn receives an immutable, digest-addressed context bundle.\n\nRepresentative shape:\n\n```json\n{\n  \"schemaVersion\": \"v1\",\n  \"workflowId\": \"mm:wf\",\n  \"runId\": \"run_new\",\n  \"logicalStepId\": \"implement-story-S004\",\n  \"executionOrdinal\": 5,\n  \"reason\": \"checkpoint_branch\",\n  \"branch\": {\n    \"branchId\": \"cbr_01J...\",\n    \"branchTurnId\": \"cbt_01J...\",\n    \"label\": \"Try minimal API contract fix\",\n    \"sourceCheckpointRef\": \"art_checkpoint_after_execution\",\n    \"parentBranchId\": null,\n    \"parentTurnId\": null,\n    \"gitWorkBranch\": \"mm/mm-824/implement-story-s004/cp-a1b2c3/cbr-9f2-minimal-api-fix\"\n  },\n  \"taskInputSnapshotRef\": \"art_original_task_input\",\n  \"planRef\": \"art_plan\",\n  \"planDigest\": \"sha256:...\",\n  \"instructionRefs\": [\n    \"art_branch_initial_instructions\",\n    \"art_turn_instructions\"\n  ],\n  \"workspacePolicy\": \"apply_previous_execution_diff_to_clean_baseline\",\n  \"workspaceBaseline\": {\n    \"kind\": \"git_patch\",\n    \"baseCommit\": \"abc123\",\n    \"patchRef\": \"art_execution_2_patch\"\n  },\n  \"priorEvidenceRefs\": [\n    \"art_failed_attempt_manifest\",\n    \"art_failed_attempt_gate_report\",\n    \"art_failed_attempt_diagnostics\"\n  ],\n  \"branchComparisonRefs\": []\n}\n```\n\nRules:\n\n1. include refs and bounded summaries only;\n2. never inline raw logs, raw diffs, provider payloads, or credentials;\n3. include workspace policy and baseline;\n4. include source checkpoint identity;\n5. include branch lineage;\n6. include instruction refs and digests;\n7. include builder version and digest in the artifact metadata.\n\n---\n\n## 12. Omnigent integration\n\n### 12.1 v1 branch mode: fresh Omnigent session from checkpoint\n\nOmnigent v1 uses the streaming-gateway activity shape. It returns a terminal `AgentRunResult` and does not expose non-terminal provider states to MoonMind as branchable Temporal state. Therefore the safe v1 Checkpoint Branch mode is:\n\n```text\nfresh_omnigent_session_from_checkpoint\n```\n\nFlow:\n\n1. validate the source checkpoint;\n2. restore or synthesize an isolated git work branch/workspace from MoonMind evidence;\n3. create a new Omnigent session;\n4. pass branch-turn instructions through `parameters.omnigent.prompt.instructionRef`;\n5. include prior Omnigent capture refs as evidence refs;\n6. capture the new Omnigent session output into MoonMind artifacts;\n7. bind the new Omnigent result to the branch turn evidence.\n\nThe branch must use a new Omnigent idempotency key:\n\n```text\n{workflowId}:{branchId}:{branchTurnId}:omnigent\n```\n\nIt must not reuse the parent Omnigent attempt's idempotency key because branch-turn instructions produce a different first-message digest.\n\n### 12.2 v2 branch mode: provider continuation\n\nSame-session continuation should be enabled only when Omnigent exposes typed lifecycle activities such as:\n\n```text\nintegration.omnigent.send_message\nintegration.omnigent.harvest_session\n```\n\nIn that mode, a branch turn may use:\n\n```json\n{\n  \"runtimeContextPolicy\": \"external_provider_continuation\",\n  \"omnigentContinuation\": {\n    \"sourceSessionId\": \"conv_parent\",\n    \"continuationMode\": \"send_message\",\n    \"instructionRef\": \"art_turn_instructions\",\n    \"harvestAfterTurn\": true\n  }\n}\n```\n\nEven in v2, Omnigent session ids remain runtime bindings and diagnostics metadata. They are not product branch identity.\n\n---\n\n## 13. Branch comparison\n\nBranch comparison should produce durable artifacts.\n\nRepresentative comparison artifact:\n\n```json\n{\n  \"schemaVersion\": \"v1\",\n  \"leftBranchId\": \"cbr_A\",\n  \"rightBranchId\": \"cbr_B\",\n  \"baseCheckpointRef\": \"art_checkpoint_after_execution\",\n  \"git\": {\n    \"leftDiffRef\": \"art_branch_a_diff\",\n    \"rightDiffRef\": \"art_branch_b_diff\",\n    \"rangeDiffRef\": \"art_range_diff\"\n  },\n  \"quality\": {\n    \"leftGateVerdict\": \"FULLY_IMPLEMENTED\",\n    \"rightGateVerdict\": \"ADDITIONAL_WORK_NEEDED\"\n  },\n  \"summaryRef\": \"art_branch_comparison_summary\"\n}\n```\n\nComparison must be ref-backed and bounded. Large diffs and diagnostics stay behind artifact refs.\n\n---\n\n## 14. Security and safety\n\nCheckpoint Branches inherit MoonMind's normal artifact, secrets, runtime, and repository policies.\n\nRules:\n\n1. no raw secrets in branch records, branch turns, context bundles, diagnostics, or instruction artifacts;\n2. artifact refs are identifiers, not direct storage access grants;\n3. checkpoint validation must occur before workspace restoration or runtime launch;\n4. branch workspaces must not write outside approved worktrees;\n5. branch git operations must never push protected branches;\n6. provider continuation must be capability-gated;\n7. non-idempotent external side effects require isolation, compensation, or approval;\n8. promotion requires fresh branch-head validation;\n9. branch archival must not delete audit evidence;\n10. branch comparison must not inline large or sensitive evidence.\n\nFail-closed cases:\n\n```text\ncheckpoint_missing\ncheckpoint_invalid\ncheckpoint_unauthorized\ncheckpoint_digest_mismatch\nplan_mismatch\nworkspace_policy_incompatible\ngit_base_commit_mismatch\ngit_branch_collision\nprotected_branch_ref\nside_effect_policy_blocked\nprovider_continuation_unsupported\napproval_required\nbudget_exhausted\n```\n\n---\n\n## 15. UI requirements\n\n### 15.1 Branch Explorer\n\nThe workflow detail page should include a Branch Explorer:\n\n```text\nStep 2 / checkpoint after_execution / cp-a1b2c3\n  \u251c\u2500 Branch A: Try minimal API contract fix\n  \u2502   \u251c\u2500 Turn 1: failed tests\n  \u2502   \u2514\u2500 Turn 2: passed gate, promotable\n  \u251c\u2500 Branch B: Rewrite client module\n  \u2502   \u2514\u2500 Turn 1: too broad, archived\n  \u2514\u2500 Branch C: Continue Omnigent state\n      \u2514\u2500 Turn 1: provider session unavailable, failed closed\n```\n\n### 15.2 Default detail view\n\nThe default workflow detail view should remain simple. It should show the mainline by default, with branch count and branch status affordances near checkpoints and failed/blocked steps.\n\n### 15.3 Branch actions\n\nThe UI should support:\n\n```text\nCreate branch from checkpoint\nContinue branch\nFork from this turn\nCompare branches\nPromote branch\nPublish branch\nArchive branch\nView branch evidence\nView git diff\nView provider diagnostics\n```\n\n### 15.4 Safety previews\n\nBefore branch creation, show:\n\n```text\nSource checkpoint\nWorkspace policy\nGit work branch name\nRuntime/session policy\nPublish mode\nSide-effect risk\nBudget impact\nApproval requirements\n```\n\nBefore promotion, show:\n\n```text\nBranch head\nGate verdict\nGit commit / PR\nDownstream invalidations\nSide-effect classification\nApproval requirements\nCompeting branches that will remain active or become superseded\n```\n\n---\n\n## 16. Artifact requirements\n\nMinimum artifacts per branch:\n\n```text\ninput.branch.root_checkpoint.json\ninput.branch.initial_instructions.md\nruntime.branch.context_bundle.json\nruntime.branch.workspace_restore.json\nruntime.branch.git_binding.json\noutput.branch.summary.json\noutput.branch.latest_head.json\n```\n\nMinimum artifacts per branch turn:\n\n```text\ninput.branch_turn.instructions.md\nruntime.branch_turn.context_bundle.json\nruntime.branch_turn.agent_request.json\nruntime.branch_turn.agent_result.json\noutput.branch_turn.step_execution_manifest.json\noutput.branch_turn.checkpoint.json\noutput.branch_turn.diagnostics.json\n```\n\nMinimum artifacts per promotion:\n\n```text\noutput.branch_promotion.record.json\noutput.branch_promotion.downstream_invalidation.json\n```\n\nMinimum artifacts per comparison:\n\n```text\noutput.branch_comparison.summary.json\noutput.branch_comparison.range_diff.patch\noutput.branch_comparison.metadata.json\n```\n\n---\n\n## 17. Migration and rollout\n\n### 17.1 Phase 1 \u2014 Branch graph and fresh runtime turns\n\nDeliver:\n\n1. branch and branch turn schemas;\n2. branch create/continue/fork/archive APIs;\n3. instruction artifact storage;\n4. git work branch binding;\n5. fresh runtime turn execution;\n6. branch list/detail UI;\n7. Omnigent v1 fresh-session branch support.\n\nOut of scope:\n\n1. same-session provider continuation;\n2. rich branch compare UI;\n3. auto branch exploration policies;\n4. multi-branch merge.\n\n### 17.2 Phase 2 \u2014 Compare and promote\n\nDeliver:\n\n1. branch comparison artifacts;\n2. compare UI;\n3. promotion API;\n4. downstream invalidation;\n5. promotion audit artifacts;\n6. branch publish/PR controls.\n\n### 17.3 Phase 3 \u2014 Provider continuation\n\nDeliver provider-gated continuation for adapters that support it.\n\nFor Omnigent, this requires typed lifecycle activities such as:\n\n```text\nintegration.omnigent.send_message\nintegration.omnigent.harvest_session\n```\n\n### 17.4 Phase 4 \u2014 Policy-driven branch exploration\n\nAllow workflow templates or presets to request bounded automated branch exploration:\n\n```yaml\ncheckpointBranching:\n  enabled: true\n  triggers:\n    - gate_additional_work_needed\n    - failed_step\n    - operator_requested\n  maxBranchesPerCheckpoint: 3\n  maxTurnsPerBranch: 4\n  promotionPolicy: approval_gated\n  defaultWorkspacePolicy: apply_previous_execution_diff_to_clean_baseline\n  branchTemplates:\n    - label: minimal_fix\n      instructionsRef: art_template_minimal_fix\n    - label: alternative_design\n      instructionsRef: art_template_alternative_design\n```\n\n---\n\n## 18. Testing requirements\n\n### 18.1 Schema tests\n\n1. Branch requires source checkpoint ref.\n2. Branch turn requires instruction ref and digest.\n3. Branch turn cannot mutate after launch.\n4. Product branch id and git branch name remain distinct.\n5. Raw logs, diffs, provider payloads, and secrets are rejected from compact branch state.\n\n### 18.2 Checkpoint validation tests\n\n1. Valid checkpoint enables branch creation.\n2. Missing checkpoint blocks branch creation.\n3. Corrupted checkpoint blocks branch creation.\n4. Plan mismatch blocks branch creation.\n5. Workspace policy mismatch blocks branch creation.\n6. Unauthorized artifact blocks branch creation.\n\n### 18.3 Git isolation tests\n\n1. Branch worktree starts from expected base commit.\n2. Generated branch name is sanitized.\n3. Protected branch push is refused.\n4. Existing branch with matching metadata is reused idempotently.\n5. Existing branch with mismatched metadata fails closed.\n6. Fork from earlier turn creates a distinct git branch.\n\n### 18.4 Runtime tests\n\n1. New branch creates new Step Execution.\n2. Continue branch creates another branch turn and Step Execution.\n3. Fork creates child branch with correct parent lineage.\n4. Runtime idempotency key includes branch turn identity.\n5. Branch failure preserves artifacts and allows follow-up turn.\n\n### 18.5 Promotion tests\n\n1. Promotion requires matching expected branch head.\n2. Promotion requires passed gates.\n3. Promotion records accepted output and invalidations.\n4. Promotion does not delete competing branches.\n5. Promotion requires approval when policy says so.\n\n### 18.6 Omnigent tests\n\n1. Omnigent v1 branch turn creates a fresh Omnigent session.\n2. Omnigent v1 branch turn uses `parameters.omnigent.prompt.instructionRef`.\n3. Omnigent prior session refs are evidence, not branch identity.\n4. Omnigent idempotency key differs from source attempt.\n5. Same-session continuation is rejected unless adapter capability is enabled.\n6. Omnigent capture artifacts bind to branch turn evidence.\n\n---\n\n## 19. Open questions\n\n1. Should branch creation always create a linked follow-up Workflow Execution, or can it run inside the same logical Workflow Execution as a child branch lane?\n2. Should branch promotion update the existing workflow mainline through Continue-As-New, through a workflow update, or through a linked accepted-branch relation?\n3. Should branch ids be globally unique ULIDs or deterministic from source checkpoint plus idempotency key?\n4. Should archived branch git branches be deleted, retained, or left to repository retention policy?\n5. Should branch comparison be synchronous for small diffs and asynchronous for large diffs?\n6. How should UI display many branches from one checkpoint without overwhelming the main workflow detail page?\n7. Which workflows may permit auto-generated branch exploration without user approval?\n8. Should branch promotion support accepted no-code diagnosis as a first-class accepted output?\n\n---\n\n## 20. Desired end state\n\nThe desired end state is:\n\n```text\nWorkflow\n  -> Step\n      -> Checkpoint\n          -> Checkpoint Branch\n              -> Branch Turn\n                  -> Step Execution\n                  -> Git work branch / provider runtime binding\n                  -> Artifacts and diagnostics\n              -> Branch Turn\n                  -> Step Execution\n          -> Checkpoint Branch\n              -> Branch Turn\n                  -> Step Execution\n```\n\nUsers can safely say:\n\n```text\nContinue from this checkpoint with these instructions.\nCreate another branch from the same checkpoint with a different strategy.\nFork from before that bad turn.\nCompare branch A and branch B.\nPromote branch A.\nArchive branch B.\nPublish branch C as a PR but do not promote it yet.\n```\n\nMoonMind remains responsible for checkpoint validation, artifact authority, Step Execution identity, workspace and git isolation, provider/runtime boundaries, gates, side-effect classification, and promotion into canonical workflow progress.\n"
+  },
+  "sourceDocumentClass": "canonical-declarative",
+  "extractedAt": "2026-07-02T00:26:37Z",
+  "designSummary": "The Checkpoint Branch System defines a product-level continuation graph above Step Executions. It lets operators, workflows, or policy fork durable checkpoints into named branch lanes, execute immutable branch turns with explicit workspace/runtime policy, isolate repository work, compare candidates, and promote at most one branch back into canonical workflow progress. The design emphasizes MoonMind-owned authority over provider bindings, append-only artifact evidence, fail-closed safety, idempotent APIs, UI affordances, and phased rollout from manual branch graph/runtime support through compare/promote, provider continuation, and policy-driven exploration.",
+  "canonicalClaims": [
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#1-purpose-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "1. Purpose"
+      ],
+      "summary": "Checkpoint Branches create named independent continuations from eligible checkpoints using branch-local instructions, evidence, policies, and explicit promotion."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#1-purpose-claim-002",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "1. Purpose"
+      ],
+      "summary": "Branches preserve durable evidence, isolate repository changes, keep instructions immutable, support repeated turns, compare and promote candidates, hide runtime continuation behind typed policies, and avoid silent canonical mutation."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#21-add-a-product-level-branch-graph-above-step-executions-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "2.1 Add a product-level branch graph above Step Executions"
+      ],
+      "summary": "The product branch graph is layered above Step Executions; branches are continuation lanes and branch turns create or reference Step Execution evidence."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#22-separate-product-branches-from-git-branches-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "2.2 Separate product branches from git branches"
+      ],
+      "summary": "Checkpoint Branch identity is distinct from git branch identity; git branches are repository isolation bindings."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#23-branching-is-not-ordinary-retry-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "2.3 Branching is not ordinary retry"
+      ],
+      "summary": "Every agent/tool branch turn is a new semantic execution with new Step Execution identity, lineage, source checkpoint identity, immutable instruction ref and digest, declared workspace/runtime policy, and manifest evidence."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#24-branches-are-candidates-until-promoted-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "2.4 Branches are candidates until promoted"
+      ],
+      "summary": "Branches remain candidates until explicit workflow-owned promotion accepts them; completion and publication do not make them canonical."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#25-provider-sessions-are-runtime-bindings,-not-branch-authority-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "2.5 Provider sessions are runtime bindings, not branch authority"
+      ],
+      "summary": "Provider sessions and external ids are diagnostics/runtime bindings; MoonMind records, manifests, checkpoints, artifact refs, git refs, and promotion records remain authoritative."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#3-conceptual-model-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "3. Conceptual model"
+      ],
+      "summary": "The model supports fan-out from checkpoints, branch-local turns, branch heads, child branches, inspectable history, and explicit fan-in through promotion rather than automatic merge."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#5-core-invariants-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "5. Core invariants"
+      ],
+      "summary": "Branches are explicit, root checkpoint backed, source identity pinned, turn metadata immutable, evidence append-only, repository mutations isolated, side effects branch-scoped, comparison artifact-backed, and failures closed."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#6-branch-lifecycle-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "6. Branch lifecycle"
+      ],
+      "summary": "Checkpoint Branches and Branch Turns have explicit states and idempotent operations for create, continue, fork, compare, promote, archive, and publish."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#7-data-model-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "7. Data model"
+      ],
+      "summary": "The data model includes branch, turn, git binding, artifact join records, and optional branch metadata in Step Execution manifests."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#8-api-surface-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "8. API surface"
+      ],
+      "summary": "The API exposes branch discovery, create, continue, fork, compare, promote, and archive routes with typed inputs and idempotency keys."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#9-workspace-and-git-policy-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "9. Workspace and git policy"
+      ],
+      "summary": "Workspace creation modes and policies must be selected and recorded; generated git branch names are deterministic, sanitized, protected-ref safe, and collision checked."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#10-runtime-session-policy-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "10. Runtime/session policy"
+      ],
+      "summary": "Branch turns declare runtime context policy before launch with safe defaults for create, continue, fork, same conversation, and Omnigent modes."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#11-context-bundle-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "11. Context bundle"
+      ],
+      "summary": "Branch turns receive immutable digest-addressed context bundles containing refs and bounded summaries only, never raw logs, diffs, provider payloads, or credentials."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#12-omnigent-integration-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "12. Omnigent integration"
+      ],
+      "summary": "Omnigent v1 branch mode creates a fresh session from MoonMind checkpoint evidence; v2 provider continuation is capability-gated and still treats provider ids as bindings."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#13-branch-comparison-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "13. Branch comparison"
+      ],
+      "summary": "Branch comparison produces durable artifact-backed records with diff refs, gate verdicts, diagnostics refs, and bounded summaries."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#14-security-and-safety-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "14. Security and safety"
+      ],
+      "summary": "Branch records and artifacts avoid secrets, validate checkpoints before restoration/launch, enforce workspace/protected branch limits, gate provider continuation and side effects, validate heads before promotion, and fail closed."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#15-ui-requirements-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "15. UI requirements"
+      ],
+      "summary": "The workflow detail UI includes a Branch Explorer, simple default mainline view with branch affordances, branch actions, and safety previews before creation and promotion."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#16-artifact-requirements-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "16. Artifact requirements"
+      ],
+      "summary": "Minimum artifact sets are required for branches, branch turns, promotions, and comparisons."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#17-migration-and-rollout-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "17. Migration and rollout"
+      ],
+      "summary": "The rollout sequence separates branch graph/fresh runtime turns, compare/promote, provider continuation, and policy-driven branch exploration, with explicit out-of-scope items."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#18-testing-requirements-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "18. Testing requirements"
+      ],
+      "summary": "Schema, checkpoint validation, git isolation, runtime, promotion, and Omnigent tests must cover the branch system contracts."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#19-open-questions-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "19. Open questions"
+      ],
+      "summary": "Open choices remain around workflow execution linkage, promotion mechanics, branch id shape, git ref retention, comparison sync mode, dense UI display, auto-exploration permission, and no-code diagnosis promotion."
+    },
+    {
+      "id": "docs/Workflows/CheckpointBranchSystem.md#20-desired-end-state-claim-001",
+      "path": "docs/Workflows/CheckpointBranchSystem.md",
+      "sections": [
+        "20. Desired end state"
+      ],
+      "summary": "Operators can continue, create alternatives, fork from earlier points, compare branches, and promote a selected branch from durable checkpoint evidence."
+    }
+  ],
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Checkpoint branch primitive",
+      "type": "requirement",
+      "source_section": "1. Purpose",
+      "explanation": "Create independent named continuations from eligible checkpoints."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Durable branch evidence",
+      "type": "artifact",
+      "source_section": "1. Purpose / 5. Core invariants",
+      "explanation": "Preserve append-only evidence through checkpoints, Step Execution manifests, artifacts, diagnostics, comparisons, and promotion records."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Repository isolation",
+      "type": "constraint",
+      "source_section": "1. Purpose / 9. Workspace and git policy",
+      "explanation": "Repository-mutating branches use isolated git branches, worktrees, or provider workspace bindings."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Immutable auditable instructions",
+      "type": "security",
+      "source_section": "1. Purpose / 2.3",
+      "explanation": "Store branch-turn instructions by artifact ref and digest and prohibit mutation after launch."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Repeated branch turns",
+      "type": "requirement",
+      "source_section": "1. Purpose / 3. Conceptual model",
+      "explanation": "Allow multiple turns on a branch while preserving lineage."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Compare and promote branches",
+      "type": "requirement",
+      "source_section": "1. Purpose / 6.3 / 13",
+      "explanation": "Compare candidates through artifacts and explicitly promote zero or one."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Typed runtime policies",
+      "type": "integration",
+      "source_section": "1. Purpose / 10",
+      "explanation": "Represent runtime/provider semantics with declared policies."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "No silent canonical advancement",
+      "type": "constraint",
+      "source_section": "1. Purpose / 2.4",
+      "explanation": "Exploration, publication, and completion do not silently advance canonical workflow state."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Product graph above executions",
+      "type": "state-model",
+      "source_section": "2.1",
+      "explanation": "Model branches above logical steps, Step Executions, checkpoints, turns, and child branches."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Product/git identity separation",
+      "type": "state-model",
+      "source_section": "2.2",
+      "explanation": "Keep product branch and git work branch identities distinct."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Branch turn semantic execution",
+      "type": "requirement",
+      "source_section": "2.3",
+      "explanation": "Branch turns are new semantic executions, not retries."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "MoonMind authority over provider ids",
+      "type": "constraint",
+      "source_section": "2.5",
+      "explanation": "MoonMind-owned records and artifacts are authoritative; provider ids are bindings."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Fan-out/fan-in model",
+      "type": "state-model",
+      "source_section": "3.3",
+      "explanation": "Multiple branches can fork from one checkpoint; combining results requires promotion or explicit evidence input."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Lifecycle states and operations",
+      "type": "state-model",
+      "source_section": "6",
+      "explanation": "Expose explicit states and canonical idempotent operations."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Branch data records",
+      "type": "requirement",
+      "source_section": "7",
+      "explanation": "Persist branch records, turn records, git bindings, artifact associations, and manifest branch metadata."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "API contracts",
+      "type": "integration",
+      "source_section": "8",
+      "explanation": "Provide REST APIs for discovery, create, continue, fork, compare, promote, and archive."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Workspace policy recording",
+      "type": "constraint",
+      "source_section": "9",
+      "explanation": "Record selected workspace policy in branch metadata, turn metadata, manifests, and diagnostics."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Safe git branch naming",
+      "type": "security",
+      "source_section": "9.3",
+      "explanation": "Generate deterministic, sanitized, protected-ref-safe, collision-checked work branch names."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Runtime session policy defaults",
+      "type": "requirement",
+      "source_section": "10",
+      "explanation": "Use explicit runtime context policies and safe defaults for create, continue, fork, same conversation, and Omnigent."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Compact context bundle",
+      "type": "artifact",
+      "source_section": "11",
+      "explanation": "Provide immutable digest-addressed context bundles with refs, bounded summaries, lineage, policies, source checkpoint identity, and builder metadata."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Context payload exclusions",
+      "type": "security",
+      "source_section": "11",
+      "explanation": "Never inline raw logs, raw diffs, provider payloads, or credentials in compact context."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Omnigent v1 fresh branch mode",
+      "type": "integration",
+      "source_section": "12.1",
+      "explanation": "Create fresh Omnigent sessions from MoonMind evidence using instruction refs and new idempotency keys."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Omnigent v2 gated continuation",
+      "type": "integration",
+      "source_section": "12.2",
+      "explanation": "Require typed lifecycle activities and capability gates for same-session provider continuation."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Artifact-backed comparison",
+      "type": "artifact",
+      "source_section": "13",
+      "explanation": "Persist diff refs, quality verdicts, diagnostics, and bounded summaries for comparisons."
+    },
+    {
+      "id": "DESIGN-REQ-025",
+      "title": "Security fail-closed behavior",
+      "type": "security",
+      "source_section": "14",
+      "explanation": "Fail closed for checkpoint, auth, digest, policy, protected ref, provider, approval, and budget failures."
+    },
+    {
+      "id": "DESIGN-REQ-026",
+      "title": "Branch Explorer UI",
+      "type": "requirement",
+      "source_section": "15",
+      "explanation": "Provide Branch Explorer, branch actions, mainline affordances, and safety previews."
+    },
+    {
+      "id": "DESIGN-REQ-027",
+      "title": "Minimum artifact inventory",
+      "type": "artifact",
+      "source_section": "16",
+      "explanation": "Emit minimum named artifacts for branches, turns, promotions, and comparisons."
+    },
+    {
+      "id": "DESIGN-REQ-028",
+      "title": "Phased rollout boundaries",
+      "type": "migration",
+      "source_section": "17",
+      "explanation": "Separate manual branch graph/fresh turns, compare/promote, provider continuation, and policy exploration phases."
+    },
+    {
+      "id": "DESIGN-REQ-029",
+      "title": "Required test coverage",
+      "type": "requirement",
+      "source_section": "18",
+      "explanation": "Cover schema, checkpoint validation, git isolation, runtime, promotion, and Omnigent contracts."
+    },
+    {
+      "id": "DESIGN-REQ-030",
+      "title": "Open product choices",
+      "type": "constraint",
+      "source_section": "19",
+      "explanation": "Preserve unresolved choices for downstream clarification."
+    }
+  ],
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Persist checkpoint branch graph and lifecycle state",
+      "shortName": "branch-graph",
+      "description": "As a workflow operator, I need MoonMind to persist explicit Checkpoint Branch and Branch Turn records above Step Executions so every continuation lane has durable lineage, lifecycle state, and source checkpoint identity.",
+      "sourceReference": {
+        "path": "docs/Workflows/CheckpointBranchSystem.md",
+        "title": "Checkpoint Branch System",
+        "sections": [
+          "1. Purpose",
+          "2.1 Add a product-level branch graph above Step Executions",
+          "3. Conceptual model",
+          "5. Core invariants",
+          "6. Branch lifecycle",
+          "7. Data model",
+          "20. Desired end state"
+        ],
+        "claimIds": [
+          "docs/Workflows/CheckpointBranchSystem.md#1-purpose-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#1-purpose-claim-002",
+          "docs/Workflows/CheckpointBranchSystem.md#21-add-a-product-level-branch-graph-above-step-executions-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#3-conceptual-model-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#5-core-invariants-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#6-branch-lifecycle-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#7-data-model-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#20-desired-end-state-claim-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "why": "This is the backbone for every downstream branch operation.",
+      "scope": [
+        "Branch and turn persistence records",
+        "Root checkpoint and parent lineage fields",
+        "Lifecycle states and canonical operation names",
+        "Step Execution manifest branch metadata extension"
+      ],
+      "outOfScope": [
+        "Running agent work",
+        "Git workspace materialization",
+        "Dashboard rendering"
+      ],
+      "independentTest": "Create branches and turns against fixture checkpoints and assert records, state transitions, lineage, source checkpoint identity, and manifest metadata.",
+      "acceptanceCriteria": [
+        "A branch cannot be created without a valid source checkpoint ref or typed source state ref.",
+        "Records preserve workflow, run, logical step, source execution ordinal, checkpoint boundary, ref, and digest when available.",
+        "Branch and turn states match the canonical lifecycle vocabulary.",
+        "Branch records remain distinct from Step Execution identities.",
+        "Child branches preserve parent branch and parent turn lineage."
+      ],
+      "requirements": [
+        "Persist branch, turn, artifact, git binding, and manifest branch metadata records.",
+        "Represent fan-out and child forks.",
+        "Keep failed, archived, superseded, and unpromoted evidence append-only."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owned by this story.",
+        "DESIGN-REQ-002": "Owned by this story.",
+        "DESIGN-REQ-005": "Owned by this story.",
+        "DESIGN-REQ-009": "Owned by this story.",
+        "DESIGN-REQ-013": "Owned by this story.",
+        "DESIGN-REQ-014": "Owned by this story.",
+        "DESIGN-REQ-015": "Owned by this story."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "Existing Step Execution persistence can be extended with optional branch metadata."
+      ],
+      "needsClarification": [
+        "Whether branch creation always creates a linked follow-up Workflow Execution or can run inside the same logical Workflow Execution."
+      ]
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Launch immutable branch turns as new Step Execution evidence",
+      "shortName": "branch-turns",
+      "description": "As a workflow runtime, I need each branch turn to execute as a new semantic unit with immutable instruction refs, declared policies, compact context, and Step Execution evidence.",
+      "sourceReference": {
+        "path": "docs/Workflows/CheckpointBranchSystem.md",
+        "title": "Checkpoint Branch System",
+        "sections": [
+          "2.3 Branching is not ordinary retry",
+          "5. Core invariants",
+          "10. Runtime/session policy",
+          "11. Context bundle",
+          "16. Artifact requirements"
+        ],
+        "claimIds": [
+          "docs/Workflows/CheckpointBranchSystem.md#23-branching-is-not-ordinary-retry-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#5-core-invariants-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#10-runtime-session-policy-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#11-context-bundle-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#16-artifact-requirements-claim-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-027"
+        ]
+      },
+      "why": "Branch work must not be represented as retries or mutable prompts.",
+      "scope": [
+        "Instruction artifact refs and digests",
+        "Runtime policy declaration",
+        "Immutable context bundle",
+        "New Step Execution or typed continuation evidence",
+        "Minimum branch-turn artifacts"
+      ],
+      "outOfScope": [
+        "Provider-specific continuation internals",
+        "Promotion and comparison decisions"
+      ],
+      "independentTest": "Launch a branch turn and verify new evidence, immutable digest, context bundle ref, required artifacts, and compact-state rejection for raw/sensitive payloads.",
+      "acceptanceCriteria": [
+        "Agent/tool work creates a new Step Execution identity or typed continuation evidence.",
+        "Instruction text is artifact-backed with digest before launch and immutable afterward.",
+        "Workspace and runtime policies are declared before launch and copied to metadata, manifest, and diagnostics.",
+        "Context bundle includes refs, bounded summaries, source checkpoint identity, lineage, instructions, baseline, and builder metadata.",
+        "Context validation rejects raw logs, raw diffs, provider payloads, and credentials."
+      ],
+      "requirements": [
+        "Differentiate branch turns from Activity retry.",
+        "Support runtime context policies from the design.",
+        "Emit minimum branch-turn artifacts."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-004": "Owned by this story.",
+        "DESIGN-REQ-007": "Owned by this story.",
+        "DESIGN-REQ-011": "Owned by this story.",
+        "DESIGN-REQ-019": "Owned by this story.",
+        "DESIGN-REQ-020": "Owned by this story.",
+        "DESIGN-REQ-021": "Owned by this story.",
+        "DESIGN-REQ-027": "Owned by this story."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Artifact storage provides digest-addressed refs."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Isolate branch workspaces with safe git bindings",
+      "shortName": "git-isolation",
+      "description": "As a repository maintainer, I need code-changing branches to run in isolated git branches or worktrees with deterministic protected-ref-safe naming.",
+      "sourceReference": {
+        "path": "docs/Workflows/CheckpointBranchSystem.md",
+        "title": "Checkpoint Branch System",
+        "sections": [
+          "2.2 Separate product branches from git branches",
+          "5. Core invariants",
+          "9. Workspace and git policy",
+          "14. Security and safety",
+          "18.3 Git isolation tests"
+        ],
+        "claimIds": [
+          "docs/Workflows/CheckpointBranchSystem.md#22-separate-product-branches-from-git-branches-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#5-core-invariants-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#9-workspace-and-git-policy-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#14-security-and-safety-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#18-testing-requirements-claim-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-029"
+        ]
+      },
+      "why": "Repository mutation requires explicit isolation and fail-closed validation.",
+      "scope": [
+        "Git binding records",
+        "Workspace creation modes and policies",
+        "Deterministic sanitized branch names",
+        "Protected-ref and collision checks",
+        "Workspace restoration diagnostics"
+      ],
+      "outOfScope": [
+        "Provider session continuation",
+        "Pull request creation beyond metadata"
+      ],
+      "independentTest": "Use fixture repos to assert branch/worktree isolation, deterministic names, protected-ref refusal, idempotent reuse, and mismatched collision failure.",
+      "acceptanceCriteria": [
+        "Repository-mutating branches require distinct git branch, worktree, or provider workspace binding.",
+        "Product branch id and git work branch name are stored separately.",
+        "Workspace policy is recorded in all required branch, turn, manifest, and diagnostics places.",
+        "Generated names are deterministic and sanitized.",
+        "Protected refs, detached heads, unknown refs, and mismatched collisions fail closed."
+      ],
+      "requirements": [
+        "Support the workspace modes and policies from the design.",
+        "Emit workspace_restore and git_binding artifacts."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-003": "Owned by this story.",
+        "DESIGN-REQ-010": "Owned by this story.",
+        "DESIGN-REQ-017": "Owned by this story.",
+        "DESIGN-REQ-018": "Owned by this story.",
+        "DESIGN-REQ-025": "Owned by this story.",
+        "DESIGN-REQ-029": "Owned by this story."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Fixture repositories can cover behavior without remote pushes."
+      ],
+      "needsClarification": [
+        "Whether archived branch git refs are deleted, retained, or left to repository retention policy."
+      ]
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Expose idempotent checkpoint branch APIs",
+      "shortName": "branch-apis",
+      "description": "As a dashboard or workflow client, I need typed idempotent APIs to discover, create, continue, fork, compare, promote, publish, and archive branches.",
+      "sourceReference": {
+        "path": "docs/Workflows/CheckpointBranchSystem.md",
+        "title": "Checkpoint Branch System",
+        "sections": [
+          "6.2 Operations",
+          "8. API surface",
+          "9.4 Publish vs promote",
+          "14. Security and safety"
+        ],
+        "claimIds": [
+          "docs/Workflows/CheckpointBranchSystem.md#24-branches-are-candidates-until-promoted-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#6-branch-lifecycle-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#8-api-surface-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#14-security-and-safety-claim-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "why": "Stable API contracts are required for UI and automated policy clients.",
+      "scope": [
+        "Discovery routes",
+        "Create/continue/fork/compare/promote/archive/publish operation wiring",
+        "Request validation",
+        "Publication/promotion separation"
+      ],
+      "outOfScope": [
+        "Rich Branch Explorer rendering",
+        "Provider execution internals"
+      ],
+      "independentTest": "Exercise route contracts with valid and invalid requests and assert idempotency, typed failures, no implicit promotion, expected-head checks, and non-destructive archive.",
+      "acceptanceCriteria": [
+        "Clients can list checkpoints, branches, details, and turns.",
+        "Side-effecting operations accept idempotency keys.",
+        "Publishing does not promote.",
+        "Promotion requires expected head, gate evidence, side-effect disposition, and approval evidence when policy requires it.",
+        "Archive hides active work without deleting evidence."
+      ],
+      "requirements": [
+        "Expose source API paths.",
+        "Fail closed for invalid source, auth, digest, policy, protected ref, provider, approval, and budget cases.",
+        "Use typed payloads rather than inferred logs or branch names."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-006": "Owned by this story.",
+        "DESIGN-REQ-008": "Owned by this story.",
+        "DESIGN-REQ-014": "Owned by this story.",
+        "DESIGN-REQ-016": "Owned by this story.",
+        "DESIGN-REQ-025": "Owned by this story."
+      },
+      "dependencies": [
+        "STORY-001",
+        "STORY-003"
+      ],
+      "assumptions": [
+        "Gate verdicts are available as step evidence artifacts."
+      ],
+      "needsClarification": [
+        "Whether promotion updates mainline through Continue-As-New, workflow update, or linked accepted-branch relation."
+      ]
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Support Omnigent branch runtime modes safely",
+      "shortName": "omnigent-branches",
+      "description": "As a workflow integrator, I need Omnigent branch turns to use fresh sessions for v1 and capability-gated provider continuation for v2.",
+      "sourceReference": {
+        "path": "docs/Workflows/CheckpointBranchSystem.md",
+        "title": "Checkpoint Branch System",
+        "sections": [
+          "2.5 Provider sessions are runtime bindings, not branch authority",
+          "10. Runtime/session policy",
+          "12. Omnigent integration",
+          "14. Security and safety",
+          "18.6 Omnigent tests"
+        ],
+        "claimIds": [
+          "docs/Workflows/CheckpointBranchSystem.md#25-provider-sessions-are-runtime-bindings,-not-branch-authority-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#10-runtime-session-policy-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#12-omnigent-integration-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#14-security-and-safety-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#18-testing-requirements-claim-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-029"
+        ]
+      },
+      "why": "Omnigent has explicit v1 and v2 branch semantics in the design.",
+      "scope": [
+        "Omnigent v1 fresh session flow",
+        "instructionRef payload shape",
+        "Prior capture refs as evidence",
+        "Branch-turn idempotency key",
+        "Capability gate for lifecycle continuation"
+      ],
+      "outOfScope": [
+        "General branch graph persistence",
+        "Non-Omnigent adapters unless sharing the same contract"
+      ],
+      "independentTest": "Adapter-boundary tests verify fresh v1 sessions, instructionRef payloads, prior refs as evidence, distinct idempotency, and gated same-session continuation.",
+      "acceptanceCriteria": [
+        "Omnigent v1 validates checkpoint and restores/synthesizes isolated workspace before creating a new session.",
+        "Requests use parameters.omnigent.prompt.instructionRef.",
+        "Prior captures are evidence refs, not branch identity.",
+        "Idempotency key includes workflow id, branch id, and branch turn id.",
+        "Same-session continuation is rejected unless lifecycle activities and capability gates are enabled."
+      ],
+      "requirements": [
+        "Capture Omnigent output into artifacts.",
+        "Bind Omnigent results to branch-turn evidence.",
+        "Treat provider ids as diagnostics only."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-007": "Owned by this story.",
+        "DESIGN-REQ-012": "Owned by this story.",
+        "DESIGN-REQ-019": "Owned by this story.",
+        "DESIGN-REQ-022": "Owned by this story.",
+        "DESIGN-REQ-023": "Owned by this story.",
+        "DESIGN-REQ-025": "Owned by this story.",
+        "DESIGN-REQ-029": "Owned by this story."
+      },
+      "dependencies": [
+        "STORY-002",
+        "STORY-003"
+      ],
+      "assumptions": [
+        "Adapter capability discovery can be exposed through the existing boundary."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Compare, promote, publish, and archive branch evidence",
+      "shortName": "branch-outcomes",
+      "description": "As a workflow owner, I need durable comparison, promotion, publication, and archival records so I can evaluate candidates and explicitly accept one result.",
+      "sourceReference": {
+        "path": "docs/Workflows/CheckpointBranchSystem.md",
+        "title": "Checkpoint Branch System",
+        "sections": [
+          "2.4 Branches are candidates until promoted",
+          "3.3 Branch fan-out and fan-in",
+          "6.3 Promotion",
+          "9.4 Publish vs promote",
+          "13. Branch comparison",
+          "16. Artifact requirements",
+          "18.5 Promotion tests"
+        ],
+        "claimIds": [
+          "docs/Workflows/CheckpointBranchSystem.md#24-branches-are-candidates-until-promoted-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#3-conceptual-model-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#13-branch-comparison-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#16-artifact-requirements-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#18-testing-requirements-claim-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-024",
+          "DESIGN-REQ-027",
+          "DESIGN-REQ-029",
+          "DESIGN-REQ-030"
+        ]
+      },
+      "why": "Branch exploration needs evidence-backed fan-in without destroying alternatives.",
+      "scope": [
+        "Comparison artifacts",
+        "Promotion records",
+        "Publication status metadata",
+        "Archive records",
+        "Non-deletion of competing branches"
+      ],
+      "outOfScope": [
+        "Branch execution launch mechanics",
+        "Dashboard visualization beyond records"
+      ],
+      "independentTest": "Create two fixture branches, compare them, publish one, promote it with matching expected head, and assert artifacts, records, invalidations, metadata, and surviving alternatives.",
+      "acceptanceCriteria": [
+        "Comparison produces durable artifact-backed records with branch ids, base checkpoint, diff refs, quality verdicts, diagnostics, and summary refs.",
+        "Promotion records branch, turn, Step Execution, accepted output, git/PR, gate, side-effect, invalidation, approval, and policy evidence.",
+        "Promotion requires fresh head validation and passed gates.",
+        "Publication and promotion remain separate.",
+        "Promotion does not delete competing branches; archive is non-destructive."
+      ],
+      "requirements": [
+        "Emit comparison and promotion artifacts from the design.",
+        "Preserve open product choices around async comparison and no-code diagnosis."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-006": "Owned by this story.",
+        "DESIGN-REQ-008": "Owned by this story.",
+        "DESIGN-REQ-013": "Owned by this story.",
+        "DESIGN-REQ-024": "Owned by this story.",
+        "DESIGN-REQ-027": "Owned by this story.",
+        "DESIGN-REQ-029": "Owned by this story.",
+        "DESIGN-REQ-030": "Owned by this story."
+      },
+      "dependencies": [
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Range diff and gate artifacts may be asynchronous for large branches."
+      ],
+      "needsClarification": [
+        "Whether branch comparison should be synchronous for small diffs and asynchronous for large diffs.",
+        "Whether branch promotion should support accepted no-code diagnosis as a first-class output."
+      ]
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Render Branch Explorer and safety previews",
+      "shortName": "branch-ui",
+      "description": "As a dashboard user, I need a Branch Explorer, branch actions, mainline affordances, evidence links, and pre-action safety previews.",
+      "sourceReference": {
+        "path": "docs/Workflows/CheckpointBranchSystem.md",
+        "title": "Checkpoint Branch System",
+        "sections": [
+          "15. UI requirements",
+          "19. Open questions"
+        ],
+        "claimIds": [
+          "docs/Workflows/CheckpointBranchSystem.md#15-ui-requirements-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#19-open-questions-claim-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-026",
+          "DESIGN-REQ-030"
+        ]
+      },
+      "why": "The branch graph must be visible and operable without overwhelming workflow detail.",
+      "scope": [
+        "Branch Explorer tree",
+        "Mainline-focused workflow detail affordances",
+        "Branch action controls",
+        "Evidence/diff/provider diagnostics links",
+        "Creation and promotion previews"
+      ],
+      "outOfScope": [
+        "Backend execution semantics",
+        "Rich comparison UI beyond bounded summaries if not available"
+      ],
+      "independentTest": "UI tests with mocked branch APIs verify tree rendering, mainline defaults, action availability, preview fields, and dense branch behavior.",
+      "acceptanceCriteria": [
+        "Workflow detail defaults to mainline and shows branch count/status near checkpoints and failed/blocked steps.",
+        "Branch Explorer shows hierarchy, states, and evidence links.",
+        "Users can initiate branch actions when policy allows.",
+        "Creation preview shows checkpoint, workspace policy, git branch, runtime policy, publish mode, side-effect risk, budget impact, and approvals.",
+        "Promotion preview shows head, gate, git/PR, invalidations, side effects, approvals, and competing branches."
+      ],
+      "requirements": [
+        "Keep default detail simple.",
+        "Support many branches without log/git inference."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-026": "Owned by this story.",
+        "DESIGN-REQ-030": "Owned by this story."
+      },
+      "dependencies": [
+        "STORY-004",
+        "STORY-006"
+      ],
+      "assumptions": [
+        "Backend APIs provide bounded summaries and artifact refs."
+      ],
+      "needsClarification": [
+        "How the UI should display many branches from one checkpoint without overwhelming the main workflow detail page."
+      ]
+    },
+    {
+      "id": "STORY-008",
+      "summary": "Gate automated branch exploration by policy",
+      "shortName": "branch-policy",
+      "description": "As a platform operator, I need workflow templates or presets to request bounded automated branch exploration only under explicit policy.",
+      "sourceReference": {
+        "path": "docs/Workflows/CheckpointBranchSystem.md",
+        "title": "Checkpoint Branch System",
+        "sections": [
+          "14. Security and safety",
+          "17.4 Phase 4 - Policy-driven branch exploration",
+          "19. Open questions"
+        ],
+        "claimIds": [
+          "docs/Workflows/CheckpointBranchSystem.md#14-security-and-safety-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#17-migration-and-rollout-claim-001",
+          "docs/Workflows/CheckpointBranchSystem.md#19-open-questions-claim-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-028",
+          "DESIGN-REQ-030"
+        ]
+      },
+      "why": "Policy-driven exploration is a later phase and must be bounded before automation creates branches.",
+      "scope": [
+        "checkpointBranching configuration",
+        "Trigger filtering",
+        "Branch and turn caps",
+        "Approval-gated promotion",
+        "Default workspace policy and branch template refs"
+      ],
+      "outOfScope": [
+        "Phase 1 manual branch creation",
+        "Provider continuation implementation beyond existing gates"
+      ],
+      "independentTest": "Preset fixtures assert trigger filtering, caps, approval-gated promotion, instruction refs, workspace defaults, and budget/approval fail-closed behavior.",
+      "acceptanceCriteria": [
+        "Automated exploration is disabled unless explicitly enabled in authorized template or preset.",
+        "Triggers are limited to configured values.",
+        "maxBranchesPerCheckpoint and maxTurnsPerBranch are enforced.",
+        "Promotion remains approval-gated unless policy explicitly allows another safe mode.",
+        "Budget, side-effect, unsupported provider, and approval failures fail closed."
+      ],
+      "requirements": [
+        "Record policy-created branches the same as operator-created branches.",
+        "Preserve rollout boundaries until selected."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-025": "Owned by this story.",
+        "DESIGN-REQ-028": "Owned by this story.",
+        "DESIGN-REQ-030": "Owned by this story."
+      },
+      "dependencies": [
+        "STORY-004",
+        "STORY-006"
+      ],
+      "assumptions": [
+        "Workflow presets are the durable policy location after manual phases land."
+      ],
+      "needsClarification": [
+        "Which workflows may permit auto-generated branch exploration without user approval?"
+      ]
+    }
+  ],
+  "coverageMatrix": {
+    "docs/Workflows/CheckpointBranchSystem.md#1-purpose-claim-001": [
+      "STORY-001"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#1-purpose-claim-002": [
+      "STORY-001"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#21-add-a-product-level-branch-graph-above-step-executions-claim-001": [
+      "STORY-001"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#22-separate-product-branches-from-git-branches-claim-001": [
+      "STORY-003"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#23-branching-is-not-ordinary-retry-claim-001": [
+      "STORY-002"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#24-branches-are-candidates-until-promoted-claim-001": [
+      "STORY-004",
+      "STORY-006"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#25-provider-sessions-are-runtime-bindings,-not-branch-authority-claim-001": [
+      "STORY-005"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#3-conceptual-model-claim-001": [
+      "STORY-001",
+      "STORY-006"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#5-core-invariants-claim-001": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#6-branch-lifecycle-claim-001": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#7-data-model-claim-001": [
+      "STORY-001"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#8-api-surface-claim-001": [
+      "STORY-004"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#9-workspace-and-git-policy-claim-001": [
+      "STORY-003"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#10-runtime-session-policy-claim-001": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#11-context-bundle-claim-001": [
+      "STORY-002"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#12-omnigent-integration-claim-001": [
+      "STORY-005"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#13-branch-comparison-claim-001": [
+      "STORY-006"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#14-security-and-safety-claim-001": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-005",
+      "STORY-008"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#15-ui-requirements-claim-001": [
+      "STORY-007"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#16-artifact-requirements-claim-001": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#17-migration-and-rollout-claim-001": [
+      "STORY-008"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#18-testing-requirements-claim-001": [
+      "STORY-003",
+      "STORY-005",
+      "STORY-006"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#19-open-questions-claim-001": [
+      "STORY-007",
+      "STORY-008"
+    ],
+    "docs/Workflows/CheckpointBranchSystem.md#20-desired-end-state-claim-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-004",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-004",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-001",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-025": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-005",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-026": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-027": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-028": [
+      "STORY-008"
+    ],
+    "DESIGN-REQ-029": [
+      "STORY-003",
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-030": [
+      "STORY-006",
+      "STORY-007",
+      "STORY-008"
+    ]
+  },
+  "outOfScopeItems": [
+    {
+      "item": "Creating spec.md files or specs/ directories",
+      "rationale": "Breakdown only writes temporary derived story artifacts."
+    },
+    {
+      "item": "Implementing code from the design",
+      "rationale": "This step only decomposes the canonical design into story candidates."
+    },
+    {
+      "item": "Treating rollout phases as story boundaries by default",
+      "rationale": "Stories are split by independently valuable outcomes, not phase checklist items."
+    }
+  ],
+  "recommendedFirstStory": "STORY-001",
+  "outputMode": "jira"
+}
