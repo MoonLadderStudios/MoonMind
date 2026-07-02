@@ -9,6 +9,7 @@ ALLOWED_ARCHIVAL_POINTERS = {
     Path("docs/Workflows/WorkflowStatus.md"),
     Path("docs/Temporal/StatusDomainMatrix.md"),
     Path("tests/unit/docs/test_status_authority_references.py"),
+    Path("tests/unit/tools/test_status_domain_audit.py"),
 }
 SCAN_ROOTS = (
     "api_service",

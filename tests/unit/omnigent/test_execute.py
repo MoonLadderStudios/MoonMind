@@ -177,9 +177,13 @@ def test_build_omnigent_result_uses_valid_failure_class_for_timeout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> None:
+async def test_run_omnigent_execution_waits_for_terminal_result(
+    monkeypatch,
+    tmp_path,
+) -> None:
     created_clients: list[object] = []
     heartbeats: list[dict[str, Any]] = []
+    large_provider_state = "large-provider-state:" + ("x" * 12_000)
 
     class FakeClient:
         def __init__(self, **_: object) -> None:
@@ -218,10 +222,14 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
                 "summary": "done",
                 "outputRefs": ["artifact://final"],
                 "diagnosticsRef": "artifact://diagnostics",
+                "transcript": large_provider_state,
             }
 
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
-    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setenv(
+        "OMNIGENT_SERVER_URL",
+        "https://operator@omnigent.test:443/api?debug=1",
+    )
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
     monkeypatch.setattr(
         "moonmind.omnigent.execute._safe_heartbeat",
@@ -237,19 +245,66 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
             parameters={
                 "title": "Execute Omnigent",
                 "omnigent": {
+                    "endpointRef": "endpoint:test",
                     "agent": {"agentName": "codex-native-ui"},
                     "session": {"allowEmptyWorkspace": True},
                     "prompt": {"text": "Do the task"},
                 },
             },
-        )
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
     )
 
     assert result.summary == "done"
     assert result.output_refs
     assert all(ref.startswith("artifact://omnigent/") for ref in result.output_refs)
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
+    assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")
+    assert "workspaceRootRef" not in result.metadata
+    assert result.metadata["checkpointKind"] == "external_state_ref"
+    assert result.metadata["idempotencyKey"] == "idem-1"
     assert result.metadata["normalizedStatus"] == "completed"
+    result_payload = result.model_dump(by_alias=True, mode="json")
+    assert large_provider_state not in json.dumps(result_payload)
+    external_state = json.loads(
+        (tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert external_state["sourceIssue"] == "MM-1077"
+    assert external_state["endpoint"] == {
+        "endpointRef": "endpoint:test",
+        "serverUrl": "https://omnigent.test:443/api",
+    }
+    assert external_state["correlation"] == {
+        "correlationId": "corr-1",
+        "idempotencyKey": "idem-1",
+        "omnigentSessionId": "session-1",
+        "omnigentAgentId": "agent-1",
+    }
+    assert external_state["firstMessage"]["digest"]
+    assert external_state["firstMessage"]["requestRef"].startswith(
+        "artifact://omnigent/"
+    )
+    assert external_state["firstMessage"]["responseRef"].startswith(
+        "artifact://omnigent/"
+    )
+    assert external_state["firstMessage"]["posted"] is True
+    assert external_state["reattachState"]["initialSnapshotRef"].startswith(
+        "artifact://omnigent/"
+    )
+    assert external_state["streamRefs"]["rawSseStreamRef"].startswith(
+        "artifact://omnigent/"
+    )
+    assert external_state["snapshotRefs"]["finalSnapshotRef"].startswith(
+        "artifact://omnigent/"
+    )
+    assert external_state["terminalResultRefs"]["diagnosticsRef"] == result.diagnostics_ref
+    assert external_state["patchEvidence"]["patchUnavailable"] is True
+    assert external_state["patchEvidence"]["diagnostics"][0]["code"] == (
+        "omnigent_patch_unavailable"
+    )
+    assert large_provider_state not in json.dumps(external_state)
     assert created_clients
     assert heartbeats
     assert all("normalizedStatus" in heartbeat for heartbeat in heartbeats)
@@ -296,6 +351,9 @@ async def test_run_omnigent_execution_reports_httpx_transport_errors(
     assert result.failure_class == "integration_error"
     assert result.provider_error_code == "omnigent_http_error"
     assert result.metadata["normalizedStatus"] == "failed"
+    assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")
+    assert result.metadata["checkpointKind"] == "external_state_ref"
+    assert "workspaceRootRef" not in result.metadata
 
 
 @pytest.mark.asyncio
@@ -907,6 +965,8 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     class Row:
         omnigent_session_id = "persisted-session"
         first_message_state = "posted"
+        first_message_pending_id = "pending-1"
+        first_message_item_id = "item-1"
 
     class Store:
         async def get_or_create(self, **_: object) -> Row:
@@ -969,6 +1029,8 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
 
     assert result.summary == "durably reattached"
     assert calls == []
+    assert result.metadata["checkpointKind"] == "external_state_ref"
+    assert "workspaceRootRef" not in result.metadata
     assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")
     external_state = json.loads(
         await artifact_gateway.read_text(result.metadata["externalStateRef"])
@@ -978,6 +1040,11 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     assert external_state["retry"]["attachSource"] == "durable_idempotency_mapping"
     assert external_state["retry"]["firstMessageOutcome"] == "already_posted"
     assert external_state["firstMessage"]["state"] == "posted"
+    assert external_state["firstMessage"]["posted"] is True
+    assert external_state["firstMessage"]["responseIdentifiers"] == {
+        "pendingId": "pending-1",
+        "itemId": "item-1",
+    }
     assert external_state["artifactRefs"]["diagnosticsRef"] == result.diagnostics_ref
 
 
@@ -1316,6 +1383,17 @@ async def test_run_omnigent_execution_harvests_changed_and_session_files(
     assert manifest["workspaceFiles"][0]["path"] == "README.md"
     assert manifest["workspaceDiffs"][0]["path"] == "src/app.py"
     assert manifest["patchUnavailable"] is False
+    external_state_path = tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json"
+    external_state = json.loads(external_state_path.read_text(encoding="utf-8"))
+    assert external_state["patchEvidence"] == {
+        "diffRefs": [
+            {
+                "path": "src/app.py",
+                "artifactRef": manifest["workspaceDiffs"][0]["artifactRef"],
+            }
+        ],
+        "patchUnavailable": False,
+    }
 
 
 @pytest.mark.asyncio
