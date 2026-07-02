@@ -13305,6 +13305,12 @@ class MoonMindRunWorkflow:
             step_execution_payload["memoryContextRef"] = (
                 attempt_context.memory_context_ref
             )
+        if isinstance(branch_projection, Mapping):
+            step_execution_payload["branch"] = dict(branch_projection)
+        if isinstance(branch_artifact_manifest, Mapping):
+            step_execution_payload["branchArtifactManifest"] = dict(
+                branch_artifact_manifest
+            )
         if agent_kind == "managed":
             session_reset = self._managed_reattempt_session_reset_evidence(
                 node_id,

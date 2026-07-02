@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/integration/test_interventions.py (score: 1.000, trust: canonical)\n    line 3: from httpx import AsyncClient, ASGITransport\n2. moonmind/mcp/executable_tool_registry.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n3. api_service/services/oauth_auth_runner.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n4. api_service/services/manifest_sync_service.py (score: 1.000, trust: canonical)\n    line 1: from __future__ import annotations\n5. api_service/services/settings_change_subscribers.py (score: 1.000, trust: canonical)\n    line 14: from __future__ import annotations\n6. api_service/services/__init__.py (score: 1.000, trust: canonical)\n    line 4: # from .profile_service import ProfileService\n7. api_service/services/agent_skills_service.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n8. api_service/services/profile_service.py (score: 1.000, trust: canonical)\n    line 3: from typing import Optional",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/integration/test_interventions.py",
+      "text": "line 3: from httpx import AsyncClient, ASGITransport",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/mcp/executable_tool_registry.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/services/oauth_auth_runner.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/services/manifest_sync_service.py",
+      "text": "line 1: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/services/settings_change_subscribers.py",
+      "text": "line 14: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 14,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/services/__init__.py",
+      "text": "line 4: # from .profile_service import ProfileService",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 4,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/services/agent_skills_service.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/services/profile_service.py",
+      "text": "line 3: from typing import Optional",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-07-02T18:05:12Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

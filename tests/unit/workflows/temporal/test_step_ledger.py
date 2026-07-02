@@ -182,6 +182,7 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
                 "latestStepExecutionCheckpointRef": None,
                 "stepExecutionCheckpointRefs": [],
                 "checkpointRefsByBoundary": {},
+                "branchTurnArtifactRefs": {},
             },
             "artifacts": {
                 "outputSummary": None,
@@ -665,6 +666,7 @@ def test_update_step_row_merges_structured_refs_and_artifacts() -> None:
         "latestStepExecutionCheckpointRef": None,
         "stepExecutionCheckpointRefs": [],
         "checkpointRefsByBoundary": {},
+        "branchTurnArtifactRefs": {},
     }
     assert row["artifacts"] == {
         "outputSummary": "art_summary_1",

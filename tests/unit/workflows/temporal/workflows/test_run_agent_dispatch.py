@@ -1012,6 +1012,20 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
 
         assert request.step_execution is not None
         self.assertEqual(request.step_execution.reason, "checkpoint_branch")
+        self.assertEqual(
+            request.step_execution.runtime_context_policy,
+            "fresh_agent_run",
+        )
+        self.assertEqual(
+            request.step_execution.branch,
+            {
+                "branchId": "branch-1",
+                "branchTurnId": "turn-1",
+                "rootCheckpointRef": "artifact://checkpoint/source",
+                "gitWorkBranch": "mm/branch-1",
+            },
+        )
+        assert request.step_execution.branch_artifact_manifest is not None
         self.assertEqual(request.instruction_ref, "artifact://instructions/turn-1")
         moonmind_metadata = request.parameters["metadata"]["moonmind"]
         execution_context = moonmind_metadata["executionContext"]
@@ -1028,6 +1042,12 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         )
         self.assertEqual(
             moonmind_metadata["checkpointBranchTurn"]["artifactManifestDigest"],
+            moonmind_metadata["checkpointBranchTurnArtifactManifest"][
+                "artifactManifestDigest"
+            ],
+        )
+        self.assertEqual(
+            request.step_execution.branch_artifact_manifest["artifactManifestDigest"],
             moonmind_metadata["checkpointBranchTurnArtifactManifest"][
                 "artifactManifestDigest"
             ],

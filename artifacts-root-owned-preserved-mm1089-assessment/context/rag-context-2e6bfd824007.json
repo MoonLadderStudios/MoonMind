@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/conftest.py (score: 1.000, trust: canonical)\n    line 5: from pathlib import Path\n2. moonmind/memory/services.py (score: 1.000, trust: canonical)\n    line 1: from __future__ import annotations\n3. frontend/src/vite-config.test.ts (score: 1.000, trust: canonical)\n    line 1: import { describe, expect, it } from \"vitest\";\n4. moonmind/memory/procedural.py (score: 1.000, trust: canonical)\n    line 8: from __future__ import annotations\n5. moonmind/factories/anthropic_factory.py (score: 1.000, trust: canonical)\n    line 1: from llama_index.core.llms.llm import LLM\n6. moonmind/planning/__init__.py (score: 1.000, trust: canonical)\n    line 3: from .jira_story_planner import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft\n7. moonmind/factories/vector_store_factory.py (score: 1.000, trust: canonical)\n    line 3: from llama_index.vector_stores.qdrant import QdrantVectorStore\n8. moonmind/planning/jira_story_planner.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/conftest.py",
+      "text": "line 5: from pathlib import Path",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/memory/services.py",
+      "text": "line 1: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/vite-config.test.ts",
+      "text": "line 1: import { describe, expect, it } from \"vitest\";",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/memory/procedural.py",
+      "text": "line 8: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/factories/anthropic_factory.py",
+      "text": "line 1: from llama_index.core.llms.llm import LLM",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/__init__.py",
+      "text": "line 3: from .jira_story_planner import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/factories/vector_store_factory.py",
+      "text": "line 3: from llama_index.vector_stores.qdrant import QdrantVectorStore",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/jira_story_planner.py",
+      "text": "line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-07-02T18:31:34Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
