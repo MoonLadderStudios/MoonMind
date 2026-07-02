@@ -1,4 +1,16 @@
-const INTEGRATION_STATUS_LABELS: Record<string, string> = {
+export const INTEGRATION_STATUS_KEYS = [
+  'queued',
+  'running',
+  'completed',
+  'failed',
+  'canceled',
+  'unknown',
+] as const;
+
+export type IntegrationStatusKey = (typeof INTEGRATION_STATUS_KEYS)[number];
+type IntegrationStatusLabelKey = IntegrationStatusKey | 'awaiting_feedback';
+
+const INTEGRATION_STATUS_LABELS: Record<IntegrationStatusLabelKey, string> = {
   queued: 'Queued',
   running: 'Running',
   completed: 'Completed',
@@ -8,7 +20,7 @@ const INTEGRATION_STATUS_LABELS: Record<string, string> = {
   awaiting_feedback: 'Awaiting feedback',
 };
 
-const INTEGRATION_STATUS_CLASSES: Record<string, string> = {
+const INTEGRATION_STATUS_CLASSES: Record<IntegrationStatusLabelKey, string> = {
   queued: 'status status-scheduled',
   running: 'status status-running',
   completed: 'status status-completed',
@@ -22,9 +34,12 @@ function normalizedIntegrationStatusKey(status: string | null | undefined): stri
   return String(status || '').toLowerCase().trim().replace(/\s+/g, '_');
 }
 
-export function isIntegrationStatus(status: string | null | undefined): boolean {
-  const key = normalizedIntegrationStatusKey(status);
+function isIntegrationStatusKey(key: string): key is IntegrationStatusLabelKey {
   return Object.prototype.hasOwnProperty.call(INTEGRATION_STATUS_LABELS, key);
+}
+
+export function isIntegrationStatus(status: string | null | undefined): boolean {
+  return isIntegrationStatusKey(normalizedIntegrationStatusKey(status));
 }
 
 function warnUnknownIntegrationStatus(key: string): void {
@@ -39,8 +54,8 @@ export function formatIntegrationStatusLabel(
 ): string {
   const key = normalizedIntegrationStatusKey(status);
   if (!key) return fallback;
-  if (Object.prototype.hasOwnProperty.call(INTEGRATION_STATUS_LABELS, key)) {
-    return INTEGRATION_STATUS_LABELS[key]!;
+  if (isIntegrationStatusKey(key)) {
+    return INTEGRATION_STATUS_LABELS[key];
   }
   warnUnknownIntegrationStatus(key);
   return fallback;
@@ -48,9 +63,8 @@ export function formatIntegrationStatusLabel(
 
 export function integrationStatusPillProps(status: string | null | undefined): Readonly<{ className: string }> {
   const key = normalizedIntegrationStatusKey(status);
-  const known = Object.prototype.hasOwnProperty.call(INTEGRATION_STATUS_CLASSES, key);
-  const className = known ? INTEGRATION_STATUS_CLASSES[key]! : 'status status-neutral';
-  if (!known) {
+  const className = isIntegrationStatusKey(key) ? INTEGRATION_STATUS_CLASSES[key] : 'status status-neutral';
+  if (!isIntegrationStatusKey(key)) {
     warnUnknownIntegrationStatus(key);
   }
   return { className };

@@ -103,15 +103,22 @@ def normalize_no_commit_finish_summary(
     publish = normalized.get("publish")
     if isinstance(publish, Mapping):
         publish_payload = dict(publish)
-        raw_reason_code = publish_payload.get("reasonCode") or publish_payload.get(
-            "reason_code"
+        reason_code_key = (
+            "reasonCode"
+            if "reasonCode" in publish_payload
+            else "reason_code"
+            if "reason_code" in publish_payload
+            else "reasonCode"
         )
+        raw_reason_code = publish_payload.get(reason_code_key)
         reason_code = canonicalize_publish_reason_alias(raw_reason_code)
         reason = str(publish_payload.get("reason") or "").strip().lower()
         if reason_code is not None:
             publish_payload["reasonCode"] = reason_code
         if reason_code == "no_commit" or reason in _NO_COMMIT_LEGACY_REASONS:
             publish_payload["reasonCode"] = "no_commit"
+            if "reason_code" in publish_payload:
+                publish_payload["reason_code"] = "no_commit"
             publish_payload["reason"] = (
                 "No repository changes were available to commit or publish."
             )

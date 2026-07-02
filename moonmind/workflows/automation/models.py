@@ -20,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    TypeDecorator,
     UniqueConstraint,
     Uuid,
     text,
@@ -184,7 +185,36 @@ class AutomationRunStatus(str, enum.Enum):
     SUCCEEDED = "completed"
     FAILED = "failed"
     NO_COMMIT = "no_commit"
-    NO_CHANGES = "no_changes"
+
+
+class AutomationRunStatusType(TypeDecorator[str]):
+    """Decode legacy persisted automation statuses at the ORM boundary."""
+
+    impl = String(32)
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, AutomationRunStatus):
+            return value.value
+        raw = str(value).strip()
+        if raw == "no_changes":
+            return AutomationRunStatus.NO_COMMIT.value
+        return AutomationRunStatus(raw).value
+
+    def process_result_value(
+        self,
+        value: str | None,
+        dialect: Any,
+    ) -> AutomationRunStatus | None:
+        if value is None:
+            return None
+        raw = str(value).strip()
+        if raw == "no_changes":
+            raw = AutomationRunStatus.NO_COMMIT.value
+        return AutomationRunStatus(raw)
+
 
 class AutomationPhase(str, enum.Enum):
     """Phases executed during the workflow automation pipeline."""
@@ -244,13 +274,7 @@ class AutomationRun(Base):
     branch_name: Mapped[Optional[str]] = mapped_column(String(255))
     pull_request_url: Mapped[Optional[str]] = mapped_column(String(512))
     status: Mapped[AutomationRunStatus] = mapped_column(
-        Enum(
-            AutomationRunStatus,
-            name="specautomationrunstatus",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
+        AutomationRunStatusType(),
         nullable=False,
         default=AutomationRunStatus.QUEUED,
     )

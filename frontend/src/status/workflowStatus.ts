@@ -12,7 +12,25 @@ export const WORKFLOW_STATUS_TRACEABILITY = Object.freeze({
   ],
 });
 
-const WORKFLOW_STATUS_LABELS: Record<string, string> = {
+export const WORKFLOW_STATUS_KEYS = [
+  'scheduled',
+  'initializing',
+  'waiting_on_dependencies',
+  'planning',
+  'awaiting_slot',
+  'executing',
+  'awaiting_external',
+  'proposals',
+  'finalizing',
+  'no_commit',
+  'completed',
+  'failed',
+  'canceled',
+] as const;
+
+export type WorkflowStatusKey = (typeof WORKFLOW_STATUS_KEYS)[number];
+
+const WORKFLOW_STATUS_LABELS: Record<WorkflowStatusKey, string> = {
   scheduled: 'Scheduled',
   initializing: 'Initializing',
   waiting_on_dependencies: 'Awaiting dependencies',
@@ -28,11 +46,11 @@ const WORKFLOW_STATUS_LABELS: Record<string, string> = {
   canceled: 'Canceled',
 };
 
-const WORKFLOW_COMPATIBILITY_ALIASES: Record<string, keyof typeof WORKFLOW_STATUS_LABELS> = {
+const WORKFLOW_COMPATIBILITY_ALIASES: Record<string, WorkflowStatusKey> = {
   no_changes: 'no_commit',
 };
 
-const WORKFLOW_STATUS_CLASSES: Record<string, string> = {
+const WORKFLOW_STATUS_CLASSES: Record<WorkflowStatusKey, string> = {
   scheduled: 'status status-scheduled',
   initializing: 'status status-initializing',
   waiting_on_dependencies: 'status status-awaiting-dependencies',
@@ -69,9 +87,12 @@ export function normalizedWorkflowStatusKey(status: string | null | undefined): 
     .replace(/\s+/g, '_');
 }
 
-export function isWorkflowLifecycleStatus(status: string | null | undefined): boolean {
-  const key = normalizedWorkflowStatusKey(status);
+function isWorkflowStatusKey(key: string): key is WorkflowStatusKey {
   return Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_LABELS, key);
+}
+
+export function isWorkflowLifecycleStatus(status: string | null | undefined): boolean {
+  return isWorkflowStatusKey(normalizedWorkflowStatusKey(status));
 }
 
 function warnUnknownWorkflowStatus(key: string): void {
@@ -94,8 +115,8 @@ export function formatWorkflowStatusLabel(
 ): string {
   const key = normalizedWorkflowStatusKey(status);
   if (!key) return fallback;
-  if (Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_LABELS, key)) {
-    return WORKFLOW_STATUS_LABELS[key]!;
+  if (isWorkflowStatusKey(key)) {
+    return WORKFLOW_STATUS_LABELS[key];
   }
   warnUnknownWorkflowStatus(key);
   return fallback;
@@ -112,10 +133,9 @@ export function workflowStatusPillProps(
   options: WorkflowStatusPillOptions = {},
 ): WorkflowStatusPillProps {
   const key = normalizedWorkflowStatusKey(status);
-  const known = Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_CLASSES, key);
-  const className = known ? WORKFLOW_STATUS_CLASSES[key]! : 'status status-neutral';
+  const className = isWorkflowStatusKey(key) ? WORKFLOW_STATUS_CLASSES[key] : 'status status-neutral';
 
-  if (!known) {
+  if (!isWorkflowStatusKey(key)) {
     warnUnknownWorkflowStatus(key);
   }
 
@@ -137,8 +157,8 @@ export function formatWorkflowCompatibilityStatusLabel(
 ): string {
   const key = canonicalWorkflowCompatibilityKey(status);
   if (!key) return fallback;
-  if (Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_LABELS, key)) {
-    return WORKFLOW_STATUS_LABELS[key]!;
+  if (isWorkflowStatusKey(key)) {
+    return WORKFLOW_STATUS_LABELS[key];
   }
   warnUnknownWorkflowStatus(key);
   return fallback;

@@ -1,10 +1,32 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { formatIntegrationStatusLabel, integrationStatusPillProps, isIntegrationStatus } from './integrationStatus';
+import {
+  INTEGRATION_STATUS_KEYS,
+  formatIntegrationStatusLabel,
+  integrationStatusPillProps,
+  isIntegrationStatus,
+} from './integrationStatus';
 
 describe('integration status helpers', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('covers every provider-normalized integration status', () => {
+    expect(INTEGRATION_STATUS_KEYS).toEqual([
+      'queued',
+      'running',
+      'completed',
+      'failed',
+      'canceled',
+      'unknown',
+    ]);
+
+    for (const status of INTEGRATION_STATUS_KEYS) {
+      expect(formatIntegrationStatusLabel(status, 'Missing')).not.toBe('Missing');
+      expect(integrationStatusPillProps(status).className).toContain('status');
+      expect(isIntegrationStatus(status)).toBe(true);
+    }
   });
 
   it('formats provider normalized statuses with readable labels and classes', () => {

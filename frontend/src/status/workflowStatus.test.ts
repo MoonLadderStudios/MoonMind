@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
 import {
+  WORKFLOW_STATUS_KEYS,
   WORKFLOW_STATUS_TRACEABILITY,
   formatWorkflowCompatibilityStatusLabel,
   formatWorkflowStatusLabel,
@@ -12,7 +14,30 @@ describe('workflow status helpers', () => {
     vi.restoreAllMocks();
   });
 
-  it('formats every canonical workflow lifecycle state with readable labels and classes', () => {
+  it('covers every canonical workflow lifecycle status', () => {
+    expect(WORKFLOW_STATUS_KEYS).toEqual([
+      'scheduled',
+      'initializing',
+      'waiting_on_dependencies',
+      'planning',
+      'awaiting_slot',
+      'executing',
+      'awaiting_external',
+      'proposals',
+      'finalizing',
+      'no_commit',
+      'completed',
+      'failed',
+      'canceled',
+    ]);
+
+    for (const status of WORKFLOW_STATUS_KEYS) {
+      expect(formatWorkflowStatusLabel(status, 'Unknown')).not.toBe('Unknown');
+      expect(workflowStatusPillProps(status).className).not.toBe('status status-neutral');
+    }
+  });
+
+  it('formats canonical workflow lifecycle states with readable labels and classes', () => {
     expect(formatWorkflowStatusLabel('scheduled')).toBe('Scheduled');
     expect(formatWorkflowStatusLabel('initializing')).toBe('Initializing');
     expect(formatWorkflowStatusLabel('waiting_on_dependencies')).toBe('Awaiting dependencies');
@@ -28,7 +53,9 @@ describe('workflow status helpers', () => {
     expect(formatWorkflowStatusLabel('canceled')).toBe('Canceled');
 
     expect(workflowStatusPillProps('scheduled')).toEqual({ className: 'status status-scheduled' });
-    expect(workflowStatusPillProps('initializing')).toMatchObject({ className: 'status status-initializing is-initializing' });
+    expect(workflowStatusPillProps('initializing')).toMatchObject({
+      className: 'status status-initializing is-initializing',
+    });
     expect(workflowStatusPillProps('waiting_on_dependencies')).toEqual({
       className: 'status status-awaiting-dependencies',
     });
@@ -39,7 +66,9 @@ describe('workflow status helpers', () => {
       className: 'status status-awaiting-external',
     });
     expect(workflowStatusPillProps('proposals')).toEqual({ className: 'status status-running' });
-    expect(workflowStatusPillProps('finalizing')).toMatchObject({ className: 'status status-finalizing is-finalizing' });
+    expect(workflowStatusPillProps('finalizing')).toMatchObject({
+      className: 'status status-finalizing is-finalizing',
+    });
     expect(workflowStatusPillProps('no_commit')).toEqual({ className: 'status status-no-commit' });
     expect(workflowStatusPillProps('completed')).toEqual({ className: 'status status-completed' });
     expect(workflowStatusPillProps('failed')).toEqual({ className: 'status status-failed' });
