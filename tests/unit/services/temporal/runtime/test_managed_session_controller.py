@@ -1872,12 +1872,13 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
             ),
         }
     ]
-    assert github_auth_brokers.starts[0]["socket_path"].startswith(
-        str(Path("/tmp") / "mm-gh")
-    )
     socket_path = Path(github_auth_brokers.starts[0]["socket_path"])
     assert socket_path.name == "github.sock"
-    assert socket_path.parent.parent == Path("/tmp") / "mm-gh"
+    assert len(str(socket_path).encode("utf-8")) < 100
+    if socket_path.parent.parent.name == ".moonmind-gh":
+        assert socket_path.parent.parent == workspace_root / ".moonmind-gh"
+    else:
+        assert socket_path.parent.parent == Path("/tmp") / "mm-gh"
     assert len(socket_path.parent.name) == 16
     assert request.session_workspace_path not in github_auth_brokers.starts[0]["socket_path"]
     docker_run_text = " ".join(docker_commands[0])
@@ -1906,6 +1907,17 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
     ).read_text(encoding="utf-8")
     assert "moonmind-managed-git-config" in git_config_text
     assert "git-credential-moonmind" in git_config_text
+    helper_text = (
+        Path(request.session_workspace_path)
+        / ".moonmind"
+        / "bin"
+        / "git-credential-moonmind"
+    ).read_text(encoding="utf-8")
+    gh_wrapper_text = (
+        Path(request.session_workspace_path) / ".moonmind" / "bin" / "gh"
+    ).read_text(encoding="utf-8")
+    assert "from moonmind" not in helper_text
+    assert "from moonmind" not in gh_wrapper_text
 
     await controller.terminate_session(
         TerminateCodexManagedSessionRequest(
@@ -1963,6 +1975,10 @@ def test_persist_brokered_github_config_preserves_container_visible_paths(
     )
     gh_wrapper_text = (support_root / "bin" / "gh").read_text(encoding="utf-8")
     assert "real_gh_path" not in gh_wrapper_text
+    assert "from moonmind" not in gh_wrapper_text
+    assert "from moonmind" not in (
+        support_root / "bin" / "git-credential-moonmind"
+    ).read_text(encoding="utf-8")
 
 @pytest.mark.asyncio
 async def test_controller_reuses_resolved_git_environment_for_target_branch(
