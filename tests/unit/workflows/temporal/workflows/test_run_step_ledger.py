@@ -747,6 +747,35 @@ async def test_checkpoint_branch_turn_manifest_records_branch_metadata(
         ]
         == "MM-1089"
     )
+    branch_turn_writes = {
+        write["payload"]["artifactName"]: write
+        for write in writes[1:]
+        if str(write["payload"].get("artifactName", "")).startswith(
+            ("input.branch_turn.", "runtime.branch_turn.", "output.branch_turn.")
+        )
+    }
+    assert set(branch_turn_writes) == {
+        "input.branch_turn.instructions.md",
+        "runtime.branch_turn.context_bundle.json",
+        "runtime.branch_turn.agent_request.json",
+        "runtime.branch_turn.agent_result.json",
+        "output.branch_turn.step_execution_manifest.json",
+        "output.branch_turn.checkpoint.json",
+        "output.branch_turn.diagnostics.json",
+    }
+    diagnostics_payload = branch_turn_writes[
+        "output.branch_turn.diagnostics.json"
+    ]["payload"]["diagnostics"]
+    assert diagnostics_payload["runtimeContextPolicy"] == "fresh_agent_run"
+    assert diagnostics_payload["workspacePolicy"] == (
+        "apply_previous_execution_diff_to_clean_baseline"
+    )
+    artifact_refs = workflow._step_execution_branch_artifact_refs[("branch-turn", 1)]
+    for artifact_name in branch_turn_writes:
+        assert artifact_refs[artifact_name].startswith("artifact-branch-manifest-")
+    manifest_row = workflow._step_ledger_row_for("branch-turn")
+    assert manifest_row is not None
+    assert manifest_row["refs"]["branchTurnArtifactRefs"] == artifact_refs
 
 
 @pytest.mark.asyncio

@@ -1030,6 +1030,9 @@ class MoonMindRunWorkflow:
         self._step_execution_branch_artifact_manifests: dict[
             tuple[str, int], dict[str, Any]
         ] = {}
+        self._step_execution_branch_artifact_refs: dict[
+            tuple[str, int], dict[str, str]
+        ] = {}
         self._step_execution_retrieval_manifest_artifacts: dict[
             tuple[str, int], dict[str, Any]
         ] = {}
@@ -1491,6 +1494,16 @@ class MoonMindRunWorkflow:
             idempotency_key=idempotency_key,
             updated_at=updated_at,
         )
+        if self._step_execution_branch_artifact_manifests.get(
+            (logical_step_id, attempt)
+        ):
+            await self._persist_branch_turn_artifacts(
+                logical_step_id,
+                attempt=attempt,
+                manifest=manifest,
+                manifest_ref=manifest_ref,
+                updated_at=updated_at,
+            )
         if phase in {"start", "launch_blocked"} and (
             resolved_terminal_disposition == "blocked"
         ):
@@ -1646,6 +1659,177 @@ class MoonMindRunWorkflow:
             self._sync_progress_snapshot(updated_at=updated_at)
             return manifest_ref
         return manifest_ref
+
+    def _branch_artifact_name(self, logical_step_id: str, attempt: int, name: str) -> str:
+        safe_step = re.sub(r"[^A-Za-z0-9_.-]+", "-", logical_step_id).strip("-")
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-")
+        return (
+            "reports/checkpoint_branch_turns/"
+            f"{safe_step or 'step'}_attempt_{attempt}_{safe_name or 'artifact'}.json"
+        )
+
+    def _branch_artifact_payload(
+        self,
+        *,
+        artifact_name: str,
+        manifest: StepExecutionManifestModel,
+        manifest_ref: str | None,
+        branch_artifact_manifest: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        manifest_payload = manifest.model_dump(
+            by_alias=True,
+            exclude_none=True,
+            mode="json",
+        )
+        context = dict(manifest_payload.get("context") or {})
+        branch = dict(manifest_payload.get("branch") or {})
+        workspace = dict(manifest_payload.get("workspace") or {})
+        execution = dict(manifest_payload.get("execution") or {})
+        outputs = dict(manifest_payload.get("outputs") or {})
+        runtime_policy = (
+            context.get("runtimeContextPolicy")
+            or execution.get("runtimeContextPolicy")
+        )
+        workspace_policy = context.get("workspacePolicy") or workspace.get(
+            "workspacePolicy"
+        )
+        base_payload: dict[str, Any] = {
+            "schemaVersion": "v1",
+            "traceability": "MM-1089",
+            "artifactName": artifact_name,
+            "stepExecutionId": manifest.step_execution_id,
+            "workflowId": manifest.workflow_id,
+            "runId": manifest.run_id,
+            "logicalStepId": manifest.logical_step_id,
+            "executionOrdinal": manifest.execution_ordinal,
+            "reason": manifest.reason,
+            "branch": branch,
+            "runtimeContextPolicy": runtime_policy,
+            "workspacePolicy": workspace_policy,
+        }
+        if manifest_ref:
+            base_payload["stepExecutionManifestRef"] = manifest_ref
+
+        if artifact_name == "input.branch_turn.instructions.md":
+            base_payload["instructionRefs"] = context.get("instructionRefs") or []
+            base_payload["instructionDigests"] = context.get(
+                "instructionDigests"
+            ) or {}
+        elif artifact_name == "runtime.branch_turn.context_bundle.json":
+            base_payload["context"] = context
+        elif artifact_name == "runtime.branch_turn.agent_request.json":
+            base_payload["request"] = {
+                "context": context,
+                "workspace": workspace,
+                "execution": execution,
+                "branchArtifactManifest": dict(branch_artifact_manifest),
+            }
+        elif artifact_name == "runtime.branch_turn.agent_result.json":
+            base_payload["outputs"] = outputs
+            base_payload["checks"] = list(manifest_payload.get("checks") or [])
+        elif artifact_name == "output.branch_turn.step_execution_manifest.json":
+            base_payload["manifest"] = manifest_payload
+        elif artifact_name == "output.branch_turn.checkpoint.json":
+            base_payload["checkpointEvidence"] = execution.get(
+                "checkpointEvidence",
+                {},
+            )
+            base_payload["contextRefs"] = {
+                key: value
+                for key, value in context.items()
+                if key.endswith("Ref") or key.endswith("Refs")
+            }
+        elif artifact_name == "output.branch_turn.diagnostics.json":
+            base_payload["diagnostics"] = {
+                "workspacePolicy": workspace_policy,
+                "runtimeContextPolicy": runtime_policy,
+                "contextBundleRef": context.get("contextBundleRef"),
+                "contextBundleDigest": context.get("contextBundleDigest"),
+                "status": manifest_payload.get("status"),
+                "terminalDisposition": manifest_payload.get(
+                    "terminalDisposition"
+                ),
+            }
+        return base_payload
+
+    async def _persist_branch_turn_artifacts(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+        manifest: StepExecutionManifestModel,
+        manifest_ref: str | None,
+        updated_at: datetime,
+    ) -> dict[str, str]:
+        cache_key = (logical_step_id, attempt)
+        branch_artifact_manifest = self._step_execution_branch_artifact_manifests.get(
+            cache_key
+        )
+        if not isinstance(branch_artifact_manifest, Mapping):
+            return {}
+        artifacts = branch_artifact_manifest.get("artifacts")
+        if not isinstance(artifacts, Sequence) or isinstance(artifacts, (str, bytes)):
+            return {}
+
+        persisted_refs = dict(
+            self._step_execution_branch_artifact_refs.get(cache_key) or {}
+        )
+        updated_artifacts: list[dict[str, Any]] = []
+        for artifact in artifacts:
+            artifact_record = dict(artifact) if isinstance(artifact, Mapping) else {}
+            artifact_name = str(artifact_record.get("name") or "").strip()
+            if not artifact_name:
+                continue
+            artifact_ref = persisted_refs.get(artifact_name)
+            if artifact_ref is None:
+                artifact_ref = await self._write_json_artifact(
+                    name=self._branch_artifact_name(
+                        logical_step_id,
+                        attempt,
+                        artifact_name,
+                    ),
+                    payload=self._branch_artifact_payload(
+                        artifact_name=artifact_name,
+                        manifest=manifest,
+                        manifest_ref=manifest_ref,
+                        branch_artifact_manifest=branch_artifact_manifest,
+                    ),
+                    metadata_json={
+                        "artifact_kind": "checkpoint_branch_turn",
+                        "branchArtifactName": artifact_name,
+                        "branchId": branch_artifact_manifest.get("branchId"),
+                        "branchTurnId": branch_artifact_manifest.get("branchTurnId"),
+                        "stepExecutionId": manifest.step_execution_id,
+                        "logicalStepId": logical_step_id,
+                        "attempt": attempt,
+                    },
+                )
+                persisted_refs[artifact_name] = artifact_ref
+            artifact_record["declaredArtifactRef"] = artifact_record.get(
+                "artifactRef"
+            )
+            artifact_record["artifactRef"] = artifact_ref
+            updated_artifacts.append(artifact_record)
+
+        updated_manifest = dict(branch_artifact_manifest)
+        updated_manifest["artifacts"] = updated_artifacts
+        updated_manifest["persistedArtifactRefs"] = dict(persisted_refs)
+        self._step_execution_branch_artifact_manifests[cache_key] = updated_manifest
+        self._step_execution_branch_artifact_refs[cache_key] = persisted_refs
+
+        if persisted_refs:
+            row = self._step_ledger_row_for(logical_step_id)
+            if isinstance(row, Mapping):
+                refs = dict(row.get("refs") or {})
+                refs["branchTurnArtifactRefs"] = dict(persisted_refs)
+                update_step_row(
+                    self._step_ledger_rows,
+                    logical_step_id,
+                    updated_at=updated_at,
+                    refs=refs,
+                )
+                self._sync_progress_snapshot(updated_at=updated_at)
+        return persisted_refs
 
     async def _bundle_ordered_nodes_for_execution(
         self,

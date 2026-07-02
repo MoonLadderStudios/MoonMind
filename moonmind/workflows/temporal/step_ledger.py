@@ -31,6 +31,7 @@ def default_step_refs() -> dict[str, Any]:
         "latestStepExecutionCheckpointRef": None,
         "stepExecutionCheckpointRefs": [],
         "checkpointRefsByBoundary": {},
+        "branchTurnArtifactRefs": {},
     }
 
 def default_step_artifacts() -> dict[str, Any]:
