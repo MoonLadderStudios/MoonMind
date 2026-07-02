@@ -150,10 +150,46 @@ def test_mm_1089_step_execution_manifest_accepts_checkpoint_branch_metadata() ->
         "branchId": "cbr_01",
         "branchTurnId": "cbt_01",
         "rootCheckpointRef": "artifact://checkpoints/after-execution",
+        "sourceStateKind": None,
+        "sourceStateRef": None,
+        "sourceStateDigest": None,
         "parentBranchId": None,
         "parentTurnId": None,
         "gitWorkBranch": "mm/workflow-1/implement-story/cbr-01",
     }
+
+
+def test_mm_1089_step_execution_manifest_accepts_typed_branch_source_state() -> None:
+    manifest = StepExecutionManifestModel.model_validate(
+        {
+            **_identity(),
+            "schemaVersion": "v1",
+            "stepExecutionId": "workflow-1:run-1:implement-story:execution:2",
+            "executionScope": "run",
+            "reason": "checkpoint_branch",
+            "status": "running",
+            "branch": {
+                "branchId": "cbr_01",
+                "branchTurnId": "cbt_01",
+                "sourceStateKind": "provider_session",
+                "sourceStateRef": "provider://session/1",
+            },
+            "input": {},
+            "context": {},
+            "workspace": {},
+            "execution": {},
+            "outputs": {},
+            "checks": [],
+            "sideEffects": {},
+            "dependencyEffects": {},
+            "budget": {},
+        }
+    )
+
+    assert manifest.branch is not None
+    assert manifest.branch.root_checkpoint_ref is None
+    assert manifest.branch.source_state_kind == "provider_session"
+    assert manifest.branch.source_state_ref == "provider://session/1"
 
 
 def test_step_execution_manifest_boundary_accepts_previous_compact_payload_shape() -> (

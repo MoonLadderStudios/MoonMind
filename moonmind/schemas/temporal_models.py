@@ -777,7 +777,14 @@ class StepExecutionBranchMetadataModel(BaseModel):
 
     branch_id: str = Field(..., alias="branchId", min_length=1)
     branch_turn_id: str = Field(..., alias="branchTurnId", min_length=1)
-    root_checkpoint_ref: str = Field(..., alias="rootCheckpointRef", min_length=1)
+    root_checkpoint_ref: str | None = Field(
+        None, alias="rootCheckpointRef", min_length=1
+    )
+    source_state_kind: str | None = Field(None, alias="sourceStateKind", min_length=1)
+    source_state_ref: str | None = Field(None, alias="sourceStateRef", min_length=1)
+    source_state_digest: str | None = Field(
+        None, alias="sourceStateDigest", min_length=1
+    )
     parent_branch_id: str | None = Field(None, alias="parentBranchId")
     parent_turn_id: str | None = Field(None, alias="parentTurnId")
     git_work_branch: str | None = Field(None, alias="gitWorkBranch")
@@ -786,6 +793,9 @@ class StepExecutionBranchMetadataModel(BaseModel):
         "branch_id",
         "branch_turn_id",
         "root_checkpoint_ref",
+        "source_state_kind",
+        "source_state_ref",
+        "source_state_digest",
         "parent_branch_id",
         "parent_turn_id",
         "git_work_branch",
@@ -797,6 +807,18 @@ class StepExecutionBranchMetadataModel(BaseModel):
             return None
         candidate = str(value).strip()
         return candidate or None
+
+    @model_validator(mode="after")
+    def _requires_checkpoint_or_typed_state(
+        self,
+    ) -> "StepExecutionBranchMetadataModel":
+        if self.root_checkpoint_ref:
+            return self
+        if self.source_state_kind and self.source_state_ref:
+            return self
+        raise ValueError(
+            "branch manifest metadata requires rootCheckpointRef or typed sourceStateRef"
+        )
 
 
 class StepExecutionManifestModel(BaseModel):

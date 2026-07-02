@@ -50,12 +50,82 @@ def _managed_request(agent_id: str = "codex") -> AgentExecutionRequest:
         executionProfileRef="codex-default",
     )
 
+
+def _managed_step_request(
+    agent_id: str = "codex",
+    *,
+    runtime_context_policy: str = "fresh_agent_run",
+) -> AgentExecutionRequest:
+    return AgentExecutionRequest(
+        agentKind="managed",
+        agentId=agent_id,
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        executionProfileRef="codex-default",
+        stepExecution={
+            "schemaVersion": "v1",
+            "workflowId": "wf-run-1",
+            "runId": "run-1",
+            "logicalStepId": "step-2",
+            "executionOrdinal": 1,
+            "stepExecutionId": "wf-run-1:run-1:step-2:execution:1",
+            "reason": "checkpoint_branch",
+            "runtimeContextPolicy": runtime_context_policy,
+        },
+    )
+
+
 def _use_external_handle(monkeypatch: pytest.MonkeyPatch, handle: Any) -> None:
     monkeypatch.setattr(
         run_module.workflow,
         "get_external_workflow_handle",
         lambda _workflow_id, run_id=None: handle,
     )
+
+
+@pytest.mark.asyncio
+async def test_run_preserves_workflow_scoped_session_for_same_epoch_branch_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH,
+            RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH,
+            RUN_WORKFLOW_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH,
+        },
+    )
+
+    async def fake_execute_activity(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("same-epoch branch turns must not clear the session")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="wf-run-1:session:codex_cli",
+        agentRunId="wf-run-1",
+        sessionId="sess:wf-run-1:codex_cli",
+        sessionEpoch=1,
+        runtimeId="codex_cli",
+        executionProfileRef="codex-default",
+    )
+    workflow._step_ledger_rows = [{"logicalStepId": "step-2", "attempt": 1}]
+
+    await workflow._maybe_clear_workflow_scoped_session_before_step(
+        request=_managed_step_request(
+            "codex",
+            runtime_context_policy="reuse_session_same_epoch",
+        ),
+        logical_step_id="step-2",
+    )
+
+    assert workflow._codex_session_cleared_before_step_attempts == set()
+    assert workflow._codex_session_binding is not None
+    assert workflow._codex_session_binding.session_epoch == 1
+
 
 @pytest.mark.asyncio
 async def test_run_defers_workflow_scoped_codex_session_until_slot_when_unbound(

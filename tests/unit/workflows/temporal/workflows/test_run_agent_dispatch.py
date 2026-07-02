@@ -1001,7 +1001,6 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                             "moonmind": {"checkpointBranchTurn": branch_turn}
                         },
                     },
-                    "instructionRef": "artifact://instructions/turn-1",
                 },
                 node_id="branch-implement",
                 tool_name="codex_cli",
@@ -1010,6 +1009,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
 
         assert request.step_execution is not None
         self.assertEqual(request.step_execution.reason, "checkpoint_branch")
+        self.assertEqual(request.instruction_ref, "artifact://instructions/turn-1")
         moonmind_metadata = request.parameters["metadata"]["moonmind"]
         execution_context = moonmind_metadata["executionContext"]
         self.assertEqual(execution_context["reason"], "checkpoint_branch")
