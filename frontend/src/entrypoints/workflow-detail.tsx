@@ -3740,15 +3740,35 @@ function stepCheckStatusClass(status: string | null | undefined): string {
   return `check-${normalized || 'unknown'}`;
 }
 
+function stepCheckStatusPillProps(status: string | null | undefined) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'pending') {
+    return {
+      ...executionStatusPillProps('executing'),
+      'data-shimmer-label': formatStatusLabel(status),
+    };
+  }
+  return executionStatusPillProps(status);
+}
+
 function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
   const checkStatusClass = stepCheckStatusClass(check.status);
-  const statusPillProps = executionStatusPillProps(check.status);
+  const statusPillProps = stepCheckStatusPillProps(check.status);
+  const label = `${check.kind.replaceAll('_', ' ')}: ${formatStatusLabel(check.status)}`;
+  const hasShimmerSweep = statusPillProps['data-effect'] === 'shimmer-sweep';
   return (
     <span
       {...statusPillProps}
+      aria-label={hasShimmerSweep ? label : undefined}
       className={`step-check-badge ${checkStatusClass} ${statusPillProps.className}`}
     >
-      {check.kind.replaceAll('_', ' ')}: {formatStatusLabel(check.status)}
+      {hasShimmerSweep ? (
+        <span className="status-letter-wave" aria-hidden="true" data-label={label}>
+          {label}
+        </span>
+      ) : (
+        label
+      )}
     </span>
   );
 }

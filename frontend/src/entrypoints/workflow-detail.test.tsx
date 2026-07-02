@@ -3103,7 +3103,7 @@ describe('Workflow Detail Entrypoint', () => {
                     checks: [
                       {
                         kind: 'approval_policy',
-                        status: 'executing',
+                        status: 'pending',
                         summary: 'Reviewer requested another retry',
                         retryCount: 2,
                         artifactRef: 'art-review-2',
@@ -3139,10 +3139,15 @@ describe('Workflow Detail Entrypoint', () => {
         '.step-check-badge[data-effect="shimmer-sweep"]',
       );
       expect(activeCheckBadge).toBeTruthy();
-      expect(activeCheckBadge?.textContent).toBe('approval policy: executing');
+      expect(activeCheckBadge?.textContent).toBe('approval policy: pending');
       expect(activeCheckBadge?.dataset.effect).toBe('shimmer-sweep');
       expect(activeCheckBadge?.dataset.state).toBe('executing');
       expect(activeCheckBadge?.className).toContain('is-executing');
+      expect(activeCheckBadge?.className).toContain('check-pending');
+      expect(activeCheckBadge?.getAttribute('aria-label')).toBe('approval policy: pending');
+      expect(activeCheckBadge?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe(
+        'approval policy: pending',
+      );
     });
   });
 
