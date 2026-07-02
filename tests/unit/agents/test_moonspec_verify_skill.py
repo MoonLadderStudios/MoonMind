@@ -90,6 +90,7 @@ def test_moonspec_verify_skill_defines_target_modes() -> None:
     assert "`target_mode`, `targetMode`, `verification_target`" in text
     assert "auto -> [resolved mode]" in text
     assert "require an issue brief artifact path" in text
+    assert "An issue reference alone is not enough to select `issue_brief`" in text
     assert "Treat MoonSpec feature files as optional context" in text
     assert "issue title, issue body or description, acceptance criteria, labels" in text
 
@@ -121,6 +122,8 @@ def test_moonspec_verify_skill_defines_structured_artifact_output() -> None:
         '"recommendedNextAction": "advance | reattempt_current_step | blocked"'
         in text
     )
+    assert "emit the same structured verdict payload in the step outputs" in text
+    assert "Do not rely on verdict-looking Markdown or prose" in text
     assert "still return the Markdown report" in text
 
 

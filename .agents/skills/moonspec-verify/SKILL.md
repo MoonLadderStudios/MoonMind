@@ -83,7 +83,7 @@ Resolve target mode first:
 
 - `moonspec_feature`: require a MoonSpec feature directory or `spec.md`, then load `spec.md`, `plan.md`, and `tasks.md`.
 - `issue_brief`: require an issue brief artifact path and do not require MoonSpec feature files.
-- `auto`: choose `issue_brief` when an issue brief artifact path, assessment artifact path, or issue reference is provided; otherwise choose `moonspec_feature`.
+- `auto`: choose `issue_brief` when an issue brief artifact path or assessment artifact path is provided; otherwise choose `moonspec_feature`. An issue reference alone is not enough to select `issue_brief` because that mode requires an artifact-backed issue brief.
 
 If the selected target mode is `issue_brief`, use issue-brief verification mode. Accept inputs expressed in prose, skill args, or preset instructions such as:
 
@@ -388,7 +388,9 @@ Keep the report evidence-backed and concise. Cite file paths and line numbers wh
 
 ## Structured Verification Artifact
 
-When `verification_artifact_path`, `verificationArtifactPath`, `verify_artifact_path`, or `verifyArtifactPath` is supplied, write a JSON file to that path and still return the Markdown report. The skill remains read-only except for this explicit verification artifact write and ignored disposable test artifacts.
+When `verification_artifact_path`, `verificationArtifactPath`, `verify_artifact_path`, or `verifyArtifactPath` is supplied, write a JSON file to that path, emit the same structured verdict payload in the step outputs, and still return the Markdown report. The skill remains read-only except for this explicit verification artifact write and ignored disposable test artifacts.
+
+The step output must include either the JSON object itself under a structured output key such as `moonSpecVerify` or a gate result artifact reference under `gateResultRef` / `gate_result_ref`. Do not rely on verdict-looking Markdown or prose as the workflow gate result.
 
 The JSON must be compact, non-secret, and shaped for workflow consumers:
 
