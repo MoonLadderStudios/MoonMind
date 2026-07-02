@@ -703,6 +703,9 @@ async def test_checkpoint_branch_turn_manifest_persists_branch_artifact_manifest
     branch_turn = {
         "branchId": "branch-1",
         "branchTurnId": "turn-1",
+        "sourceWorkflowId": "source-wf",
+        "sourceRunId": "source-run",
+        "sourceLogicalStepId": "source-step",
         "sourceCheckpointRef": "artifact://checkpoint/source",
         "sourceCheckpointDigest": "sha256:" + "a" * 64,
         "instructionArtifactRef": "artifact://instructions/turn-1",
@@ -766,7 +769,7 @@ async def test_checkpoint_branch_turn_manifest_persists_branch_artifact_manifest
         "artifactManifestRef"
     ] == "artifact-write-1"
 
-    refreshed_request = workflow._request_with_persisted_retrieval_ref(
+    refreshed_request = await workflow._request_with_persisted_retrieval_ref(
         request,
         logical_step_id="branch-implement",
         attempt=1,
@@ -780,7 +783,8 @@ async def test_checkpoint_branch_turn_manifest_persists_branch_artifact_manifest
     ] == "artifact-write-1"
 
 
-def test_checkpoint_branch_turn_refresh_keeps_retrieval_context_refs_in_sync(
+@pytest.mark.asyncio
+async def test_checkpoint_branch_turn_refresh_repersists_rebuilt_branch_manifest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -790,9 +794,31 @@ def test_checkpoint_branch_turn_refresh_keeps_retrieval_context_refs_in_sync(
         lambda patch_id: patch_id == run_module.RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     )
     workflow = MoonMindRunWorkflow()
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return f"art_branch_manifest_rebuilt_{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
     branch_turn = {
         "branchId": "branch-1",
         "branchTurnId": "turn-1",
+        "sourceWorkflowId": "source-wf",
+        "sourceRunId": "source-run",
+        "sourceLogicalStepId": "source-step",
         "sourceCheckpointRef": "artifact://checkpoint/source",
         "sourceCheckpointDigest": "sha256:" + "a" * 64,
         "instructionArtifactRef": "artifact://instructions/turn-1",
@@ -826,7 +852,7 @@ def test_checkpoint_branch_turn_refresh_keeps_retrieval_context_refs_in_sync(
         ("branch-implement", 1)
     ]["persistedArtifactRef"] = "art_branch_manifest"
 
-    refreshed = workflow._request_with_persisted_retrieval_ref(
+    refreshed = await workflow._request_with_persisted_retrieval_ref(
         request,
         logical_step_id="branch-implement",
         attempt=1,
@@ -851,6 +877,16 @@ def test_checkpoint_branch_turn_refresh_keeps_retrieval_context_refs_in_sync(
     ]
     assert branch_turn_metadata["artifactManifestDigest"] == artifact_manifest[
         "artifactManifestDigest"
+    ]
+    assert branch_turn_metadata["artifactManifestRef"] == (
+        "art_branch_manifest_rebuilt_1"
+    )
+    assert artifact_manifest["persistedArtifactRef"] == "art_branch_manifest_rebuilt_1"
+    assert writes[0]["name"] == (
+        "reports/checkpoint_branches/branch-1/turns/turn-1/artifact_manifest.json"
+    )
+    assert writes[0]["payload"]["contextBundleRef"] == execution_context[
+        "contextBundleRef"
     ]
 
 

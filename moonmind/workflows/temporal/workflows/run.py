@@ -3780,9 +3780,7 @@ class MoonMindRunWorkflow:
                     source[source_key] = value
                     break
 
-        source.setdefault("workflowId", wf_info.workflow_id)
-        source.setdefault("runId", wf_info.run_id)
-        source.setdefault("logicalStepId", node_id)
+        explicit_checkpoint_ref = source.get("checkpointRef") is not None
         source.setdefault("checkpointBoundary", "after_execution")
         workspace = context_workspace if isinstance(context_workspace, Mapping) else {}
         if source.get("checkpointRef") is None:
@@ -3803,6 +3801,10 @@ class MoonMindRunWorkflow:
             )
             if checkpoint_digest is not None:
                 source["checkpointDigest"] = checkpoint_digest
+        if source.get("checkpointRef") is not None and not explicit_checkpoint_ref:
+            source.setdefault("workflowId", wf_info.workflow_id)
+            source.setdefault("runId", wf_info.run_id)
+            source.setdefault("logicalStepId", node_id)
         return source
 
     def _checkpoint_branch_turn_workspace_policy(
@@ -7293,10 +7295,12 @@ class MoonMindRunWorkflow:
                                     if review_gate_active
                                     else None,
                                 )
-                                request = self._request_with_persisted_retrieval_ref(
-                                    request,
-                                    logical_step_id=node_id,
-                                    attempt=current_step_execution,
+                                request = (
+                                    await self._request_with_persisted_retrieval_ref(
+                                        request,
+                                        logical_step_id=node_id,
+                                        attempt=current_step_execution,
+                                    )
                                 )
                             slot_continuity_enabled = workflow.patched(
                                 RUN_SLOT_CONTINUITY_PATCH
@@ -13257,7 +13261,7 @@ class MoonMindRunWorkflow:
             profile_selector=profile_selector,
         )
 
-    def _request_with_persisted_retrieval_ref(
+    async def _request_with_persisted_retrieval_ref(
         self,
         request: AgentExecutionRequest,
         *,
@@ -13358,10 +13362,28 @@ class MoonMindRunWorkflow:
                 branch_manifest_payload["contextBundleDigest"] = (
                     current_context_bundle.context_bundle_digest
                 )
+            previous_branch_payload = {
+                key: value
+                for key, value in dict(branch_artifact_manifest).items()
+                if key != "persistedArtifactRef"
+            }
+            if branch_manifest_payload != previous_branch_payload:
+                self._step_execution_branch_artifact_manifests[
+                    (logical_step_id, attempt)
+                ] = dict(branch_manifest_payload)
+                persisted_branch_ref = (
+                    await self._persist_step_execution_branch_artifact_manifest(
+                        logical_step_id,
+                        attempt=attempt,
+                    )
+                )
+                if persisted_branch_ref:
+                    branch_artifact_ref = persisted_branch_ref
             branch_manifest_payload["persistedArtifactRef"] = branch_artifact_ref
             branch_turn["artifactManifestDigest"] = branch_manifest_payload.get(
                 "artifactManifestDigest"
             )
+            branch_turn["artifactManifestRef"] = branch_artifact_ref
             moonmind_metadata["checkpointBranchTurn"] = branch_turn
             moonmind_metadata["checkpointBranchTurnArtifactManifest"] = (
                 branch_manifest_payload

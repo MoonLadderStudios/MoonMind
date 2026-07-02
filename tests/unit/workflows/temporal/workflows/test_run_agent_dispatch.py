@@ -975,6 +975,9 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         branch_turn = {
             "branchId": "branch-1",
             "branchTurnId": "turn-1",
+            "sourceWorkflowId": "source-wf",
+            "sourceRunId": "source-run",
+            "sourceLogicalStepId": "source-step",
             "sourceCheckpointRef": "artifact://checkpoint/source",
             "sourceCheckpointDigest": "sha256:" + "a" * 64,
             "instructionArtifactRef": "artifact://instructions/turn-1",
@@ -1051,6 +1054,50 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             ],
             "turn-1",
         )
+
+    def test_checkpoint_branch_turn_requires_source_identity_for_explicit_checkpoint_ref(
+        self,
+    ) -> None:
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        branch_turn = {
+            "branchId": "branch-1",
+            "branchTurnId": "turn-1",
+            "sourceCheckpointRef": "artifact://checkpoint/source",
+            "sourceCheckpointDigest": "sha256:" + "a" * 64,
+            "instructionArtifactRef": "artifact://instructions/turn-1",
+            "instructionDigest": "sha256:" + "b" * 64,
+            "workspacePolicy": "fresh_branch_from_source",
+            "runtimeContextPolicy": "fresh_agent_run",
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH
+            ),
+        ), pytest.raises(ValueError, match="source_checkpoint.workflowId"):
+            wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "metadata": {
+                            "moonmind": {"checkpointBranchTurn": branch_turn}
+                        },
+                    },
+                },
+                node_id="branch-implement",
+                tool_name="codex_cli",
+                attempt_reason="runtime_recovered",
+            )
 
     def test_managed_reattempt_records_session_reset_launch_evidence(self) -> None:
         from unittest.mock import patch
