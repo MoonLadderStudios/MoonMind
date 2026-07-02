@@ -5881,3 +5881,20 @@ def test_agent_run_result_mapping_preserves_canonical_diagnostics_ref() -> None:
         outputs["lastAssistantText"]
         == "# MoonSpec Verification Report\n\n**Verdict**: `FULLY_IMPLEMENTED`"
     )
+
+
+def test_agent_run_result_mapping_ignores_malformed_metadata() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    mapped = workflow._map_agent_run_result(
+        {
+            "summary": "Completed with status completed",
+            "diagnosticsRef": "art_verify_report",
+            "metadata": ["not", "a", "mapping"],
+            "outputRefs": [],
+        }
+    )
+
+    outputs = mapped["outputs"]
+    assert outputs["diagnosticsRef"] == "art_verify_report"
+    assert outputs["summary"] == "Completed with status completed"

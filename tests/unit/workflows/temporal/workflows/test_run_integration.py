@@ -2499,7 +2499,7 @@ def test_moonspec_verify_text_verdict_parser_is_not_a_branch_boundary(
     )
 
 
-def test_moonspec_verify_gate_accepts_report_shaped_markdown(
+def test_moonspec_verify_gate_degrades_report_only_markdown(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
     mock_run_workflow._record_moonspec_verify_gate(
@@ -2517,17 +2517,18 @@ def test_moonspec_verify_gate_accepts_report_shaped_markdown(
     )
 
     gate_context = mock_run_workflow._publish_context["moonSpecGate"]
-    assert gate_context["verdict"] == "FULLY_IMPLEMENTED"
+    assert gate_context["verdict"] == "NO_DETERMINATION"
     assert gate_context["summary"] == (
-        "MoonSpec verification report verdict: FULLY_IMPLEMENTED"
+        "MoonSpec verification report was present but structured gate output "
+        "was missing."
     )
     assert gate_context["diagnosticsRef"] == "art_verify_report"
-    assert gate_context["invalid"] is False
-    assert gate_context["degraded"] is False
-    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is False
+    assert gate_context["invalid"] is True
+    assert gate_context["degraded"] is True
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
 
 
-def test_moonspec_verify_gate_report_fallback_ignores_stale_operator_summary(
+def test_moonspec_verify_gate_report_only_markdown_ignores_stale_operator_summary(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
     mock_run_workflow._record_moonspec_verify_gate(
@@ -2546,8 +2547,8 @@ def test_moonspec_verify_gate_report_fallback_ignores_stale_operator_summary(
 
     assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
     blocked_message = mock_run_workflow._plan_blocked_message or ""
-    assert "ADDITIONAL_WORK_NEEDED" in blocked_message
-    assert "MoonSpec verification report verdict" in blocked_message
+    assert "NO_DETERMINATION" in blocked_message
+    assert "structured gate output was missing" in blocked_message
     assert "stale Jira updater transcript" not in blocked_message
     assert "art_verify_report" in blocked_message
 
@@ -2603,7 +2604,7 @@ def test_moonspec_verify_gate_fails_closed_for_verdict_looking_prose_output(
 def test_moonspec_verify_default_artifact_path_is_added_to_parameters(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
-    parameters: dict[str, Any] = {}
+    parameters: dict[str, Any] = {"verify_artifact_path": ""}
 
     mock_run_workflow._ensure_moonspec_verify_parameters(
         parameters=parameters,

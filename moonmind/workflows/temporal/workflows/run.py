@@ -348,17 +348,6 @@ _MOONSPEC_GATE_VERDICT_TEXT_PATTERN = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-_MOONSPEC_VERIFY_REPORT_VERDICT_PATTERN = re.compile(
-    r"(?im)^\s*\*\*Verdict\*\*\s*:\s*`?("
-    r"FULLY_IMPLEMENTED|"
-    r"ADDITIONAL_WORK_NEEDED|"
-    r"NO_DETERMINATION|"
-    r"ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION|"
-    r"FAILED_UNRECOVERABLE|"
-    r"BLOCKED"
-    r")`?\b"
-)
-
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.UserWorkflow workflow."""
 
@@ -4381,18 +4370,6 @@ class MoonMindRunWorkflow:
                         return text
         return None
 
-    def _extract_moonspec_verify_report_verdict(
-        self,
-        outputs: Mapping[str, Any],
-    ) -> str | None:
-        report_text = self._moonspec_verify_report_text(outputs)
-        if not report_text:
-            return None
-        match = _MOONSPEC_VERIFY_REPORT_VERDICT_PATTERN.search(report_text[:4000])
-        if not match:
-            return None
-        return self._normalize_moonspec_verify_verdict(match.group(1))
-
     def _moonspec_verify_gate_result(
         self,
         outputs: Mapping[str, Any],
@@ -4412,10 +4389,6 @@ class MoonMindRunWorkflow:
                     payload = dict(source)
                     payload["verdict"] = source.get(key)
                     return parse_step_gate_result(payload)
-
-        report_verdict = self._extract_moonspec_verify_report_verdict(outputs)
-        if report_verdict:
-            return parse_step_gate_result({"verdict": report_verdict})
 
         return parse_step_gate_result({})
 
@@ -4445,10 +4418,10 @@ class MoonMindRunWorkflow:
     ) -> None:
         gate_result = self._moonspec_verify_gate_result(outputs)
         verdict = gate_result.verdict
-        report_verdict = self._extract_moonspec_verify_report_verdict(outputs)
         reason = (
-            f"MoonSpec verification report verdict: {report_verdict}"
-            if report_verdict
+            "MoonSpec verification report was present but structured gate output "
+            "was missing."
+            if gate_result.degraded and self._moonspec_verify_report_text(outputs)
             else None
         )
         if reason is None:
@@ -12306,10 +12279,9 @@ class MoonMindRunWorkflow:
                     break
             if verify_artifact_path:
                 break
-        parameters.setdefault(
-            "verify_artifact_path",
+        parameters["verify_artifact_path"] = (
             verify_artifact_path
-            or self._default_moonspec_verify_artifact_path(node_id),
+            or self._default_moonspec_verify_artifact_path(node_id)
         )
 
     def _build_agent_execution_request(
@@ -13153,8 +13125,9 @@ class MoonMindRunWorkflow:
             outputs["providerErrorCode"] = provider_error_code
         if retry_recommendation:
             outputs["retryRecommendation"] = retry_recommendation
-        for key, value in metadata.items():
-            outputs.setdefault(key, value)
+        if isinstance(metadata, Mapping):
+            for key, value in metadata.items():
+                outputs.setdefault(key, value)
 
         return {
             "status": status,

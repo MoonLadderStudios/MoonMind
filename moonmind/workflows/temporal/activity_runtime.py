@@ -7061,6 +7061,124 @@ class TemporalAgentRuntimeActivities:
             published["storyOutput"] = story_output
             return published
 
+        def _workspace_moonspec_verify_path_candidates(
+            workspace: Path,
+            raw_path: str,
+        ) -> list[Path]:
+            if not raw_path:
+                return []
+            candidate = Path(raw_path)
+            candidates: list[Path] = []
+            if not candidate.is_absolute():
+                candidates.append(workspace / candidate)
+                if candidate.parts and candidate.parts[0] == "artifacts":
+                    candidates.append(workspace.parent / candidate)
+            else:
+                candidates.append(candidate)
+
+            resolved_candidates: list[Path] = []
+            job_artifact_root = (workspace.parent / "artifacts").resolve()
+            for path in candidates:
+                resolved = path.expanduser().resolve()
+                allowed = resolved.is_relative_to(workspace) or resolved.is_relative_to(
+                    job_artifact_root
+                )
+                if not allowed:
+                    logger.warning(
+                        "Skipping MoonSpec verify artifact publication outside "
+                        "workspace or job artifact root: %s",
+                        raw_path,
+                    )
+                    continue
+                if resolved not in resolved_candidates:
+                    resolved_candidates.append(resolved)
+            return resolved_candidates
+
+        def _workspace_moonspec_verify_path(
+            workspace: Path,
+            raw_path: str,
+        ) -> Path | None:
+            candidates = _workspace_moonspec_verify_path_candidates(
+                workspace,
+                raw_path,
+            )
+            for candidate in candidates:
+                if candidate.is_file():
+                    return candidate
+            if candidates:
+                logger.warning(
+                    "MoonSpec verify artifact file was not found for publication: %s",
+                    raw_path,
+                )
+            return None
+
+        async def _publish_moonspec_verify_artifact() -> dict[str, Any]:
+            verify_path = _metadata_text(
+                "verify_artifact_path",
+                "verifyArtifactPath",
+                "verification_artifact_path",
+                "verificationArtifactPath",
+            )
+            if not verify_path:
+                return {}
+            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
+            if not agent_run_id or self._run_store is None:
+                return {}
+            record = self._run_store.load(agent_run_id)
+            if record is None:
+                logger.warning(
+                    "Skipping MoonSpec verify artifact publication: run record not "
+                    "found for %s",
+                    agent_run_id,
+                )
+                return {}
+            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
+            if not workspace_path:
+                return {}
+            workspace = Path(workspace_path).expanduser().resolve()
+            path = _workspace_moonspec_verify_path(workspace, verify_path)
+            if path is None:
+                return {}
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                logger.warning(
+                    "MoonSpec verify artifact could not be read as JSON: %s",
+                    verify_path,
+                    exc_info=True,
+                )
+                return {}
+            if not isinstance(payload, Mapping):
+                logger.warning(
+                    "MoonSpec verify artifact payload must be a JSON object: %s",
+                    verify_path,
+                )
+                return {}
+            gate_payload = dict(payload)
+            verify_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal="system:agent_runtime",
+                payload=gate_payload,
+                execution_ref=_execution_ref("output.moonspec_verify"),
+                metadata_json={
+                    "name": "moonspec-verify-result.json",
+                    "path": verify_path,
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": [
+                        "agent_runtime",
+                        "output.moonspec_verify",
+                        "moonspec_verify",
+                    ],
+                    **step_artifact_metadata,
+                },
+            )
+            gate_payload["gateResultRef"] = verify_ref.artifact_id
+            return {
+                "moonSpecVerify": gate_payload,
+                "gateResultRef": verify_ref.artifact_id,
+                "moonSpecVerifyArtifactRef": verify_ref.artifact_id,
+            }
+
         result_summary = result_dict.get("summary") or result_dict.get("raw", "")
         operator_summary = self._sanitize_operator_summary(
             _metadata_text("operator_summary", "operatorSummary")
@@ -7176,6 +7294,16 @@ class TemporalAgentRuntimeActivities:
                     enriched_metadata_for_result["storyOutput"] = dict(
                         story_output_ref_payload
                     )
+                result_dict["metadata"] = enriched_metadata_for_result
+            moonspec_verify_refs = await _publish_moonspec_verify_artifact()
+            if moonspec_verify_refs:
+                published_refs.update(moonspec_verify_refs)
+                enriched_metadata_for_result = (
+                    dict(result_dict.get("metadata") or {})
+                    if isinstance(result_dict.get("metadata"), Mapping)
+                    else {}
+                )
+                enriched_metadata_for_result.update(moonspec_verify_refs)
                 result_dict["metadata"] = enriched_metadata_for_result
             summary_ref = await _write_json_artifact(
                 self._artifact_service,
