@@ -555,7 +555,12 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         settings_path=("workflow", "default_publish_mode"),
         env_aliases=("WORKFLOW_DEFAULT_PUBLISH_MODE", "MOONMIND_DEFAULT_PUBLISH_MODE"),
         apply_mode="next_workflow",
-        options=(("none", "None"), ("branch", "Branch"), ("pr", "Pull Request")),
+        options=(
+            ("auto", "Auto"),
+            ("none", "None"),
+            ("branch", "Branch"),
+            ("pr", "Pull Request"),
+        ),
         applies_to=("workflow_creation", "publishing"),
         order=20,
     ),

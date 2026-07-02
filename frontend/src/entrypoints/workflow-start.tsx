@@ -2897,7 +2897,7 @@ function deriveRequiredCapabilities(args: {
         args.runtimeMode,
         ...args.stepRuntimeModes,
         ...(args.repositoryBacked ? ["git"] : []),
-        ...(args.publishMode === "pr" ? ["gh"] : []),
+        ...(args.publishMode === "pr" || args.publishMode === "auto" ? ["gh"] : []),
         ...args.taskSkillRequiredCapabilities,
         ...args.stepSkillRequiredCapabilities,
         ...args.toolRequiredCapabilities,
@@ -2936,6 +2936,9 @@ function templateEnumOptionLabel(
   if (normalizedName === "publish_mode") {
     if (normalizedOption === "pr") {
       return "PR";
+    }
+    if (normalizedOption === "auto") {
+      return "Auto";
     }
     if (normalizedOption === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE) {
       return "PR with Merge Automation";
@@ -9124,8 +9127,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     }
 
     const normalizedPublishMode = normalizePublishModeForSubmit(publishMode);
-    if (!["none", "branch", "pr"].includes(normalizedPublishMode)) {
-      setSubmitMessage("Publish mode must be one of: none, branch, pr.");
+    if (!["auto", "none", "branch", "pr"].includes(normalizedPublishMode)) {
+      setSubmitMessage("Publish mode must be one of: auto, none, branch, pr.");
       clearSubmitBusy();
       return;
     }
@@ -12592,6 +12595,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 onChange={(event) => setPublishMode(event.target.value)}
                 disabled={!mergeAutomationAvailable}
               >
+                <option value="auto">Auto</option>
                 <option value="none">None</option>
                 <option value="branch">Branch</option>
                 <option value="pr">PR</option>

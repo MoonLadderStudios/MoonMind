@@ -48,7 +48,7 @@ SUPPORTED_EXECUTION_RUNTIMES = {
     "claude_code",
     "jules",
 }
-SUPPORTED_PUBLISH_MODES = {"none", "branch", "pr"}
+SUPPORTED_PUBLISH_MODES = {"auto", "none", "branch", "pr"}
 _SECRET_REF_MOUNT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _SECRET_REF_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SECRET_REF_FIELD_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -808,6 +808,7 @@ def resolve_publish_mode_for_skill(
     requested_mode: object,
     *,
     allow_repository_publish: bool = False,
+    diagnostics: list[dict[str, object]] | None = None,
 ) -> str:
     """Resolve publish mode for a skill while enforcing skill publish constraints."""
 
@@ -816,17 +817,34 @@ def resolve_publish_mode_for_skill(
     is_non_repository = is_non_repository_side_effect_skill(normalized_skill_id)
     if is_self_managed:
         if requested_mode is None:
-            return "none"
+            return "auto"
         publish_mode = _normalize_publish_mode(requested_mode)
-        if publish_mode != "none":
+        if publish_mode == "none":
+            if diagnostics is not None:
+                diagnostics.append(
+                    {
+                        "code": "legacy_self_managed_publish_none_normalized",
+                        "skillId": normalized_skill_id,
+                        "requestedMode": "none",
+                        "resolvedMode": "auto",
+                        "designSource": "docs/Workflows/WorkflowPublishing.md",
+                    }
+                )
+            return "auto"
+        if publish_mode != "auto":
             raise WorkflowContractError(
-                f"task.publish.mode must be 'none' when using skill '{normalized_skill_id}'"
+                "task.publish.mode must be 'auto' when using "
+                f"skill '{normalized_skill_id}'"
             )
-        return "none"
+        return "auto"
     if is_non_repository:
         if requested_mode is None:
             return "none"
         publish_mode = _normalize_publish_mode(requested_mode)
+        if publish_mode == "auto":
+            raise WorkflowContractError(
+                f"task.publish.mode 'auto' is not supported for skill '{normalized_skill_id}'"
+            )
         if (
             allow_repository_publish
             or normalized_skill_id in _REPOSITORY_PUBLISH_COMPATIBLE_SIDE_EFFECT_SKILLS
@@ -838,7 +856,56 @@ def resolve_publish_mode_for_skill(
             )
         return "none"
     publish_mode = _normalize_publish_mode(requested_mode)
+    if publish_mode == "auto":
+        raise WorkflowContractError(
+            "task.publish.mode 'auto' requires an agent-owned publish skill"
+        )
     return publish_mode
+
+def resolve_publish_mode_for_skills(
+    skill_ids: Sequence[object],
+    requested_mode: object,
+    *,
+    allow_repository_publish: bool = False,
+    diagnostics: list[dict[str, object]] | None = None,
+) -> str:
+    """Resolve publish mode against every selected skill contract."""
+
+    normalized_ids = [_normalize_skill_id(skill_id) for skill_id in skill_ids]
+    ordered_ids = [skill_id for skill_id in normalized_ids if skill_id]
+    if not ordered_ids:
+        return resolve_publish_mode_for_skill(
+            "auto",
+            requested_mode,
+            allow_repository_publish=allow_repository_publish,
+            diagnostics=diagnostics,
+        )
+
+    requested_publish_mode = (
+        _normalize_publish_mode(requested_mode) if requested_mode is not None else None
+    )
+    if requested_publish_mode == "auto" and any(
+        is_self_managed_publish_skill(skill_id) for skill_id in ordered_ids
+    ):
+        for skill_id in ordered_ids:
+            if is_non_repository_side_effect_skill(skill_id):
+                raise WorkflowContractError(
+                    f"task.publish.mode 'auto' is not supported for skill '{skill_id}'"
+                )
+        return "auto"
+
+    resolved_modes = [
+        resolve_publish_mode_for_skill(
+            skill_id,
+            requested_mode,
+            allow_repository_publish=allow_repository_publish,
+            diagnostics=diagnostics,
+        )
+        for skill_id in ordered_ids
+    ]
+    if "auto" in resolved_modes:
+        return "auto"
+    return resolved_modes[0]
 
 def _is_resolve_pr_objective(value: object) -> bool:
     """Return True when task instructions target PR resolution behavior."""
@@ -2107,12 +2174,11 @@ class WorkflowExecutionSpec(BaseModel):
         requested_publish_mode = self.publish.mode if (
             allow_repository_publish or "mode" in self.publish.model_fields_set
         ) else None
-        for skill_id in skill_ids:
-            resolve_publish_mode_for_skill(
-                skill_id,
-                requested_publish_mode,
-                allow_repository_publish=allow_repository_publish,
-            )
+        self.publish.mode = resolve_publish_mode_for_skills(
+            tuple(skill_ids),
+            requested_publish_mode,
+            allow_repository_publish=allow_repository_publish,
+        )
         return self
 
     @model_validator(mode="after")
@@ -2595,8 +2661,17 @@ def build_canonical_workflow_view(
     skill_node = workflow_payload.get("skill") or {}
     skill = skill_node if isinstance(skill_node, Mapping) else {}
     skill_id = skill.get("id")
-    publish_mode = resolve_publish_mode_for_skill(
-        skill_id,
+    publish_skill_ids: list[object] = [skill_id]
+    steps_for_publish = workflow_payload.get("steps")
+    if isinstance(steps_for_publish, list):
+        for step_raw in steps_for_publish:
+            if not isinstance(step_raw, Mapping):
+                continue
+            step_skill_raw = step_raw.get("skill")
+            step_skill = step_skill_raw if isinstance(step_skill_raw, Mapping) else {}
+            publish_skill_ids.append(step_skill.get("id") or step_skill.get("name"))
+    publish_mode = resolve_publish_mode_for_skills(
+        tuple(publish_skill_ids),
         publish_mode_candidate,
         allow_repository_publish=allows_repository_publish_for_skill_context(workflow_payload),
     )
@@ -3059,6 +3134,7 @@ __all__ = [
     "is_self_managed_publish_skill",
     "normalize_queue_job_payload",
     "resolve_publish_mode_for_skill",
+    "resolve_publish_mode_for_skills",
     "reject_workflow_capability_identity_versions",
     "strip_workflow_capability_identity_versions",
 ]

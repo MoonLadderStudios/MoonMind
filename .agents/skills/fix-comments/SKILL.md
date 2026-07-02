@@ -5,11 +5,21 @@ metadata:
   required-capabilities:
     - git
     - gh
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
 ---
 
 # Fix Comments
 
 Run this as a full remediation workflow for the active branch PR. Do not stop after analysis.
+
+This skill owns publishing under `publish.mode=auto`. Before reporting success,
+write `artifacts/publish_result.json` using schema
+`moonmind.publish.auto.v1` as defined in
+`docs/Workflows/WorkflowPublishing.md`.
 
 ## Inputs
 

@@ -6,6 +6,11 @@ metadata:
     - git
     - jira
     - gh
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
 ---
 
 # Batch Workflows Skill

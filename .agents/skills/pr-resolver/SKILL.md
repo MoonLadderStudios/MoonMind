@@ -6,6 +6,11 @@ metadata:
   required-capabilities:
     - git
     - gh
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
 ---
 
 # PR Resolver Skill
@@ -14,6 +19,11 @@ metadata:
 You are the master orchestrator for finishing Pull Requests. Use bounded retries to keep finalize resilient, and delegate actual fixes to specialized skills (`fix-merge-conflicts`, `fix-comments`, `fix-ci`) when blockers are actionable.
 
 The task is not complete until the target PR is merged or is proven already merged. A local fix, local commit, passing local test run, unresolved review reply, or unpushed branch is not a successful PR resolution.
+
+This skill owns publishing under `publish.mode=auto`. Before reporting success,
+write `artifacts/publish_result.json` using schema
+`moonmind.publish.auto.v1` as defined in
+`docs/Workflows/WorkflowPublishing.md`.
 
 ## Inputs (skill args)
 - inputs.repo (optional)

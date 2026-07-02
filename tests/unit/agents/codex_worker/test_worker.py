@@ -5114,11 +5114,9 @@ async def test_compose_step_instruction_keeps_distinct_step_text(
         not in instruction
     )
 
-async def test_compose_step_instruction_allows_pr_resolver_self_publish_when_publish_none(
+async def test_compose_step_instruction_uses_auto_publish_contract(
     tmp_path: Path,
 ) -> None:
-    """`pr-resolver` should be told to commit/push directly when publish is disabled."""
-
     config = CodexWorkerConfig(
         moonmind_url="http://localhost:8000",
         worker_id="worker-1",
@@ -5137,7 +5135,7 @@ async def test_compose_step_instruction_allows_pr_resolver_self_publish_when_pub
         canonical_payload={
             "workflow": {
                 "instructions": "Resolve PR #999",
-                "publish": {"mode": "none"},
+                "publish": {"mode": "auto"},
             }
         },
         runtime_mode="codex",
@@ -5154,13 +5152,55 @@ async def test_compose_step_instruction_allows_pr_resolver_self_publish_when_pub
     )
 
     assert (
-        "Commit/push/merge directly when required by this skill. Publish stage is disabled for this task."
+        "Publishing is in auto mode. Determine the correct publish action for this task."
         in instruction
     )
+    assert "Write artifacts/publish_result.json proving the outcome" in instruction
     assert (
-        "Do NOT commit or push. Publish is handled by MoonMind publish stage."
+        "Do NOT commit or push. Publishing is disabled for this task."
         not in instruction
     )
+
+
+async def test_compose_step_instruction_disables_publish_when_publish_none(
+    tmp_path: Path,
+) -> None:
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    instruction = worker._compose_step_instruction_for_runtime(
+        canonical_payload={
+            "workflow": {
+                "instructions": "Inspect the repository",
+                "publish": {"mode": "none"},
+            }
+        },
+        runtime_mode="codex",
+        step=ResolvedTaskStep(
+            step_index=0,
+            step_id="step-1",
+            title=None,
+            instructions="Report findings",
+            effective_skill_id="auto",
+            effective_skill_args={},
+            has_step_instructions=True,
+        ),
+        total_steps=1,
+    )
+
+    assert "Do NOT commit or push. Publishing is disabled for this task." in instruction
+    assert "Publish is handled by MoonMind publish stage" not in instruction
 
 async def test_compose_step_instruction_keeps_skill_workspace_lines_under_workspace_section(
     tmp_path: Path,
@@ -6131,6 +6171,35 @@ async def test_run_once_allows_resolve_pr_when_final_state_is_resolved(
                 ),
                 encoding="utf-8",
             )
+            publish_result_path = (
+                tmp_path
+                / str(job_id)
+                / "artifacts"
+                / "publish_result.json"
+            )
+            publish_result_path.parent.mkdir(parents=True, exist_ok=True)
+            publish_result_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "moonmind.publish.auto.v1",
+                        "mode": "auto",
+                        "owner": "agent",
+                        "skillId": "pr-resolver",
+                        "status": "verified",
+                        "action": "merge",
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "branch": "feature/resolve-pr",
+                        "localHead": "abc123",
+                        "remoteBranchHead": "abc123",
+                        "remoteVerified": True,
+                        "pushed": False,
+                        "merged": True,
+                        "blockedReason": None,
+                        "verificationCommands": ["gh pr view 654 --json merged"],
+                    }
+                ),
+                encoding="utf-8",
+            )
             return await super().handle_skill(
                 job_id=job_id,
                 payload=payload,
@@ -6951,6 +7020,127 @@ async def test_determine_finish_outcome_pr_publish_without_pr_url_maps_to_publis
 
     assert outcome.code == "PUBLISHED_PR"
     assert outcome.stage == "publish"
+
+
+def test_classify_auto_publish_evidence_verified_push() -> None:
+    status, reason = CodexWorker._classify_auto_publish_result(
+        {
+            "schemaVersion": "moonmind.publish.auto.v1",
+            "mode": "auto",
+            "owner": "agent",
+            "skillId": "fix-ci",
+            "status": "verified",
+            "action": "push",
+            "localHead": "abc123",
+            "remoteBranchHead": "abc123",
+            "remoteVerified": True,
+            "pushed": True,
+            "merged": False,
+        }
+    )
+
+    assert status == "published"
+    assert reason is None
+
+
+def test_classify_auto_publish_evidence_no_op_verified() -> None:
+    status, reason = CodexWorker._classify_auto_publish_result(
+        {
+            "schemaVersion": "moonmind.publish.auto.v1",
+            "mode": "auto",
+            "owner": "agent",
+            "skillId": "fix-ci",
+            "status": "no_op_verified",
+            "action": "none",
+            "remoteVerified": True,
+            "pushed": False,
+            "merged": False,
+        }
+    )
+
+    assert status == "skipped"
+    assert reason == "auto publish no-op verified"
+
+
+def test_classify_auto_publish_evidence_missing_or_invalid() -> None:
+    assert CodexWorker._classify_auto_publish_result(None) == (
+        "failed",
+        "auto_publish_evidence_missing",
+    )
+    assert CodexWorker._classify_auto_publish_result({"mode": "auto"}) == (
+        "failed",
+        "auto_publish_evidence_invalid",
+    )
+
+
+async def test_determine_finish_outcome_auto_merged_maps_to_published_pr(
+    tmp_path: Path,
+) -> None:
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=FakeQueueClient(jobs=[]),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+        ),
+    )
+
+    outcome = worker._determine_finish_outcome(
+        succeeded=True,
+        cancelled=False,
+        cancel_reason=None,
+        failure_stage=None,
+        failure_reason=None,
+        publish_mode="auto",
+        publish_status="merged",
+        publish_reason=None,
+        publish_pr_url=None,
+        publish_branch="task/branch",
+    )
+
+    assert outcome.code == "PUBLISHED_PR"
+    assert outcome.stage == "publish"
+
+
+async def test_determine_finish_outcome_auto_no_op_maps_to_no_commit(
+    tmp_path: Path,
+) -> None:
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+        ),
+        queue_client=FakeQueueClient(jobs=[]),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+        ),
+    )
+
+    outcome = worker._determine_finish_outcome(
+        succeeded=True,
+        cancelled=False,
+        cancel_reason=None,
+        failure_stage=None,
+        failure_reason=None,
+        publish_mode="auto",
+        publish_status="skipped",
+        publish_reason="auto publish no-op verified",
+        publish_pr_url=None,
+        publish_branch="task/branch",
+    )
+
+    assert outcome.code == "NO_COMMIT"
+    assert outcome.reason == "auto publish no-op verified"
 
 async def test_live_log_chunk_callback_emits_redacted_step_metadata(
     tmp_path: Path,

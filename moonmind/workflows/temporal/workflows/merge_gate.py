@@ -334,7 +334,7 @@ def build_resolver_run_request(
         "repo": pr.repo,
         "repository": pr.repo,
         "priority": MERGE_AUTOMATION_RESOLVER_PRIORITY,
-        "publishMode": "none",
+        "publishMode": "auto",
         "targetRuntime": target_runtime,
         "task": {
             "instructions": (
@@ -344,7 +344,7 @@ def build_resolver_run_request(
             "tool": {"type": "skill", "name": "pr-resolver"},
             "skill": {"id": "pr-resolver", "args": args},
             "runtime": runtime_payload,
-            "publish": {"mode": "none"},
+            "publish": {"mode": "auto"},
         },
         "workspaceSpec": {
             "repository": pr.repo,

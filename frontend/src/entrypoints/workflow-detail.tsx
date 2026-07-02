@@ -619,6 +619,7 @@ function detailStringValue(...values: unknown[]): string {
 
 const PUBLISH_MODE_LABELS: Record<string, string> = {
   pr_with_merge_automation: 'PR with Merge Automation',
+  auto: 'Auto',
   pr: 'PR',
   branch: 'Branch',
   none: 'None',
@@ -627,6 +628,24 @@ const PUBLISH_MODE_LABELS: Record<string, string> = {
 function formatPublishModeLabel(value: string | null | undefined): string {
   const normalized = String(value || '').trim().toLowerCase();
   return PUBLISH_MODE_LABELS[normalized] ?? String(value || '').trim();
+}
+
+function formatAutoPublishEvidenceLabel(
+  publish:
+    | { mode?: string | null | undefined; status?: string | null | undefined; reason?: string | null | undefined }
+    | null
+    | undefined,
+): string | null {
+  if (String(publish?.mode || '').trim().toLowerCase() !== 'auto') return null;
+  const status = String(publish?.status || '').trim().toLowerCase();
+  if (status === 'published' || status === 'skipped') {
+    return 'Auto publish verified';
+  }
+  if (status === 'failed' || status === 'blocked') {
+    const reason = String(publish?.reason || '').trim();
+    return reason ? `Auto publish blocked: ${reason}` : 'Auto publish blocked';
+  }
+  return 'Auto publish pending';
 }
 
 function runtimeCommandFromExecution(execution: unknown): Record<string, unknown> {
@@ -7266,7 +7285,12 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 {runSummary.publish ? (
                   <>
                     <Fact label="Publish Status">{formatStatusLabel(runSummary.publish.status)}</Fact>
-                    <Fact label="Publish Mode">{runSummary.publish.mode || '—'}</Fact>
+                    <Fact label="Publish Mode">{formatPublishModeLabel(runSummary.publish.mode)}</Fact>
+                    {formatAutoPublishEvidenceLabel(runSummary.publish) ? (
+                      <Fact label="Auto Publish">
+                        {formatAutoPublishEvidenceLabel(runSummary.publish)}
+                      </Fact>
+                    ) : null}
                   </>
                 ) : null}
               </FlatFactGrid>

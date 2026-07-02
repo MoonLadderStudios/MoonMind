@@ -7702,6 +7702,11 @@ describe.skip("Task Create Entrypoint", () => {
     )) as HTMLSelectElement;
     expect(
       Array.from(publishModeSelect.options).some(
+        (option) => option.value === "auto" && option.text === "Auto",
+      ),
+    ).toBe(true);
+    expect(
+      Array.from(publishModeSelect.options).some(
         (option) =>
           option.value === "pr_with_merge_automation" &&
           /merge automation/i.test(option.text),

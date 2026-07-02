@@ -161,7 +161,7 @@ class PublishService:
         Args:
             job_id: The job identifier.
             instruction: The original instruction for the task.
-            publish_mode: The publish mode ("none", "branch", "pr").
+            publish_mode: The publish mode ("auto", "none", "branch", "pr").
             publish_base_branch: Base branch to target for PRs (default: main).
             runtime_mode: The runtime that generated the changes (e.g. "codex", "claude").
             repo_dir: Path to the git repository.

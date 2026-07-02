@@ -2725,7 +2725,13 @@ def _serialize_execution(
             or _coerce_temporal_scalar(task_payload.get("repository"))
         ) or None
 
-    _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none", "pr_with_merge_automation"}
+    _ALLOWED_PUBLISH_MODES = {
+        "auto",
+        "branch",
+        "pr",
+        "none",
+        "pr_with_merge_automation",
+    }
     raw_publish_mode = str(
         params.get("publishMode") or publish_payload.get("mode") or ""
     ).strip() or None

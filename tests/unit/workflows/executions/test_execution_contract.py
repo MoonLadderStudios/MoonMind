@@ -1261,9 +1261,24 @@ def test_jira_side_effect_skills_reject_repository_publish_modes(
         "fix-merge-conflicts",
     ],
 )
-def test_self_managed_publish_skills_force_none(skill_id: str) -> None:
-    assert resolve_publish_mode_for_skill(skill_id, None) == "none"
-    assert resolve_publish_mode_for_skill(skill_id, "none") == "none"
+def test_auto_publish_skills_resolve_to_auto(skill_id: str) -> None:
+    diagnostics: list[dict[str, object]] = []
+
+    assert resolve_publish_mode_for_skill(skill_id, None) == "auto"
+    assert resolve_publish_mode_for_skill(skill_id, "auto") == "auto"
+    assert (
+        resolve_publish_mode_for_skill(skill_id, "none", diagnostics=diagnostics)
+        == "auto"
+    )
+    assert diagnostics == [
+        {
+            "code": "legacy_self_managed_publish_none_normalized",
+            "skillId": skill_id,
+            "requestedMode": "none",
+            "resolvedMode": "auto",
+            "designSource": "docs/Workflows/WorkflowPublishing.md",
+        }
+    ]
     with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill(skill_id, "pr")
 
@@ -1272,14 +1287,15 @@ def test_self_managed_publish_skills_force_none(skill_id: str) -> None:
     "skill_id",
     ["fix-comments", "fix-ci", "fix-merge-conflicts"],
 )
-def test_codex_skill_payload_defaults_self_managed_publish_to_none(
+def test_codex_skill_payload_defaults_auto_publish_skill_to_auto(
     skill_id: str,
 ) -> None:
-    """codex_skill submissions that omit publishMode must default to ``none``.
+    """codex_skill submissions that omit publishMode default to ``auto`` for auto-publish skills.
 
     Regression for the legacy payload path materializing the default ``pr`` mode
-    before the self-managed resolver runs, which incorrectly rejected the
-    request even though the omitted mode should resolve to ``none``.
+    before the skill publish resolver runs, which incorrectly rejected the
+    request even though the omitted mode should resolve through the selected
+    skill contract.
     """
 
     result = build_canonical_workflow_view(
@@ -1293,7 +1309,55 @@ def test_codex_skill_payload_defaults_self_managed_publish_to_none(
         },
     )
 
-    assert result["workflow"]["publish"]["mode"] == "none"
+    assert result["workflow"]["publish"]["mode"] == "auto"
+
+
+def test_auto_publish_rejected_without_agent_owned_publish_skill() -> None:
+    with pytest.raises(WorkflowContractError, match="agent-owned publish skill"):
+        resolve_publish_mode_for_skill("auto", "auto")
+
+
+def test_step_auto_publish_skill_defaults_global_publish_to_auto() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {
+                "instructions": "Resolve the selected PR.",
+                "steps": [
+                    {
+                        "id": "resolve",
+                        "type": "skill",
+                        "instructions": "Run pr-resolver.",
+                        "skill": {"id": "pr-resolver", "args": {"pr": "123"}},
+                    }
+                ],
+            },
+        },
+    )
+
+    assert result["workflow"]["publish"]["mode"] == "auto"
+
+    explicit = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {
+                "instructions": "Resolve the selected PR.",
+                "publish": {"mode": "auto"},
+                "steps": [
+                    {
+                        "id": "resolve",
+                        "type": "skill",
+                        "instructions": "Run pr-resolver.",
+                        "skill": {"id": "pr-resolver", "args": {"pr": "123"}},
+                    }
+                ],
+            },
+        },
+    )
+
+    assert explicit["workflow"]["publish"]["mode"] == "auto"
 
 
 def test_canonical_workflow_view_strips_capability_identity_versions() -> None:

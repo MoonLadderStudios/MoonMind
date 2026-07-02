@@ -5,11 +5,21 @@ metadata:
   required-capabilities:
     - git
     - gh
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
 ---
 
 # Fix CI
 
 Run this workflow to diagnose and fix CI build and test failures on the active branch.
+
+This skill owns publishing under `publish.mode=auto`. Before reporting success,
+write `artifacts/publish_result.json` using schema
+`moonmind.publish.auto.v1` as defined in
+`docs/Workflows/WorkflowPublishing.md`.
 
 ## Inputs
 - Optional: specific failing check name or local reproduction command.

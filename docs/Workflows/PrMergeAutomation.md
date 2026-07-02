@@ -101,7 +101,7 @@ MoonMind's lifecycle model already expects `MoonMind.UserWorkflow` to mix direct
 
 ### 6.3 Why the resolver itself is a child `MoonMind.UserWorkflow`
 
-The current MoonMind execution model dispatches plan execution through `agent_runtime` child workflows. `pr-resolver` is an agent skill selected for the resolver run, not a standalone workflow type, and it owns git/PR mutations and requires `publishMode = "none"`.
+The current MoonMind execution model dispatches plan execution through `agent_runtime` child workflows. `pr-resolver` is an agent skill selected for the resolver run, not a standalone workflow type, and it owns git/PR mutations under `publishMode = "auto"`.
 
 Because of that, `MoonMind.MergeAutomation` SHOULD start a child **`MoonMind.UserWorkflow`** for the resolver, rather than trying to execute the resolver skill directly inside the gate workflow. This reuses:
 
@@ -121,9 +121,9 @@ MoonMind.UserWorkflow (root parent workflow)
   |- child: MoonMind.MergeAutomation
   |    |- gate wait / external events / Jira checks
   |    |- child: MoonMind.UserWorkflow (resolver attempt 1)
-  |    |     `- executes tool=skill(pr-resolver), publishMode=none
+  |    |     `- executes tool=skill(pr-resolver), publishMode=auto
   |    `- child: MoonMind.UserWorkflow (resolver attempt 2, if needed)
-  |          `- executes tool=skill(pr-resolver), publishMode=none
+  |          `- executes tool=skill(pr-resolver), publishMode=auto
   `- terminal completion only after MergeAutomation returns success
 ```
 
@@ -481,7 +481,7 @@ When the gate opens, `MoonMind.MergeAutomation` starts a child **`MoonMind.UserW
 That child run MUST set:
 
 - `task.tool = { type: "skill", name: "pr-resolver" }`
-- top-level `initialParameters.publishMode = "none"`
+- top-level `initialParameters.publishMode = "auto"`
 
 This is required because `pr-resolver` itself owns git push and merge behavior.
 
@@ -494,7 +494,7 @@ This is required because `pr-resolver` itself owns git push and merge behavior.
     "repository": "owner/repo",
     "targetRuntime": "codex",
     "requiredCapabilities": ["git", "gh"],
-    "publishMode": "none",
+    "publishMode": "auto",
     "task": {
       "instructions": "Resolve and merge PR #123 for parent workflow mm:parent.",
       "tool": {
@@ -774,7 +774,7 @@ This design is complete when:
 3. the parent does not complete until the merge-automation child completes,
 4. `MoonMind.MergeAutomation` waits on external signal completion rather than a fixed delay,
 5. `MoonMind.MergeAutomation` launches a child `MoonMind.UserWorkflow` for `pr-resolver`,
-6. resolver child runs use `publishMode = "none"`,
+6. resolver child runs use `publishMode = "auto"`,
 7. a resolver-generated push can return control to the gate,
 8. downstream workflow executions depending on the parent workflow naturally wait for merge automation completion,
 9. non-success merge-automation terminal outcomes fail the parent workflow except `canceled`, which cancels the parent workflow,

@@ -4,6 +4,11 @@ description: Discover open Dependabot version-bump PRs and enqueue one `pr-resol
 metadata:
   required-capabilities:
     - gh
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
 ---
 
 # Batch Dependabot Resolver Skill
@@ -135,7 +140,7 @@ Example `POST /api/recurring-workflows` body:
             "packageManagers": ["pip", "npm", "github-actions"],
             "dryRun": false
           },
-          "publish": { "mode": "none" }
+          "publish": { "mode": "auto" }
         }
       }
     }

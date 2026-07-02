@@ -1933,6 +1933,7 @@ class CodexWorker:
             failure_stage_override: str | None = None,
             failure_reason_override: str | None = None,
         ) -> None:
+            nonlocal result
             nonlocal publish_status
             nonlocal publish_reason
             nonlocal publish_pr_url
@@ -1941,6 +1942,25 @@ class CodexWorker:
             nonlocal publish_pr_metadata
 
             publish_payload = self._read_publish_result(prepared=prepared)
+            if publish_mode == "auto" and result is not None and result.succeeded:
+                auto_status, auto_reason = self._classify_auto_publish_result(
+                    publish_payload
+                )
+                publish_status = auto_status
+                publish_reason = auto_reason
+                if auto_status == "failed":
+                    result = type(result)(
+                        succeeded=False,
+                        summary=result.summary,
+                        error_message=auto_reason,
+                        artifacts=result.artifacts,
+                        run_quality_reason=result.run_quality_reason,
+                    )
+                    if failure_stage_override is None and failure_stage is None:
+                        failure_stage_override = "publish"
+                    if failure_reason_override is None and failure_reason is None:
+                        failure_reason_override = auto_reason
+
             if publish_payload:
                 if (
                     publish_payload.get("status") == "skipped"
@@ -1951,7 +1971,7 @@ class CodexWorker:
                         publish_payload.get("reason")
                         or "No repository changes were available to commit or publish."
                     ).strip()
-                else:
+                elif publish_mode != "auto":
                     publish_status = "published"
                 publish_pr_url = str(publish_payload.get("prUrl") or "").strip() or None
                 publish_base_branch = (
@@ -2250,6 +2270,30 @@ class CodexWorker:
                             **dict(skill_meta),
                         },
                     )
+                elif publish_mode == "auto":
+                    publish_status = "awaiting_evidence"
+                    publish_reason = None
+                    await self._emit_event(
+                        job_id=job.id,
+                        level="info",
+                        message="moonmind.task.publish",
+                        payload={
+                            "status": "awaiting_evidence",
+                            "reason": "publish mode is auto",
+                            **dict(skill_meta),
+                        },
+                    )
+                    if (
+                        prepared is not None
+                        and prepared.publish_result_path.exists()
+                    ):
+                        staged_artifacts.append(
+                            ArtifactUpload(
+                                path=prepared.publish_result_path,
+                                name="publish_result.json",
+                                content_type="application/json",
+                            )
+                        )
                 else:
                     self._start_finish_stage(stage_starts, stage="publish")
                     try:
@@ -3416,6 +3460,55 @@ class CodexWorker:
         return dict(payload) if isinstance(payload, Mapping) else None
 
     @staticmethod
+    def _classify_auto_publish_result(
+        payload: Mapping[str, Any] | None,
+    ) -> tuple[str, str | None]:
+        """Map agent-owned auto publish evidence to worker publish status.
+
+        Design source: docs/Workflows/WorkflowPublishing.md.
+        """
+
+        if payload is None:
+            return "failed", "auto_publish_evidence_missing"
+        if payload.get("schemaVersion") != "moonmind.publish.auto.v1":
+            return "failed", "auto_publish_evidence_invalid"
+        if payload.get("mode") != "auto" or payload.get("owner") != "agent":
+            return "failed", "auto_publish_evidence_invalid"
+
+        status = str(payload.get("status") or "").strip()
+        action = str(payload.get("action") or "").strip()
+        if status not in {"verified", "no_op_verified", "blocked", "failed"}:
+            return "failed", "auto_publish_evidence_invalid"
+        if action not in {
+            "none",
+            "commit",
+            "push",
+            "merge",
+            "commit_and_push",
+            "push_and_merge",
+        }:
+            return "failed", "auto_publish_evidence_invalid"
+
+        if status == "no_op_verified":
+            if payload.get("remoteVerified") is not True:
+                return "failed", "auto_publish_evidence_invalid"
+            return "skipped", "auto publish no-op verified"
+
+        if status == "verified":
+            if payload.get("merged") is True:
+                return "merged", None
+            if payload.get("pushed") is True and payload.get("remoteVerified") is True:
+                local_head = str(payload.get("localHead") or "").strip()
+                remote_head = str(payload.get("remoteBranchHead") or "").strip()
+                if local_head and remote_head and local_head == remote_head:
+                    return "published", None
+            return "failed", "auto_publish_evidence_invalid"
+
+        blocked_reason = str(payload.get("blockedReason") or "").strip()
+        reason = blocked_reason or f"auto_publish_{status}"
+        return "failed", reason
+
+    @staticmethod
     def _agent_pr_metadata_path(prepared: PreparedTaskWorkspace) -> Path:
         return prepared.artifacts_dir / _AGENT_PR_METADATA_ARTIFACT_NAME
 
@@ -3476,7 +3569,7 @@ class CodexWorker:
             )
         if not succeeded:
             stage = (failure_stage or "unknown").strip() or "unknown"
-            reason = f"{stage} stage failed"
+            reason = self._redact_text(failure_reason or f"{stage} stage failed")
             return FinishOutcome(code="FAILED", stage=stage, reason=reason)
 
         if publish_mode == "none":
@@ -3489,7 +3582,9 @@ class CodexWorker:
         if publish_status == "skipped":
             reason = publish_reason or "No repository commit was needed."
             return FinishOutcome(code="NO_COMMIT", stage="publish", reason=reason)
-        if publish_status == "published" and (publish_mode == "pr" or publish_pr_url):
+        if publish_status in {"merged", "published"} and (
+            publish_mode == "pr" or publish_pr_url or publish_status == "merged"
+        ):
             return FinishOutcome(
                 code="PUBLISHED_PR",
                 stage="publish",
@@ -3541,7 +3636,7 @@ class CodexWorker:
 
         if publish_status == "skipped":
             has_changes = False
-        elif publish_status in {"published", "failed"}:
+        elif publish_status in {"merged", "published", "failed"}:
             has_changes = True
         elif publish_mode == "none":
             has_changes = patch_exists
@@ -11062,13 +11157,21 @@ class CodexWorker:
                 step_instruction_value
                 or "(no step-specific instructions; continue based on objective)"
             )
-        workspace_publish_line = (
-            "- Do NOT commit or push. Publish is handled by MoonMind publish stage."
-        )
-        if step.effective_skill_id == _PR_RESOLVER_SKILL_ID and publish_mode == "none":
+        if publish_mode == "auto":
             workspace_publish_line = (
-                "- Commit/push/merge directly when required by this skill. "
-                "Publish stage is disabled for this task."
+                "- Publishing is in auto mode. Determine the correct publish action "
+                "for this task. You may commit, push, or merge only when required "
+                "by the selected skill. Write artifacts/publish_result.json proving "
+                "the outcome before reporting success."
+            )
+        elif publish_mode == "none":
+            workspace_publish_line = (
+                "- Do NOT commit or push. Publishing is disabled for this task."
+            )
+        else:
+            workspace_publish_line = (
+                "- After completing the changes, commit your work. Do NOT push or "
+                "create a pull request; MoonMind handles that automatically."
             )
 
         attachment_context = self._compose_step_attachment_context_block(

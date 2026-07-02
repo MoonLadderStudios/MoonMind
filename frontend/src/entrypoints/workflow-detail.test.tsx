@@ -5725,6 +5725,123 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('renders auto publish evidence labels from the summary artifact', async () => {
+    window.history.pushState({}, 'Auto Publish Test', '/workflows/test-auto?source=temporal');
+    const mockExecution = {
+      taskId: 'test-auto',
+      workflowId: 'test-auto',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      entry: 'user_workflow',
+      title: 'Auto publish task',
+      summary: 'Auto publish completed',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      closeStatus: 'COMPLETED',
+      publishMode: 'auto',
+      summaryArtifactRef: 'art-summary-auto',
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: '2026-03-28T00:00:03Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-summary-auto/download')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              finishOutcome: { code: 'PUBLISHED_BRANCH', stage: 'publish' },
+              publish: { mode: 'auto', status: 'published' },
+            }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Auto publish task')).toBeTruthy();
+      expect(screen.getByText('Auto publish verified')).toBeTruthy();
+      expect(screen.getAllByText('Auto').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('renders blocked auto publish evidence reason from the summary artifact', async () => {
+    window.history.pushState({}, 'Auto Publish Blocked Test', '/workflows/test-auto-blocked?source=temporal');
+    const mockExecution = {
+      taskId: 'test-auto-blocked',
+      workflowId: 'test-auto-blocked',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      entry: 'user_workflow',
+      title: 'Auto publish blocked task',
+      summary: 'Auto publish blocked',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      closeStatus: 'FAILED',
+      publishMode: 'auto',
+      summaryArtifactRef: 'art-summary-auto-blocked',
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: '2026-03-28T00:00:03Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-summary-auto-blocked/download')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              finishOutcome: { code: 'FAILED', stage: 'publish' },
+              publish: {
+                mode: 'auto',
+                status: 'failed',
+                reason: 'publish_unavailable',
+              },
+            }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Auto publish blocked task')).toBeTruthy();
+      expect(screen.getByText('Auto publish blocked: publish_unavailable')).toBeTruthy();
+    });
+  });
+
   it('does not render a PR link for unsafe execution or run-summary URLs', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {

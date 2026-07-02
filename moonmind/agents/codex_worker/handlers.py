@@ -126,9 +126,9 @@ class CodexExecPayload:
         publish_raw = payload.get("publish")
         publish_payload = publish_raw if isinstance(publish_raw, Mapping) else {}
         publish_mode = str(publish_payload.get("mode", "none")).strip() or "none"
-        if publish_mode not in {"none", "branch", "pr"}:
+        if publish_mode not in {"auto", "none", "branch", "pr"}:
             raise CodexWorkerHandlerError(
-                "publish.mode must be one of: none, branch, pr"
+                "publish.mode must be one of: auto, none, branch, pr"
             )
 
         publish_base_raw = publish_payload.get("baseBranch")
@@ -223,9 +223,9 @@ class CodexSkillPayload:
             raise CodexWorkerHandlerError(
                 "codex_skill workdirMode must be one of: fresh_clone, reuse"
             )
-        if publish_mode not in {"none", "branch", "pr"}:
+        if publish_mode not in {"auto", "none", "branch", "pr"}:
             raise CodexWorkerHandlerError(
-                "codex_skill publishMode must be one of: none, branch, pr"
+                "codex_skill publishMode must be one of: auto, none, branch, pr"
             )
 
         return cls(

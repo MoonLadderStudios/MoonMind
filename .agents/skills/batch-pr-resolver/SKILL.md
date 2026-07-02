@@ -4,6 +4,11 @@ description: Discover open PRs in a repository and enqueue one `pr-resolver` tas
 metadata:
   required-capabilities:
     - gh
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
 ---
 
 # Batch PR Resolver Skill
@@ -69,7 +74,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
      - `payload.idempotencyKey`: stable per parent batch run and PR, hash-backed and capped to the execution persistence limit, so rerunning the same batch task does not create duplicate resolver workflows.
      - `payload.repository`: target repo
      - `payload.task.git.startingBranch`: PR head branch
-     - `payload.task.publish.mode`: `none`
+     - `payload.task.publish.mode`: `auto`
      - `payload.task.skill.name`: `pr-resolver`
      - `payload.task.inputs`: `{ repo, pr, branch, mergeMethod, maxIterations }`
    - Submit via the internal Temporal execution API (`POST /api/executions`);

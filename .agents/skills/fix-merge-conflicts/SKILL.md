@@ -4,6 +4,12 @@ description: Sync the branch with the latest `origin/main`, merge `origin/main`,
 metadata:
   required-capabilities:
     - git
+    - gh
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
 ---
 
 # Fix Merge Conflicts
@@ -14,6 +20,11 @@ Run this as an end-to-end sync and conflict resolution workflow:
 3. Resolve any conflicts.
 4. Validate no conflict markers remain.
 5. Commit and push the current branch.
+
+This skill owns publishing under `publish.mode=auto`. Before reporting success,
+write `artifacts/publish_result.json` using schema
+`moonmind.publish.auto.v1` as defined in
+`docs/Workflows/WorkflowPublishing.md`.
 
 ## Default Prompt
 
@@ -70,6 +81,12 @@ fi
 6. Commit and push.
 - If the merge was a fast-forward, no merge commit is created. Commit any other local changes before pushing.
 - Push current branch: `git push`
+- If there was nothing to commit, still prove the current branch is published:
+  verify the exact local `HEAD` SHA is visible on the remote branch using
+  `git ls-remote`, `gh`, or an equivalent GitHub connector path.
+- After any push or no-op verification, re-check that the remote branch head SHA
+  equals local `HEAD`. If push or remote verification is unavailable, stop as
+  blocked with reason `publish_unavailable`; do not report success.
 
 ## Output
 
