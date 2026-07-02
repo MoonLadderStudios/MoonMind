@@ -27,7 +27,7 @@ def test_status_domain_audit_passes_current_repository() -> None:
 def test_status_domain_audit_fail_on_unknown_mode_rejects_unallowlisted_token() -> None:
     allowed_tokens = status_domain_audit.approved_status_tokens()
     findings = status_domain_audit.audit_text_for_status_tokens(
-        'payload = {"status": "surprise_new_status"}\n',
+        'workflow_status_payload = {"status": "surprise_new_status"}\n',
         path=Path("moonmind/workflows/temporal/example.py"),
         allowed_tokens=allowed_tokens,
         require_domain_path=False,
@@ -45,6 +45,67 @@ def test_status_domain_audit_fail_on_unknown_mode_rejects_unallowlisted_token() 
         )
         == []
     )
+
+
+def test_status_domain_audit_checks_common_status_key_in_domain_files() -> None:
+    findings = status_domain_audit.audit_text_for_status_tokens(
+        'workflow_status_payload = {"status": "surprise_new_status"}\n',
+        path=Path("moonmind/workflows/temporal/example.py"),
+        allowed_tokens=status_domain_audit.approved_status_tokens(),
+    )
+
+    assert [finding.code for finding in findings] == ["unknown-status-token"]
+    assert findings[0].token == "surprise_new_status"
+
+
+def test_status_domain_audit_recognizes_status_comparisons_and_cases() -> None:
+    findings = status_domain_audit.audit_text_for_status_tokens(
+        (
+            'if (workflowStatus === "surprise_new_status") {\n'
+            "  return true;\n"
+            "}\n"
+            'case "other_surprise_status":\n'
+        ),
+        path=Path("moonmind/workflows/temporal/example.ts"),
+        allowed_tokens=status_domain_audit.approved_status_tokens(),
+    )
+
+    assert [finding.token for finding in findings] == [
+        "surprise_new_status",
+        "other_surprise_status",
+    ]
+
+
+def test_status_domain_audit_allows_recursive_test_globs() -> None:
+    findings = status_domain_audit.audit_text_for_status_tokens(
+        'payload = {"status": "surprise_new_status"}\n',
+        path=Path("frontend/src/components/subfolder/example.test.ts"),
+        allowed_tokens=status_domain_audit.approved_status_tokens(),
+    )
+
+    assert findings == []
+
+
+def test_status_domain_audit_prunes_ignored_dirs_relative_to_repo_root(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "var" / "repo"
+    audited_dir = repo / "moonmind" / "workflows" / "temporal"
+    ignored_dir = repo / "var" / "moonmind" / "workflows" / "temporal"
+    audited_dir.mkdir(parents=True)
+    ignored_dir.mkdir(parents=True)
+    audited_file = audited_dir / "example.py"
+    ignored_file = ignored_dir / "ignored.py"
+    audited_file.write_text('payload = {"status": "running"}\n', encoding="utf-8")
+    ignored_file.write_text('payload = {"status": "running"}\n', encoding="utf-8")
+
+    candidates = {
+        path.relative_to(repo).as_posix()
+        for path in status_domain_audit._iter_candidate_files(repo)
+    }
+
+    assert "moonmind/workflows/temporal/example.py" in candidates
+    assert "var/moonmind/workflows/temporal/ignored.py" not in candidates
 
 
 def test_status_domain_audit_blocks_generic_global_status_vocabulary() -> None:

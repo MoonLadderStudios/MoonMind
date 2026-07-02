@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import fnmatch
+import os
 from pathlib import Path
 import re
 import sys
@@ -116,26 +118,57 @@ ALLOWED_STATUS_TOKEN_LOCATIONS = (
 
 STATUS_CONTEXT_RE = re.compile(
     r"""
-    (?P<keyquote>["'`])?
-    (?P<key>
-        mm_state
-        |currentTargetState
-        |current_target_state
-        |dashboardStatus
-        |dashboard_status
-        |temporalStatus
-        |temporal_status
-        |closeStatus
-        |close_status
-        |rawState
-        |raw_state
-        |state
-        |status
+    (?<![.\w])
+    (?:
+        (?P<keyquote>["'`])
+        (?P<quoted_key>
+            mm_state
+            |currentTargetState
+            |current_target_state
+            |dashboardStatus
+            |dashboard_status
+            |temporalStatus
+            |temporal_status
+            |closeStatus
+            |close_status
+            |rawState
+            |raw_state
+            |workflowStatus
+            |workflow_status
+            |stepStatus
+            |step_status
+            |state
+            |status
+        )
+        (?P=keyquote)
+        |
+        (?P<unquoted_key>
+            mm_state
+            |currentTargetState
+            |current_target_state
+            |dashboardStatus
+            |dashboard_status
+            |temporalStatus
+            |temporal_status
+            |closeStatus
+            |close_status
+            |rawState
+            |raw_state
+            |workflowStatus
+            |workflow_status
+            |stepStatus
+            |step_status
+            |state
+            |status
+        )
     )
-    (?P=keyquote)?
-    \s*(?:[:=]|\|)\s*
+    \s*(?P<operator>:|=|={2,3}|!==?|\|)\s*
     (?P<quote>["'`])(?P<token>[a-z][a-z0-9_-]*)(?P=quote)
     """,
+    re.VERBOSE,
+)
+STATUS_CASE_RE = re.compile(
+    r"""\bcase\s+(?P<quote>["'`])(?P<token>[a-z][a-z0-9_-]*)(?P=quote)""",
     re.VERBOSE,
 )
 
@@ -152,6 +185,10 @@ STRICT_STATUS_KEYS = frozenset(
         "close_status",
         "rawState",
         "raw_state",
+        "workflowStatus",
+        "workflow_status",
+        "stepStatus",
+        "step_status",
     }
 )
 GENERIC_STATUS_SCHEMA_FILES = frozenset(
@@ -165,6 +202,13 @@ GENERIC_STATUS_SCHEMA_FILES = frozenset(
 
 GENERIC_GLOBAL_VOCABULARY_RE = re.compile(
     r"\b(?:GLOBAL|GENERIC|COMMON|UNIFIED)_STATUS(?:_VOCABULARY|_TOKENS|_VALUES|ES)?\b"
+)
+STATUS_DOMAIN_LINE_RE = re.compile(
+    (
+        r"\b(?:workflow|step|dashboard|temporal|close|raw|current_target)_status"
+        r"|mm_state|currentTargetState|dashboardStatus|temporalStatus|closeStatus|rawState\b"
+    ),
+    re.IGNORECASE,
 )
 
 
@@ -194,10 +238,23 @@ def _relative(path: Path, root: Path = REPO_ROOT) -> Path:
 
 
 def _extract_text_block_after_heading(text: str, heading: str) -> set[str]:
-    marker = text.index(heading)
-    block_start = text.index("```text", marker)
-    value_start = text.index("\n", block_start) + 1
-    value_end = text.index("```", value_start)
+    try:
+        marker = text.index(heading)
+    except ValueError as exc:
+        raise RuntimeError(f"Could not find heading {heading!r} in document") from exc
+    try:
+        block_start = text.index("```text", marker)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Could not find code block start '```text' after heading {heading!r}"
+        ) from exc
+    try:
+        value_start = text.index("\n", block_start) + 1
+        value_end = text.index("```", value_start)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Could not find code block end '```' after heading {heading!r}"
+        ) from exc
     return {line.strip() for line in text[value_start:value_end].splitlines() if line.strip()}
 
 
@@ -246,7 +303,7 @@ def _is_allowlisted_path(path: Path) -> bool:
     for entry in ALLOWED_STATUS_TOKEN_LOCATIONS:
         for prefix in entry["path_prefixes"]:
             if "*" in prefix:
-                if path.match(prefix):
+                if fnmatch.fnmatch(rel, prefix):
                     return True
             elif rel.startswith(prefix):
                 return True
@@ -257,13 +314,25 @@ def _should_audit_status_match(
     *,
     path: Path,
     key: str,
+    key_is_quoted: bool,
+    operator: str,
+    line: str,
     require_domain_path: bool,
 ) -> bool:
     if not require_domain_path:
         return True
+    is_comparison = operator in {"==", "===", "!=", "!=="}
+    if not key_is_quoted and not is_comparison:
+        return False
     if key in STRICT_STATUS_KEYS:
         return True
     if path.as_posix() in GENERIC_STATUS_SCHEMA_FILES:
+        if key == "status":
+            return bool(STATUS_DOMAIN_LINE_RE.search(line))
+        return True
+    if key == "status" and _is_domain_path(path):
+        return bool(STATUS_DOMAIN_LINE_RE.search(line))
+    if key == "state" and is_comparison and _is_domain_path(path):
         return True
     return False
 
@@ -281,11 +350,12 @@ def _iter_candidate_files(root: Path) -> Iterable[Path]:
         "var",
     }
     suffixes = {".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".yaml", ".yml", ".md"}
-    for path in root.rglob("*"):
-        if any(part in ignored_dirs for part in path.parts):
-            continue
-        if path.is_file() and path.suffix in suffixes:
-            yield path
+    for dirpath, dirs, filenames in os.walk(root):
+        dirs[:] = [directory for directory in dirs if directory not in ignored_dirs]
+        for filename in filenames:
+            path = Path(dirpath) / filename
+            if path.suffix in suffixes:
+                yield path
 
 
 def audit_text_for_status_tokens(
@@ -297,11 +367,10 @@ def audit_text_for_status_tokens(
 ) -> list[AuditFinding]:
     findings: list[AuditFinding] = []
     rel_path = path
+    if _is_allowlisted_path(rel_path):
+        return []
     is_domain_path = _is_domain_path(rel_path)
-    is_allowlisted = _is_allowlisted_path(rel_path)
     for line_number, line in enumerate(text.splitlines(), start=1):
-        if is_allowlisted:
-            continue
         if GENERIC_GLOBAL_VOCABULARY_RE.search(line):
             findings.append(
                 AuditFinding(
@@ -314,13 +383,34 @@ def audit_text_for_status_tokens(
         if require_domain_path and not is_domain_path:
             continue
         for match in STATUS_CONTEXT_RE.finditer(line):
-            key = match.group("key")
+            key = match.group("quoted_key") or match.group("unquoted_key")
             if not _should_audit_status_match(
                 path=rel_path,
                 key=key,
+                key_is_quoted=bool(match.group("quoted_key")),
+                operator=match.group("operator"),
+                line=line,
                 require_domain_path=require_domain_path,
             ):
                 continue
+            token = match.group("token")
+            if key == "status" and token.startswith("mm_"):
+                continue
+            if token not in allowed_tokens:
+                findings.append(
+                    AuditFinding(
+                        rel_path,
+                        line_number,
+                        "unknown-status-token",
+                        (
+                            "raw status token is not in an approved workflow, "
+                            "step, rollup, close, provider, fixture, or "
+                            "historical domain"
+                        ),
+                        token,
+                    )
+                )
+        for match in STATUS_CASE_RE.finditer(line):
             token = match.group("token")
             if token not in allowed_tokens:
                 findings.append(
