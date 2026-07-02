@@ -116,7 +116,7 @@ def test_materialize_preserved_steps_marks_source_provenance_without_new_attempt
     )
     refresh_ready_steps(rows, updated_at=now)
 
-    assert rows[0]["status"] == "succeeded"
+    assert rows[0]["status"] == "completed"
     assert rows[0]["executionOrdinal"] == 0
     assert rows[0]["summary"] == "Preserved from source run."
     assert rows[0]["preservedFrom"] == {

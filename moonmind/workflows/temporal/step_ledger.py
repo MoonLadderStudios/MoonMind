@@ -9,10 +9,11 @@ from datetime import datetime
 from typing import Any
 
 ACTIVE_STEP_STATUSES = ("executing", "reviewing", "awaiting_external")
-TERMINAL_STEP_STATUSES = {"completed", "succeeded", "failed", "skipped", "canceled"}
-READY_DEPENDENCY_STATUSES = {"completed", "succeeded", "skipped"}
+TERMINAL_STEP_STATUSES = {"completed", "failed", "skipped", "canceled"}
+READY_DEPENDENCY_STATUSES = {"completed", "skipped"}
 LEGACY_STEP_STATUS_ALIASES = {
     "running": "executing",
+    "succeeded": "completed",
 }
 _UNSET = object()
 
@@ -603,7 +604,7 @@ def mark_step_checkpoint_evidence(
             row["refs"] = refs
         existing_checkpoint = str(row.get("stateCheckpointRef") or "").strip()
         status = _normalize_replayed_step_status(row.get("status"))
-        if status not in READY_DEPENDENCY_STATUSES:
+        if status not in {"completed", "skipped"}:
             preservation = _recovery_preservation(
                 eligible=False,
                 reason="not_completed",

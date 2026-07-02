@@ -7606,7 +7606,7 @@ class MoonMindRunWorkflow:
 
             self._mark_step_terminal(
                 node_id,
-                status="succeeded",
+                status="completed",
                 updated_at=workflow.now(),
                 summary=self._get_from_result(execution_result, "summary")
                 or self._summary,
@@ -7621,7 +7621,7 @@ class MoonMindRunWorkflow:
                 phase="terminal",
                 updated_at=workflow.now(),
                 reason=attempt_reason,
-                status="succeeded",
+                status="completed",
                 terminal_disposition="accepted",
                 budget=self._review_gate_budget_metadata(
                     max_review_attempts=max_review_attempts,

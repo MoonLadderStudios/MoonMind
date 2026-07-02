@@ -8782,7 +8782,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "pending" | "ready" | "executing" | "awaiting_external" | "reviewing" | "succeeded" | "completed" | "failed" | "skipped" | "canceled";
+            status: "pending" | "ready" | "executing" | "awaiting_external" | "reviewing" | "completed" | "failed" | "skipped" | "canceled";
             /** Waitingreason */
             waitingReason?: string | null;
             /**

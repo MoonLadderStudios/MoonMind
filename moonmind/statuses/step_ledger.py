@@ -14,7 +14,6 @@ class StepLedgerStatus(str, enum.Enum):
     EXECUTING = "executing"
     AWAITING_EXTERNAL = "awaiting_external"
     REVIEWING = "reviewing"
-    SUCCEEDED = "succeeded"
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
@@ -27,7 +26,6 @@ StepLedgerStatusValue = Literal[
     "executing",
     "awaiting_external",
     "reviewing",
-    "succeeded",
     "completed",
     "failed",
     "skipped",
@@ -46,7 +44,7 @@ STEP_EXECUTION_TO_LEDGER_STATUS: dict[str, StepLedgerStatus] = {
     "running": StepLedgerStatus.EXECUTING,
     "checking": StepLedgerStatus.REVIEWING,
     "completed": StepLedgerStatus.COMPLETED,
-    "succeeded": StepLedgerStatus.SUCCEEDED,
+    "succeeded": StepLedgerStatus.COMPLETED,
     "failed": StepLedgerStatus.FAILED,
     "blocked": StepLedgerStatus.AWAITING_EXTERNAL,
     "canceled": StepLedgerStatus.CANCELED,
