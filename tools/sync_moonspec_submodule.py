@@ -220,7 +220,12 @@ def _drift(files: list[PlannedFile], unexpected_patterns: list[str]) -> list[str
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Sync MoonSpec submodule projection")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Deprecated generated-copy MoonSpec projector. "
+            "Use tools/link_moonspec_submodule.py for the canonical symlink projection."
+        )
+    )
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--projection", default="moonmind")
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -250,7 +255,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 1
 
-    print("MoonSpec submodule projection is current")
+    print(
+        "Deprecated generated-copy projection is current. "
+        "Use tools/link_moonspec_submodule.py for the canonical symlink projection."
+    )
     return 0
 
 
