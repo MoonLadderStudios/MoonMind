@@ -569,6 +569,37 @@ async def test_workspace_apply_policy_copies_to_nested_target_parent(
     assert (target / "README.md").read_text(encoding="utf-8") == "base\nchanged\n"
 
 
+async def test_workspace_apply_policy_accepts_snake_case_workspace_ref(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    checkpoint_ref = _checkpoint_artifact(
+        store,
+        workspace={
+            "kind": "ephemeral_workspace_ref",
+            "workspace_ref": str(repo),
+        },
+    )
+    target = root / "temporal_sandbox" / "snake-case-workspace-ref"
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    policy = await sandbox.workspace_apply_policy(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "workspacePolicy": "continue_from_previous_execution",
+            "checkpointRef": checkpoint_ref,
+            "checkpoint": {},
+            "targetWorkspaceRef": str(target),
+            "idempotencyKey": "MM-1079:snake-case-workspace-ref",
+        }
+    )
+
+    assert policy["status"] == "applied"
+    assert (target / "README.md").read_text(encoding="utf-8") == "base\nchanged\n"
+
+
 async def test_workspace_apply_policy_rejects_artifact_backed_workspace_ref_ambiguity(
     tmp_path: Path,
 ) -> None:
@@ -649,6 +680,44 @@ async def test_workspace_apply_policy_rejects_external_ref_with_omnigent_diagnos
     assert not target.exists()
     diagnostic = json.loads(store.get_bytes(policy["diagnosticRefs"][0]).decode())
     assert diagnostic["checkpointKind"] == "external_state_ref"
+    assert diagnostic["externalStateRef"] == "artifact-omnigent-state"
+    assert diagnostic["omnigentSessionId"] == "omni-session-123"
+    assert diagnostic["providerSessionRef"] == "artifact-provider-session-ref"
+    _assert_secret_absent(diagnostic)
+
+
+async def test_workspace_apply_policy_rejection_diagnostic_accepts_snake_case_refs(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    target = root / "temporal_sandbox" / "external-state-snake-case-target"
+    checkpoint_ref = _checkpoint_artifact(
+        store,
+        workspace={
+            "kind": "external_state_ref",
+            "external_state_ref": "artifact-omnigent-state",
+            "idempotency_key": "omnigent-idem",
+            "omnigent_session_id": "omni-session-123",
+            "provider_session_ref": "artifact-provider-session-ref",
+        },
+    )
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    policy = await sandbox.workspace_apply_policy(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "workspacePolicy": "continue_from_previous_execution",
+            "checkpointRef": checkpoint_ref,
+            "checkpoint": {},
+            "targetWorkspaceRef": str(target),
+            "idempotencyKey": "MM-1079:external-state-ref-snake-case",
+        }
+    )
+
+    assert policy["status"] == "rejected"
+    assert policy["failureCode"] == "workspace_incompatible"
+    diagnostic = json.loads(store.get_bytes(policy["diagnosticRefs"][0]).decode())
     assert diagnostic["externalStateRef"] == "artifact-omnigent-state"
     assert diagnostic["omnigentSessionId"] == "omni-session-123"
     assert diagnostic["providerSessionRef"] == "artifact-provider-session-ref"

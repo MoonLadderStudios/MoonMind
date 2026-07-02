@@ -3151,7 +3151,7 @@ class TemporalSandboxActivities:
             )
             return WorkspaceCheckpointEvidenceModel(
                 kind="ephemeral_workspace_ref",
-                workspaceArtifactRef=workspace_ref,
+                workspace_artifact_ref=workspace_ref,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "external_state_ref":
@@ -3169,7 +3169,7 @@ class TemporalSandboxActivities:
             )
             return WorkspaceCheckpointEvidenceModel(
                 kind="external_state_ref",
-                externalStateRef=external_state_ref,
+                external_state_ref=external_state_ref,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
@@ -3314,8 +3314,9 @@ class TemporalSandboxActivities:
                 diagnostic_refs=diagnostic_refs,
                 checkpoint=checkpoint,
             )
-        if kind == "ephemeral_workspace_ref" and not workspace_payload.get(
-            "workspaceRef"
+        if kind == "ephemeral_workspace_ref" and not (
+            workspace_payload.get("workspaceRef")
+            or workspace_payload.get("workspace_ref")
         ):
             return await self._reject_workspace_policy(
                 model,
@@ -3408,7 +3409,11 @@ class TemporalSandboxActivities:
         target: Path,
     ) -> None:
         if policy == "continue_from_previous_execution":
-            workspace_ref = str(workspace_payload.get("workspaceRef") or "").strip()
+            workspace_ref = str(
+                workspace_payload.get("workspaceRef")
+                or workspace_payload.get("workspace_ref")
+                or ""
+            ).strip()
             if workspace_ref:
                 source = self._resolve_workspace(workspace_ref, must_exist=True)
                 if source != target:
@@ -3443,6 +3448,7 @@ class TemporalSandboxActivities:
         if policy == "fresh_branch_from_source":
             source_ref = str(
                 workspace_payload.get("workspaceRef")
+                or workspace_payload.get("workspace_ref")
                 or workspace_payload.get("branch")
                 or workspace_payload.get("baseCommit")
                 or ""
@@ -3457,7 +3463,11 @@ class TemporalSandboxActivities:
         raise TemporalActivityRuntimeError(f"unsupported workspace policy: {policy}")
 
     def _workspace_ref_source(self, workspace_payload: Mapping[str, Any]) -> Path:
-        workspace_ref = str(workspace_payload.get("workspaceRef") or "").strip()
+        workspace_ref = str(
+            workspace_payload.get("workspaceRef")
+            or workspace_payload.get("workspace_ref")
+            or ""
+        ).strip()
         if not workspace_ref:
             raise TemporalActivityRuntimeError("workspace ref evidence is missing")
         return self._resolve_workspace(workspace_ref, must_exist=True)
@@ -3522,7 +3532,11 @@ class TemporalSandboxActivities:
             raise TemporalActivityRuntimeError(
                 "git commit checkpoint evidence is missing"
             )
-        source_ref = str(workspace_payload.get("workspaceRef") or "").strip()
+        source_ref = str(
+            workspace_payload.get("workspaceRef")
+            or workspace_payload.get("workspace_ref")
+            or ""
+        ).strip()
         if source_ref:
             source = self._resolve_workspace(source_ref, must_exist=True)
             self._replace_workspace_tree(source, target)
@@ -3670,18 +3684,32 @@ class TemporalSandboxActivities:
             checkpoint_kind = str(workspace.get("kind") or "").strip()
             if checkpoint_kind:
                 payload["checkpointKind"] = checkpoint_kind
-            external_state_ref = str(workspace.get("externalStateRef") or "").strip()
+            external_state_ref = str(
+                workspace.get("externalStateRef")
+                or workspace.get("external_state_ref")
+                or ""
+            ).strip()
             if external_state_ref:
                 payload["externalStateRef"] = external_state_ref
             workspace_artifact_ref = str(
-                workspace.get("workspaceArtifactRef") or ""
+                workspace.get("workspaceArtifactRef")
+                or workspace.get("workspace_artifact_ref")
+                or ""
             ).strip()
             if workspace_artifact_ref:
                 payload["workspaceArtifactRef"] = workspace_artifact_ref
-            omnigent_session_id = str(workspace.get("omnigentSessionId") or "").strip()
+            omnigent_session_id = str(
+                workspace.get("omnigentSessionId")
+                or workspace.get("omnigent_session_id")
+                or ""
+            ).strip()
             if omnigent_session_id:
                 payload["omnigentSessionId"] = omnigent_session_id
-            provider_session_ref = str(workspace.get("providerSessionRef") or "").strip()
+            provider_session_ref = str(
+                workspace.get("providerSessionRef")
+                or workspace.get("provider_session_ref")
+                or ""
+            ).strip()
             if provider_session_ref:
                 payload["providerSessionRef"] = provider_session_ref
         return await self._put_checkpoint_bytes(
