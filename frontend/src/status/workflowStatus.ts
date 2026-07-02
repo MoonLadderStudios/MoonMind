@@ -12,7 +12,25 @@ export const WORKFLOW_STATUS_TRACEABILITY = Object.freeze({
   ],
 });
 
-const WORKFLOW_STATUS_LABELS: Record<string, string> = {
+export const WORKFLOW_STATUS_KEYS = [
+  'scheduled',
+  'initializing',
+  'waiting_on_dependencies',
+  'planning',
+  'awaiting_slot',
+  'executing',
+  'awaiting_external',
+  'proposals',
+  'finalizing',
+  'no_commit',
+  'completed',
+  'failed',
+  'canceled',
+] as const;
+
+export type WorkflowStatusKey = (typeof WORKFLOW_STATUS_KEYS)[number];
+
+const WORKFLOW_STATUS_LABELS: Record<WorkflowStatusKey, string> = {
   scheduled: 'Scheduled',
   initializing: 'Initializing',
   waiting_on_dependencies: 'Awaiting dependencies',
@@ -28,7 +46,7 @@ const WORKFLOW_STATUS_LABELS: Record<string, string> = {
   canceled: 'Canceled',
 };
 
-const WORKFLOW_STATUS_CLASSES: Record<string, string> = {
+const WORKFLOW_STATUS_CLASSES: Record<WorkflowStatusKey, string> = {
   scheduled: 'status status-scheduled',
   initializing: 'status status-initializing',
   waiting_on_dependencies: 'status status-awaiting-dependencies',
@@ -65,14 +83,18 @@ export function normalizedWorkflowStatusKey(status: string | null | undefined): 
     .replace(/\s+/g, '_');
 }
 
+function isWorkflowStatusKey(key: string): key is WorkflowStatusKey {
+  return (WORKFLOW_STATUS_KEYS as readonly string[]).includes(key);
+}
+
 export function formatWorkflowStatusLabel(
   status: string | null | undefined,
   fallback = '-',
 ): string {
   const key = normalizedWorkflowStatusKey(status);
   if (!key) return fallback;
-  if (Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_LABELS, key)) {
-    return WORKFLOW_STATUS_LABELS[key]!;
+  if (isWorkflowStatusKey(key)) {
+    return WORKFLOW_STATUS_LABELS[key];
   }
   return fallback;
 }
@@ -88,8 +110,8 @@ export function workflowStatusPillProps(
   options: WorkflowStatusPillOptions = {},
 ): WorkflowStatusPillProps {
   const key = normalizedWorkflowStatusKey(status);
-  const className = Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_CLASSES, key)
-    ? WORKFLOW_STATUS_CLASSES[key]!
+  const className = isWorkflowStatusKey(key)
+    ? WORKFLOW_STATUS_CLASSES[key]
     : 'status status-neutral';
 
   if (options.enableMotion !== false && isShimmerSweepStatusKey(key)) {

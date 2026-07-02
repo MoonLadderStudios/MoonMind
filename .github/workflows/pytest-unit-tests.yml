@@ -300,6 +300,10 @@ jobs:
         run: |
           set -euo pipefail
           ./tools/check_terminology.sh
+      - name: Audit status token domains
+        run: |
+          set -euo pipefail
+          python3 tools/audit_status_tokens.py --fail-on-unknown > /tmp/status-token-audit.csv
       - name: Verify selected suites passed
         shell: bash
         run: |

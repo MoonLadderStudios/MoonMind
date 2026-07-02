@@ -1,11 +1,35 @@
 import { describe, expect, it } from 'vitest';
 import {
+  WORKFLOW_STATUS_KEYS,
   WORKFLOW_STATUS_TRACEABILITY,
   formatWorkflowStatusLabel,
   workflowStatusPillProps,
 } from './workflowStatus';
 
 describe('workflow status helpers', () => {
+  it('covers every canonical workflow lifecycle status', () => {
+    expect(WORKFLOW_STATUS_KEYS).toEqual([
+      'scheduled',
+      'initializing',
+      'waiting_on_dependencies',
+      'planning',
+      'awaiting_slot',
+      'executing',
+      'awaiting_external',
+      'proposals',
+      'finalizing',
+      'no_commit',
+      'completed',
+      'failed',
+      'canceled',
+    ]);
+
+    for (const status of WORKFLOW_STATUS_KEYS) {
+      expect(formatWorkflowStatusLabel(status, 'Unknown')).not.toBe('Unknown');
+      expect(workflowStatusPillProps(status).className).not.toBe('status status-neutral');
+    }
+  });
+
   it('formats canonical workflow lifecycle states with readable labels', () => {
     expect(formatWorkflowStatusLabel('awaiting_slot')).toBe('Awaiting slot');
     expect(formatWorkflowStatusLabel('waiting_on_dependencies')).toBe('Awaiting dependencies');

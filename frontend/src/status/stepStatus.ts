@@ -1,4 +1,34 @@
-const STEP_STATUS_LABELS: Record<string, string> = {
+export const STEP_LEDGER_STATUS_KEYS = [
+  'pending',
+  'ready',
+  'executing',
+  'awaiting_external',
+  'reviewing',
+  'completed',
+  'failed',
+  'skipped',
+  'canceled',
+] as const;
+
+export const STEP_EXECUTION_STATUS_KEYS = [
+  'pending',
+  'preparing',
+  'executing',
+  'running',
+  'checking',
+  'completed',
+  'succeeded',
+  'failed',
+  'blocked',
+  'canceled',
+  'superseded',
+] as const;
+
+export type StepLedgerStatusKey = (typeof STEP_LEDGER_STATUS_KEYS)[number];
+export type StepExecutionStatusKey = (typeof STEP_EXECUTION_STATUS_KEYS)[number];
+type StepStatusKey = StepLedgerStatusKey | StepExecutionStatusKey;
+
+const STEP_STATUS_LABELS: Record<StepStatusKey, string> = {
   pending: 'Pending',
   ready: 'Ready',
   preparing: 'Preparing',
@@ -10,11 +40,13 @@ const STEP_STATUS_LABELS: Record<string, string> = {
   completed: 'Completed',
   succeeded: 'Succeeded',
   failed: 'Failed',
+  blocked: 'Blocked',
   skipped: 'Skipped',
   canceled: 'Canceled',
+  superseded: 'Superseded',
 };
 
-const STEP_STATUS_CLASSES: Record<string, string> = {
+const STEP_STATUS_CLASSES: Record<StepStatusKey, string> = {
   pending: 'status status-scheduled',
   ready: 'status status-scheduled',
   preparing: 'status status-running',
@@ -26,9 +58,18 @@ const STEP_STATUS_CLASSES: Record<string, string> = {
   completed: 'status status-completed',
   succeeded: 'status status-succeeded',
   failed: 'status status-failed',
+  blocked: 'status status-awaiting-external',
   skipped: 'status status-neutral',
   canceled: 'status status-canceled',
+  superseded: 'status status-neutral',
 };
+
+function isStepStatusKey(key: string): key is StepStatusKey {
+  return (
+    (STEP_LEDGER_STATUS_KEYS as readonly string[]).includes(key) ||
+    (STEP_EXECUTION_STATUS_KEYS as readonly string[]).includes(key)
+  );
+}
 
 export function formatStepStatusLabel(
   status: string | null | undefined,
@@ -36,15 +77,11 @@ export function formatStepStatusLabel(
 ): string {
   const key = String(status || '').toLowerCase().trim().replace(/\s+/g, '_');
   if (!key) return fallback;
-  return Object.prototype.hasOwnProperty.call(STEP_STATUS_LABELS, key)
-    ? STEP_STATUS_LABELS[key]!
-    : fallback;
+  return isStepStatusKey(key) ? STEP_STATUS_LABELS[key] : fallback;
 }
 
 export function stepStatusPillProps(status: string | null | undefined): Readonly<{ className: string }> {
   const key = String(status || '').toLowerCase().trim().replace(/\s+/g, '_');
-  const className = Object.prototype.hasOwnProperty.call(STEP_STATUS_CLASSES, key)
-    ? STEP_STATUS_CLASSES[key]!
-    : 'status status-neutral';
+  const className = isStepStatusKey(key) ? STEP_STATUS_CLASSES[key] : 'status status-neutral';
   return { className };
 }
