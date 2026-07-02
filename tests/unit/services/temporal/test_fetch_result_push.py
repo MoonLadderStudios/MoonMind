@@ -1356,7 +1356,13 @@ class TestPushWorkspaceBranch:
             "tests/new_test.py",
         ]
         commit_call = next(call for call in recorded_calls if "commit" in call)
-        assert list(commit_call[-3:]) == ["commit", "-m", "Ship dirty workspace"]
+        assert list(commit_call[-5:]) == [
+            "-m",
+            "Ship dirty workspace",
+            "--",
+            "api_service/main.py",
+            "tests/new_test.py",
+        ]
 
     @pytest.mark.asyncio
     async def test_push_stages_tracked_artifact_under_ignored_parent_with_update(self):
@@ -1490,10 +1496,12 @@ class TestPushWorkspaceBranch:
         assert result["push_commit_message"] == "Ship staged workspace"
         assert all("add" not in call for call in recorded_calls)
         commit_call = next(call for call in recorded_calls if "commit" in call)
-        assert list(commit_call[-3:]) == [
-            "commit",
+        assert list(commit_call[-5:]) == [
             "-m",
             "Ship staged workspace",
+            "--",
+            "tests/unit/tools/test_link_moonspec_submodule.py",
+            "tests/unit/tools/test_sync_moonspec_submodule.py",
         ]
 
     @pytest.mark.asyncio
