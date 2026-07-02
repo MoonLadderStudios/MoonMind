@@ -94,7 +94,13 @@ def build_step_checkpoint_payload(
         stepOutputs=dict(step_outputs or {}),
         createdAt=created_at,
     )
-    return checkpoint.model_dump(by_alias=True, mode="json")
+    payload = checkpoint.model_dump(by_alias=True, mode="json")
+    payload["workspace"] = checkpoint.workspace.model_dump(
+        by_alias=True,
+        mode="json",
+        exclude_none=True,
+    )
+    return payload
 
 
 def build_step_checkpoint_create_result(
@@ -171,7 +177,11 @@ def validate_step_checkpoint(
                     f"workspace policy {request.workspace_policy}"
                 ),
             )
-    workspace_payload = checkpoint.workspace.model_dump(by_alias=True, mode="json")
+    workspace_payload = checkpoint.workspace.model_dump(
+        by_alias=True,
+        mode="json",
+        exclude_none=True,
+    )
     for key, expected_value in request.expected_workspace.items():
         if workspace_payload.get(key) != expected_value:
             return _invalid(
@@ -319,7 +329,10 @@ def _checkpoint_artifact_refs(
         refs.add(checkpoint.plan_ref)
     if request.checkpoint_ref:
         refs.add(request.checkpoint_ref)
-    _collect_ref_values(checkpoint.workspace.model_dump(by_alias=True, mode="json"), refs)
+    _collect_ref_values(
+        checkpoint.workspace.model_dump(by_alias=True, mode="json", exclude_none=True),
+        refs,
+    )
     _collect_ref_values(checkpoint.step_outputs, refs)
     return refs
 

@@ -3048,7 +3048,7 @@ class TemporalSandboxActivities:
                 status="captured",
                 workspace=WorkspaceCheckpointEvidenceModel(
                     kind="external_state_ref",
-                    externalStateRef=external_state_ref,
+                    external_state_ref=external_state_ref,
                     createdAt=datetime.now(UTC),
                 ),
                 summary="external_state_ref checkpoint captured",
@@ -3111,7 +3111,7 @@ class TemporalSandboxActivities:
             pullAuth=pull_auth,
             providerLeaseRefs=provider_refs,
         )
-        return result.model_dump(by_alias=True, mode="json")
+        return result.model_dump(by_alias=True, mode="json", exclude_none=True)
 
     async def _capture_workspace_evidence(
         self,
@@ -3179,7 +3179,7 @@ class TemporalSandboxActivities:
             )
             return WorkspaceCheckpointEvidenceModel(
                 kind="ephemeral_workspace_ref",
-                workspaceArtifactRef=workspace_ref,
+                workspace_artifact_ref=workspace_ref,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
@@ -3312,7 +3312,6 @@ class TemporalSandboxActivities:
                 diagnostic_refs=diagnostic_refs,
                 checkpoint=checkpoint,
             )
-
         target = self._policy_target_workspace(model)
         try:
             await self._apply_workspace_policy_to_target(
@@ -3398,13 +3397,19 @@ class TemporalSandboxActivities:
                     "external provider restore bridge"
                 )
             if workspace_payload.get("kind") == "ephemeral_workspace_ref" and str(
-                workspace_payload.get("workspaceArtifactRef") or ""
+                workspace_payload.get("workspaceArtifactRef")
+                or workspace_payload.get("workspace_artifact_ref")
+                or ""
             ).strip():
                 raise TemporalActivityRuntimeError(
                     "artifact-backed ephemeral workspace evidence cannot be "
                     "restored as a local sandbox path"
                 )
-            workspace_ref = str(workspace_payload.get("workspaceRef") or "").strip()
+            workspace_ref = str(
+                workspace_payload.get("workspaceRef")
+                or workspace_payload.get("workspace_ref")
+                or ""
+            ).strip()
             if workspace_ref:
                 source = self._resolve_workspace(workspace_ref, must_exist=True)
                 if source != target:
@@ -3424,7 +3429,11 @@ class TemporalSandboxActivities:
                 await self._checkout_commit_to_workspace(workspace_payload, target)
                 return
             if workspace_payload.get("kind") == "ephemeral_workspace_ref":
-                if str(workspace_payload.get("workspaceArtifactRef") or "").strip():
+                if str(
+                    workspace_payload.get("workspaceArtifactRef")
+                    or workspace_payload.get("workspace_artifact_ref")
+                    or ""
+                ).strip():
                     raise TemporalActivityRuntimeError(
                         "artifact-backed ephemeral workspace evidence cannot be "
                         "restored as a local sandbox path"
@@ -3444,6 +3453,7 @@ class TemporalSandboxActivities:
         if policy == "fresh_branch_from_source":
             source_ref = str(
                 workspace_payload.get("workspaceRef")
+                or workspace_payload.get("workspace_ref")
                 or workspace_payload.get("branch")
                 or workspace_payload.get("baseCommit")
                 or ""
@@ -3458,7 +3468,11 @@ class TemporalSandboxActivities:
         raise TemporalActivityRuntimeError(f"unsupported workspace policy: {policy}")
 
     def _workspace_ref_source(self, workspace_payload: Mapping[str, Any]) -> Path:
-        workspace_ref = str(workspace_payload.get("workspaceRef") or "").strip()
+        workspace_ref = str(
+            workspace_payload.get("workspaceRef")
+            or workspace_payload.get("workspace_ref")
+            or ""
+        ).strip()
         if not workspace_ref:
             raise TemporalActivityRuntimeError("workspace ref evidence is missing")
         return self._resolve_workspace(workspace_ref, must_exist=True)
@@ -3523,7 +3537,11 @@ class TemporalSandboxActivities:
             raise TemporalActivityRuntimeError(
                 "git commit checkpoint evidence is missing"
             )
-        source_ref = str(workspace_payload.get("workspaceRef") or "").strip()
+        source_ref = str(
+            workspace_payload.get("workspaceRef")
+            or workspace_payload.get("workspace_ref")
+            or ""
+        ).strip()
         if source_ref:
             source = self._resolve_workspace(source_ref, must_exist=True)
             self._replace_workspace_tree(source, target)
@@ -3657,9 +3675,26 @@ class TemporalSandboxActivities:
         if not isinstance(workspace, Mapping):
             workspace = {}
         checkpoint_kind = workspace.get("kind")
+        external_state_ref = (
+            workspace.get("externalStateRef") or workspace.get("external_state_ref")
+        )
+        workspace_artifact_ref = (
+            workspace.get("workspaceArtifactRef")
+            or workspace.get("workspace_artifact_ref")
+        )
+        omnigent_session_id = (
+            workspace.get("omnigentSessionId")
+            or workspace.get("omnigent_session_id")
+        )
+        provider_session_ref = (
+            workspace.get("providerSessionRef")
+            or workspace.get("provider_session_ref")
+        )
         safe_correlation = {
-            "externalStateRef": workspace.get("externalStateRef"),
-            "workspaceArtifactRef": workspace.get("workspaceArtifactRef"),
+            "externalStateRef": external_state_ref,
+            "workspaceArtifactRef": workspace_artifact_ref,
+            "omnigentSessionId": omnigent_session_id,
+            "providerSessionRef": provider_session_ref,
             "providerLeaseRefs": provider_refs,
         }
         safe_correlation = {

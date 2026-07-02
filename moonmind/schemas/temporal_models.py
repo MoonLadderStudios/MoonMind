@@ -904,6 +904,9 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
     workspace_ref: str | None = Field(None, alias="workspaceRef")
     workspace_artifact_ref: str | None = Field(None, alias="workspaceArtifactRef")
     external_state_ref: str | None = Field(None, alias="externalStateRef")
+    idempotency_key: str | None = Field(None, alias="idempotencyKey")
+    omnigent_session_id: str | None = Field(None, alias="omnigentSessionId")
+    provider_session_ref: str | None = Field(None, alias="providerSessionRef")
     manifest_ref: str | None = Field(None, alias="manifestRef")
     branch: str | None = Field(None, alias="branch")
     includes_untracked: bool = Field(False, alias="includesUntracked")
@@ -919,6 +922,9 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
         "workspace_ref",
         "workspace_artifact_ref",
         "external_state_ref",
+        "idempotency_key",
+        "omnigent_session_id",
+        "provider_session_ref",
         "manifest_ref",
         "branch",
         mode="before",
