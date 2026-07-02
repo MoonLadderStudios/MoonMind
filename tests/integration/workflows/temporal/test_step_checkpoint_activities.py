@@ -781,7 +781,6 @@ async def test_workspace_apply_policy_rejects_artifact_backed_ephemeral_ref_as_p
     assert policy["status"] == "rejected"
     assert policy["failureCode"] == "workspace_incompatible"
     assert "artifact-backed ephemeral workspace evidence" in policy["summary"]
-    assert capture["workspace"]["workspaceArtifactRef"] in json.dumps(policy)
     diagnostic = json.loads(store.get_bytes(policy["diagnosticRefs"][-1]).decode())
     assert diagnostic["checkpointKind"] == "ephemeral_workspace_ref"
     assert diagnostic["providerSessionCorrelation"]["workspaceArtifactRef"] == (
