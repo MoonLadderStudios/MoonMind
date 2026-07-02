@@ -5,20 +5,41 @@ import {
   executionStatusPillProps,
 } from './executionStatusPillClasses';
 
+const CANONICAL_WORKFLOW_STATES = [
+  'scheduled',
+  'initializing',
+  'waiting_on_dependencies',
+  'planning',
+  'awaiting_slot',
+  'executing',
+  'awaiting_external',
+  'proposals',
+  'finalizing',
+  'no_commit',
+  'completed',
+  'failed',
+  'canceled',
+] as const;
+
+const CANONICAL_STEP_STATUSES = [
+  'pending',
+  'ready',
+  'running',
+  'awaiting_external',
+  'reviewing',
+  'succeeded',
+  'failed',
+  'skipped',
+  'canceled',
+] as const;
+
 describe('executionStatusPillProps', () => {
   it('adds shimmer selector metadata for active executing and transition status pills', () => {
     expect(executionStatusPillProps('executing')).toMatchObject({
       className: 'status status-running is-executing',
       'data-state': 'executing',
       'data-effect': 'shimmer-sweep',
-      'data-shimmer-label': 'executing',
-    });
-
-    expect(executionStatusPillProps('running')).toMatchObject({
-      className: 'status status-running is-running',
-      'data-state': 'running',
-      'data-effect': 'shimmer-sweep',
-      'data-shimmer-label': 'running',
+      'data-shimmer-label': 'Executing',
     });
 
     for (const key of ['initializing', 'planning', 'finalizing'] as const) {
@@ -26,12 +47,12 @@ describe('executionStatusPillProps', () => {
         className: `status status-${key} is-${key}`,
         'data-state': key,
         'data-effect': 'shimmer-sweep',
-        'data-shimmer-label': key,
+        'data-shimmer-label': key.charAt(0).toUpperCase() + key.slice(1),
       });
     }
 
     expect(executionStatusPillProps('waiting')).toEqual({
-      className: 'status status-waiting',
+      className: 'status status-neutral',
     });
   });
 
@@ -40,7 +61,7 @@ describe('executionStatusPillProps', () => {
       className: 'status status-running',
     });
     expect(executionStatusPillProps('running', { enableMotion: false })).toEqual({
-      className: 'status status-running',
+      className: 'status status-neutral',
     });
     expect(executionStatusPillProps('initializing', { enableMotion: false })).toEqual({
       className: 'status status-initializing',
@@ -94,9 +115,21 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('canceled')).toEqual({ className: 'status status-canceled' });
   });
 
-  it('uses the no-commit teal pill class for canonical and legacy no-commit statuses', () => {
+  it('uses the no-commit teal pill class only for the canonical no-commit status', () => {
     expect(executionStatusPillProps('no_commit')).toEqual({ className: 'status status-no-commit' });
-    expect(executionStatusPillProps('no_changes')).toEqual({ className: 'status status-no-commit' });
+    expect(executionStatusPillProps('no_changes')).toEqual({ className: 'status status-neutral' });
+  });
+
+  it('covers every MM-1084 canonical workflow status with a stable pill class', () => {
+    for (const status of CANONICAL_WORKFLOW_STATES) {
+      expect(executionStatusPillProps(status).className).toMatch(/^status status-/);
+    }
+  });
+
+  it('covers every MM-1084 canonical step status with a stable pill class', () => {
+    for (const status of CANONICAL_STEP_STATUSES) {
+      expect(executionStatusPillProps(status).className).toMatch(/^status status-/);
+    }
   });
 
   it('preserves MM-488 traceability for downstream verification', () => {
@@ -119,5 +152,6 @@ describe('executionStatusPillProps', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-704');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1035');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1036');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1073');
   });
 });

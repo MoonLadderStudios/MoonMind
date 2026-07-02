@@ -8,10 +8,10 @@ This document defines the document classes MoonSpec workflows operate on, the pr
 
 ### Canonical declarative documents
 
-- **Location**: long-lived files under `docs/`, plus `.specify/memory/constitution.md`.
+- **Location**: long-lived files under `docs/`.
 - **Content**: desired state — architecture, contracts, operator-visible behavior, and target semantics.
 - **Lifecycle**: version-controlled and durable. These are the primary source of truth for what the system is and how it should behave.
-- **Constraints**: canonical documents must stay declarative. Migration narratives, phased rollout sequencing, status checklists, and implementation backlogs must not become their primary framing (Constitution XII).
+- **Constraints**: canonical documents must stay declarative. Migration narratives, phased rollout sequencing, status checklists, and implementation backlogs must not become their primary framing.
 
 ### Temporary execution artifacts
 
@@ -23,7 +23,7 @@ This document defines the document classes MoonSpec workflows operate on, the pr
 
 - **Location**: `docs/tmp/` or gitignored handoff paths.
 - **Content**: checklists, status trackers, migration and rollout plans, cleanup sequences — anything whose primary framing is steps, phases, checkboxes, or status.
-- **Lifecycle**: time-bound. Delete or archive them when the work completes (Constitution XII).
+- **Lifecycle**: time-bound. Delete or archive them when the work completes.
 
 ## Classification And Fallback Rule
 
@@ -43,7 +43,7 @@ When a derived artifact (`spec.md`, `stories.json`, `plan.md`, `tasks.md`) confl
 
 ## Reconciliation Expectation
 
-Implementation runs that discover canonical-document drift end with a doc-reconciliation pass (see the `moonspec-doc-reconcile` skill). This operationalizes Constitution XI: when a non-trivial change lands, its durable decisions are reflected in the owning `docs/` files.
+Implementation runs that discover canonical-document drift end with a doc-reconciliation pass (see the `moonspec-doc-reconcile` skill): when a non-trivial change lands, its durable decisions are reflected in the owning `docs/` files.
 
 Reconciliation updates a canonical document only when discoveries **definitely require** it:
 
@@ -51,7 +51,7 @@ Reconciliation updates a canonical document only when discoveries **definitely r
 - **Consistency**: the implementation correctly resolved an internal contradiction or ambiguity in the document, and the document must record the resolution.
 - **Best practices**: the implementation deliberately and correctly diverged from a documented approach for a defensible, verification-backed reason.
 
-Stylistic preferences, speculative improvements, and unverified observations never qualify. Reconciliation preserves desired-state framing: it never downgrades a canonical document to match buggy or incomplete code, and it never inserts imperative content into canonical files. Updates that would conflict with the constitution, README, or architecture direction are escalated as Jira issues instead of applied.
+Stylistic preferences, speculative improvements, and unverified observations never qualify. Reconciliation preserves desired-state framing: it never downgrades a canonical document to match buggy or incomplete code, and it never inserts imperative content into canonical files. Updates that would conflict with repo guidance, README, or architecture direction are escalated as Jira issues instead of applied.
 
 ## Documentation Architecture Standard
 
@@ -66,4 +66,4 @@ Read MoonSpec documentation in this order:
 3. **Project-local architecture / design / contract docs** — the canonical declarative documents for the project at hand.
 4. **Optional project-local implementation scratch** — temporary execution artifacts and imperative working documents, when present.
 
-Downstream projects may adapt this read order with minor local additions (for example, engineering or owner matrices, or a project constitution, which must always be positioned at the very beginning of the read order) without changing the relative ordering above.
+Downstream projects may adapt this read order with minor local additions, such as repo-level AGENTS.md guidance or engineering and owner matrices, without changing the relative ordering above.

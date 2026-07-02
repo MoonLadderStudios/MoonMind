@@ -211,7 +211,7 @@ Rules:
 8. Rows blocked on dependencies show dependency text under the status pill, for example `Blocked by 1 prerequisite`.
 9. Rows requiring intervention show `Intervention requested` under the status pill.
 10. Failed rows do not repeat `Failed - needs review`, and awaiting-external rows do not repeat `Waiting on external response` when the text merely restates the status.
-11. The Progress column renders compactly from `row.progress`: `{succeeded}/{total} · {currentStepTitle}`, `{succeeded}/{total} complete`, `{succeeded}/{total} · Failed at {currentStepTitle}`, or `—` when progress is missing or has no usable total.
+11. The Progress column renders compactly from `row.progress`: `{completed}/{total} · {currentStepTitle}`, `{completed}/{total} complete`, `{completed}/{total} · Failed at {currentStepTitle}`, or `—` when progress is missing or has no usable total.
 12. The list page must not fetch per-row step details to populate Progress.
 13. The `Started` timestamp is intentionally not shown in the list presentation.
 
@@ -363,7 +363,7 @@ Derived value:
 
 ```text
 progressPct = progress.total > 0
-  ? clamp(progress.succeeded / progress.total, 0, 1)
+  ? clamp(progress.completed / progress.total, 0, 1)
   : null
 ```
 
@@ -376,14 +376,14 @@ Product labels:
 
 Rules:
 
-1. `progress.succeeded` is the numerator because it matches the displayed `{succeeded}/{total}` copy.
+1. `progress.completed` is the numerator because it matches the displayed `{completed}/{total}` copy.
 2. Missing progress, `null` progress, and `total <= 0` are Progress blanks.
 3. Progress blanks sort last in both ascending and descending sorts unless the user explicitly filters to blanks.
 4. Progress sorting must not use `currentStepTitle` as the primary sort value because step titles are high-cardinality, transient text.
 5. Progress sorting must not reinterpret workflow outcome. Failed, canceled, and completed workflow outcomes remain Status semantics.
 6. Tie-breakers should be deterministic:
    1. progress percentage;
-   2. `progress.succeeded`;
+   2. `progress.completed`;
    3. `progress.total`;
    4. `progress.updatedAt || updatedAt`;
    5. workflow identifier descending.
@@ -564,7 +564,7 @@ Buckets
 [ ] No progress data
 
 Signals
-[ ] Has running step
+[ ] Has executing step
 [ ] Waiting on external progress
 [ ] Reviewing
 [ ] Has failed steps
@@ -582,15 +582,15 @@ Bucket definitions:
 | Bucket | Definition |
 | --- | --- |
 | No progress data | `!progress || progress.total <= 0` |
-| Not started | `total > 0`, no succeeded/failed/skipped/canceled steps, and no active running/awaiting/reviewing step. |
-| In progress | `total > 0`, not complete, and some work has started or is actively waiting/reviewing/running. |
-| Complete | `total > 0 && succeeded >= total`. |
+| Not started | `total > 0`, no completed/failed/skipped/canceled steps, and no active executing/awaiting/reviewing step. |
+| In progress | `total > 0`, not complete, and some work has started or is actively waiting/reviewing/executing. |
+| Complete | `total > 0 && completed >= total`. |
 
 Signal definitions:
 
 | Signal | Definition |
 | --- | --- |
-| `running` | `progress.running > 0` |
+| `executing` | `progress.executing > 0` |
 | `awaiting_external` | `progress.awaitingExternal > 0` |
 | `reviewing` | `progress.reviewing > 0` |
 | `has_failed_steps` | `progress.failed > 0` |
@@ -600,7 +600,7 @@ Signal definitions:
 Rules:
 
 1. Completion range filtering uses `progressPct`, not string comparison.
-2. Completion percent is derived from `succeeded / total` and clamped to the inclusive range 0–100.
+2. Completion percent is derived from `completed / total` and clamped to the inclusive range 0–100.
 3. Progress blanks are rows with missing progress, null progress, or `total <= 0`.
 4. Bucket selections use OR semantics within Progress.
 5. Signal selections use OR semantics within the signal group.
@@ -721,7 +721,7 @@ Recommended parameters:
 | `<field>Blank` | Include or exclude blanks for fields where blank is meaningful. |
 | `progressPctFrom` / `progressPctTo` | Inclusive Progress completion percentage bounds, 0–100. |
 | `progressBucketIn` / `progressBucketNotIn` | Progress buckets: `not_started`, `in_progress`, `complete`. |
-| `progressSignalIn` / `progressSignalNotIn` | Progress signals: `running`, `awaiting_external`, `reviewing`, `has_failed_steps`, `has_skipped_steps`, `has_canceled_steps`. |
+| `progressSignalIn` / `progressSignalNotIn` | Progress signals: `executing`, `awaiting_external`, `reviewing`, `has_failed_steps`, `has_skipped_steps`, `has_canceled_steps`. |
 | `progressStepTitleContains` | Text filter for `progress.currentStepTitle`. |
 | `progressBlank` | Include or exclude Progress blanks. |
 | `sort=progressPct` | Sort by derived Progress completion percentage. |
@@ -844,11 +844,11 @@ Required derived fields:
 
 | Derived field | Meaning |
 | --- | --- |
-| `progressPct` or `progressPctBps` | Completion percent derived from `succeeded / total`; basis points are preferred for storage. |
+| `progressPct` or `progressPctBps` | Completion percent derived from `completed / total`; basis points are preferred for storage. |
 | `progressTotal` | `progress.total`. |
-| `progressSucceeded` | `progress.succeeded`. |
+| `progressCompleted` | `progress.completed`. |
 | `progressFailed` | `progress.failed`. |
-| `progressRunning` | `progress.running`. |
+| `progressExecuting` | `progress.executing`. |
 | `progressAwaitingExternal` | `progress.awaitingExternal`. |
 | `progressReviewing` | `progress.reviewing`. |
 | `progressSkipped` | `progress.skipped`. |

@@ -18,6 +18,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ScrollText } from 'lucide-react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { validatePageBoot } from '../boot/pageBootSchemas';
@@ -76,16 +77,7 @@ function NavIcon({ className, children }: NavIconProps & { children: ReactNode }
 }
 
 function WorkflowsNavIcon({ className }: NavIconProps) {
-  return (
-    <NavIcon className={className}>
-      <path d="M4 7h16" />
-      <path d="M4 12h16" />
-      <path d="M4 17h16" />
-      <circle cx="7" cy="7" r="1" fill="currentColor" stroke="none" />
-      <circle cx="7" cy="12" r="1" fill="currentColor" stroke="none" />
-      <circle cx="7" cy="17" r="1" fill="currentColor" stroke="none" />
-    </NavIcon>
-  );
+  return <ScrollText className={className} aria-hidden="true" focusable="false" />;
 }
 
 function StartWorkflowNavIcon({ className }: NavIconProps) {

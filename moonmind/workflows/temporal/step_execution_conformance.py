@@ -138,7 +138,7 @@ def _valid_manifest_payload(**overrides: Any) -> dict[str, Any]:
         logicalStepId=identity.logical_step_id,
         executionOrdinal=identity.execution_ordinal,
         reason="initial_execution",
-        status="succeeded",
+        status="completed",
         startedAt=_now(),
         updatedAt=_now(),
         input={"preparedInputRefs": ["artifact://input"]},
