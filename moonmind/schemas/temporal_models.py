@@ -899,6 +899,7 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
     patch_ref: str | None = Field(None, alias="patchRef")
     archive_ref: str | None = Field(None, alias="archiveRef")
     workspace_ref: str | None = Field(None, alias="workspaceRef")
+    workspace_artifact_ref: str | None = Field(None, alias="workspaceArtifactRef")
     external_state_ref: str | None = Field(None, alias="externalStateRef")
     manifest_ref: str | None = Field(None, alias="manifestRef")
     branch: str | None = Field(None, alias="branch")
@@ -913,6 +914,7 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
         "patch_ref",
         "archive_ref",
         "workspace_ref",
+        "workspace_artifact_ref",
         "external_state_ref",
         "manifest_ref",
         "branch",
@@ -943,9 +945,12 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
             raise ValueError(
                 "worktree_archive checkpoint requires archiveRef and manifestRef"
             )
-        if self.kind == "ephemeral_workspace_ref" and not self.workspace_ref:
+        if self.kind == "ephemeral_workspace_ref" and not (
+            self.workspace_ref or self.workspace_artifact_ref
+        ):
             raise ValueError(
-                "ephemeral_workspace_ref checkpoint requires workspaceRef"
+                "ephemeral_workspace_ref checkpoint requires workspaceRef or "
+                "workspaceArtifactRef"
             )
         if self.kind == "external_state_ref" and not self.external_state_ref:
             raise ValueError("external_state_ref checkpoint requires externalStateRef")
