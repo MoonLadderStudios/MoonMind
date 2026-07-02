@@ -1277,10 +1277,14 @@ def _omnigent_external_state_payload(
         if isinstance(first_message_metadata, dict)
         else None
     )
+    reattached_first_message_posted = (
+        isinstance(reattach_state, dict)
+        and reattach_state.get("firstMessagePosted") is True
+    )
     first_message: dict[str, Any] = {
         "state": "not_prepared" if first_message_request is None else "prepared",
     }
-    if first_message_response is not None:
+    if first_message_response is not None or reattached_first_message_posted:
         first_message["state"] = "posted"
     if first_message_digest:
         first_message["digestSha256"] = str(first_message_digest)

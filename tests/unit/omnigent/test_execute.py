@@ -880,6 +880,7 @@ async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[str] = []
 
@@ -920,6 +921,7 @@ async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
         },
     )
 
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
     result = await run_omnigent_execution(
         AgentExecutionRequest(
             agentKind="external",
@@ -933,16 +935,23 @@ async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
                     "prompt": {"text": "continue"},
                 },
             },
-        )
+        ),
+        artifact_gateway=gateway,
     )
 
+    external_state = json.loads(
+        await gateway.read_text(str(result.metadata["externalStateRef"]))
+    )
     assert result.summary == "reattached"
     assert calls == []
+    assert external_state["firstMessage"]["state"] == "posted"
+    assert "responseRef" not in external_state["firstMessage"]
 
 
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[str] = []
 
@@ -990,6 +999,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
 
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
     result = await run_omnigent_execution(
         AgentExecutionRequest(
             agentKind="external",
@@ -1004,11 +1014,17 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
                 },
             },
         ),
+        artifact_gateway=gateway,
         run_store=Store(),
     )
 
+    external_state = json.loads(
+        await gateway.read_text(str(result.metadata["externalStateRef"]))
+    )
     assert result.summary == "durably reattached"
     assert calls == []
+    assert external_state["firstMessage"]["state"] == "posted"
+    assert "responseRef" not in external_state["firstMessage"]
 
 
 @pytest.mark.asyncio

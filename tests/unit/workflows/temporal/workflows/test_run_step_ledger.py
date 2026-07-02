@@ -1260,6 +1260,7 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
                 "mergedLogArtifactRef": "art_merged_1",
                 "diagnosticsRef": "art_diag_1",
                 "providerSnapshotRef": "art_provider_1",
+                "externalStateRef": "artifact://omnigent/state",
                 "outputRefs": [
                     "art_stdout_1",
                     "art_stderr_1",
@@ -1291,8 +1292,17 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
         "runtimeMergedLogs": "art_merged_1",
         "runtimeDiagnostics": "art_diag_1",
         "providerSnapshot": "art_provider_1",
+        "externalStateRef": "artifact://omnigent/state",
         "stepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
+    }
+    assert workflow._step_execution_compact_output_refs("delegate-agent") == {
+        "summaryRef": "art_summary_1",
+        "primaryRef": "art_primary_1",
+        "stdoutRef": "art_stdout_1",
+        "stderrRef": "art_stderr_1",
+        "logsRef": "art_merged_1",
+        "externalStateRef": "artifact://omnigent/state",
     }
 
 
