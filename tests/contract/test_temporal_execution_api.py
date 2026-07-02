@@ -545,10 +545,10 @@ async def test_execution_lifecycle_endpoints_report_projection_contract(
                     "total": 2,
                     "pending": 1,
                     "ready": 0,
-                    "running": 1,
+                    "executing": 1,
                     "awaitingExternal": 0,
                     "reviewing": 0,
-                    "succeeded": 0,
+                    "completed": 0,
                     "failed": 0,
                     "skipped": 0,
                     "canceled": 0,
@@ -570,7 +570,7 @@ async def test_execution_lifecycle_endpoints_report_projection_contract(
                                 "version": "1",
                             },
                             "dependsOn": [],
-                            "status": "running",
+                            "status": "executing",
                             "waitingReason": None,
                             "attentionRequired": False,
                             "attempt": 1,
@@ -602,7 +602,7 @@ async def test_execution_lifecycle_endpoints_report_projection_contract(
             describe_body = describe_response.json()
             assert describe_body["runId"] == "run-query-latest"
             assert "temporalRunId" not in describe_body
-            assert describe_body["progress"]["running"] == 1
+            assert describe_body["progress"]["executing"] == 1
             assert describe_body["progress"]["currentStepTitle"] == "Run tests"
             assert "runId" not in describe_body["progress"]
             assert describe_body["stepsHref"] == f"/api/executions/{workflow_id}/steps"

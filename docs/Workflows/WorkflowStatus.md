@@ -8,6 +8,7 @@ This file is no longer the canonical source for MoonMind Workflow status design.
 
 Use these docs instead:
 
+- `docs/Temporal/StatusDomainMatrix.md` for the canonical cross-domain status matrix, token ownership, formatting rules, and non-destructive audit action vocabulary
 - `docs/Temporal/VisibilityAndUiQueryModel.md` for execution-level `mm_state`, dashboard-status mapping, Memo/Search Attribute rules, and `mm_updated_at`
 - `docs/Temporal/WorkflowExecutionProductModel.md` for the canonical Workflow Execution product model
 - `docs/Temporal/StepLedgerAndProgressModel.md` for step-level statuses, attempts, checks, and latest-run rules

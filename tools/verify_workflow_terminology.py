@@ -147,6 +147,31 @@ RUNTIME_RULES = (
         message="Use preset catalog route and contract names.",
     ),
     Rule(
+        name="preset-public-downstream-task-copy",
+        paths=("api_service/data/presets",),
+        pattern=re.compile(
+            r"\b("
+            r"Create dependent Jira (?:Implement|Orchestrate) tasks|"
+            r"downstream task(?: creation)?|"
+            r"downstream Jira (?:Implement|Orchestrate) tasks|"
+            r"Jira Implement/Orchestrate tasks|"
+            r"no-downstream-task"
+            r")\b",
+            re.IGNORECASE,
+        ),
+        message="Preset copy for downstream queue entries must use workflow terminology.",
+    ),
+    Rule(
+        name="public-moonspec-spelling",
+        paths=(
+            "api_service/data/presets",
+            "frontend/src",
+            "docs/Workflows/SkillAndPlanContracts.md",
+        ),
+        pattern=re.compile(r"\bMoon Spec\b"),
+        message="Spell MoonSpec consistently in public copy.",
+    ),
+    Rule(
         name="legacy-recurring-workflow-contract",
         paths=(
             "api_service",
@@ -190,7 +215,7 @@ def _iter_rule_files(rule: Rule, root: Path) -> Iterable[Path]:
         path = root / path_text
         if path.is_dir():
             for child in path.rglob("*"):
-                if child.is_file() and child.suffix in {".py", ".ts", ".tsx"}:
+                if child.is_file() and child.suffix in {".py", ".ts", ".tsx", ".yaml", ".yml"}:
                     if _path_is_allowed_runtime_exception(child.relative_to(root)):
                         continue
                     yield child

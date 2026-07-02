@@ -89,7 +89,7 @@ Parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then derive:
 - `PLAN = FEATURE_DIR/plan.md`
 - `TASKS = FEATURE_DIR/tasks.md`
 - optional docs from `AVAILABLE_DOCS`
-- `CONSTITUTION = .specify/memory/constitution.md`
+- `REPO_GUIDANCE = AGENTS.md` when present
 
 If shell arguments contain single quotes, use shell-safe escaping such as `'I'\''m Groot'`, or double quotes when possible.
 
@@ -99,7 +99,7 @@ Read:
 
 - `plan.md`: tech stack, libraries, project structure, unit test tooling, integration test tooling, constraints, validation commands, and any `## Requirement Status` table.
 - `spec.md`: preserved `**Input**`, `## Source Packet`, single user story, goal, independent test, acceptance scenarios, edge cases, functional requirements, success criteria, assumptions, and source design mappings such as `CLAIM-*`, `DESIGN-REQ-*` or `DOC-REQ-*`.
-- `.specify/memory/constitution.md`: project constraints and test discipline.
+- `AGENTS.md` when present: project principles, repo constraints, and test discipline.
 - `data-model.md` when present: entities, relationships, validation rules, and state transitions.
 - `contracts/` when present: public interfaces and contract or integration test obligations.
 - `research.md` when present: technical decisions that affect setup or implementation tasks.
@@ -113,7 +113,7 @@ Build a traceability inventory before writing tasks:
 - One row per meaningful edge case.
 - One row per measurable success criterion or `SC-*`.
 - One row per in-scope stable source claim ID from `## Source Packet`, such as `CLAIM-*`, `DESIGN-REQ-*` or `DOC-REQ-*`.
-- One row per constitution requirement that affects implementation or testing.
+- One row per relevant AGENTS.md principle, repo constraint, or testing-discipline requirement that affects implementation or testing.
 
 For each row, carry forward the matching `## Requirement Status` entry from `plan.md` when present. Allowed statuses are `missing`, `partial`, `implemented_unverified`, and `implemented_verified`; if a row has no status, treat it as `missing`.
 

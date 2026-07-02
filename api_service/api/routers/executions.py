@@ -45,6 +45,10 @@ from api_service.db.models import (
     User,
 )
 from moonmind.config.settings import settings
+from moonmind.statuses.compat import (
+    canonicalize_finish_outcome_code_alias,
+    normalize_no_commit_finish_summary,
+)
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
 from moonmind.workflows.executions.routing import _coerce_bool
@@ -296,7 +300,7 @@ _TEMPORAL_STATUS_VALUES = (
 _PROGRESS_BUCKET_VALUES = frozenset({"not_started", "in_progress", "complete"})
 _PROGRESS_SIGNAL_VALUES = frozenset(
     {
-        "running",
+        "executing",
         "awaiting_external",
         "reviewing",
         "has_failed_steps",
@@ -787,22 +791,22 @@ def _execution_progress_pct(execution: ExecutionModel) -> float | None:
     progress = execution.progress
     if progress is None or progress.total <= 0:
         return None
-    return max(0.0, min(100.0, (progress.succeeded / progress.total) * 100.0))
+    return max(0.0, min(100.0, (progress.completed / progress.total) * 100.0))
 
 
 def _execution_progress_bucket(execution: ExecutionModel) -> str | None:
     progress = execution.progress
     if progress is None or progress.total <= 0:
         return None
-    if progress.succeeded >= progress.total:
+    if progress.completed >= progress.total:
         return "complete"
     active = (
-        progress.running > 0
+        progress.executing > 0
         or progress.awaiting_external > 0
         or progress.reviewing > 0
     )
     terminal = progress.failed > 0 or progress.skipped > 0 or progress.canceled > 0
-    if progress.succeeded > 0 or active or terminal:
+    if progress.completed > 0 or active or terminal:
         return "in_progress"
     return "not_started"
 
@@ -812,8 +816,8 @@ def _execution_progress_signals(execution: ExecutionModel) -> set[str]:
     if progress is None:
         return set()
     signals: set[str] = set()
-    if progress.running > 0:
-        signals.add("running")
+    if progress.executing > 0:
+        signals.add("executing")
     if progress.awaiting_external > 0:
         signals.add("awaiting_external")
     if progress.reviewing > 0:
@@ -916,7 +920,7 @@ def _sort_executions_by_progress(
         return (
             1 if pct is None else 0,
             pct or 0.0,
-            progress.succeeded if progress else 0,
+            progress.completed if progress else 0,
             progress.total if progress else 0,
             updated_at.timestamp() if updated_at else 0.0,
             item.workflow_id,
@@ -1050,8 +1054,11 @@ def _state_include_clause(values: list[str]) -> str | None:
         for status in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE.get(value, ())
     ))
     unknown = [
-        value
+        expanded
         for value in deduped
+        for expanded in (
+            ("no_commit", "no_changes") if value == "no_commit" else (value,)
+        )
         if value not in _NON_TERMINAL_MM_STATES
         and value not in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE
     ]
@@ -1110,7 +1117,13 @@ def _append_state_temporal_filter(
                 escaped = _escape_temporal_value(status_value)
                 query_parts.append(f'ExecutionStatus!="{escaped}"')
             continue
-        query_parts.append(f'mm_state!="{_escape_temporal_value(normalized)}"')
+        excluded_values = (
+            ("no_commit", "no_changes") if normalized == "no_commit" else (normalized,)
+        )
+        for excluded_value in excluded_values:
+            query_parts.append(
+                f'mm_state!="{_escape_temporal_value(excluded_value)}"'
+            )
 
 
 def _append_exact_or_multi_temporal_filter(
@@ -2174,12 +2187,16 @@ def _bounded_execution_progress_from_sources(
             "total": source.get("total"),
             "pending": source.get("pending"),
             "ready": source.get("ready"),
-            "running": source.get("running"),
+            "executing": source.get("executing")
+            if source.get("executing") is not None
+            else source.get("running"),
             "awaitingExternal": source.get("awaitingExternal")
             if source.get("awaitingExternal") is not None
             else source.get("awaiting_external"),
             "reviewing": source.get("reviewing"),
-            "succeeded": source.get("succeeded"),
+            "completed": source.get("completed")
+            if source.get("completed") is not None
+            else source.get("succeeded"),
             "failed": source.get("failed"),
             "skipped": source.get("skipped"),
             "canceled": source.get("canceled"),
@@ -2756,9 +2773,10 @@ def _serialize_execution(
         else memo_finish_summary
     )
     finish_summary = _normalize_no_commit_finish_summary(finish_summary)
-    finish_outcome_code = getattr(record, "finish_outcome_code", None)
-    if str(finish_outcome_code or "").strip().upper() == "NO_CHANGES":
-        finish_outcome_code = "NO_COMMIT"
+    finish_outcome_code = canonicalize_finish_outcome_code_alias(
+        getattr(record, "finish_outcome_code", None),
+        logger=logger,
+    )
     proposal_summary = _proposal_summary_from_memo(memo)
     if isinstance(finish_summary, Mapping):
         finish_proposals = finish_summary.get("proposals")
@@ -3173,7 +3191,7 @@ def _recommended_next_action(
             if not pr_url
             else "Review published pull request."
         )
-    if code in {"NO_COMMIT", "NO_CHANGES"}:
+    if canonicalize_finish_outcome_code_alias(code) == "NO_COMMIT":
         return "No follow-up required unless the outcome is unexpected."
     if code == "PUBLISH_DISABLED":
         return "Review generated artifacts; publishing was disabled."
@@ -4782,7 +4800,7 @@ def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | 
                 int(row.get("executionOrdinal") or row.get("attempt") or 0),
                 1,
             )
-            row["status"] = "awaiting_external" if waiting_reason else "running"
+            row["status"] = "awaiting_external" if waiting_reason else "executing"
             row["executionOrdinal"] = execution_ordinal
             row["startedAt"] = row.get("startedAt") or updated_at.isoformat()
             row["updatedAt"] = updated_at.isoformat()
@@ -5430,6 +5448,7 @@ def _step_execution_projection_payload(
         "executionOrdinal": manifest.execution_ordinal,
         "sourceExecutionOrdinal": source_execution_ordinal,
         "lineage": manifest.lineage,
+        "branch": manifest.branch,
         "reason": manifest.reason,
         "status": manifest.status,
         "terminalDisposition": manifest.terminal_disposition,
@@ -5782,41 +5801,7 @@ def _build_debug_fields(
 def _normalize_no_commit_finish_summary(
     finish_summary: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    if not isinstance(finish_summary, Mapping):
-        return None
-    normalized = dict(finish_summary)
-    finish_outcome = normalized.get("finishOutcome")
-    if isinstance(finish_outcome, Mapping):
-        outcome = dict(finish_outcome)
-        if str(outcome.get("code") or "").strip().upper() == "NO_CHANGES":
-            outcome["code"] = "NO_COMMIT"
-            reason = str(outcome.get("reason") or "").strip().lower()
-            if reason in {
-                "publish skipped: no local changes",
-                "no local changes",
-                "workflow completed with no changes.",
-            }:
-                outcome["reason"] = "No repository commit was needed."
-        normalized["finishOutcome"] = outcome
-    publish = normalized.get("publish")
-    if isinstance(publish, Mapping):
-        publish_payload = dict(publish)
-        reason_code = str(
-            publish_payload.get("reasonCode")
-            or publish_payload.get("reason_code")
-            or ""
-        ).strip()
-        reason = str(publish_payload.get("reason") or "").strip().lower()
-        if reason_code == "no_changes" or reason in {
-            "publish skipped: no local changes",
-            "no local changes",
-        }:
-            publish_payload["reasonCode"] = "no_commit"
-            publish_payload["reason"] = (
-                "No repository changes were available to commit or publish."
-            )
-        normalized["publish"] = publish_payload
-    return normalized
+    return normalize_no_commit_finish_summary(finish_summary, logger=logger)
 
 def _coerce_artifact_ref(value: Any) -> str | None:
     if value is None:
