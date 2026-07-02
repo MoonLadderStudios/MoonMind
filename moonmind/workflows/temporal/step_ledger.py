@@ -9,11 +9,10 @@ from datetime import datetime
 from typing import Any
 
 ACTIVE_STEP_STATUSES = ("executing", "reviewing", "awaiting_external")
-TERMINAL_STEP_STATUSES = {"completed", "failed", "skipped", "canceled"}
-READY_DEPENDENCY_STATUSES = {"completed", "skipped"}
+TERMINAL_STEP_STATUSES = {"completed", "succeeded", "failed", "skipped", "canceled"}
+READY_DEPENDENCY_STATUSES = {"completed", "succeeded", "skipped"}
 LEGACY_STEP_STATUS_ALIASES = {
     "running": "executing",
-    "succeeded": "completed",
 }
 _UNSET = object()
 

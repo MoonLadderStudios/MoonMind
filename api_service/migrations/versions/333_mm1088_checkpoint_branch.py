@@ -2,7 +2,7 @@
 
 Source traceability: MM-1087 Checkpoint Branch System design.
 
-Revision ID: 333_mm1088_checkpoint_branch_graph
+Revision ID: 333_mm1088_checkpoint_branch
 Revises: 332_mm1024_no_commit_status
 Create Date: 2026-07-02
 """
@@ -15,7 +15,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "333_mm1088_checkpoint_branch_graph"
+revision: str = "333_mm1088_checkpoint_branch"
 down_revision: Union[str, None] = "332_mm1024_no_commit_status"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
