@@ -442,6 +442,7 @@ async def test_run_omnigent_execution_derives_managed_workspace_from_workspace_s
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_preserves_session_after_transport_error(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[tuple[str, object]] = []
 
@@ -484,6 +485,7 @@ async def test_run_omnigent_execution_preserves_session_after_transport_error(
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    artifact_gateway = LocalOmnigentArtifactGateway(root=tmp_path)
 
     result = await run_omnigent_execution(
         AgentExecutionRequest(
@@ -498,11 +500,21 @@ async def test_run_omnigent_execution_preserves_session_after_transport_error(
                     "prompt": {"text": "Do the task"},
                 },
             },
-        )
+        ),
+        artifact_gateway=artifact_gateway,
     )
 
     assert result.failure_class == "integration_error"
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
+    assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")
+    external_state = json.loads(
+        await artifact_gateway.read_text(result.metadata["externalStateRef"])
+    )
+    assert external_state["retry"]["sessionResolution"] == "created"
+    assert external_state["retry"]["firstMessageOutcome"] == "pending"
+    assert external_state["firstMessage"]["digest"]
+    assert external_state["firstMessage"]["idempotencyMarkerPresent"] is True
+    assert external_state["artifactRefs"]["diagnosticsRef"] == result.diagnostics_ref
     assert all(call[0] != "delete_session" for call in calls)
 
 

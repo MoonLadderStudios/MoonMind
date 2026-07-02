@@ -1311,6 +1311,7 @@ async def run_omnigent_execution(
     target_agent_id: str | None = None
     delete_after_harvest = False
     capture_policy: dict[str, Any] | None = None
+    external_state: dict[str, Any] | None = None
     try:
         selection = build_omnigent_selection(request)
         capture_policy = selection.capture
@@ -1777,6 +1778,8 @@ async def run_omnigent_execution(
                 "failureClass": "integration_error",
             },
             harvest_resources=bool(client and session_id),
+            external_state=external_state,
+            capture_policy=capture_policy,
         )
         return AgentRunResult(
             outputRefs=bundle.output_refs,
@@ -1817,6 +1820,8 @@ async def run_omnigent_execution(
             terminal_status="failed",
             diagnostics=diagnostics,
             harvest_resources=bool(client and session_id),
+            external_state=external_state,
+            capture_policy=capture_policy,
         )
         return AgentRunResult(
             outputRefs=bundle.output_refs,
