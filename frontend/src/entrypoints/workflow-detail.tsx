@@ -1,9 +1,28 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type Ref,
+  type RefObject,
+} from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Anser from 'anser';
 import {
   ArrowRight,
 } from 'lucide-react';
+import {
+  BotIcon,
+  type BotIconHandle,
+  FlaskIcon,
+  type FlaskIconHandle,
+  LoaderCircleIcon,
+  type LoaderCircleIconHandle,
+  RouteIcon,
+  type RouteIconHandle,
+} from 'lucide-animated';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
@@ -70,6 +89,96 @@ const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/p
 const SESSION_PROJECTION_POLL_MS = 5000;
 const SESSION_CAPABILITY_POLL_MS = 5000;
 const WORKFLOW_WORKSPACE_DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
+const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
+const WORKFLOW_SIDEBAR_ANIMATED_STATUS = {
+  initializing: LoaderCircleIcon,
+  executing: BotIcon,
+  planning: RouteIcon,
+  finalizing: FlaskIcon,
+} as const;
+type SidebarAnimatedWorkflowStatus = keyof typeof WORKFLOW_SIDEBAR_ANIMATED_STATUS;
+const WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS: Readonly<Record<SidebarAnimatedWorkflowStatus, number | undefined>> = {
+  initializing: undefined,
+  executing: 650,
+  planning: 650,
+  finalizing: 650,
+};
+type WorkflowSidebarStatusIconHandle = LoaderCircleIconHandle | BotIconHandle | RouteIconHandle | FlaskIconHandle;
+
+function AnimatedWorkflowSidebarStatusIcon({
+  status,
+  className,
+  title,
+}: {
+  status: SidebarAnimatedWorkflowStatus;
+  className?: string;
+  title: string;
+}) {
+  const iconRef = useRef<WorkflowSidebarStatusIconHandle | null>(null);
+  const Icon = WORKFLOW_SIDEBAR_ANIMATED_STATUS[status];
+  const pillProps = executionStatusPillProps(status, { enableMotion: false });
+
+  useEffect(() => {
+    let active = true;
+    let timerId: number | null = null;
+    const replayMs = WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS[status];
+    const reducedMotion = typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia(REDUCED_MOTION_QUERY).matches;
+
+    const loop = () => {
+      if (reducedMotion) {
+        return;
+      }
+      if (!iconRef.current || !active) {
+        return;
+      }
+      iconRef.current.startAnimation();
+      if (!active || replayMs == null) {
+        return;
+      }
+      timerId = window.setTimeout(() => {
+        if (!active) {
+          return;
+        }
+        void loop();
+      }, replayMs);
+    };
+
+    void loop();
+
+    return () => {
+      active = false;
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+      iconRef.current?.stopAnimation();
+    };
+  }, [status]);
+
+  const ref = iconRef as Ref<WorkflowSidebarStatusIconHandle> | null;
+
+  return (
+    <span
+      {...pillProps}
+      className={`${pillProps.className}${className ? ` ${className}` : ''}`}
+      aria-label={`Status: ${title}`}
+      title={title}
+      data-testid="workflow-workspace-sidebar-status-icon"
+    >
+      <Icon
+        ref={ref}
+        size={16}
+        animateOnHover={false}
+        aria-hidden="true"
+      />
+    </span>
+  );
+}
+
+function isSidebarAnimatedWorkflowStatus(status: string): status is SidebarAnimatedWorkflowStatus {
+  return Object.prototype.hasOwnProperty.call(WORKFLOW_SIDEBAR_ANIMATED_STATUS, status);
+}
 
 const WorkflowWorkspaceRowSchema = z
   .object({
@@ -250,7 +359,30 @@ function workflowWorkspaceListQuery(search: URLSearchParams): string {
   return params.toString();
 }
 
+function sidebarStatusLabel(status: string | null | undefined): string {
+  const label = formatStatusLabel(status);
+  return label.length > 0 ? `${label.charAt(0).toUpperCase()}${label.slice(1)}` : label;
+}
+
 function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefined }) {
+  let normalizedStatus = String(status || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '_');
+  if (normalizedStatus === 'running') {
+    normalizedStatus = 'executing';
+  }
+  if (isSidebarAnimatedWorkflowStatus(normalizedStatus)) {
+    const label = sidebarStatusLabel(status);
+    return (
+      <AnimatedWorkflowSidebarStatusIcon
+        status={normalizedStatus}
+        title={label}
+        className="workflow-workspace-sidebar-status-icon"
+      />
+    );
+  }
+
   return (
     <StatusIcon
       status={status}

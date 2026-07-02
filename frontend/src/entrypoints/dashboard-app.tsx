@@ -18,7 +18,13 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Rocket, ScrollText } from 'lucide-react';
+import {
+  MoonIcon,
+  RocketIcon,
+  SettingsIcon,
+  SparklesIcon,
+  WorkflowIcon,
+} from 'lucide-animated';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { validatePageBoot } from '../boot/pageBootSchemas';
@@ -50,6 +56,8 @@ const PAGE_IMPORTS = {
   'workflow-list': () => import('./workflow-list'),
 } satisfies Record<DashboardPage, PageImport>;
 
+const NAV_ICON_SIZE = 16;
+
 type SharedLayoutConfig = {
   dataWidePanel?: boolean;
 };
@@ -58,68 +66,24 @@ type NavIconProps = {
   className?: string | undefined;
 };
 
-function NavIcon({ className, children }: NavIconProps & { children: ReactNode }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {children}
-    </svg>
-  );
-}
-
 function WorkflowsNavIcon({ className }: NavIconProps) {
-  return <ScrollText className={className} aria-hidden="true" focusable="false" />;
+  return <WorkflowIcon size={NAV_ICON_SIZE} className={className} animateOnHover aria-hidden="true" />;
 }
 
 function StartWorkflowNavIcon({ className }: NavIconProps) {
-  return <Rocket className={className} aria-hidden="true" focusable="false" />;
+  return <RocketIcon size={NAV_ICON_SIZE} className={className} animateOnHover aria-hidden="true" />;
 }
 
 function SchedulesNavIcon({ className }: NavIconProps) {
-  return (
-    <NavIcon className={className}>
-      <rect x="4" y="5" width="16" height="15" rx="2" />
-      <path d="M8 3v4" />
-      <path d="M16 3v4" />
-      <path d="M4 10h16" />
-      <path d="M9 15h3" />
-    </NavIcon>
-  );
+  return <MoonIcon size={NAV_ICON_SIZE} className={className} animateOnHover aria-hidden="true" />;
 }
 
 function SkillsNavIcon({ className }: NavIconProps) {
-  return (
-    <NavIcon className={className}>
-      <path d="M12 3l1.55 4.25L18 8.8l-4.45 1.55L12 15l-1.55-4.65L6 8.8l4.45-1.55L12 3z" />
-      <path d="M19 14l.75 2 2.25.75-2.25.75L19 20l-.75-2.5L16 16.75l2.25-.75L19 14z" />
-      <path d="M5 14l.75 2L8 16.75l-2.25.75L5 20l-.75-2.5L2 16.75 4.25 16 5 14z" />
-    </NavIcon>
-  );
+  return <SparklesIcon size={NAV_ICON_SIZE} className={className} animateOnHover aria-hidden="true" />;
 }
 
 function SettingsNavIcon({ className }: NavIconProps) {
-  return (
-    <NavIcon className={className}>
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 3v3" />
-      <path d="M12 18v3" />
-      <path d="M3 12h3" />
-      <path d="M18 12h3" />
-      <path d="M5.6 5.6l2.1 2.1" />
-      <path d="M16.3 16.3l2.1 2.1" />
-      <path d="M5.6 18.4l2.1-2.1" />
-      <path d="M16.3 7.7l2.1-2.1" />
-    </NavIcon>
-  );
+  return <SettingsIcon size={NAV_ICON_SIZE} className={className} animateOnHover aria-hidden="true" />;
 }
 
 function isSupportedPage(page: string): page is DashboardPage {
