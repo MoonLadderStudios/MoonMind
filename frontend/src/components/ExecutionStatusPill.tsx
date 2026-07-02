@@ -1,7 +1,11 @@
 import { useMemo, type CSSProperties } from 'react';
 
-import { formatStepStatusLabel, stepStatusPillProps } from '../status/stepStatus';
-import { formatWorkflowStatusLabel, workflowStatusPillProps } from '../status/workflowStatus';
+import { formatStepStatusLabel, isStepLedgerStatus, stepStatusPillProps } from '../status/stepStatus';
+import {
+  formatWorkflowStatusLabel,
+  isWorkflowLifecycleStatus,
+  workflowStatusPillProps,
+} from '../status/workflowStatus';
 
 type GlyphStyle = CSSProperties & {
   '--mm-letter-count'?: number;
@@ -37,18 +41,26 @@ function splitGraphemes(value: string): string[] {
 }
 
 function visibleStatusLabel(status: string | null | undefined): string {
-  return formatWorkflowStatusLabel(status, formatStepStatusLabel(status, '-'));
+  if (isWorkflowLifecycleStatus(status)) {
+    return formatWorkflowStatusLabel(status, '-');
+  }
+  if (isStepLedgerStatus(status)) {
+    return formatStepStatusLabel(status, '-');
+  }
+  return formatWorkflowStatusLabel(status, '-');
 }
 
 function executionStatusPillProps(
   status: string | null | undefined,
   options: { enableMotion?: boolean } = {},
 ): ExecutionStatusPillClassProps {
-  const workflowProps = workflowStatusPillProps(status, options);
-  if (workflowProps.className !== 'status status-neutral') {
-    return workflowProps;
+  if (isWorkflowLifecycleStatus(status)) {
+    return workflowStatusPillProps(status, options);
   }
-  return stepStatusPillProps(status);
+  if (isStepLedgerStatus(status)) {
+    return stepStatusPillProps(status);
+  }
+  return workflowStatusPillProps(status, options);
 }
 
 export function ExecutionStatusPill({

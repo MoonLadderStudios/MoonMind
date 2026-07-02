@@ -30,21 +30,40 @@ const STEP_STATUS_CLASSES: Record<string, string> = {
   canceled: 'status status-canceled',
 };
 
+function normalizedStepStatusKey(status: string | null | undefined): string {
+  return String(status || '').toLowerCase().trim().replace(/\s+/g, '_');
+}
+
+export function isStepLedgerStatus(status: string | null | undefined): boolean {
+  const key = normalizedStepStatusKey(status);
+  return Object.prototype.hasOwnProperty.call(STEP_STATUS_LABELS, key);
+}
+
+function warnUnknownStepStatus(key: string): void {
+  if (key) {
+    console.warn(`Unknown step ledger status: ${key}`);
+  }
+}
+
 export function formatStepStatusLabel(
   status: string | null | undefined,
   fallback = '-',
 ): string {
-  const key = String(status || '').toLowerCase().trim().replace(/\s+/g, '_');
+  const key = normalizedStepStatusKey(status);
   if (!key) return fallback;
-  return Object.prototype.hasOwnProperty.call(STEP_STATUS_LABELS, key)
-    ? STEP_STATUS_LABELS[key]!
-    : fallback;
+  if (Object.prototype.hasOwnProperty.call(STEP_STATUS_LABELS, key)) {
+    return STEP_STATUS_LABELS[key]!;
+  }
+  warnUnknownStepStatus(key);
+  return fallback;
 }
 
 export function stepStatusPillProps(status: string | null | undefined): Readonly<{ className: string }> {
-  const key = String(status || '').toLowerCase().trim().replace(/\s+/g, '_');
-  const className = Object.prototype.hasOwnProperty.call(STEP_STATUS_CLASSES, key)
-    ? STEP_STATUS_CLASSES[key]!
-    : 'status status-neutral';
+  const key = normalizedStepStatusKey(status);
+  const known = Object.prototype.hasOwnProperty.call(STEP_STATUS_CLASSES, key);
+  const className = known ? STEP_STATUS_CLASSES[key]! : 'status status-neutral';
+  if (!known) {
+    warnUnknownStepStatus(key);
+  }
   return { className };
 }
