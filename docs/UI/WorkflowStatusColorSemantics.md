@@ -100,7 +100,7 @@ Rationale: `awaiting_slot` represents a workflow that is waiting for capacity, n
 | `waiting_on_dependencies` | Awaiting dep | Blocked yellow | `#92400E` | `#FACC15` | Furthest non-terminal distance from active execution; blocked on prerequisite workflow state and kept legible against purple dashboard backgrounds. |
 | `awaiting_external` | Awaiting external | Blocked yellow | `#92400E` | `#FACC15` | Furthest non-terminal distance from active execution; waiting on an external system, provider, or human and kept legible against purple dashboard backgrounds. |
 | `finalizing` | Finalizing | Finalization slate | `#64748B` | `#64748B` | Wrap-up, recording, publish summary, and terminalization work. |
-| `no_commit` | No commit | No-commit gray | Muted gray token | Muted gray token | Successful or side-effectful completion with no repository commit/publish artifact. |
+| `no_commit` | No commit | No-commit gray | `#5F667A` | `#AEAACC` | Successful or side-effectful completion with no repository commit/publish artifact. |
 
 ---
 
