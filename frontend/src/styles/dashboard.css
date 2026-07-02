@@ -6885,10 +6885,25 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 }
 
+@media (max-width: 767px) {
+  .panel:has(.workflow-detail-page) {
+    max-width: none;
+    margin-top: 0.5rem;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+    min-height: 0;
+  }
+}
+
 /* Task detail: grouped flat facts */
 
 .workflow-detail-page {
   min-width: 0;
+  width: 100%;
+  max-width: 100%;
 }
 
 .workflow-workspace-shell {
@@ -7177,17 +7192,72 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     max-width: none;
   }
 
+  .workflow-workspace-detail {
+    max-width: none;
+    margin-inline: 0;
+  }
+
+  .workflow-detail-page {
+    gap: 0.75rem;
+    overflow-x: clip;
+  }
+
+  .workflow-detail-page .toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .workflow-detail-page .toolbar > *,
+  .workflow-detail-page .toolbar-identity-row,
+  .workflow-detail-page .toolbar-controls {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .workflow-detail-page .toolbar-controls {
+    justify-content: stretch;
+    margin-left: 0;
+  }
+
+  .workflow-detail-page .toolbar-controls > *,
+  .workflow-detail-page .td-workflow-actions-menu,
+  .workflow-detail-page .td-workflow-actions-trigger {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .workflow-detail-page .td-workflow-actions-popover {
+    position: fixed;
+    left: 0.75rem;
+    right: 0.75rem;
+    top: auto;
+    width: auto;
+    max-width: none;
+  }
+
   .workflow-workspace-sidebar,
   .workflow-workspace-open-sidebar {
     display: none;
   }
 
+  .td-subroute-nav-row {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+  }
+
   .segmented-nav {
     overflow-x: auto;
+    width: max-content;
+    min-width: 100%;
   }
 
   .segmented-nav-item {
-    min-width: 5.4rem;
+    flex: 0 0 auto;
+    min-width: 4.75rem;
+    white-space: normal;
   }
 
   .flat-fact-grid {
@@ -7197,6 +7267,37 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   .flat-fact-grid > div {
     grid-template-columns: minmax(0, 1fr);
     gap: 0.2rem;
+  }
+
+  .workflow-detail-page .card,
+  .workflow-detail-page .td-actions-region,
+  .workflow-detail-page .td-evidence-slab,
+  .workflow-detail-page .td-instructions-panel,
+  .workflow-detail-page .live-logs-panel {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .workflow-detail-page .queue-table-wrapper {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .workflow-detail-page .queue-table-wrapper table {
+    min-width: 42rem;
+  }
+
+  .workflow-detail-page code,
+  .workflow-detail-page pre {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .workflow-detail-page pre {
+    white-space: pre-wrap;
   }
 }
 

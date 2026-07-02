@@ -10,6 +10,7 @@ import pytest
 from moonmind.statuses.close_status import TemporalExecutionCloseStatus
 from moonmind.statuses.compat import WORKFLOW_STATE_COMPATIBILITY_ALIASES
 from moonmind.statuses.integration import INTEGRATION_STATUS_VALUES
+from moonmind.schemas.temporal_activity_models import ExecutionTerminalStateInput
 from moonmind.statuses.step_execution import (
     STEP_EXECUTION_ARTIFACT_STATUS_TO_LEDGER_STATUS,
     STEP_EXECUTION_ARTIFACT_STATUS_VALUES,
@@ -25,6 +26,7 @@ from moonmind.statuses.workflow import (
     coerce_workflow_state,
     workflow_state_to_close_status,
 )
+from moonmind.workflows.automation import models as automation_models
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -54,12 +56,46 @@ def _status_table_values(markdown: str) -> set[str]:
     }
 
 
+def _matrix_values_for_domain(markdown: str, domain: str) -> set[str]:
+    for line in markdown.splitlines():
+        if line.startswith(f"| {domain} |"):
+            columns = [column.strip() for column in line.strip().strip("|").split("|")]
+            assert len(columns) >= 3
+            return set(re.findall(r"`([^`]+)`", columns[2]))
+    raise AssertionError(f"Missing status-domain matrix row for {domain}")
+
+
 def test_workflow_state_values_match_temporal_visibility_doc() -> None:
     markdown = _read_doc("docs/Temporal/VisibilityAndUiQueryModel.md")
 
     assert WORKFLOW_STATE_VALUES == _fenced_values_after_heading(
         markdown,
         "5.1 `mm_state` value set",
+    )
+
+
+def test_backend_status_domains_match_status_domain_matrix() -> None:
+    markdown = _read_doc("docs/Temporal/StatusDomainMatrix.md")
+
+    assert WORKFLOW_STATE_VALUES == _matrix_values_for_domain(
+        markdown,
+        "Workflow lifecycle state",
+    )
+    assert TEMPORAL_STATUS_VALUES == _matrix_values_for_domain(
+        markdown,
+        "`temporalStatus`",
+    )
+    assert STEP_LEDGER_STATUS_VALUES == _matrix_values_for_domain(
+        markdown,
+        "Step ledger status",
+    )
+    assert STEP_EXECUTION_ARTIFACT_STATUS_VALUES == _matrix_values_for_domain(
+        markdown,
+        "Step execution artifact status",
+    )
+    assert INTEGRATION_STATUS_VALUES <= _matrix_values_for_domain(
+        markdown,
+        "Provider normalized status",
     )
 
 
@@ -86,6 +122,27 @@ def test_workflow_state_parsing_fails_fast_outside_compat_boundary() -> None:
 
     with pytest.raises(ValueError):
         coerce_workflow_state("done")
+
+
+def test_automation_status_type_decodes_legacy_persisted_value() -> None:
+    status_type = automation_models.AutomationRunStatusType()
+
+    assert (
+        status_type.process_result_value("no_changes", None)
+        is automation_models.AutomationRunStatus.NO_COMMIT
+    )
+    assert (
+        status_type.process_bind_param("no_changes", None)
+        == automation_models.AutomationRunStatus.NO_COMMIT.value
+    )
+
+
+def test_terminal_state_activity_input_accepts_legacy_no_changes_state() -> None:
+    model = ExecutionTerminalStateInput.model_validate(
+        {"workflowId": "wf-1", "state": "no_changes"}
+    )
+
+    assert model.state == "no_changes"
 
 
 def test_step_ledger_values_match_step_ledger_doc() -> None:
@@ -159,3 +216,13 @@ def test_workflow_domain_excludes_provider_aliases() -> None:
     }
 
     assert WORKFLOW_STATE_VALUES.isdisjoint(provider_aliases)
+
+
+def test_no_generic_global_status_vocabulary_is_reintroduced() -> None:
+    status_modules = {
+        path.name for path in (REPO_ROOT / "moonmind" / "statuses").glob("*.py")
+    }
+
+    assert "global.py" not in status_modules
+    assert "generic.py" not in status_modules
+    assert not (WORKFLOW_STATE_VALUES & {"queued", "running", "succeeded", "done"})
