@@ -9589,13 +9589,7 @@ async def list_executions(
                             getattr(record_obj, "started_at", None) or datetime.now(UTC)
                         )
                     execution = _serialize_execution_list_item(record_obj)
-                    if (
-                        _execution_uses_live_workflow_queries(execution)
-                        and (
-                            _request_has_progress_filters(request)
-                            or sort in {"progress", "progressPct"}
-                        )
-                    ):
+                    if _execution_uses_live_workflow_queries(execution):
                         progress, queried_run_id = await _load_execution_progress(
                             temporal_client=temporal_client,
                             workflow_id=wf.id,
