@@ -1,6 +1,6 @@
 """Add checkpoint branch git binding records for MM-1090.
 
-Revision ID: 333_mm1090_checkpoint_branch_git_bindings
+Revision ID: 333_mm1090_cp_bindings
 Revises: 332_mm1024_no_commit_status
 Create Date: 2026-07-02
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "333_mm1090_checkpoint_branch_git_bindings"
+revision: str = "333_mm1090_cp_bindings"
 down_revision: Union[str, None] = "332_mm1024_no_commit_status"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
