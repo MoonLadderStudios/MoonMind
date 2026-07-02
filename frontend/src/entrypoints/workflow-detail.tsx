@@ -1981,7 +1981,7 @@ function ProposalDeliveryCard({ outcome, index }: { outcome: Record<string, unkn
         {created === true ? <Fact label="Dedup">Created new issue</Fact> : null}
         {duplicateSource ? <Fact label="Dedup Source">{duplicateSource}</Fact> : null}
         {proposalFieldText(taskPreview, 'repository') ? (
-          <Fact label="Repository">
+          <Fact label="Repo">
             <code className="text-xs break-all">{proposalFieldText(taskPreview, 'repository')}</code>
           </Fact>
         ) : null}
@@ -7268,7 +7268,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
               <FactGroup title="Git & Publish">
                 {execution.repository ? (
-                  <Fact label="Repository">
+                  <Fact label="Repo">
                     <RepositoryFact repository={execution.repository} />
                   </Fact>
                 ) : null}
