@@ -89,6 +89,7 @@ const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/p
 const SESSION_PROJECTION_POLL_MS = 5000;
 const SESSION_CAPABILITY_POLL_MS = 5000;
 const WORKFLOW_WORKSPACE_DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
+const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 const WORKFLOW_SIDEBAR_ANIMATED_STATUS = {
   initializing: LoaderCircleIcon,
   executing: BotIcon,
@@ -121,8 +122,14 @@ function AnimatedWorkflowSidebarStatusIcon({
     let active = true;
     let timerId: number | null = null;
     const replayMs = WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS[status];
+    const reducedMotion = typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia(REDUCED_MOTION_QUERY).matches;
 
-    const loop = async () => {
+    const loop = () => {
+      if (reducedMotion) {
+        return;
+      }
       if (!iconRef.current || !active) {
         return;
       }
@@ -358,10 +365,13 @@ function sidebarStatusLabel(status: string | null | undefined): string {
 }
 
 function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefined }) {
-  const normalizedStatus = String(status || '')
+  let normalizedStatus = String(status || '')
     .toLowerCase()
     .trim()
     .replace(/\s+/g, '_');
+  if (normalizedStatus === 'running') {
+    normalizedStatus = 'executing';
+  }
   if (isSidebarAnimatedWorkflowStatus(normalizedStatus)) {
     const label = sidebarStatusLabel(status);
     return (

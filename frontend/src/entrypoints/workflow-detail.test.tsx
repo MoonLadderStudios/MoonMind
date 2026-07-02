@@ -731,8 +731,9 @@ describe('Workflow Detail Entrypoint', () => {
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches({
       rows: [
-        ['scheduled', 'Scheduled workflow'],
+      ['scheduled', 'Scheduled workflow'],
         ['initializing', 'Initializing workflow'],
+        ['running', 'Running workflow'],
         ['waiting_on_dependencies', 'Dependency wait workflow'],
         ['planning', 'Planning workflow'],
         ['awaiting_slot', 'Slot wait workflow'],
@@ -763,6 +764,7 @@ describe('Workflow Detail Entrypoint', () => {
     const expectedIcons = [
       ['Scheduled workflow', 'Status: Scheduled', 'status-scheduled', 'lucide-calendar-clock'],
       ['Initializing workflow', 'Status: Initializing', 'status-initializing', null],
+      ['Running workflow', 'Status: Running', 'status-running', null],
       ['Dependency wait workflow', 'Status: Awaiting dependencies', 'status-awaiting-dependencies', 'lucide-link'],
       ['Planning workflow', 'Status: Planning', 'status-planning', null],
       ['Slot wait workflow', 'Status: Awaiting slot', 'status-awaiting-slot', 'lucide-hourglass'],
