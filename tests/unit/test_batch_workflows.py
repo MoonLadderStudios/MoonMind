@@ -336,6 +336,23 @@ def test_build_child_request_without_caller_omits_inheritance_directive():
     assert payload["task"]["publish"] == {"mode": "branch"}
 
 
+def test_build_child_request_maps_merge_automation_publish_mode_to_contract():
+    module = _load_module()
+    request = module["build_child_request"](
+        _JIRA_TARGET,
+        config=_jira_config(module, publish_mode="pr_with_merge_automation"),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+
+    assert request is not None
+    assert request["payload"]["task"]["publish"] == {
+        "mode": "pr",
+        "mergeAutomation": {"enabled": True},
+    }
+
+
 def test_build_child_requests_caps_at_max_workflows():
     module = _load_module()
     targets = [
@@ -416,6 +433,10 @@ def test_normalize_publish_mode_falls_back_to_pr():
     assert module["_normalize_publish_mode"]("none") == "none"
     assert module["_normalize_publish_mode"]("branch") == "branch"
     assert module["_normalize_publish_mode"]("pr") == "pr"
+    assert (
+        module["_normalize_publish_mode"]("pr_with_merge_automation")
+        == "pr_with_merge_automation"
+    )
     assert module["_normalize_publish_mode"]("bogus") == "pr"
 
 

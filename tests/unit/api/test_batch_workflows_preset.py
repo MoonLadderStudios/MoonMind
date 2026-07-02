@@ -113,6 +113,7 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
                 "none",
                 "branch",
                 "pr",
+                "pr_with_merge_automation",
             ]
 
             # UI schema uses only registered widgets or advanced flags.

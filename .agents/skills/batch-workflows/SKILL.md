@@ -36,7 +36,7 @@ Progress" with a single batch run.
 - `repository` (string, optional): repository override when workflow context
   cannot infer it.
 - `publish_mode` (string, optional): advanced child publish override, `none`,
-  `branch`, or `pr`. Default `none`.
+  `branch`, `pr`, or `pr_with_merge_automation`. Default `none`.
 
 ## Workflow
 
@@ -69,7 +69,7 @@ Progress" with a single batch run.
    python3 .agents/skills/batch-workflows/bin/batch_workflows.py \
      --targets artifacts/batch-workflows-targets.json \
      --run-ref <skill:jira-verify|preset:jira-implement> \
-     --publish-mode <none|branch|pr> \
+     --publish-mode <none|branch|pr|pr_with_merge_automation> \
      --constraints-file <optional path to shared constraints> \
      --max-workflows <cap>
    ```
