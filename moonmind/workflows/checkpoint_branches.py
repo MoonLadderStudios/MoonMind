@@ -125,6 +125,8 @@ class CheckpointBranchGitBindingModel(BaseModel):
 
     product_branch_id: str = Field(..., alias="productBranchId")
     branch_turn_id: str | None = Field(None, alias="branchTurnId")
+    logical_step_id: str | None = Field(None, alias="logicalStepId")
+    idempotency_key: str = Field(..., alias="idempotencyKey")
     repository: str
     base_branch: str = Field(..., alias="baseBranch")
     base_commit: str | None = Field(None, alias="baseCommit")
@@ -226,6 +228,8 @@ def prepare_checkpoint_branch_git_binding(
     binding = CheckpointBranchGitBindingModel(
         productBranchId=model.product_branch_id,
         branchTurnId=model.branch_turn_id,
+        logicalStepId=model.logical_step_id,
+        idempotencyKey=model.idempotency_key,
         repository=model.repository,
         baseBranch=model.base_branch,
         baseCommit=model.base_commit,
@@ -259,6 +263,7 @@ def prepare_checkpoint_branch_git_binding(
         "workflowId": model.workflow_id,
         "productBranchId": model.product_branch_id,
         "branchTurnId": model.branch_turn_id,
+        "logicalStepId": model.logical_step_id,
         "sourceCheckpointRef": model.source_checkpoint_ref,
         "sourceCheckpointDigest": model.source_checkpoint_digest,
         "workspacePolicy": model.workspace_policy,
@@ -279,6 +284,7 @@ def prepare_checkpoint_branch_git_binding(
         "workflowId": model.workflow_id,
         "productBranchId": model.product_branch_id,
         "branchTurnId": model.branch_turn_id,
+        "logicalStepId": model.logical_step_id,
         "workspacePolicy": model.workspace_policy,
         "creationMode": model.creation_mode,
         "gitBinding": {
@@ -373,7 +379,8 @@ def _validate_workspace_isolation(
     if not isolated:
         raise CheckpointBranchGitBindingError(
             "workspace_policy_incompatible",
-            "repository-mutating checkpoint branches require git/worktree/provider isolation",
+            "repository-mutating checkpoint branches require "
+            "git/worktree/provider isolation",
         )
 
 
