@@ -92,6 +92,51 @@ def test_required_guard_sets_validate_assigned_literals(tmp_path: Path) -> None:
     assert "attempt" in findings[0].line
 
 
+def test_runtime_check_rejects_preset_task_copy_and_moonspec_spelling(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "api_service/data/presets/jira-breakdown.yaml",
+        "steps:\n"
+        "  - title: Create dependent Jira Orchestrate tasks\n"
+        "    instructions: Run downstream task creation for Moon Spec stories.\n",
+    )
+    _write(
+        tmp_path / "frontend/src/entrypoints/workflow-start.tsx",
+        'const label = "Moon Spec";\n',
+    )
+    _write(
+        tmp_path / "docs/Workflows/SkillAndPlanContracts.md",
+        "Broad Moon Spec breakdown writes story candidates.\n",
+    )
+    guard_terms = (
+        "BANNED_EXECUTION_RESPONSE_KEYS = {\n"
+        "    'attempt',\n"
+        "    'attempts',\n"
+        "    'stepAttemptId',\n"
+        "    'taskId',\n"
+        "    'task' + 'RunId',\n"
+        "    'taskStatus',\n"
+        "}\n"
+    )
+    schema_guard_terms = guard_terms.replace(
+        "BANNED_EXECUTION_RESPONSE_KEYS",
+        "BANNED_EXECUTION_SCHEMA_FIELDS",
+    )
+    _write(tmp_path / "tests/unit/api/test_executions_temporal.py", guard_terms)
+    _write(
+        tmp_path / "tests/contract/test_temporal_execution_api.py",
+        schema_guard_terms,
+    )
+
+    findings = verify_workflow_terminology.run("runtime", root=tmp_path)
+
+    assert {finding.rule for finding in findings} == {
+        "preset-public-downstream-task-copy",
+        "public-moonspec-spelling",
+    }
+
+
 def test_docs_check_allows_qualified_terms_and_rejects_unqualified_task(
     tmp_path: Path,
 ) -> None:

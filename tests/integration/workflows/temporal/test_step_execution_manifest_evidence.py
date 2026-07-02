@@ -285,7 +285,7 @@ async def test_terminal_manifest_aggregates_required_side_effect_groups(
         )
     workflow._mark_step_terminal(
         "publish",
-        status="succeeded",
+        status="completed",
         updated_at=now,
         summary="Published",
     )
@@ -295,7 +295,7 @@ async def test_terminal_manifest_aggregates_required_side_effect_groups(
         phase="terminal",
         updated_at=now,
         reason="initial_execution",
-        status="succeeded",
+        status="completed",
         terminal_disposition="accepted",
     )
 
@@ -467,7 +467,7 @@ async def test_terminal_manifest_projects_structured_memory_side_effects(
     )
     workflow._mark_step_terminal(
         "implement",
-        status="succeeded",
+        status="completed",
         updated_at=now,
         summary="Implemented",
     )
@@ -477,7 +477,7 @@ async def test_terminal_manifest_projects_structured_memory_side_effects(
         phase="terminal",
         updated_at=now,
         reason="initial_execution",
-        status="succeeded",
+        status="completed",
         terminal_disposition="accepted",
     )
 
@@ -632,7 +632,7 @@ async def test_repo_memory_write_projects_privileged_candidate_when_approved(
     )
     workflow._mark_step_terminal(
         "publish",
-        status="succeeded",
+        status="completed",
         updated_at=now,
         summary="Published",
     )
@@ -642,7 +642,7 @@ async def test_repo_memory_write_projects_privileged_candidate_when_approved(
         phase="terminal",
         updated_at=now,
         reason="initial_execution",
-        status="succeeded",
+        status="completed",
         terminal_disposition="accepted",
     )
 

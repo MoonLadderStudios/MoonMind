@@ -226,7 +226,7 @@ async def test_capture_all_checkpoint_kinds_as_compact_refs(tmp_path: Path) -> N
     cases = [
         ("git_commit", {"baseCommit": base_commit}, ("headCommit",)),
         ("git_patch", {"baseCommit": base_commit}, ("patchRef", "manifestRef")),
-        ("ephemeral_workspace_ref", {}, ("workspaceRef",)),
+        ("ephemeral_workspace_ref", {}, ("workspaceArtifactRef",)),
         ("worktree_archive", {}, ("archiveRef", "manifestRef")),
         ("external_state_ref", {}, ("externalStateRef",)),
     ]
@@ -246,6 +246,23 @@ async def test_capture_all_checkpoint_kinds_as_compact_refs(tmp_path: Path) -> N
             assert capture["workspace"][ref_name]
         rendered = json.dumps(capture, sort_keys=True)
         assert str(repo) not in rendered
+
+    external_capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "external_state_ref",
+            "externalStateRef": "artifact://omnigent/external-state",
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "idem-external-state-ref",
+        }
+    )
+    assert external_capture["status"] == "captured"
+    assert external_capture["workspace"]["kind"] == "external_state_ref"
+    external_payload = json.loads(
+        store.get_bytes(external_capture["workspace"]["externalStateRef"])
+    )
+    assert external_payload["sourceRef"] == "artifact://omnigent/external-state"
 
     archive_capture = await sandbox.workspace_capture_checkpoint(
         {
@@ -742,9 +759,94 @@ async def test_sandbox_checkpoint_writes_use_artifact_service_when_available(
         }
     )
 
-    assert capture["workspace"]["workspaceRef"] == "artifact-completed"
+    assert capture["workspace"]["workspaceArtifactRef"] == "artifact-completed"
     service.create.assert_awaited_once()
     service.write_complete.assert_awaited_once()
+
+
+async def test_workspace_apply_policy_rejects_artifact_backed_ephemeral_ref_as_path(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+    capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "ephemeral_workspace_ref",
+            "workspacePath": str(repo),
+            "workspaceRootRef": "artifact-workspace-root",
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "MM-1079:ephemeral-capture",
+        }
+    )
+    checkpoint_ref = _checkpoint_artifact(store, workspace=capture["workspace"])
+
+    policy = await sandbox.workspace_apply_policy(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "workspacePolicy": "continue_from_previous_execution",
+            "checkpointRef": checkpoint_ref,
+            "checkpoint": {},
+            "targetWorkspaceRef": str(root / "temporal_sandbox" / "target"),
+            "idempotencyKey": "MM-1079:ephemeral-apply",
+        }
+    )
+
+    assert policy["status"] == "rejected"
+    assert policy["failureCode"] == "workspace_incompatible"
+    assert "artifact-backed ephemeral workspace evidence" in policy["summary"]
+    diagnostic = json.loads(store.get_bytes(policy["diagnosticRefs"][-1]).decode())
+    assert diagnostic["checkpointKind"] == "ephemeral_workspace_ref"
+    assert diagnostic["providerSessionCorrelation"]["workspaceArtifactRef"] == (
+        capture["workspace"]["workspaceArtifactRef"]
+    )
+
+
+async def test_workspace_apply_policy_rejects_external_state_ref_with_diagnostics(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+    external_ref = store.put_bytes(
+        json.dumps(
+            {
+                "kind": "external_state_ref",
+                "sourceRef": "omnigent-session-123",
+            }
+        ).encode(),
+        content_type="application/json",
+        metadata={"artifact_kind": "checkpoint_external_state_ref"},
+    ).artifact_ref
+    checkpoint_ref = _checkpoint_artifact(
+        store,
+        workspace={
+            "kind": "external_state_ref",
+            "externalStateRef": external_ref,
+        },
+    )
+
+    policy = await sandbox.workspace_apply_policy(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "workspacePolicy": "continue_from_previous_execution",
+            "checkpointRef": checkpoint_ref,
+            "checkpoint": {},
+            "targetWorkspaceRef": str(root / "temporal_sandbox" / "target"),
+            "providerLeaseContextRef": "provider-lease-context",
+            "idempotencyKey": "MM-1079:external-state-apply",
+        }
+    )
+
+    assert policy["status"] == "rejected"
+    assert policy["failureCode"] == "workspace_incompatible"
+    assert "external provider restore bridge" in policy["summary"]
+    diagnostic = json.loads(store.get_bytes(policy["diagnosticRefs"][-1]).decode())
+    assert diagnostic["checkpointKind"] == "external_state_ref"
+    assert diagnostic["providerSessionCorrelation"]["externalStateRef"] == external_ref
 
 
 async def test_checkpoint_activity_failures_are_typed_and_secret_safe(

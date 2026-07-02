@@ -78,6 +78,12 @@ _JIRA_BREAKDOWN_IMPLEMENT_SLUG = "jira-breakdown-implement"
 _JIRA_BREAKDOWN_COMPOSITE_SLUGS = frozenset(
     {_JIRA_BREAKDOWN_ORCHESTRATE_SLUG, _JIRA_BREAKDOWN_IMPLEMENT_SLUG}
 )
+_GITHUB_ISSUE_BREAKDOWN_SLUGS = frozenset(
+    {
+        "github-issue-breakdown-implement",
+        "github-issue-breakdown-orchestrate",
+    }
+)
 _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS = frozenset(
     {
         _JIRA_BREAKDOWN_SLUG,
@@ -92,9 +98,13 @@ _JIRA_BREAKDOWN_SOURCE_INPUTS = (
     "source_issue_key",
     "feature_request",
 )
+_GITHUB_ISSUE_BREAKDOWN_SOURCE_INPUTS = (
+    "source_design_path",
+    "feature_request",
+)
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 _UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
-_NATIVE_BOOLEAN_TEMPLATE_PATTERN = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
+_NATIVE_SCALAR_TEMPLATE_PATTERN = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
 _SECRET_LIKE_KEY_PATTERN = re.compile(
     r"(authorization|cookie|password|secret|token|api[_-]?key|access[_-]?key)",
     re.IGNORECASE,
@@ -628,6 +638,7 @@ def _render_value(
     value: Any,
     *,
     variables: dict[str, Any],
+    key: str | None = None,
 ) -> Any:
     if isinstance(value, str):
         try:
@@ -641,17 +652,27 @@ def _render_value(
                 f"Template rendering failed: {exc}."
             ) from exc
         stripped = rendered.strip()
-        if _NATIVE_BOOLEAN_TEMPLATE_PATTERN.match(value.strip()):
+        if _NATIVE_SCALAR_TEMPLATE_PATTERN.match(value.strip()):
             lowered = stripped.lower()
             if lowered in {"true", "false"}:
                 return lowered == "true"
+            if key == "moonSpecRemediationMaxAttempts" and re.fullmatch(
+                r"[+-]?\d+",
+                stripped,
+            ):
+                return int(stripped)
         return stripped
     if isinstance(value, list):
         return [_render_value(env, item, variables=variables) for item in value]
     if isinstance(value, dict):
         return {
-            str(key): _render_value(env, item, variables=variables)
-            for key, item in value.items()
+            str(item_key): _render_value(
+                env,
+                item,
+                variables=variables,
+                key=str(item_key),
+            )
+            for item_key, item in value.items()
         }
     return value
 
@@ -678,24 +699,32 @@ def _preset_step_enabled(value: Any) -> bool:
         return False
     return True
 
-def _validate_jira_breakdown_source_inputs(
+def _validate_breakdown_source_inputs(
     *,
     slug: str,
     inputs: Mapping[str, Any],
 ) -> None:
-    if slug not in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
+    if slug in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
+        source_inputs = _JIRA_BREAKDOWN_SOURCE_INPUTS
+        provider_label = "Jira"
+        source_message = (
+            "Provide a Source Document Path, Source Jira Issue Key, "
+            "or Workflow Instructions."
+        )
+    elif slug in _GITHUB_ISSUE_BREAKDOWN_SLUGS:
+        source_inputs = _GITHUB_ISSUE_BREAKDOWN_SOURCE_INPUTS
+        provider_label = "GitHub issue"
+        source_message = "Provide a Source Document Path or Workflow Instructions."
+    else:
         return
-    if any(str(inputs.get(name) or "").strip() for name in _JIRA_BREAKDOWN_SOURCE_INPUTS):
+    if any(str(inputs.get(name) or "").strip() for name in source_inputs):
         return
     raise PresetValidationError(
-        "Jira breakdown presets require a source input.",
+        f"{provider_label} breakdown presets require a source input.",
         errors=[
             {
                 "path": "preset.inputs",
-                "message": (
-                    "Provide a Source Document Path, Source Jira Issue Key, "
-                    "or Workflow Instructions."
-                ),
+                "message": source_message,
                 "code": "required",
                 "recoverable": True,
             }
@@ -997,6 +1026,18 @@ def _apply_contextual_input_overrides(
         annotations=annotations,
         submitted=dict(submitted),
     )
+
+    if slug == _BATCH_WORKFLOWS_SLUG:
+        repository = _repository_from_context(context)
+        schema_defaults = _input_schema_defaults_by_name(inputs_schema)
+        submitted_repository = str(adjusted.get("repository") or "").strip()
+        schema_repository = str(schema_defaults.get("repository", "")).strip()
+        if (
+            repository
+            and (not submitted_repository or submitted_repository == schema_repository)
+        ):
+            adjusted["repository"] = repository
+        return adjusted
 
     if slug not in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
         return adjusted
@@ -2082,7 +2123,7 @@ class PresetCatalogService:
             submitted=submitted_inputs,
             resolved=validated_inputs,
         )
-        _validate_jira_breakdown_source_inputs(
+        _validate_breakdown_source_inputs(
             slug=template.slug,
             inputs=validated_inputs,
         )

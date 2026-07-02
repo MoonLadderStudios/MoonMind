@@ -433,7 +433,7 @@ Representative recovery checkpoint artifact:
     {
       "logicalStepId": "apply-patch",
       "order": 3,
-      "status": "succeeded",
+      "status": "completed",
       "sourceExecutionOrdinal": 1,
       "outputRefs": {
         "outputSummary": "art_step_summary",

@@ -1863,7 +1863,7 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if name == "story.create_jira_issues":
         return {
             "name": name,
-            "description": "Create Jira issues from Moon Spec story breakdown output.",
+            "description": "Create Jira issues from MoonSpec story breakdown output.",
             "inputs": {
                 "schema": {
                     "type": "object",
@@ -1902,7 +1902,7 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if name == "story.create_github_issues":
         return {
             "name": name,
-            "description": "Create GitHub issues from Moon Spec story breakdown output.",
+            "description": "Create GitHub issues from MoonSpec story breakdown output.",
             "inputs": {
                 "schema": {
                     "type": "object",
@@ -3027,12 +3027,40 @@ class TemporalSandboxActivities:
             if isinstance(request, WorkspaceCheckpointCaptureInput)
             else WorkspaceCheckpointCaptureInput.model_validate(request)
         )
+        pull_auth = self._pull_auth_diagnostics(model.pull_auth_context_ref)
+        provider_refs = self._provider_lease_refs(model.provider_lease_context_ref)
+
+        if model.kind == "external_state_ref":
+            source_ref = model.external_state_ref or model.workspace_root_ref or ""
+            external_state_ref = await self._put_checkpoint_bytes(
+                _json_bytes(
+                    {
+                        "kind": "external_state_ref",
+                        "sourceRef": source_ref,
+                        "idempotencyKey": model.idempotency_key,
+                        "createdAt": datetime.now(UTC).isoformat(),
+                    }
+                ),
+                content_type="application/json",
+                metadata={"artifact_kind": "checkpoint_external_state_ref"},
+            )
+            result = WorkspaceCheckpointCaptureResult(
+                status="captured",
+                workspace=WorkspaceCheckpointEvidenceModel(
+                    kind="external_state_ref",
+                    externalStateRef=external_state_ref,
+                    createdAt=datetime.now(UTC),
+                ),
+                summary="external_state_ref checkpoint captured",
+                pullAuth=pull_auth,
+                providerLeaseRefs=provider_refs,
+            )
+            return result.model_dump(by_alias=True, mode="json")
+
         workspace = self._resolve_workspace(
             model.workspace_path or model.workspace_root_ref or "",
             must_exist=True,
         )
-        pull_auth = self._pull_auth_diagnostics(model.pull_auth_context_ref)
-        provider_refs = self._provider_lease_refs(model.provider_lease_context_ref)
 
         if model.kind == "worktree_archive" and (
             self._workspace_has_traversal(workspace)
@@ -3151,25 +3179,7 @@ class TemporalSandboxActivities:
             )
             return WorkspaceCheckpointEvidenceModel(
                 kind="ephemeral_workspace_ref",
-                workspaceRef=workspace_ref,
-                createdAt=datetime.now(UTC),
-            )
-        if model.kind == "external_state_ref":
-            external_state_ref = await self._put_checkpoint_bytes(
-                _json_bytes(
-                    {
-                        "kind": "external_state_ref",
-                        "sourceRef": model.workspace_root_ref,
-                        "idempotencyKey": model.idempotency_key,
-                        "createdAt": datetime.now(UTC).isoformat(),
-                    }
-                ),
-                content_type="application/json",
-                metadata={"artifact_kind": "checkpoint_external_state_ref"},
-            )
-            return WorkspaceCheckpointEvidenceModel(
-                kind="external_state_ref",
-                externalStateRef=external_state_ref,
+                workspaceArtifactRef=workspace_ref,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
@@ -3382,6 +3392,18 @@ class TemporalSandboxActivities:
         target: Path,
     ) -> None:
         if policy == "continue_from_previous_execution":
+            if workspace_payload.get("kind") == "external_state_ref":
+                raise TemporalActivityRuntimeError(
+                    "external_state_ref restoration is unsupported without an "
+                    "external provider restore bridge"
+                )
+            if workspace_payload.get("kind") == "ephemeral_workspace_ref" and str(
+                workspace_payload.get("workspaceArtifactRef") or ""
+            ).strip():
+                raise TemporalActivityRuntimeError(
+                    "artifact-backed ephemeral workspace evidence cannot be "
+                    "restored as a local sandbox path"
+                )
             workspace_ref = str(workspace_payload.get("workspaceRef") or "").strip()
             if workspace_ref:
                 source = self._resolve_workspace(workspace_ref, must_exist=True)
@@ -3402,6 +3424,11 @@ class TemporalSandboxActivities:
                 await self._checkout_commit_to_workspace(workspace_payload, target)
                 return
             if workspace_payload.get("kind") == "ephemeral_workspace_ref":
+                if str(workspace_payload.get("workspaceArtifactRef") or "").strip():
+                    raise TemporalActivityRuntimeError(
+                        "artifact-backed ephemeral workspace evidence cannot be "
+                        "restored as a local sandbox path"
+                    )
                 source = self._workspace_ref_source(workspace_payload)
                 self._replace_workspace_tree(source, target)
                 return
@@ -3597,6 +3624,7 @@ class TemporalSandboxActivities:
                 summary=summary,
                 checkpoint=checkpoint,
                 target_workspace_ref=target_workspace_ref or model.target_workspace_ref,
+                provider_refs=provider_refs,
             )
         )
         result = WorkspacePolicyApplyResult(
@@ -3618,20 +3646,37 @@ class TemporalSandboxActivities:
         summary: str,
         checkpoint: Mapping[str, Any] | None,
         target_workspace_ref: str | None,
+        provider_refs: list[str],
     ) -> str:
         source = checkpoint.get("source") if isinstance(checkpoint, Mapping) else None
         if not isinstance(source, Mapping):
             source = model.identity.model_dump(by_alias=True, mode="json")
+        workspace = (
+            checkpoint.get("workspace") if isinstance(checkpoint, Mapping) else None
+        )
+        if not isinstance(workspace, Mapping):
+            workspace = {}
+        checkpoint_kind = workspace.get("kind")
+        safe_correlation = {
+            "externalStateRef": workspace.get("externalStateRef"),
+            "workspaceArtifactRef": workspace.get("workspaceArtifactRef"),
+            "providerLeaseRefs": provider_refs,
+        }
+        safe_correlation = {
+            key: value for key, value in safe_correlation.items() if value
+        }
         payload = {
             "status": "blocked",
             "failureCode": failure_code,
             "summary": summary,
+            "checkpointKind": checkpoint_kind,
             "logicalStepId": source.get("logicalStepId"),
             "sourceWorkflowId": source.get("workflowId"),
             "sourceRunId": source.get("runId"),
             "checkpointRef": model.checkpoint_ref,
             "workspacePolicy": model.workspace_policy,
             "targetWorkspaceRef": target_workspace_ref,
+            "providerSessionCorrelation": safe_correlation,
             "recommendedNextAction": (
                 "Inspect checkpoint evidence and select a compatible workspace "
                 "policy before reattempting the Step Execution."
@@ -9320,6 +9365,16 @@ class TemporalAgentRuntimeActivities:
     @staticmethod
     def _parse_git_status_records(status_output: bytes) -> tuple[tuple[str, str], ...]:
         """Extract ``(status, path)`` records from `git status --porcelain=v1 -z`."""
+        entries = TemporalAgentRuntimeActivities._parse_git_status_record_entries(
+            status_output
+        )
+        return tuple((status, path) for status, path, _is_source_path in entries)
+
+    @staticmethod
+    def _parse_git_status_record_entries(
+        status_output: bytes,
+    ) -> tuple[tuple[str, str, bool], ...]:
+        """Extract Git status records and mark rename/copy source paths."""
 
         def _decode_path(path_bytes: bytes) -> str:
             return os.fsdecode(path_bytes)
@@ -9329,7 +9384,7 @@ class TemporalAgentRuntimeActivities:
             return ()
 
         entries = raw_output.split(b"\0")
-        records: list[tuple[str, str]] = []
+        records: list[tuple[str, str, bool]] = []
         index = 0
         while index < len(entries):
             record = entries[index]
@@ -9343,7 +9398,7 @@ class TemporalAgentRuntimeActivities:
             path_bytes = record[3:]
             if not path_bytes:
                 raise ValueError(f"missing path in git status record: {record!r}")
-            records.append((status, _decode_path(path_bytes)))
+            records.append((status, _decode_path(path_bytes), False))
 
             if "R" in status or "C" in status:
                 index += 1
@@ -9356,14 +9411,21 @@ class TemporalAgentRuntimeActivities:
                     raise ValueError(
                         f"missing original path for git rename/copy record: {record!r}"
                     )
-                records.append((status, _decode_path(original_path_bytes)))
+                records.append((status, _decode_path(original_path_bytes), True))
 
             index += 1
 
-        deduped: dict[str, tuple[str, str]] = {}
-        for status, path in records:
-            deduped.setdefault(path, (status, path))
+        deduped: dict[str, tuple[str, str, bool]] = {}
+        for status, path, is_source_path in records:
+            deduped.setdefault(path, (status, path, is_source_path))
         return tuple(deduped.values())
+
+    @staticmethod
+    def _git_status_needs_worktree_stage(status: str) -> bool:
+        """Return True when a porcelain status has unstaged worktree changes."""
+        if len(status) != 2 or status in {"??", "!!"}:
+            return False
+        return status[1] != " "
 
     @staticmethod
     def _should_exclude_publish_path(
@@ -9886,7 +9948,11 @@ class TemporalAgentRuntimeActivities:
             workspace_path = Path(workspace).expanduser().resolve()
             tracked_paths: list[str] = []
             untracked_paths: list[str] = []
-            for status, path in self._parse_git_status_records(status_stdout):
+            for (
+                status,
+                path,
+                is_source_path,
+            ) in self._parse_git_status_record_entries(status_stdout):
                 if self._should_exclude_publish_path(
                     path,
                     workspace=workspace_path,
@@ -9894,15 +9960,17 @@ class TemporalAgentRuntimeActivities:
                     continue
                 if status == "??":
                     untracked_paths.append(path)
-                elif status != "!!":
+                elif (
+                    status != "!!"
+                    and not is_source_path
+                    and self._git_status_needs_worktree_stage(status)
+                ):
                     tracked_paths.append(path)
         except ValueError as exc:
             return {
                 "push_status": "failed",
                 "push_error": f"could not parse workspace changes: {exc}",
             }
-        if not tracked_paths and not untracked_paths:
-            return {}
 
         async def _stage_paths(
             *,
@@ -9960,17 +10028,32 @@ class TemporalAgentRuntimeActivities:
                 "push_error": f"could not inspect staged workspace changes: {detail}",
             }
 
-        if not staged_stdout.decode("utf-8", errors="replace").strip():
+        staged_paths = [
+            path.strip()
+            for path in staged_stdout.decode("utf-8", errors="replace").splitlines()
+            if path.strip()
+        ]
+        publishable_staged_paths = [
+            path
+            for path in staged_paths
+            if not self._should_exclude_publish_path(path, workspace=workspace_path)
+        ]
+        if not publishable_staged_paths:
             return {}
 
         normalized_message = (
             str(commit_message).strip()
             if isinstance(commit_message, str) and commit_message.strip()
-            else f"MoonMind task result for run {run_id}"
+            else f"MoonMind workflow result for run {run_id}"
         )
         commit_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(
-                workspace, "commit", "-m", normalized_message,
+                workspace,
+                "commit",
+                "-m",
+                normalized_message,
+                "--",
+                *publishable_staged_paths,
             ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

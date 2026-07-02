@@ -66,9 +66,9 @@ MoonSpec tasks turn one declarative design-backed spec into an executable implem
 
 1. **Setup**: Run `{SCRIPT}` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
 
-2. **Load design documents**: Read from FEATURE_DIR:
+2. **Load design documents**: Read from FEATURE_DIR and repo guidance:
    - **Required**: plan.md (tech stack, libraries, structure), spec.md (single user story)
-   - **Required**: `.specify/memory/constitution.md` for project constraints and test discipline
+   - **If present**: `AGENTS.md` for project principles, constraints, and test discipline
    - **Optional**: data-model.md (entities), contracts/ (interface contracts), research.md (decisions), quickstart.md (test scenarios), `specs/breakdown.md` (source design coverage context)
    - Note: Not all projects have all documents. Generate tasks based on what's available.
 
@@ -76,7 +76,7 @@ MoonSpec tasks turn one declarative design-backed spec into an executable implem
    - Load plan.md and extract tech stack, libraries, project structure, unit testing tools, and integration testing tools
    - Load spec.md and extract the preserved `**Input**`, single user story, goal, independent test, acceptance scenarios, edge cases, functional requirements, success criteria, assumptions, and source design mappings such as `DESIGN-REQ-*` or `DOC-REQ-*`
    - Confirm spec.md contains exactly one independently testable user story; if it contains multiple stories, STOP and tell the user to use `/moonspec.breakdown` for broad designs or regenerate a one-story spec with `/moonspec.specify`
-   - Build a traceability inventory covering each `FR-*`, acceptance scenario, edge case, measurable success criterion, and in-scope source design mapping
+   - Build a traceability inventory covering each `FR-*`, acceptance scenario, edge case, measurable success criterion, in-scope source design mapping, and relevant AGENTS.md principle/test-discipline requirement
    - If data-model.md exists: Extract entities needed by the story
    - If contracts/ exists: Map interface contracts to the story and to integration/contract test tasks
    - If research.md exists: Extract decisions for setup tasks
@@ -221,6 +221,11 @@ Every task MUST strictly follow this format:
    - Each source design workflow or public boundary → at least one integration test task
    - Each source design rule, invariant, or edge case → at least one unit test task where applicable
    - Explicit non-goals and constraints → guardrail tests, validation tasks, or documented scope checks when they affect implementation
+
+6. **From AGENTS.md Principles And Test Discipline**:
+   - Each relevant principle conflict → a visible mitigation or scope decision in tasks.md
+   - Each testing-discipline requirement → concrete unit, integration, or validation tasks
+   - Repo-specific docs/source-of-truth requirements → concrete documentation or reconciliation tasks when they apply
 
 ### Phase Structure
 

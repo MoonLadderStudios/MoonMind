@@ -8,40 +8,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.statuses.step_execution import (
+    StepExecutionReason,
+    StepExecutionStatus,
+    StepExecutionTerminalDisposition,
+)
+
 STEP_EXECUTION_CONTENT_TYPE = "application/vnd.moonmind.step-execution+json;version=1"
 
-StepExecutionReason = Literal[
-    "initial_execution",
-    "quality_gate_failed",
-    "tests_failed",
-    "runtime_recovered",
-    "recover_from_failed_step",
-    "remediation_context",
-    "operator_requested",
-    "dependency_invalidated",
-    "policy_revalidation",
-]
-StepExecutionStatus = Literal[
-    "pending",
-    "preparing",
-    "running",
-    "checking",
-    "succeeded",
-    "failed",
-    "blocked",
-    "canceled",
-    "superseded",
-]
-StepExecutionTerminalDisposition = Literal[
-    "accepted",
-    "retryable",
-    "blocked",
-    "needs_human",
-    "discarded",
-    "superseded",
-    "failed_unrecoverable",
-    "failed_with_remaining_work",
-]
 MemoryEffectState = Literal[
     "proposed",
     "accepted_for_run_context",

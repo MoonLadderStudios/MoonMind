@@ -575,6 +575,18 @@ describe('Dashboard shared entry', () => {
     expect(svgBlock).toContain('height: 0.8125rem');
   });
 
+  it('keeps workflow detail step timeline icons large inside their status circles', async () => {
+    const iconBlock = cssRuleBlock(dashboardCss, '.step-tl-icon');
+    expect(iconBlock).toContain('width: 1.35rem');
+    expect(iconBlock).toContain('height: 1.35rem');
+    expect(iconBlock).toContain('border-radius: 50%');
+
+    const svgBlock = cssRuleBlock(dashboardCss, '.step-tl-icon svg');
+    expect(svgBlock).toContain('width: 1.05rem');
+    expect(svgBlock).toContain('height: 1.05rem');
+    expect(svgBlock).toContain('stroke-width: 2.4');
+  });
+
   it('keeps checkbox label hit areas bounded to visible control text', async () => {
     const checkboxLabelBlock = cssRuleBlock(dashboardCss, 'label.checkbox');
 
@@ -876,9 +888,11 @@ describe('Dashboard shared entry', () => {
   it('enforces MM-429 reduced-motion suppression for live and premium effects', async () => {
     const runningIconBlock = cssRuleBlockMatching(
       dashboardCss,
-      (rule) =>
-        normalizeCssSelector(rule.selector) === '.step-tl-icon.step-icon-running' &&
-        rule.nodes.some((node) => node.type === 'decl' && node.toString() === 'animation: none !important'),
+      (rule) => {
+        const selectors = rule.selector.split(',').map(normalizeCssSelector);
+        return selectors.includes('.step-tl-icon.status-running') &&
+          rule.nodes.some((node) => node.type === 'decl' && node.toString() === 'animation: none !important');
+      },
     );
     expect(runningIconBlock).toContain('animation: none !important');
     expect(runningIconBlock).toContain('opacity: 1');
@@ -1010,7 +1024,7 @@ describe('Dashboard shared entry', () => {
 
     const waitBlock = cssRuleBlocks(
       dashboardCss,
-      '.status-awaiting_action, .status-waiting, .status-awaiting-dependencies, .status-awaiting-external',
+      '.status-awaiting-action, .status-waiting, .status-awaiting-dependencies, .status-awaiting-external',
     ).join('\n');
     expect(dashboardCss).toContain('--mm-status-waiting: 146 64 14');
     expect(dashboardCss).toContain('--mm-status-waiting: 250 204 21');
@@ -1027,7 +1041,7 @@ describe('Dashboard shared entry', () => {
     expect(cssRuleBlock(dashboardCss, '.status-canceled')).toContain(
       'color: rgb(var(--mm-status-canceled, 249 115 22))',
     );
-    expect(cssRuleBlock(dashboardCss, '.status-no-commit')).toContain('color: #159376');
+    expect(cssRuleBlock(dashboardCss, '.status-no-commit')).toContain('color: rgb(var(--mm-muted))');
     expect(cssRuleBlock(dashboardCss, '.status-running, .status-running.is-executing')).toContain(
       'color: rgb(var(--mm-accent-2))',
     );

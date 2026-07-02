@@ -279,6 +279,65 @@ async def test_update_github_issue_status_blocks_start_for_blocked_assessment(
     assert result.outputs["assessmentVerdict"] == "BLOCKED"
     assert service.token_requests == []
 
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_blocks_code_review_without_verification_artifact(
+    tmp_path,
+):
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "verificationArtifactPath": str(tmp_path / "missing-verify.json"),
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert "verification artifact" in result.outputs["summary"]
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_blocks_code_review_until_fully_implemented(
+    tmp_path,
+):
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    verify_artifact = tmp_path / "verify.json"
+    verify_artifact.write_text('{"verdict": "ADDITIONAL_WORK_NEEDED"}', encoding="utf-8")
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "verificationArtifactPath": str(verify_artifact),
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["verificationVerdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert service.token_requests == []
+
+
 @pytest.mark.asyncio
 async def test_create_jira_issues_from_inline_story_breakdown():
     service = _FakeJiraService()
@@ -622,6 +681,59 @@ async def test_create_github_issues_narrows_partial_story_to_remaining_work():
 
 
 @pytest.mark.asyncio
+async def test_create_github_issues_uses_story_output_github_and_previous_artifact():
+    service = _FakeGitHubService()
+    artifact_reads: list[str] = []
+
+    async def read_artifact(ref: str) -> dict[str, Any]:
+        artifact_reads.append(ref)
+        return {
+            "source": {"referencePath": "docs/Designs/GitHubBreakdown.md"},
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "Artifact GitHub story",
+                    "description": "Create this from a previous breakdown artifact.",
+                    "sourceReference": {
+                        "claimIds": ["claim:github-breakdown"],
+                        "sourceIssueKey": "TargetOrg/TargetRepo#77",
+                    },
+                }
+            ],
+        }
+
+    result = await create_github_issues_from_stories(
+        {
+            "storyOutput": {
+                "github": {
+                    "repository": "TargetOrg/TargetRepo",
+                    "traceability": {"sourceIssueKey": "TargetOrg/TargetRepo#77"},
+                },
+            },
+            "previousOutputs": {
+                "storyOutput": {
+                    "storyBreakdownArtifactRef": "art_previous_github_breakdown"
+                }
+            },
+        },
+        github_service_factory=lambda: service,
+        artifact_reader=read_artifact,
+    )
+
+    github = result.outputs["github"]
+    assert result.outputs["storyOutput"]["status"] == "github_created"
+    assert github["issueMappings"][0]["repository"] == "TargetOrg/TargetRepo"
+    assert github["issueMappings"][0]["sourceDesignPath"] == (
+        "docs/Designs/GitHubBreakdown.md"
+    )
+    assert artifact_reads == ["art_previous_github_breakdown"]
+    assert service.create_issue_requests[0]["repo"] == "TargetOrg/TargetRepo"
+    assert "Source Issue: TargetOrg/TargetRepo#77" in service.create_issue_requests[0][
+        "body"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_create_github_issue_workflows_from_issue_mappings():
     creator = _FakeExecutionCreator()
 
@@ -685,6 +797,81 @@ async def test_create_github_issue_workflows_from_issue_mappings():
     assert workflow["inputs"]["github_issue_ref"] == "MoonLadderStudios/MoonMind#11"
     assert "Source issue: MM-1063." in workflow["instructions"]
     assert "Source canonical claim IDs: DESIGN-REQ-007." in workflow["instructions"]
+
+
+@pytest.mark.asyncio
+async def test_create_github_issue_workflows_mark_remaining_after_failure():
+    creator = _FakeExecutionCreator(fail_at=2)
+
+    result = await create_github_issue_implement_workflows_from_issue_mappings(
+        {
+            "github": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-001",
+                        "storyIndex": 1,
+                        "summary": "First",
+                        "issueNumber": "101",
+                    },
+                    {
+                        "storyId": "STORY-002",
+                        "storyIndex": 2,
+                        "summary": "Second",
+                        "issueNumber": "102",
+                    },
+                    {
+                        "storyId": "STORY-003",
+                        "storyIndex": 3,
+                        "summary": "Third",
+                        "issueNumber": "103",
+                    },
+                ],
+            },
+            "githubOrchestration": {
+                "task": {"repository": "MoonLadderStudios/MoonMind"},
+                "traceability": {"sourceIssueKey": "MM-1063"},
+            },
+        },
+        execution_creator=creator,
+    )
+
+    orchestration = result.outputs["githubWorkflowOrchestration"]
+    assert orchestration["status"] == "partial"
+    assert orchestration["createdWorkflowCount"] == 1
+    assert orchestration["failures"][0]["storyId"] == "STORY-002"
+    assert orchestration["failures"][0]["errorCode"] == "workflow_creation_failed"
+    assert orchestration["skippedStories"] == [
+        {
+            "storyId": "STORY-003",
+            "storyIndex": 3,
+            "repository": "MoonLadderStudios/MoonMind",
+            "githubIssueNumber": "103",
+            "errorCode": "dependency_not_created",
+            "message": "Earlier downstream workflow creation failed.",
+        }
+    ]
+
+
+def test_github_downstream_workflow_payload_propagates_fallback_repository():
+    _title, task = story_tools._github_downstream_workflow_payload(
+        mapping={
+            "storyId": "STORY-001",
+            "summary": "Fallback repo issue",
+            "issueNumber": "101",
+        },
+        task_payload={"repository": "MoonLadderStudios/MoonMind"},
+        traceability={},
+        depends_on=[],
+        source_issue_key="",
+        target_preset="implement",
+    )
+
+    assert task["inputs"]["github_issue"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "number": 101,
+        "title": "Fallback repo issue",
+    }
+    assert task["inputs"]["github_issue_ref"] == "MoonLadderStudios/MoonMind#101"
 
 
 @pytest.mark.asyncio
@@ -2600,7 +2787,10 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
     assert orchestration["status"] == "completed"
     assert orchestration["storyCount"] == 3
     assert orchestration["createdTaskCount"] == 3
+    assert orchestration["createdWorkflowCount"] == 3
     assert orchestration["dependencyCount"] == 2
+    assert orchestration["workflows"] == orchestration["tasks"]
+    assert orchestration["workflowMappings"] == orchestration["tasks"]
     assert [task["jiraIssueKey"] for task in orchestration["tasks"]] == [
         "MM-501",
         "MM-502",
@@ -2850,8 +3040,10 @@ async def test_create_jira_orchestrate_tasks_handles_one_and_zero_story_results(
 
     assert one.outputs["jiraOrchestration"]["status"] == "completed"
     assert one.outputs["jiraOrchestration"]["createdTaskCount"] == 1
+    assert one.outputs["jiraOrchestration"]["createdWorkflowCount"] == 1
     assert one.outputs["jiraOrchestration"]["dependencyCount"] == 0
     assert one.outputs["jiraOrchestration"]["tasks"][0]["dependsOn"] == []
+    assert one.outputs["jiraOrchestration"]["workflows"][0]["dependsOn"] == []
 
     zero = await create_jira_orchestrate_tasks_from_issue_mappings(
         {"jira": {"issueMappings": []}, "traceability": {"sourceIssueKey": "MM-404"}},
@@ -2859,7 +3051,11 @@ async def test_create_jira_orchestrate_tasks_handles_one_and_zero_story_results(
     )
 
     assert zero.outputs["jiraOrchestration"]["status"] == "no_downstream_tasks"
+    assert zero.outputs["jiraOrchestration"]["workflowStatus"] == (
+        "no_downstream_workflows"
+    )
     assert zero.outputs["jiraOrchestration"]["createdTaskCount"] == 0
+    assert zero.outputs["jiraOrchestration"]["createdWorkflowCount"] == 0
     assert zero.outputs["jiraOrchestration"]["dependencyCount"] == 0
 
 @pytest.mark.asyncio
@@ -2949,7 +3145,10 @@ async def test_create_jira_implement_tasks_targets_jira_implement_preset():
     orchestration = result.outputs["jiraOrchestration"]
     assert orchestration["status"] == "completed"
     assert orchestration["createdTaskCount"] == 2
+    assert orchestration["createdWorkflowCount"] == 2
     assert orchestration["dependencyCount"] == 1
+    assert orchestration["workflows"] == orchestration["tasks"]
+    assert orchestration["workflowMappings"] == orchestration["tasks"]
     assert orchestration["tasks"][0]["dependsOn"] == []
     assert orchestration["tasks"][1]["dependsOn"] == ["mm:story-1"]
 
@@ -2957,7 +3156,7 @@ async def test_create_jira_implement_tasks_targets_jira_implement_preset():
     assert first_request["idempotency_key"] == (
         "jira-implement:MM-404:STORY-001:MM-501"
     )
-    assert "Jira Implement task for MM-501" in first_request["summary"]
+    assert "Jira Implement workflow for MM-501" in first_request["summary"]
     first_task = first_request["initial_parameters"]["workflow"]
     assert first_task["taskTemplate"] == {
         "slug": "jira-implement",
@@ -3189,7 +3388,10 @@ async def test_create_document_update_tasks_from_inline_paths():
     assert orchestration["status"] == "completed"
     assert orchestration["documentCount"] == 2
     assert orchestration["createdTaskCount"] == 2
+    assert orchestration["createdWorkflowCount"] == 2
     assert orchestration["dependencyCount"] == 1
+    assert orchestration["workflows"] == orchestration["tasks"]
+    assert orchestration["workflowMappings"] == orchestration["tasks"]
 
     first = orchestration["tasks"][0]
     assert first["documentPath"] == "/docs/readme.md"
@@ -3237,6 +3439,7 @@ async def test_create_document_update_tasks_from_previous_outputs():
 
     assert result.status == "COMPLETED"
     assert result.outputs["documentUpdateOrchestration"]["createdTaskCount"] == 1
+    assert result.outputs["documentUpdateOrchestration"]["createdWorkflowCount"] == 1
     assert creator.requests[0]["initial_parameters"]["workflow"]["inputs"]["document_path"] == "/docs/guide.md"
 
 
@@ -3249,7 +3452,11 @@ async def test_create_document_update_tasks_handles_empty_paths():
 
     assert result.status == "COMPLETED"
     assert result.outputs["documentUpdateOrchestration"]["status"] == "no_downstream_tasks"
+    assert result.outputs["documentUpdateOrchestration"]["workflowStatus"] == (
+        "no_downstream_workflows"
+    )
     assert result.outputs["documentUpdateOrchestration"]["createdTaskCount"] == 0
+    assert result.outputs["documentUpdateOrchestration"]["createdWorkflowCount"] == 0
 
 
 @pytest.mark.asyncio
@@ -3278,6 +3485,7 @@ async def test_create_document_update_tasks_reports_partial_failures():
     orchestration = result.outputs["documentUpdateOrchestration"]
     assert orchestration["status"] == "partial"
     assert orchestration["createdTaskCount"] == 1
+    assert orchestration["createdWorkflowCount"] == 1
     assert orchestration["dependencyCount"] == 0
     assert orchestration["failures"][0]["documentPath"] == "/docs/b.md"
     assert orchestration["failures"][0]["errorCode"] == "task_creation_failed"

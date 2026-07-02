@@ -2289,8 +2289,10 @@ def test_record_execution_context_summarizes_trusted_jira_downstream_outputs(
             "outputs": {
                 "jiraOrchestration": {
                     "status": "no_downstream_tasks",
+                    "workflowStatus": "no_downstream_workflows",
                     "storyCount": 7,
                     "createdTaskCount": 0,
+                    "createdWorkflowCount": 0,
                     "dependencyCount": 0,
                     "failures": [
                         {
@@ -2305,8 +2307,8 @@ def test_record_execution_context_summarizes_trusted_jira_downstream_outputs(
 
     assert mock_run_workflow._last_step_id == "create-implement-tasks"
     assert mock_run_workflow._last_step_summary == (
-        "Jira downstream task creation no_downstream_tasks "
-        "(createdTasks=0; stories=7; dependencies=0; "
+        "Jira downstream workflow creation no_downstream_workflows "
+        "(createdWorkflows=0; stories=7; dependencies=0; "
         "firstFailure=task_creation_failed: Missing required template input "
         "'jira_issue_key')."
     )
@@ -2453,6 +2455,31 @@ def test_moonspec_verify_gate_detects_remaining_remediation_budget(
     assert not mock_run_workflow._has_remaining_moonspec_remediation_step(
         ordered_nodes=ordered_nodes,
         current_index=1,
+    )
+
+
+def test_moonspec_verify_gate_detects_issue_implement_remediation_role(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    ordered_nodes = [
+        {
+            "id": "verify-1",
+            "inputs": {
+                "title": "Verify implementation",
+                "selectedSkill": "moonspec-verify",
+            },
+        },
+        {
+            "id": "remediate-1",
+            "annotations": {"issueImplementRole": "moonspec-remediation"},
+            "skill": {"id": "auto"},
+            "inputs": {"title": "Remediate verification gaps"},
+        },
+    ]
+
+    assert mock_run_workflow._has_remaining_moonspec_remediation_step(
+        ordered_nodes=ordered_nodes,
+        current_index=0,
     )
 
 

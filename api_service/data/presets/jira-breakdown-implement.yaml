@@ -1,6 +1,6 @@
 slug: jira-breakdown-implement
 title: Breakdown and Jira Implement
-description: Break a preferred source input into stories, create Jira issues, then create dependent Jira Implement tasks for each generated issue.
+description: Break a preferred source input into stories, create Jira issues, then create dependent Jira Implement workflow executions for each generated issue.
 scope: global
 tags:
   - jira
@@ -13,7 +13,7 @@ requiredCapabilities:
 annotations:
   sourceSkill: jira-breakdown
   jiraWorkflow: breakdown-to-dependent-implement
-  output: dependent-jira-implement-tasks
+  output: dependent-jira-implement-workflows
 inputs:
   - name: feature_request
     label: Workflow Instructions
@@ -110,11 +110,11 @@ steps:
       Use story-reconcile-implementation to compare the generated MoonSpec story breakdown against the current repository implementation before any Jira issue creation occurs.
 
       Read the runtime-provided story breakdown JSON path and rewrite that same JSON handoff with implementationStatus and jiraCreation fields for every story.
-      Mark fully implemented stories with jiraCreation.action = "skip" so no Jira issue or downstream Jira Implement task is created for completed work.
+      Mark fully implemented stories with jiraCreation.action = "skip" so no Jira issue or downstream Jira Implement workflow execution is created for completed work.
       For partially implemented stories, preserve the original story scope and add remainingWork so Jira tracks only the unmet requirements.
       Mark unverifiable stories with jiraCreation.action = "manual_review" so deterministic Jira creation will not create implementation work automatically.
       Write the reconciliation report to the runtime-provided markdown breakdown path when available.
-      Do not create Jira issues, do not create implementation tasks, and do not implement code in this reconciliation step.
+      Do not create Jira issues, do not create downstream workflow executions, and do not implement code in this reconciliation step.
     skill:
       id: story-reconcile-implementation
       args: {}
@@ -147,16 +147,16 @@ steps:
       requiredCapabilities:
         - jira
       args: {}
-  - title: Create dependent Jira Implement tasks
+  - title: Create dependent Jira Implement workflow executions
     instructions: |-
-      Create one Jira Implement task for each Jira issue created from the trusted Jira story output.
+      Create one Jira Implement workflow execution for each Jira issue created from the trusted Jira story output.
 
-      Use the ordered issue mappings returned by story.create_jira_issues. Preserve the generated story order when creating downstream tasks.
-      Do not create downstream tasks for skipped fully implemented stories or manual-review stories that did not produce Jira issue mappings.
-      Each downstream task must run Jira Implement on its corresponding Jira story issue and must not run implementation inline inside this breakdown run.
-      Create task dependencies with dependsOn so each later generated task waits for the immediately earlier generated task workflow ID.
-      Preserve source Jira issue {{ inputs.source_issue_key }} and the original source brief in downstream task instructions and result traceability.
-      Report created tasks, skipped stories, dependency edges, partial failures, and no-downstream-task outcomes honestly.
+      Use the ordered issue mappings returned by story.create_jira_issues. Preserve the generated story order when creating downstream workflow executions.
+      Do not create downstream workflow executions for skipped fully implemented stories or manual-review stories that did not produce Jira issue mappings.
+      Each downstream workflow execution must run Jira Implement on its corresponding Jira story issue and must not run implementation inline inside this breakdown run.
+      Create workflow dependencies with dependsOn so each later generated workflow execution waits for the immediately earlier generated workflow ID.
+      Preserve source Jira issue {{ inputs.source_issue_key }} and the original source brief in downstream workflow instructions and result traceability.
+      Report created workflow executions, skipped stories, dependency edges, partial failures, and no-downstream-workflow outcomes honestly.
     jiraOrchestration:
       task:
         repository: "{{ context.repository }}"

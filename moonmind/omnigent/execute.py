@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from re import sub
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from temporalio import activity
@@ -437,6 +438,24 @@ def _first_message_marker(*, request: AgentExecutionRequest, digest: str) -> str
     )
 
 
+def _new_external_state_evidence(
+    *,
+    endpoint_ref: object,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    return {
+        "endpointRef": str(endpoint_ref or "default"),
+        "retry": {
+            "idempotencyKey": idempotency_key,
+            "sessionResolution": "pending",
+            "attached": False,
+            "attachSource": None,
+            "firstMessageOutcome": "pending",
+        },
+        "firstMessage": {},
+    }
+
+
 def _snapshot_contains_first_message_marker(
     snapshot: dict[str, Any],
     *,
@@ -592,6 +611,7 @@ def build_omnigent_result(
         "providerName": "omnigent",
         "normalizedStatus": terminal_status,
         "omnigentSessionId": session_id,
+        "idempotencyKey": request.idempotency_key,
         "sseEventsCaptured": event_count,
         "correlationId": request.correlation_id,
     }
@@ -602,6 +622,7 @@ def build_omnigent_result(
     if capture_bundle.external_state_ref:
         metadata["externalStateRef"] = capture_bundle.external_state_ref
         metadata["stateCheckpointRef"] = capture_bundle.external_state_ref
+        metadata["checkpointKind"] = "external_state_ref"
     metadata.update(capture_bundle.metadata_refs)
     snapshot_metadata_keys = {
         "omnigentAgentName": "omnigent_agent_name",
@@ -667,11 +688,12 @@ async def _capture_cancelled_omnigent_session(
     initial_snapshot: dict[str, Any] | None,
     first_message_request: dict[str, Any] | None,
     first_message_response: dict[str, Any] | None,
+    first_message_posted: bool,
+    first_message_response_identifiers: dict[str, str],
     raw_events: list[dict[str, Any]],
     normalized_events: list[dict[str, Any]],
     capture_policy: dict[str, Any] | None,
-    endpoint_ref: str | None = None,
-    retry_evidence: dict[str, Any] | None = None,
+    external_state: dict[str, Any] | None = None,
 ) -> None:
     with suppress(Exception):
         final_snapshot = await client.get_session(session_id)
@@ -685,6 +707,8 @@ async def _capture_cancelled_omnigent_session(
             final_snapshot=final_snapshot or {"status": "canceled"},
             first_message_request=first_message_request,
             first_message_response=first_message_response,
+            first_message_posted=first_message_posted,
+            first_message_response_identifiers=first_message_response_identifiers,
             raw_events=raw_events,
             normalized_events=normalized_events,
             terminal_status="canceled",
@@ -694,8 +718,7 @@ async def _capture_cancelled_omnigent_session(
             },
             harvest_resources=True,
             capture_policy=capture_policy,
-            endpoint_ref=endpoint_ref,
-            retry_evidence=retry_evidence,
+            external_state=external_state,
         )
 
 
@@ -996,6 +1019,92 @@ def _child_session_ids(
     return ids
 
 
+def _redacted_endpoint_url(value: str | None) -> str | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return "redacted"
+    if not parsed.scheme or not parsed.hostname:
+        return "redacted"
+    host = parsed.hostname
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path.rstrip("/"), "", ""))
+
+
+def _omnigent_endpoint_ref(request: AgentExecutionRequest) -> str:
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    omnigent = parameters.get("omnigent")
+    if isinstance(omnigent, dict):
+        endpoint_ref = str(omnigent.get("endpointRef") or "").strip()
+        if endpoint_ref:
+            return endpoint_ref
+    return "default"
+
+
+def _payload_digest(payload: Any) -> str | None:
+    if payload is None:
+        return None
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _artifact_ref_items(items: Any) -> list[dict[str, str]]:
+    if not isinstance(items, list):
+        return []
+    refs: list[dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        artifact_ref = str(item.get("artifactRef") or "").strip()
+        if not artifact_ref:
+            continue
+        path = str(item.get("path") or item.get("filename") or "").strip()
+        compact = {"artifactRef": artifact_ref}
+        if path:
+            compact["path"] = path
+        refs.append(compact)
+    return refs
+
+
+def _patch_evidence(manifest: dict[str, Any]) -> dict[str, Any]:
+    diff_refs = _artifact_ref_items(manifest.get("workspaceDiffs"))
+    evidence: dict[str, Any] = {
+        "diffRefs": diff_refs,
+        "patchUnavailable": bool(manifest.get("patchUnavailable", not diff_refs)),
+    }
+    diagnostics: list[dict[str, str]] = []
+    if evidence["patchUnavailable"]:
+        diagnostics.append(
+            {
+                "code": "omnigent_patch_unavailable",
+                "message": (
+                    "Omnigent patch evidence is unavailable; "
+                    "see captured diff refs or diagnostics."
+                ),
+            }
+        )
+    unavailable = str(manifest.get("workspaceDiffsUnavailable") or "").strip()
+    if unavailable:
+        diagnostics.append(
+            {
+                "code": "omnigent_workspace_diffs_unavailable",
+                "message": unavailable,
+            }
+        )
+    if diagnostics:
+        evidence["diagnostics"] = diagnostics
+    return evidence
+
+
 async def _build_capture_bundle(
     *,
     client: OmnigentHttpClient | None,
@@ -1007,14 +1116,15 @@ async def _build_capture_bundle(
     final_snapshot: dict[str, Any],
     first_message_request: dict[str, Any] | None,
     first_message_response: dict[str, Any] | None,
+    first_message_posted: bool,
+    first_message_response_identifiers: dict[str, str] | None,
     raw_events: list[dict[str, Any]],
     normalized_events: list[dict[str, Any]],
     terminal_status: str,
     diagnostics: dict[str, Any],
     harvest_resources: bool,
+    external_state: dict[str, Any] | None = None,
     capture_policy: dict[str, Any] | None = None,
-    endpoint_ref: str | None = None,
-    retry_evidence: dict[str, Any] | None = None,
 ) -> OmnigentCaptureBundle:
     refs: dict[str, str] = {}
     if first_message_request is not None:
@@ -1183,26 +1293,88 @@ async def _build_capture_bundle(
         payload=diagnostics_payload,
         link_type="diagnostics.omnigent",
     )
-    external_state_payload = _build_external_state_payload(
-        request=request,
-        session_id=session_id,
-        agent_id=agent_id,
-        terminal_status=terminal_status,
-        refs=refs,
-        diagnostics_ref=diagnostics_ref,
-        endpoint_ref=endpoint_ref,
-        retry_evidence=retry_evidence,
-    )
-    external_state_ref = await _capture_artifact_json(
-        artifact_gateway,
-        request,
-        refs,
-        key="externalStateRef",
-        name="checkpoint.omnigent.external_state.json",
-        payload=external_state_payload,
-        link_type="checkpoint.omnigent.external_state",
-    )
-    manifest["externalStateRef"] = external_state_ref
+    if external_state is not None:
+        first_message_state = dict(external_state.get("firstMessage", {}))
+        first_message_state.setdefault("requestRef", refs.get("firstMessageRequestRef"))
+        first_message_state.setdefault(
+            "responseRef", refs.get("firstMessageResponseRef")
+        )
+        first_message_state["posted"] = (
+            first_message_posted or first_message_response is not None
+        )
+        if first_message_response_identifiers:
+            first_message_state["responseIdentifiers"] = dict(
+                first_message_response_identifiers
+            )
+        external_state_payload = {
+            "sourceIssue": "MM-1077",
+            "provider": "omnigent",
+            "checkpointKind": "external_state_ref",
+            "endpointRef": external_state.get("endpointRef"),
+            "endpoint": {
+                "endpointRef": _omnigent_endpoint_ref(request),
+                "serverUrl": _redacted_endpoint_url(resolved_server_url()),
+            },
+            "correlation": {
+                "correlationId": request.correlation_id,
+                "idempotencyKey": request.idempotency_key,
+                "omnigentSessionId": session_id,
+                "omnigentAgentId": agent_id,
+            },
+            "omnigentSessionId": session_id,
+            "omnigentAgentId": agent_id,
+            "terminalStatus": terminal_status,
+            "firstMessage": first_message_state,
+            "retry": external_state.get("retry", {}),
+            "reattachState": {
+                "idempotencyKey": request.idempotency_key,
+                "initialSnapshotRef": refs.get("initialSnapshotRef"),
+                "initialSnapshotObserved": initial_snapshot is not None,
+            },
+            "streamRefs": {
+                "rawSseStreamRef": refs.get("rawSseStreamRef"),
+                "normalizedEventStreamRef": refs.get("normalizedEventStreamRef"),
+            },
+            "snapshotRefs": {
+                "initialSnapshotRef": refs.get("initialSnapshotRef"),
+                "finalSnapshotRef": refs.get("finalSnapshotRef"),
+            },
+            "terminalResultRefs": {
+                "outputRefs": [
+                    ref
+                    for ref in (
+                        refs.get("finalSnapshotRef"),
+                        refs.get("normalizedEventStreamRef"),
+                    )
+                    if ref
+                ],
+                "finalSnapshotRef": refs.get("finalSnapshotRef"),
+                "diagnosticsRef": diagnostics_ref,
+                "terminalStatus": terminal_status,
+            },
+            "patchEvidence": _patch_evidence(manifest),
+            "artifactRefs": {
+                key: refs[key]
+                for key in (
+                    "initialSnapshotRef",
+                    "finalSnapshotRef",
+                    "rawSseStreamRef",
+                    "normalizedEventStreamRef",
+                    "diagnosticsRef",
+                )
+                if key in refs
+            },
+        }
+        external_state_ref = await _capture_artifact_json(
+            artifact_gateway,
+            request,
+            refs,
+            key="externalStateRef",
+            name="checkpoint.omnigent.external_state.json",
+            payload=external_state_payload,
+            link_type="checkpoint.omnigent.external_state_ref",
+        )
+        manifest["externalStateRef"] = external_state_ref
     manifest_ref = await _capture_artifact_json(
         artifact_gateway,
         request,
@@ -1214,11 +1386,13 @@ async def _build_capture_bundle(
     )
     metadata_refs = {
         "captureManifestRef": manifest_ref,
-        "externalStateRef": external_state_ref,
         "rawSseStreamRef": raw_ref,
         "normalizedEventStreamRef": normalized_ref,
         "finalSnapshotRef": final_ref,
     }
+    if "externalStateRef" in refs:
+        metadata_refs["externalStateRef"] = refs["externalStateRef"]
+        metadata_refs["checkpointKind"] = "external_state_ref"
     for optional_key in (
         "firstMessageRequestRef",
         "firstMessageResponseRef",
@@ -1227,6 +1401,7 @@ async def _build_capture_bundle(
         "workspaceFilesIndexRef",
         "sessionFilesIndexRef",
         "childSessionsRef",
+        "externalStateRef",
     ):
         if optional_key in refs:
             metadata_refs[optional_key] = refs[optional_key]
@@ -1235,75 +1410,9 @@ async def _build_capture_bundle(
         output_refs=output_refs,
         diagnostics_ref=diagnostics_ref,
         capture_manifest_ref=manifest_ref,
-        external_state_ref=external_state_ref,
+        external_state_ref=refs.get("externalStateRef", ""),
         metadata_refs=metadata_refs,
     )
-
-
-def _build_external_state_payload(
-    *,
-    request: AgentExecutionRequest,
-    session_id: str,
-    agent_id: str | None,
-    terminal_status: str,
-    refs: dict[str, str],
-    diagnostics_ref: str,
-    endpoint_ref: str | None,
-    retry_evidence: dict[str, Any] | None,
-) -> dict[str, Any]:
-    evidence = _compact_retry_evidence(retry_evidence)
-    payload: dict[str, Any] = {
-        "provider": "omnigent",
-        "sourceIssue": "MM-1078",
-        "sourceIssueRefs": ["MM-1078", "MM-1074"],
-        "idempotencyKey": request.idempotency_key,
-        "omnigentSessionId": session_id,
-        "omnigentAgentId": agent_id,
-        "terminalStatus": terminal_status,
-        "diagnosticsRef": diagnostics_ref,
-        "retryEvidence": evidence,
-        "artifactRefs": {
-            key: value
-            for key, value in refs.items()
-            if key
-            in {
-                "initialSnapshotRef",
-                "finalSnapshotRef",
-                "rawSseStreamRef",
-                "normalizedEventStreamRef",
-                "firstMessageRequestRef",
-                "firstMessageResponseRef",
-            }
-        },
-    }
-    if endpoint_ref:
-        payload["endpointRef"] = str(endpoint_ref)
-    return payload
-
-
-def _compact_retry_evidence(evidence: dict[str, Any] | None) -> dict[str, Any]:
-    if not evidence:
-        return {"outcome": "created", "reattached": False, "reconciled": False}
-    allowed = {
-        "outcome",
-        "source",
-        "reattached",
-        "reconciled",
-        "mismatch",
-        "firstMessageState",
-        "firstMessageDigest",
-        "idempotencyMarkerPresent",
-        "diagnosticsCode",
-    }
-    compact = {
-        key: value
-        for key, value in evidence.items()
-        if key in allowed and value is not None
-    }
-    compact.setdefault("reattached", compact.get("outcome") in {"attached", "reconciled"})
-    compact.setdefault("reconciled", compact.get("outcome") == "reconciled")
-    compact.setdefault("mismatch", compact.get("outcome") == "unrecoverable_mismatch")
-    return compact
 
 
 def _jsonl(events: list[dict[str, Any]]) -> str:
@@ -1311,6 +1420,23 @@ def _jsonl(events: list[dict[str, Any]]) -> str:
         json.dumps(event, sort_keys=True, default=str, separators=(",", ":")) + "\n"
         for event in events
     )
+
+
+def _first_message_response_identifiers(
+    response: dict[str, Any] | None = None,
+    *,
+    pending_id: object | None = None,
+    item_id: object | None = None,
+) -> dict[str, str]:
+    identifiers: dict[str, str] = {}
+    if isinstance(response, dict):
+        pending_id = response.get("pending_id", pending_id)
+        item_id = response.get("item_id", item_id)
+    for key, value in (("pendingId", pending_id), ("itemId", item_id)):
+        text = str(value).strip() if value is not None else ""
+        if text:
+            identifiers[key] = text
+    return identifiers
 
 
 def _capture_enabled(capture_policy: dict[str, Any] | None, key: str) -> bool:
@@ -1351,22 +1477,22 @@ async def run_omnigent_execution(
     artifact_gateway = artifact_gateway or LocalOmnigentArtifactGateway()
     first_message: dict[str, Any] | None = None
     first_message_response: dict[str, Any] | None = None
+    first_message_posted = False
+    first_message_response_identifiers: dict[str, str] = {}
     initial_snapshot: dict[str, Any] | None = None
     raw_events: list[dict[str, Any]] = []
     normalized_events: list[dict[str, Any]] = []
     target_agent_id: str | None = None
     delete_after_harvest = False
     capture_policy: dict[str, Any] | None = None
-    endpoint_ref: str | None = None
-    retry_evidence: dict[str, Any] = {
-        "outcome": "created",
-        "reattached": False,
-        "reconciled": False,
-    }
+    external_state: dict[str, Any] | None = None
     try:
         selection = build_omnigent_selection(request)
         capture_policy = selection.capture
-        endpoint_ref = str(selection.endpoint_ref or "default")
+        external_state = _new_external_state_evidence(
+            endpoint_ref=selection.endpoint_ref or "default",
+            idempotency_key=request.idempotency_key,
+        )
         delete_after_harvest = bool(
             selection.capture.get("deleteOmnigentSessionAfterHarvest", False)
         )
@@ -1406,7 +1532,7 @@ async def run_omnigent_execution(
             if run_store is not None:
                 durable_row = await run_store.get_or_create(
                     request=request,
-                    endpoint_ref=endpoint_ref,
+                    endpoint_ref=str(selection.endpoint_ref or "default"),
                     agent_id=target.agent_id,
                     agent_name=target.agent_name,
                     target_metadata={
@@ -1431,21 +1557,39 @@ async def run_omnigent_execution(
                     durable_row.first_message_state
                     in {FIRST_MESSAGE_POSTED, FIRST_MESSAGE_TERMINAL}
                 )
+                first_message_response_identifiers = _first_message_response_identifiers(
+                    pending_id=getattr(durable_row, "first_message_pending_id", None),
+                    item_id=getattr(durable_row, "first_message_item_id", None),
+                )
+                external_state["firstMessage"]["durableState"] = (
+                    durable_row.first_message_state
+                )
+                if first_message_response_identifiers:
+                    external_state["firstMessage"]["responseIdentifiers"] = dict(
+                        first_message_response_identifiers
+                    )
             if session_id:
-                retry_evidence = {
-                    "outcome": "attached",
-                    "source": "durable_mapping" if durable_session_id else "heartbeat",
-                    "reattached": True,
-                    "reconciled": False,
-                    "firstMessageState": getattr(
-                        durable_row,
-                        "first_message_state",
-                        "posted" if first_message_posted else "unknown",
-                    ),
-                }
+                external_state["retry"].update(
+                    {
+                        "sessionResolution": "attached",
+                        "attached": True,
+                        "attachSource": (
+                            "durable_idempotency_mapping"
+                            if durable_session_id
+                            else "activity_heartbeat"
+                        ),
+                    }
+                )
             if not session_id:
                 create_response = await client.create_session(session_payload)
                 session_id = _session_id(create_response)
+                external_state["retry"].update(
+                    {
+                        "sessionResolution": "created",
+                        "attached": False,
+                        "attachSource": None,
+                    }
+                )
                 if run_store is not None:
                     await run_store.attach_session(
                         request.idempotency_key,
@@ -1475,14 +1619,22 @@ async def run_omnigent_execution(
                 "moonmindFirstMessageDigest"
             ] = digest
             first_message["metadata"]["moonmindIdempotencyKey"] = request.idempotency_key
-            idempotency_marker_present = bool(
-                selection.prompt.get("includeIdempotencyMarker", True)
-            )
-            if idempotency_marker_present:
+            if selection.prompt.get("includeIdempotencyMarker", True):
                 first_message_text = _first_message_text(first_message)
                 first_message["data"]["content"][0]["text"] = (
                     f"{first_message_text}\n\n{marker}".strip()
                 )
+            external_state["firstMessage"].update(
+                {
+                    "digest": digest,
+                    "idempotencyMarkerPresent": selection.prompt.get(
+                        "includeIdempotencyMarker", True
+                    ),
+                    "postedBeforeRetry": first_message_posted,
+                    "reconcileRequired": first_message_reconcile_required,
+                    "state": "posted" if first_message_posted else "prepared",
+                }
+            )
             if run_store is not None:
                 try:
                     durable_row = await run_store.mark_prepared(
@@ -1493,19 +1645,17 @@ async def run_omnigent_execution(
                     first_message_reconcile_required = (
                         durable_row.first_message_state == FIRST_MESSAGE_POSTING
                     )
-                    retry_evidence["firstMessageState"] = durable_row.first_message_state
-                    retry_evidence["firstMessageDigest"] = digest
-                    retry_evidence["idempotencyMarkerPresent"] = (
-                        idempotency_marker_present
+                    external_state["firstMessage"]["durableState"] = (
+                        durable_row.first_message_state
                     )
+                    external_state["firstMessage"][
+                        "reconcileRequired"
+                    ] = first_message_reconcile_required
                 except OmnigentDigestMismatchError as exc:
-                    retry_evidence.update(
+                    external_state["retry"].update(
                         {
-                            "outcome": "unrecoverable_mismatch",
-                            "mismatch": True,
-                            "firstMessageDigest": digest,
-                            "idempotencyMarkerPresent": idempotency_marker_present,
-                            "diagnosticsCode": "omnigent_first_message_digest_mismatch",
+                            "firstMessageOutcome": "unrecoverable_mismatch",
+                            "mismatchReason": "digest_mismatch",
                         }
                     )
                     bundle = await _build_capture_bundle(
@@ -1518,6 +1668,8 @@ async def run_omnigent_execution(
                         final_snapshot=initial_snapshot or {"status": "failed"},
                         first_message_request=first_message,
                         first_message_response=None,
+                        first_message_posted=first_message_posted,
+                        first_message_response_identifiers=first_message_response_identifiers,
                         raw_events=raw_events,
                         normalized_events=normalized_events,
                         terminal_status="failed",
@@ -1527,8 +1679,7 @@ async def run_omnigent_execution(
                             "failureClass": "integration_error",
                         },
                         harvest_resources=False,
-                        endpoint_ref=endpoint_ref,
-                        retry_evidence=retry_evidence,
+                        external_state=external_state,
                     )
                     return build_omnigent_result(
                         request=request,
@@ -1552,14 +1703,12 @@ async def run_omnigent_execution(
                     digest=digest,
                     marker=marker,
                 ):
-                    retry_evidence.update(
+                    external_state["retry"].update(
                         {
-                            "outcome": "unrecoverable_mismatch",
-                            "mismatch": True,
-                            "firstMessageState": FIRST_MESSAGE_POSTING,
-                            "firstMessageDigest": digest,
-                            "idempotencyMarkerPresent": False,
-                            "diagnosticsCode": "omnigent_first_message_reconcile_failed",
+                            "firstMessageOutcome": "unrecoverable_mismatch",
+                            "mismatchReason": "reconcile_failed",
+                            "reconciliationChecked": True,
+                            "markerFound": False,
                         }
                     )
                     bundle = await _build_capture_bundle(
@@ -1572,6 +1721,8 @@ async def run_omnigent_execution(
                         final_snapshot=reconciliation_snapshot,
                         first_message_request=first_message,
                         first_message_response=None,
+                        first_message_posted=first_message_posted,
+                        first_message_response_identifiers=first_message_response_identifiers,
                         raw_events=raw_events,
                         normalized_events=normalized_events,
                         terminal_status="failed",
@@ -1580,8 +1731,7 @@ async def run_omnigent_execution(
                             "failureClass": "integration_error",
                         },
                         harvest_resources=False,
-                        endpoint_ref=endpoint_ref,
-                        retry_evidence=retry_evidence,
+                        external_state=external_state,
                     )
                     return build_omnigent_result(
                         request=request,
@@ -1600,16 +1750,14 @@ async def run_omnigent_execution(
                 if run_store is not None:
                     await run_store.mark_posted(request.idempotency_key)
                 first_message_posted = True
-                retry_evidence.update(
+                external_state["retry"].update(
                     {
-                        "outcome": "reconciled",
-                        "reattached": True,
-                        "reconciled": True,
-                        "firstMessageState": FIRST_MESSAGE_POSTED,
-                        "firstMessageDigest": digest,
-                        "idempotencyMarkerPresent": idempotency_marker_present,
+                        "firstMessageOutcome": "reconciled",
+                        "reconciliationChecked": True,
+                        "markerFound": True,
                     }
                 )
+                external_state["firstMessage"]["state"] = "posted"
             if not first_message_posted:
                 stream_queue = asyncio.Queue()
                 stream_task = asyncio.create_task(
@@ -1623,6 +1771,10 @@ async def run_omnigent_execution(
                 if run_store is not None:
                     await run_store.mark_posting(request.idempotency_key)
                 first_message_response = await client.post_event(session_id, first_message)
+                first_message_posted = True
+                first_message_response_identifiers = _first_message_response_identifiers(
+                    first_message_response
+                )
                 if run_store is not None:
                     await run_store.mark_posted(
                         request.idempotency_key,
@@ -1637,18 +1789,11 @@ async def run_omnigent_execution(
                         "firstMessageDigest": digest,
                     }
                 )
-                retry_evidence.update(
-                    {
-                        "outcome": (
-                            "created"
-                            if retry_evidence.get("outcome") == "created"
-                            else "posted"
-                        ),
-                        "firstMessageState": FIRST_MESSAGE_POSTED,
-                        "firstMessageDigest": digest,
-                        "idempotencyMarkerPresent": idempotency_marker_present,
-                    }
-                )
+                external_state["retry"]["firstMessageOutcome"] = "posted"
+                external_state["firstMessage"]["state"] = "posted"
+            elif external_state["retry"]["firstMessageOutcome"] == "pending":
+                external_state["retry"]["firstMessageOutcome"] = "already_posted"
+                external_state["firstMessage"]["state"] = "posted"
 
             event_count = {"value": 0}
             heartbeat_status = {"value": "running"}
@@ -1745,14 +1890,15 @@ async def run_omnigent_execution(
                 final_snapshot=final_snapshot,
                 first_message_request=first_message,
                 first_message_response=first_message_response,
+                first_message_posted=first_message_posted,
+                first_message_response_identifiers=first_message_response_identifiers,
                 raw_events=raw_events,
                 normalized_events=normalized_events,
                 terminal_status=terminal_status,
                 diagnostics={"failureClass": _failure_class_for(terminal_status)},
                 harvest_resources=True,
+                external_state=external_state,
                 capture_policy=capture_policy,
-                endpoint_ref=endpoint_ref,
-                retry_evidence=retry_evidence,
             )
             if run_store is not None:
                 await run_store.mark_terminal(
@@ -1793,11 +1939,12 @@ async def run_omnigent_execution(
                     initial_snapshot=initial_snapshot,
                     first_message_request=first_message,
                     first_message_response=first_message_response,
+                    first_message_posted=first_message_posted,
+                    first_message_response_identifiers=first_message_response_identifiers,
                     raw_events=raw_events,
                     normalized_events=normalized_events,
                     capture_policy=capture_policy,
-                    endpoint_ref=endpoint_ref,
-                    retry_evidence=retry_evidence,
+                    external_state=external_state,
                 )
                 if delete_after_harvest:
                     with suppress(Exception):
@@ -1822,6 +1969,8 @@ async def run_omnigent_execution(
             final_snapshot=final_snapshot,
             first_message_request=first_message,
             first_message_response=first_message_response,
+            first_message_posted=first_message_posted,
+            first_message_response_identifiers=first_message_response_identifiers,
             raw_events=raw_events,
             normalized_events=normalized_events,
             terminal_status="failed",
@@ -1830,8 +1979,8 @@ async def run_omnigent_execution(
                 "failureClass": "integration_error",
             },
             harvest_resources=bool(client and session_id),
-            endpoint_ref=endpoint_ref,
-            retry_evidence=retry_evidence,
+            external_state=external_state,
+            capture_policy=capture_policy,
         )
         return AgentRunResult(
             outputRefs=bundle.output_refs,
@@ -1867,13 +2016,15 @@ async def run_omnigent_execution(
             final_snapshot=final_snapshot,
             first_message_request=first_message,
             first_message_response=first_message_response,
+            first_message_posted=first_message_posted,
+            first_message_response_identifiers=first_message_response_identifiers,
             raw_events=raw_events,
             normalized_events=normalized_events,
             terminal_status="failed",
             diagnostics=diagnostics,
             harvest_resources=bool(client and session_id),
-            endpoint_ref=endpoint_ref,
-            retry_evidence=retry_evidence,
+            external_state=external_state,
+            capture_policy=capture_policy,
         )
         return AgentRunResult(
             outputRefs=bundle.output_refs,

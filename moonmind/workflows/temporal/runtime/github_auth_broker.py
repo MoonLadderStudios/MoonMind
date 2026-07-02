@@ -1,18 +1,213 @@
-"""Broker GitHub credentials to local helper scripts without writing PATs to disk."""
+"""Broker GitHub credentials to local managed runtimes without writing PATs to disk.
+
+This module is for MoonMind-managed runtime processes and containers. External
+agent adapters, including Omnigent, must keep credential handling behind their
+own adapter/activity boundary instead of using these local helper scripts.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
 import socket
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 _BROKER_SOCKET_TIMEOUT_SECONDS = 5.0
+_BROKER_SOCKET_PATH_MAX_BYTES = 100
+_SHARED_WORKSPACE_ROOT = Path("/work/agent_jobs")
+_SHARED_SOCKET_DIRNAME = ".moonmind-gh"
+_LEGACY_SHARED_SOCKET_DIRNAME = "mm-gh"
+
+
+def build_github_socket_path(
+    *,
+    run_id: str,
+    support_root: str | None,
+    socket_root: str | None = None,
+) -> str:
+    """Build a short broker socket path visible to local managed runtimes.
+
+    MoonMind-managed session containers share ``/work/agent_jobs`` with the
+    worker process, but they do not share the worker's ``/tmp``. Prefer a
+    compact workspace-volume path when the support root lives under that
+    volume, then fall back to ``/tmp/mm-gh`` for local/direct subprocess runs.
+    """
+
+    material = run_id
+    support_path: Path | None = None
+    if support_root:
+        support_path = Path(support_root).resolve()
+        material = f"{support_path}::{run_id}"
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+    if socket_root:
+        return str(Path(socket_root) / digest / "github.sock")
+
+    candidate_roots: list[Path] = []
+    if support_path is not None:
+        workdir = os.environ.get("MOONMIND_WORKDIR")
+        if workdir:
+            candidate_roots.append(Path(workdir).resolve() / _SHARED_SOCKET_DIRNAME)
+        candidate_roots.append(_SHARED_WORKSPACE_ROOT / _SHARED_SOCKET_DIRNAME)
+        if support_path.name == ".moonmind":
+            if len(support_path.parents) >= 3:
+                candidate_roots.append(support_path.parents[2] / _SHARED_SOCKET_DIRNAME)
+            candidate_roots.append(support_path.parent / _SHARED_SOCKET_DIRNAME)
+        else:
+            candidate_roots.append(support_path / _SHARED_SOCKET_DIRNAME)
+
+    for root in dict.fromkeys(candidate_roots):
+        path = root / digest / "github.sock"
+        try:
+            if support_path is not None and not support_path.is_relative_to(root.parent):
+                continue
+        except ValueError:
+            continue
+        if len(str(path).encode("utf-8")) < _BROKER_SOCKET_PATH_MAX_BYTES:
+            return str(path)
+
+    socket_root_path = Path("/tmp")
+    if not socket_root_path.is_dir():
+        socket_root_path = Path(tempfile.gettempdir())
+    return str(
+        socket_root_path
+        / _LEGACY_SHARED_SOCKET_DIRNAME
+        / digest
+        / "github.sock"
+    )
+
+
+def render_gh_wrapper_script(*, socket_path: str, real_gh_path: str | None = None) -> str:
+    """Render a self-contained gh wrapper for agent workspaces."""
+
+    return (
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import os\n"
+        "import shutil\n"
+        "import socket\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "\n"
+        f"SOCKET_PATH = {socket_path!r}\n"
+        f"REAL_GH_PATH = {real_gh_path!r}\n"
+        f"TIMEOUT_SECONDS = {_BROKER_SOCKET_TIMEOUT_SECONDS!r}\n"
+        "\n"
+        "def request_token():\n"
+        "    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+        "    client.settimeout(TIMEOUT_SECONDS)\n"
+        "    try:\n"
+        "        client.connect(SOCKET_PATH)\n"
+        "        client.sendall(json.dumps({'command': 'github_token'}).encode('utf-8') + b'\\n')\n"
+        "        response = bytearray()\n"
+        "        while True:\n"
+        "            chunk = client.recv(4096)\n"
+        "            if not chunk:\n"
+        "                break\n"
+        "            response.extend(chunk)\n"
+        "            if b'\\n' in chunk:\n"
+        "                break\n"
+        "        if not response:\n"
+        "            raise RuntimeError('GitHub auth broker returned no response')\n"
+        "        parsed = json.loads(response.decode('utf-8').strip())\n"
+        "        if not parsed.get('ok'):\n"
+        "            raise RuntimeError(str(parsed.get('error') or 'broker request failed'))\n"
+        "        return str(parsed.get('token') or '')\n"
+        "    finally:\n"
+        "        client.close()\n"
+        "\n"
+        "def resolve_real_gh():\n"
+        "    if REAL_GH_PATH:\n"
+        "        return str(REAL_GH_PATH)\n"
+        "    wrapper_dir = Path(sys.argv[0]).resolve().parent\n"
+        "    path_parts = [\n"
+        "        item for item in os.environ.get('PATH', '').split(os.pathsep)\n"
+        "        if item and Path(item).resolve() != wrapper_dir\n"
+        "    ]\n"
+        "    resolved = shutil.which('gh', path=os.pathsep.join(path_parts))\n"
+        "    if not resolved:\n"
+        "        raise RuntimeError('Unable to locate real gh binary in managed session PATH')\n"
+        "    return str(resolved)\n"
+        "\n"
+        "def main():\n"
+        "    token = request_token()\n"
+        "    env = dict(os.environ)\n"
+        "    env.pop('GH_TOKEN', None)\n"
+        "    env['GITHUB_TOKEN'] = token\n"
+        "    real_gh = resolve_real_gh()\n"
+        "    os.execvpe(real_gh, [real_gh, *sys.argv[1:]], env)\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    )
+
+
+def render_git_credential_helper_script(*, socket_path: str) -> str:
+    """Render a self-contained git credential helper for agent workspaces."""
+
+    return (
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import socket\n"
+        "import sys\n"
+        "\n"
+        f"SOCKET_PATH = {socket_path!r}\n"
+        f"TIMEOUT_SECONDS = {_BROKER_SOCKET_TIMEOUT_SECONDS!r}\n"
+        "\n"
+        "def request_token():\n"
+        "    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+        "    client.settimeout(TIMEOUT_SECONDS)\n"
+        "    try:\n"
+        "        client.connect(SOCKET_PATH)\n"
+        "        client.sendall(json.dumps({'command': 'github_token'}).encode('utf-8') + b'\\n')\n"
+        "        response = bytearray()\n"
+        "        while True:\n"
+        "            chunk = client.recv(4096)\n"
+        "            if not chunk:\n"
+        "                break\n"
+        "            response.extend(chunk)\n"
+        "            if b'\\n' in chunk:\n"
+        "                break\n"
+        "        if not response:\n"
+        "            raise RuntimeError('GitHub auth broker returned no response')\n"
+        "        parsed = json.loads(response.decode('utf-8').strip())\n"
+        "        if not parsed.get('ok'):\n"
+        "            raise RuntimeError(str(parsed.get('error') or 'broker request failed'))\n"
+        "        return str(parsed.get('token') or '')\n"
+        "    finally:\n"
+        "        client.close()\n"
+        "\n"
+        "def main():\n"
+        "    operation = str(sys.argv[1] if len(sys.argv) > 1 else '').strip().lower()\n"
+        "    if operation not in {'get', 'fill'}:\n"
+        "        return 0\n"
+        "    request = {}\n"
+        "    for raw_line in sys.stdin:\n"
+        "        line = raw_line.rstrip('\\n')\n"
+        "        if not line:\n"
+        "            break\n"
+        "        key, _, value = line.partition('=')\n"
+        "        request[key] = value\n"
+        "    host = str(request.get('host') or '').strip().lower()\n"
+        "    protocol = str(request.get('protocol') or '').strip().lower()\n"
+        "    if host != 'github.com' or (protocol and protocol != 'https'):\n"
+        "        return 0\n"
+        "    token = request_token()\n"
+        "    sys.stdout.write('username=x-access-token\\n')\n"
+        "    sys.stdout.write(f'password={token}\\n\\n')\n"
+        "    sys.stdout.flush()\n"
+        "    return 0\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    raise SystemExit(main())\n"
+    )
 
 @dataclass(slots=True)
 class GitHubAuthBrokerHandle:
@@ -58,7 +253,10 @@ class GitHubAuthBrokerManager:
 
         path = Path(socket_path)
         shared_root = path.parent.parent
-        if shared_root.name == "mm-gh":
+        if shared_root.name in {
+            _LEGACY_SHARED_SOCKET_DIRNAME,
+            _SHARED_SOCKET_DIRNAME,
+        }:
             shared_root.mkdir(parents=True, exist_ok=True, mode=0o711)
             shared_root.chmod(0o711)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

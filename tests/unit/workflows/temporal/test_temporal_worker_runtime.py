@@ -1698,7 +1698,7 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
                             "type": "skill",
                             "name": "story.create_jira_orchestrate_tasks",
                         },
-                        "instructions": "Create dependent Jira Orchestrate tasks.",
+                        "instructions": "Create dependent Jira Orchestrate workflow executions.",
                         "jiraOrchestration": {
                             "task": {
                                 "repository": "MoonLadderStudios/MoonMind",
@@ -1790,7 +1790,7 @@ def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
                             "type": "skill",
                             "name": "story.create_jira_implement_tasks",
                         },
-                        "instructions": "Create dependent Jira Implement tasks.",
+                        "instructions": "Create dependent Jira Implement workflow executions.",
                         "jiraOrchestration": {
                             "task": {
                                 "repository": "MoonLadderStudios/MoonMind",
@@ -1950,10 +1950,10 @@ def test_runtime_planner_dedupes_repeated_identical_preset_steps():
     }
     orchestrate_step = {
         "id": "tpl:jira-breakdown-orchestrate:1.0.0:03:6bfb1360",
-        "title": "Create dependent Jira Orchestrate tasks",
+        "title": "Create dependent Jira Orchestrate workflow executions",
         "type": "skill",
         "skill": {"id": "story.create_jira_orchestrate_tasks"},
-        "instructions": "Create dependent Jira Orchestrate tasks.",
+        "instructions": "Create dependent Jira Orchestrate workflow executions.",
         "jiraOrchestration": {
             "task": {
                 "repository": "MoonLadderStudios/Tactics",
@@ -2457,6 +2457,54 @@ def test_github_story_tools_route_as_direct_story_output_tools() -> None:
         "story.create_github_issue_implement_workflows"
         in worker_runtime._STORY_OUTPUT_TASK_TOOLS
     )
+
+
+def test_runtime_planner_preserves_github_orchestration_for_direct_story_tool() -> None:
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Create GitHub issue workflows.",
+                "repository": "MoonLadderStudios/MoonMind",
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "type": "skill",
+                        "title": "Create dependent GitHub Issue Implement workflow executions",
+                        "instructions": "Create downstream workflows.",
+                        "githubOrchestration": {
+                            "task": {
+                                "repository": "MoonLadderStudios/MoonMind",
+                                "runtime": {"mode": "codex"},
+                                "publish": {
+                                    "mode": "pr",
+                                    "mergeAutomation": {"enabled": True},
+                                },
+                            }
+                        },
+                        "skill": {
+                            "id": "story.create_github_issue_implement_workflows"
+                        },
+                    }
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][0]["inputs"]["githubOrchestration"] == {
+        "task": {
+            "repository": "MoonLadderStudios/MoonMind",
+            "runtime": {"mode": "codex"},
+            "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
+        }
+    }
 
 
 def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():

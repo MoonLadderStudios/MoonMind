@@ -31,6 +31,7 @@ Do not use this skill to split a broad design, write a spec, create a plan, or g
 - Treat the user's text as optional implementation guidance.
 - Work from the active feature directory resolved by the prerequisite script.
 - Require `spec.md`, `plan.md`, and `tasks.md`.
+- Read `AGENTS.md` when present for project principles, repo constraints, and test discipline.
 - The spec must contain exactly one independently testable user story.
 - `tasks.md` must be specific enough to execute without inventing hidden product scope.
 - Use absolute paths in reports and cite files changed or validated.
@@ -87,7 +88,7 @@ Parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then derive:
 - `PLAN = FEATURE_DIR/plan.md`
 - `TASKS = FEATURE_DIR/tasks.md`
 - optional docs from `AVAILABLE_DOCS`
-- `CONSTITUTION = .specify/memory/constitution.md`
+- `REPO_GUIDANCE = AGENTS.md` when present
 
 If shell arguments contain single quotes, use shell-safe escaping such as `'I'\''m Groot'`, or double quotes when possible.
 
@@ -114,9 +115,9 @@ If any checklist has incomplete items, stop and ask whether to proceed. Continue
 Read enough context to implement without guessing:
 
 - `tasks.md`: task IDs, phases, dependencies, parallel markers, file paths, required test commands, and final verification task.
-- `plan.md`: tech stack, architecture, project structure, test tooling, integration dependencies, and constraints.
+- `plan.md`: tech stack, architecture, project structure, test tooling, integration dependencies, Principles Check, and constraints.
 - `spec.md`: preserved `**Input**`, the single story, independent test, acceptance scenarios, edge cases, functional requirements, success criteria, assumptions, and source design mappings.
-- `.specify/memory/constitution.md`: project constraints, quality gates, and TDD expectations.
+- `AGENTS.md` when present: project principles, repo constraints, quality gates, and TDD expectations.
 - `data-model.md` when present: entities, relationships, validation rules, and state transitions.
 - `contracts/` when present: public interfaces and contract or integration test obligations.
 - `research.md` when present: technical decisions and constraints.
@@ -127,8 +128,9 @@ Validate before editing code:
 
 - `spec.md` has exactly one independently testable user story.
 - Any `DESIGN-REQ-*` or `DOC-REQ-*` mappings are traceable to planned code or test work.
+- Relevant `AGENTS.md` principles and testing discipline are represented in the plan or tasks when they affect implementation.
 - `tasks.md` includes unit test tasks and integration test tasks unless the spec clearly makes one class irrelevant.
-- Implementation tasks do not introduce scope outside the story, original request, or source design constraints.
+- Implementation tasks do not introduce scope outside the story, original request, source design constraints, or relevant repo guidance.
 
 If the spec contains multiple stories, stop and tell the user to split the design with `/moonspec.breakdown` or regenerate a one-story spec with `/moonspec.specify`.
 
@@ -194,7 +196,7 @@ Rules:
 - Prefer project-local helpers and established abstractions over new patterns.
 - Keep the work scoped to the single story.
 - Do not weaken requirements, delete source design mappings, or remove the preserved original request.
-- Do not add hidden scope beyond the story, source design constraints, or explicit user guidance.
+- Do not add hidden scope beyond the story, source design constraints, relevant repo guidance, or explicit user guidance.
 - Write unit tests for domain rules, transformations, validation, edge cases, and failure modes named by the spec.
 - Write integration tests for acceptance scenarios, end-to-end workflows, contracts, persistence, external services, startup wiring, or user-facing interfaces when the design implies them.
 - Confirm new tests fail before implementing production behavior, then make them pass.
@@ -231,10 +233,11 @@ Before reporting completion:
 2. Verify production behavior matches the single story in `spec.md`.
 3. Verify the implementation remains aligned with the original feature request or declarative design preserved in `spec.md` `**Input**`.
 4. Verify every in-scope `DESIGN-REQ-*` or `DOC-REQ-*` has implementation and test evidence.
-5. Run unit tests and integration tests named in `plan.md`, `tasks.md`, `quickstart.md`, or project conventions.
-6. Run quickstart validation when present and feasible.
-7. Confirm no hidden scope or contradiction was introduced.
-8. Run the final `/moonspec.verify` task when present.
+5. Verify relevant `AGENTS.md` principles and testing discipline were not violated.
+6. Run unit tests and integration tests named in `plan.md`, `tasks.md`, `quickstart.md`, or project conventions.
+7. Run quickstart validation when present and feasible.
+8. Confirm no hidden scope or contradiction was introduced.
+9. Run the final `/moonspec.verify` task when present.
 
 If a command cannot run because of missing credentials, services, tools, or unsafe side effects, record the exact reason and the smallest next step needed.
 
@@ -299,6 +302,7 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Unit tests and integration tests are both expected implementation evidence.
 - Confirm tests fail for the intended reason before production code.
 - Preserve traceability to the original request and source design mappings.
+- Preserve relevant `AGENTS.md` principles and repo constraints.
 - Mark completed tasks `[X]` only after real completion.
 - Record canonical-doc drift in the discovery ledger instead of editing `docs/` files inline.
 - Run or recommend `/moonspec.verify` as the final alignment check.
