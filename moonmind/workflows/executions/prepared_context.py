@@ -635,12 +635,17 @@ def build_branch_turn_context_bundle(
     parent_turn_id: str | None = None,
     label: str | None = None,
     git_work_branch: str | None = None,
+    prepared_context: StepPreparedContext | None = None,
     workspace_baseline: Mapping[str, Any] | None = None,
     prior_evidence_refs: Sequence[Any] | None = None,
     bounded_summaries: Sequence[Any] | None = None,
     branch_comparison_refs: Sequence[Any] | None = None,
     runtime_selection: Mapping[str, Any] | None = None,
     policy_refs: Mapping[str, Any] | None = None,
+    retrieval: Mapping[str, Any] | None = None,
+    memory_proposals: Sequence[Mapping[str, Any]] | None = None,
+    memory_context: Mapping[str, Any] | None = None,
+    fix_patterns: Sequence[Mapping[str, Any]] | None = None,
     builder_version: str = BRANCH_TURN_CONTEXT_BUILDER_VERSION,
 ) -> ExecutionContextBundle:
     """Build the immutable context bundle for one Checkpoint Branch turn.
@@ -706,6 +711,7 @@ def build_branch_turn_context_bundle(
         task_input_snapshot_ref=task_input_snapshot_ref,
         plan_ref=plan_ref,
         plan_digest=plan_digest,
+        prepared_context=prepared_context,
         workspace_policy=workspace_policy,
         runtime_context_policy=runtime_context_policy,
         workspace_baseline=workspace_baseline,
@@ -715,6 +721,10 @@ def build_branch_turn_context_bundle(
         branch_comparison_refs=branch_comparison_refs,
         runtime_selection=runtime_selection,
         policy_refs=policy_refs,
+        retrieval=retrieval,
+        memory_proposals=memory_proposals,
+        memory_context=memory_context,
+        fix_patterns=fix_patterns,
         builder_version=builder_version,
     )
 
