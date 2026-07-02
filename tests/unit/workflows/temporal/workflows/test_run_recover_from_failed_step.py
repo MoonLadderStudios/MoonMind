@@ -211,6 +211,7 @@ def test_parent_owned_checkpoint_evidence_survives_child_runtime_projection() ->
         "latestStepExecutionCheckpointRef": None,
         "stepExecutionCheckpointRefs": [],
         "checkpointRefsByBoundary": {},
+        "branchTurnArtifactRefs": {},
     }
     assert rows[0]["stateCheckpointRef"] == "artifact://child-checkpoint"
     assert rows[0]["recoveryPreservation"] == {
