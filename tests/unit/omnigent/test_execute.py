@@ -260,7 +260,7 @@ async def test_run_omnigent_execution_waits_for_terminal_result(
     assert all(ref.startswith("artifact://omnigent/") for ref in result.output_refs)
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
     assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")
-    assert result.metadata["workspaceRootRef"] == result.metadata["externalStateRef"]
+    assert "workspaceRootRef" not in result.metadata
     assert result.metadata["checkpointKind"] == "external_state_ref"
     assert result.metadata["idempotencyKey"] == "idem-1"
     assert result.metadata["normalizedStatus"] == "completed"
@@ -289,6 +289,7 @@ async def test_run_omnigent_execution_waits_for_terminal_result(
     assert external_state["firstMessage"]["responseRef"].startswith(
         "artifact://omnigent/"
     )
+    assert external_state["firstMessage"]["posted"] is True
     assert external_state["reattachState"]["initialSnapshotRef"].startswith(
         "artifact://omnigent/"
     )
@@ -350,6 +351,9 @@ async def test_run_omnigent_execution_reports_httpx_transport_errors(
     assert result.failure_class == "integration_error"
     assert result.provider_error_code == "omnigent_http_error"
     assert result.metadata["normalizedStatus"] == "failed"
+    assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")
+    assert result.metadata["checkpointKind"] == "external_state_ref"
+    assert "workspaceRootRef" not in result.metadata
 
 
 @pytest.mark.asyncio
@@ -934,12 +938,15 @@ async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[str] = []
 
     class Row:
         omnigent_session_id = "persisted-session"
         first_message_state = "posted"
+        first_message_pending_id = "pending-1"
+        first_message_item_id = "item-1"
 
     class Store:
         async def get_or_create(self, **_: object) -> Row:
@@ -995,11 +1002,24 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
                 },
             },
         ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
         run_store=Store(),
     )
 
     assert result.summary == "durably reattached"
     assert calls == []
+    assert result.metadata["checkpointKind"] == "external_state_ref"
+    assert "workspaceRootRef" not in result.metadata
+    external_state = json.loads(
+        (tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert external_state["firstMessage"]["posted"] is True
+    assert external_state["firstMessage"]["responseIdentifiers"] == {
+        "pendingId": "pending-1",
+        "itemId": "item-1",
+    }
 
 
 @pytest.mark.asyncio

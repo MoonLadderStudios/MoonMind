@@ -247,6 +247,23 @@ async def test_capture_all_checkpoint_kinds_as_compact_refs(tmp_path: Path) -> N
         rendered = json.dumps(capture, sort_keys=True)
         assert str(repo) not in rendered
 
+    external_capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "external_state_ref",
+            "externalStateRef": "artifact://omnigent/external-state",
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "idem-external-state-ref",
+        }
+    )
+    assert external_capture["status"] == "captured"
+    assert external_capture["workspace"]["kind"] == "external_state_ref"
+    external_payload = json.loads(
+        store.get_bytes(external_capture["workspace"]["externalStateRef"])
+    )
+    assert external_payload["sourceRef"] == "artifact://omnigent/external-state"
+
     archive_capture = await sandbox.workspace_capture_checkpoint(
         {
             **common,

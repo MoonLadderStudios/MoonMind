@@ -3983,10 +3983,17 @@ class MoonMindRunWorkflow:
                 "workspaceRootRef",
                 "workspace_root_ref",
             )
+            external_state_ref = self._checkpoint_capture_text(
+                candidate,
+                "externalStateRef",
+                "external_state_ref",
+            )
             if workspace_path:
                 capture_input["workspacePath"] = workspace_path
             elif workspace_root_ref:
                 capture_input["workspaceRootRef"] = workspace_root_ref
+            elif external_state_ref:
+                capture_input["externalStateRef"] = external_state_ref
             else:
                 continue
 
@@ -4051,6 +4058,8 @@ class MoonMindRunWorkflow:
             payload["workspacePath"] = capture_input["workspacePath"]
         if capture_input.get("workspaceRootRef"):
             payload["workspaceRootRef"] = capture_input["workspaceRootRef"]
+        if capture_input.get("externalStateRef"):
+            payload["externalStateRef"] = capture_input["externalStateRef"]
         if capture_input.get("baseCommit"):
             payload["baseCommit"] = capture_input["baseCommit"]
 

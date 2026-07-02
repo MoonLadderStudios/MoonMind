@@ -1163,6 +1163,7 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
     kind: WorkspaceCheckpointKind = Field(..., alias="kind")
     workspace_root_ref: str | None = Field(None, alias="workspaceRootRef")
     workspace_path: str | None = Field(None, alias="workspacePath")
+    external_state_ref: str | None = Field(None, alias="externalStateRef")
     artifact_namespace: str = Field(..., alias="artifactNamespace", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     base_commit: str | None = Field(None, alias="baseCommit")
@@ -1177,6 +1178,7 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
     @field_validator(
         "workspace_root_ref",
         "workspace_path",
+        "external_state_ref",
         "base_commit",
         "pull_auth_context_ref",
         "provider_lease_context_ref",
@@ -1198,7 +1200,12 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_input(self) -> "WorkspaceCheckpointCaptureInput":
-        if self.workspace_root_ref is None and self.workspace_path is None:
+        if self.kind == "external_state_ref":
+            if self.external_state_ref is None and self.workspace_root_ref is None:
+                raise ValueError(
+                    "external_state_ref checkpoint capture requires externalStateRef"
+                )
+        elif self.workspace_root_ref is None and self.workspace_path is None:
             raise ValueError("workspace capture requires workspaceRootRef or workspacePath")
         if self.kind == "git_patch" and self.base_commit is None:
             raise ValueError("git_patch checkpoint capture requires baseCommit")

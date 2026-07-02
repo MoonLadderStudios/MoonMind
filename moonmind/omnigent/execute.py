@@ -603,7 +603,6 @@ def build_omnigent_result(
         metadata["captureManifestRef"] = capture_bundle.capture_manifest_ref
     if capture_bundle.external_state_ref:
         metadata["externalStateRef"] = capture_bundle.external_state_ref
-        metadata["workspaceRootRef"] = capture_bundle.external_state_ref
         metadata["checkpointKind"] = "external_state_ref"
     metadata.update(capture_bundle.metadata_refs)
     snapshot_metadata_keys = {
@@ -686,6 +685,10 @@ async def _capture_cancelled_omnigent_session(
             final_snapshot=final_snapshot or {"status": "canceled"},
             first_message_request=first_message_request,
             first_message_response=first_message_response,
+            first_message_posted=first_message_response is not None,
+            first_message_response_identifiers=_first_message_response_identifiers(
+                first_message_response
+            ),
             raw_events=raw_events,
             normalized_events=normalized_events,
             terminal_status="canceled",
@@ -1093,6 +1096,8 @@ def _build_external_state_payload(
     capture_manifest_ref: str,
     first_message_request: dict[str, Any] | None,
     first_message_response: dict[str, Any] | None,
+    first_message_posted: bool,
+    first_message_response_identifiers: dict[str, str] | None,
     initial_snapshot: dict[str, Any] | None,
 ) -> dict[str, Any]:
     first_message_digest = None
@@ -1110,6 +1115,15 @@ def _build_external_state_payload(
         for key, value in refs.items()
         if isinstance(value, str) and value.startswith("artifact://")
     }
+    first_message: dict[str, Any] = {
+        "digest": first_message_digest,
+        "requestRef": refs.get("firstMessageRequestRef"),
+        "responseRef": refs.get("firstMessageResponseRef"),
+        "posted": first_message_posted or first_message_response is not None,
+    }
+    if first_message_response_identifiers:
+        first_message["responseIdentifiers"] = dict(first_message_response_identifiers)
+
     return {
         "kind": "omnigent_external_state_ref",
         "sourceIssue": "MM-1077",
@@ -1124,12 +1138,7 @@ def _build_external_state_payload(
             "omnigentSessionId": session_id,
             "omnigentAgentId": agent_id,
         },
-        "firstMessage": {
-            "digest": first_message_digest,
-            "requestRef": refs.get("firstMessageRequestRef"),
-            "responseRef": refs.get("firstMessageResponseRef"),
-            "posted": first_message_response is not None,
-        },
+        "firstMessage": first_message,
         "reattachState": {
             "idempotencyKey": request.idempotency_key,
             "initialSnapshotRef": refs.get("initialSnapshotRef"),
@@ -1180,6 +1189,8 @@ async def _build_capture_bundle(
     final_snapshot: dict[str, Any],
     first_message_request: dict[str, Any] | None,
     first_message_response: dict[str, Any] | None,
+    first_message_posted: bool,
+    first_message_response_identifiers: dict[str, str] | None,
     raw_events: list[dict[str, Any]],
     normalized_events: list[dict[str, Any]],
     terminal_status: str,
@@ -1374,6 +1385,8 @@ async def _build_capture_bundle(
         capture_manifest_ref=manifest_ref,
         first_message_request=first_message_request,
         first_message_response=first_message_response,
+        first_message_posted=first_message_posted,
+        first_message_response_identifiers=first_message_response_identifiers,
         initial_snapshot=initial_snapshot,
     )
     external_state_ref = await _capture_artifact_json(
@@ -1388,6 +1401,7 @@ async def _build_capture_bundle(
     metadata_refs = {
         "captureManifestRef": manifest_ref,
         "externalStateRef": external_state_ref,
+        "checkpointKind": "external_state_ref",
         "rawSseStreamRef": raw_ref,
         "normalizedEventStreamRef": normalized_ref,
         "finalSnapshotRef": final_ref,
@@ -1418,6 +1432,23 @@ def _jsonl(events: list[dict[str, Any]]) -> str:
         json.dumps(event, sort_keys=True, default=str, separators=(",", ":")) + "\n"
         for event in events
     )
+
+
+def _first_message_response_identifiers(
+    response: dict[str, Any] | None = None,
+    *,
+    pending_id: object | None = None,
+    item_id: object | None = None,
+) -> dict[str, str]:
+    identifiers: dict[str, str] = {}
+    if isinstance(response, dict):
+        pending_id = response.get("pending_id", pending_id)
+        item_id = response.get("item_id", item_id)
+    for key, value in (("pendingId", pending_id), ("itemId", item_id)):
+        text = str(value).strip() if value is not None else ""
+        if text:
+            identifiers[key] = text
+    return identifiers
 
 
 def _capture_enabled(capture_policy: dict[str, Any] | None, key: str) -> bool:
@@ -1458,6 +1489,8 @@ async def run_omnigent_execution(
     artifact_gateway = artifact_gateway or LocalOmnigentArtifactGateway()
     first_message: dict[str, Any] | None = None
     first_message_response: dict[str, Any] | None = None
+    first_message_posted = False
+    first_message_response_identifiers: dict[str, str] = {}
     initial_snapshot: dict[str, Any] | None = None
     raw_events: list[dict[str, Any]] = []
     normalized_events: list[dict[str, Any]] = []
@@ -1529,6 +1562,10 @@ async def run_omnigent_execution(
                     durable_row.first_message_state
                     in {FIRST_MESSAGE_POSTED, FIRST_MESSAGE_TERMINAL}
                 )
+                first_message_response_identifiers = _first_message_response_identifiers(
+                    pending_id=getattr(durable_row, "first_message_pending_id", None),
+                    item_id=getattr(durable_row, "first_message_item_id", None),
+                )
             if not session_id:
                 create_response = await client.create_session(session_payload)
                 session_id = _session_id(create_response)
@@ -1587,6 +1624,8 @@ async def run_omnigent_execution(
                         final_snapshot=initial_snapshot or {"status": "failed"},
                         first_message_request=first_message,
                         first_message_response=None,
+                        first_message_posted=first_message_posted,
+                        first_message_response_identifiers=first_message_response_identifiers,
                         raw_events=raw_events,
                         normalized_events=normalized_events,
                         terminal_status="failed",
@@ -1629,6 +1668,8 @@ async def run_omnigent_execution(
                         final_snapshot=reconciliation_snapshot,
                         first_message_request=first_message,
                         first_message_response=None,
+                        first_message_posted=first_message_posted,
+                        first_message_response_identifiers=first_message_response_identifiers,
                         raw_events=raw_events,
                         normalized_events=normalized_events,
                         terminal_status="failed",
@@ -1668,6 +1709,10 @@ async def run_omnigent_execution(
                 if run_store is not None:
                     await run_store.mark_posting(request.idempotency_key)
                 first_message_response = await client.post_event(session_id, first_message)
+                first_message_posted = True
+                first_message_response_identifiers = _first_message_response_identifiers(
+                    first_message_response
+                )
                 if run_store is not None:
                     await run_store.mark_posted(
                         request.idempotency_key,
@@ -1778,6 +1823,8 @@ async def run_omnigent_execution(
                 final_snapshot=final_snapshot,
                 first_message_request=first_message,
                 first_message_response=first_message_response,
+                first_message_posted=first_message_posted,
+                first_message_response_identifiers=first_message_response_identifiers,
                 raw_events=raw_events,
                 normalized_events=normalized_events,
                 terminal_status=terminal_status,
@@ -1851,6 +1898,8 @@ async def run_omnigent_execution(
             final_snapshot=final_snapshot,
             first_message_request=first_message,
             first_message_response=first_message_response,
+            first_message_posted=first_message_posted,
+            first_message_response_identifiers=first_message_response_identifiers,
             raw_events=raw_events,
             normalized_events=normalized_events,
             terminal_status="failed",
@@ -1894,6 +1943,8 @@ async def run_omnigent_execution(
             final_snapshot=final_snapshot,
             first_message_request=first_message,
             first_message_response=first_message_response,
+            first_message_posted=first_message_posted,
+            first_message_response_identifiers=first_message_response_identifiers,
             raw_events=raw_events,
             normalized_events=normalized_events,
             terminal_status="failed",

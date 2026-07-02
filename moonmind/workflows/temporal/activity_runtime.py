@@ -3027,12 +3027,40 @@ class TemporalSandboxActivities:
             if isinstance(request, WorkspaceCheckpointCaptureInput)
             else WorkspaceCheckpointCaptureInput.model_validate(request)
         )
+        pull_auth = self._pull_auth_diagnostics(model.pull_auth_context_ref)
+        provider_refs = self._provider_lease_refs(model.provider_lease_context_ref)
+
+        if model.kind == "external_state_ref":
+            source_ref = model.external_state_ref or model.workspace_root_ref or ""
+            external_state_ref = await self._put_checkpoint_bytes(
+                _json_bytes(
+                    {
+                        "kind": "external_state_ref",
+                        "sourceRef": source_ref,
+                        "idempotencyKey": model.idempotency_key,
+                        "createdAt": datetime.now(UTC).isoformat(),
+                    }
+                ),
+                content_type="application/json",
+                metadata={"artifact_kind": "checkpoint_external_state_ref"},
+            )
+            result = WorkspaceCheckpointCaptureResult(
+                status="captured",
+                workspace=WorkspaceCheckpointEvidenceModel(
+                    kind="external_state_ref",
+                    externalStateRef=external_state_ref,
+                    createdAt=datetime.now(UTC),
+                ),
+                summary="external_state_ref checkpoint captured",
+                pullAuth=pull_auth,
+                providerLeaseRefs=provider_refs,
+            )
+            return result.model_dump(by_alias=True, mode="json")
+
         workspace = self._resolve_workspace(
             model.workspace_path or model.workspace_root_ref or "",
             must_exist=True,
         )
-        pull_auth = self._pull_auth_diagnostics(model.pull_auth_context_ref)
-        provider_refs = self._provider_lease_refs(model.provider_lease_context_ref)
 
         if model.kind == "worktree_archive" and (
             self._workspace_has_traversal(workspace)
@@ -3152,24 +3180,6 @@ class TemporalSandboxActivities:
             return WorkspaceCheckpointEvidenceModel(
                 kind="ephemeral_workspace_ref",
                 workspaceRef=workspace_ref,
-                createdAt=datetime.now(UTC),
-            )
-        if model.kind == "external_state_ref":
-            external_state_ref = await self._put_checkpoint_bytes(
-                _json_bytes(
-                    {
-                        "kind": "external_state_ref",
-                        "sourceRef": model.workspace_root_ref,
-                        "idempotencyKey": model.idempotency_key,
-                        "createdAt": datetime.now(UTC).isoformat(),
-                    }
-                ),
-                content_type="application/json",
-                metadata={"artifact_kind": "checkpoint_external_state_ref"},
-            )
-            return WorkspaceCheckpointEvidenceModel(
-                kind="external_state_ref",
-                externalStateRef=external_state_ref,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
