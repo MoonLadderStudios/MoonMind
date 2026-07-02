@@ -720,7 +720,7 @@ describe('Workflow Detail Entrypoint', () => {
     const pinned = within(pinnedGroup).getByRole('link', { name: /MM-999 selected workflow outside filters/i });
     expect(pinned.getAttribute('aria-current')).toBe('page');
     expect(pinned.getAttribute('data-pinned')).toBe('true');
-    expect(within(pinned).getByLabelText('Status: executing')).toBeTruthy();
+    expect(within(pinned).getByLabelText('Status: Executing')).toBeTruthy();
     expect(within(sidebar).getByRole('link', { name: /Filtered workflow/i }).getAttribute('aria-current')).toBeNull();
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
@@ -762,21 +762,21 @@ describe('Workflow Detail Entrypoint', () => {
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     const expectedIcons = [
-      ['Scheduled workflow', 'Status: scheduled', 'status-scheduled', 'lucide-calendar-clock'],
-      ['Initializing workflow', 'Status: initializing', 'status-initializing', 'lucide-power'],
-      ['Dependency wait workflow', 'Status: AWAITING DEP', 'status-awaiting-dependencies', 'lucide-link'],
-      ['Planning workflow', 'Status: planning', 'status-planning', 'lucide-map'],
-      ['Slot wait workflow', 'Status: AWAITING SLOT', 'status-awaiting-slot', 'lucide-hourglass'],
-      ['Executing workflow', 'Status: executing', 'status-running', 'lucide-play'],
-      ['Proposals workflow', 'Status: proposals', 'status-running', 'lucide-lightbulb'],
-      ['External wait workflow', 'Status: awaiting external', 'status-awaiting-external', 'lucide-hand'],
-      ['Finalizing workflow', 'Status: finalizing', 'status-finalizing', 'lucide-package-check'],
+      ['Scheduled workflow', 'Status: Scheduled', 'status-scheduled', 'lucide-calendar-clock'],
+      ['Initializing workflow', 'Status: Initializing', 'status-initializing', 'lucide-power'],
+      ['Dependency wait workflow', 'Status: Waiting on dependencies', 'status-waiting-on-dependencies', 'lucide-link'],
+      ['Planning workflow', 'Status: Planning', 'status-planning', 'lucide-map'],
+      ['Slot wait workflow', 'Status: Awaiting slot', 'status-awaiting-slot', 'lucide-hourglass'],
+      ['Executing workflow', 'Status: Executing', 'status-running', 'lucide-play'],
+      ['Proposals workflow', 'Status: Proposals', 'status-running', 'lucide-lightbulb'],
+      ['External wait workflow', 'Status: Awaiting external', 'status-awaiting-external', 'lucide-hand'],
+      ['Finalizing workflow', 'Status: Finalizing', 'status-finalizing', 'lucide-package-check'],
       ['No commit workflow', 'Status: No commit', 'status-no-commit', 'lucide-check'],
-      ['No changes workflow', 'Status: No commit', 'status-no-commit', 'lucide-check'],
-      ['Completed workflow', 'Status: completed', 'status-completed', 'lucide-check'],
-      ['Failed workflow', 'Status: failed', 'status-failed', 'lucide-x'],
-      ['Canceled workflow', 'Status: canceled', 'status-canceled', 'lucide-ban'],
-      ['Unknown prototype workflow', 'Status: constructor', 'status-neutral', 'lucide-play'],
+      ['No changes workflow', 'Status: No changes', 'status-neutral', 'lucide-play'],
+      ['Completed workflow', 'Status: Completed', 'status-completed', 'lucide-check'],
+      ['Failed workflow', 'Status: Failed', 'status-failed', 'lucide-x'],
+      ['Canceled workflow', 'Status: Canceled', 'status-canceled', 'lucide-ban'],
+      ['Unknown prototype workflow', 'Status: Constructor', 'status-neutral', 'lucide-play'],
     ] as const;
 
     for (const [title, ariaLabel, statusClass, iconClass] of expectedIcons) {
@@ -2658,13 +2658,13 @@ describe('Workflow Detail Entrypoint', () => {
     expect(toolbarStatus?.dataset.shimmerLabel).toBeUndefined();
     expect(toolbarStatus?.getAttribute('aria-label')).toBeNull();
     expect(toolbarStatus?.querySelector('.status-letter-wave')).toBeNull();
-    expect(toolbarStatus?.textContent).toBe('planning');
+    expect(toolbarStatus?.textContent).toBe('Planning');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1035');
 
-    const waitingPill = await screen.findByText('AWAITING DEP');
+    const waitingPill = await screen.findByText('Waiting on dependencies');
     expect(waitingPill.closest('span')?.dataset.effect).toBeUndefined();
   });
 

@@ -20,9 +20,15 @@ import {
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
-import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
+import {
+  StepLedgerStatusPill,
+  WorkflowLifecycleStatusPill,
+} from '../components/ExecutionStatusPill';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
-import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
+import {
+  integrationProviderStatusPillView,
+  workflowLifecycleStatusPillView,
+} from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { LogPanel } from '../components/dashboard/LogPanel';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
@@ -273,7 +279,6 @@ const WORKFLOW_STATUS_ICONS = {
   awaiting_external: Hand,
   finalizing: PackageCheck,
   no_commit: Check,
-  no_changes: Check,
   completed: Check,
   failed: X,
   canceled: Ban,
@@ -290,16 +295,12 @@ function workflowStatusIconKey(status: string | null | undefined): WorkflowStatu
   if (Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_ICONS, key)) {
     return key as WorkflowStatusIconKey;
   }
-  if (key === 'succeeded') return 'completed';
-  if (key === 'running') return 'executing';
-  if (key === 'awaiting_action') return 'awaiting_external';
   return 'executing';
 }
 
 function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefined }) {
-  const label = formatStatusLabel(status);
+  const { label, pillProps } = workflowLifecycleStatusPillView(status, { enableMotion: false });
   const Icon = WORKFLOW_STATUS_ICONS[workflowStatusIconKey(status)];
-  const pillProps = executionStatusPillProps(status, { enableMotion: false });
 
   return (
     <span
@@ -3746,7 +3747,7 @@ function stepCheckStatusClass(status: string | null | undefined): string {
 
 function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
   const checkStatusClass = stepCheckStatusClass(check.status);
-  const statusPillClassName = executionStatusPillProps(check.status).className;
+  const statusPillClassName = integrationProviderStatusPillView(check.status, { enableMotion: false }).pillProps.className;
   return (
     <span className={`step-check-badge ${checkStatusClass} ${statusPillClassName}`}>
       {check.kind.replaceAll('_', ' ')}: {formatStatusLabel(check.status)}
@@ -4066,7 +4067,7 @@ function StepExecutionHistoryRow({
     <li className="step-execution-history-item">
       <div className="step-execution-history-head">
         <span className="step-execution-pill">Execution {execution.executionOrdinal}</span>
-        <ExecutionStatusPill status={execution.status} />
+        <StepLedgerStatusPill status={execution.status} />
         <span className="step-execution-reason">{formatStatusLabel(execution.reason)}</span>
         {downstreamInvalidated ? (
           <span
@@ -4291,7 +4292,7 @@ function StepLedgerRowCard({
             <span className="step-tl-title">{row.title}</span>
             <span className="step-tl-right">
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
-              <ExecutionStatusPill status={row.status} />
+              <StepLedgerStatusPill status={row.status} />
               {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}
               <StepProvenanceMarker row={row} />
               <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
@@ -6985,7 +6986,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           <div className="toolbar-identity-row">
             <p className="page-meta">Workflow {taskId || '—'}</p>
             {execution ? (
-              <ExecutionStatusPill status={execution.rawState || execution.state || execution.status} enableMotion={false} />
+              <WorkflowLifecycleStatusPill status={execution.rawState || execution.state || execution.status} enableMotion={false} />
             ) : null}
           </div>
         </div>
@@ -7514,7 +7515,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                               <strong>{item.title || item.workflowId}</strong>
                             </a>
                             <code className="text-xs break-all">{item.workflowId}</code>
-                            <ExecutionStatusPill status={stateLabel} />
+                            <WorkflowLifecycleStatusPill status={stateLabel} />
                             {isWaitingForRerun ? (
                               <p className="small">
                                 <strong>Prerequisite failed; waiting for successful rerun.</strong>{' '}
@@ -7552,7 +7553,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                             <strong>{item.title || item.workflowId}</strong>
                           </a>
                           <code className="text-xs break-all">{item.workflowId}</code>
-                          <ExecutionStatusPill status={item.state || 'unknown'} />
+                          <WorkflowLifecycleStatusPill status={item.state || 'unknown'} />
                           {item.summary ? <p className="small">{item.summary}</p> : null}
                           {item.closeStatus ? <p className="small">Close status: {formatStatusLabel(item.closeStatus)}</p> : null}
                         </div>

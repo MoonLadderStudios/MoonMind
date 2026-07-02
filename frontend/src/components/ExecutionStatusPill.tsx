@@ -1,7 +1,12 @@
 import { useMemo, type CSSProperties } from 'react';
 
-import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
-import { formatStatusLabel } from '../utils/formatters';
+import {
+  integrationProviderStatusPillView,
+  stepLedgerStatusPillView,
+  workflowLifecycleStatusPillView,
+  type ExecutionStatusPillOptions,
+  type StatusPillView,
+} from '../utils/executionStatusPillClasses';
 
 type GlyphStyle = CSSProperties & {
   '--mm-letter-count'?: number;
@@ -29,19 +34,8 @@ function splitGraphemes(value: string): string[] {
   return Array.from(value);
 }
 
-function visibleStatusLabel(status: string | null | undefined): string {
-  return formatStatusLabel(status);
-}
-
-export function ExecutionStatusPill({
-  status,
-  enableMotion = true,
-}: {
-  status: string | null | undefined;
-  enableMotion?: boolean;
-}) {
-  const label = visibleStatusLabel(status);
-  const pillProps = executionStatusPillProps(status, { enableMotion });
+function StatusPill({ view }: { view: StatusPillView }) {
+  const { label, pillProps } = view;
   const hasShimmerSweep = pillProps['data-effect'] === 'shimmer-sweep';
   const glyphs = useMemo(() => splitGraphemes(label), [label]);
 
@@ -68,4 +62,20 @@ export function ExecutionStatusPill({
       </span>
     </span>
   );
+}
+
+type DomainStatusPillProps = ExecutionStatusPillOptions & {
+  status: string | null | undefined;
+};
+
+export function WorkflowLifecycleStatusPill({ status, enableMotion = true }: DomainStatusPillProps) {
+  return <StatusPill view={workflowLifecycleStatusPillView(status, { enableMotion })} />;
+}
+
+export function StepLedgerStatusPill({ status, enableMotion = true }: DomainStatusPillProps) {
+  return <StatusPill view={stepLedgerStatusPillView(status, { enableMotion })} />;
+}
+
+export function IntegrationProviderStatusPill({ status, enableMotion = true }: DomainStatusPillProps) {
+  return <StatusPill view={integrationProviderStatusPillView(status, { enableMotion })} />;
 }

@@ -9,8 +9,8 @@ export function formatTaskSkills(
 }
 
 const STATUS_DISPLAY_NAMES: Record<string, string> = {
-  awaiting_slot: 'AWAITING SLOT',
-  waiting_on_dependencies: 'AWAITING DEP',
+  awaiting_slot: 'Awaiting slot',
+  waiting_on_dependencies: 'Waiting on dependencies',
   no_commit: 'No commit',
   no_changes: 'No commit',
   checkpoint_validation: 'Checkpoint validation',

@@ -4,9 +4,9 @@ import { formatStatusLabel } from './formatters';
 
 describe('formatStatusLabel', () => {
   it('uses compact user-facing labels for dependency and slot waits', () => {
-    expect(formatStatusLabel('waiting_on_dependencies')).toBe('AWAITING DEP');
-    expect(formatStatusLabel('WAITING ON DEPENDENCIES')).toBe('AWAITING DEP');
-    expect(formatStatusLabel('awaiting_slot')).toBe('AWAITING SLOT');
+    expect(formatStatusLabel('waiting_on_dependencies')).toBe('Waiting on dependencies');
+    expect(formatStatusLabel('WAITING ON DEPENDENCIES')).toBe('Waiting on dependencies');
+    expect(formatStatusLabel('awaiting_slot')).toBe('Awaiting slot');
   });
 
   it('renders canonical and legacy no-commit statuses as No commit', () => {

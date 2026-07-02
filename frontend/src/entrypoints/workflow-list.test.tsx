@@ -1192,17 +1192,20 @@ describe('Workflows Entrypoint', () => {
       expect(pill.dataset.state).toBe(label);
       expect(pill.className).toContain(`is-${label}`);
       expect(pill.className).toContain(`status-${label === 'executing' ? 'running' : label}`);
-      expect(pill.dataset.shimmerLabel).toBe(label);
-      expect(pill.getAttribute('aria-label')).toBe(label);
-      expect(pill.textContent).toBe(label);
+      const visibleLabel = label.charAt(0).toUpperCase() + label.slice(1);
+      expect(pill.dataset.shimmerLabel).toBe(visibleLabel);
+      expect(pill.getAttribute('aria-label')).toBe(visibleLabel);
+      expect(pill.textContent).toBe(visibleLabel);
       expect(pill.querySelector('.status-letter-wave')?.getAttribute('aria-hidden')).toBe('true');
       const glyphs = Array.from(pill.querySelectorAll<HTMLElement>('.status-letter-wave__glyph'));
-      expect(glyphs).toHaveLength(label.length);
-      expect(glyphs.map((glyph) => glyph.textContent).join('')).toBe(label);
+      expect(glyphs).toHaveLength(visibleLabel.length);
+      expect(glyphs.map((glyph) => glyph.textContent).join('')).toBe(visibleLabel);
       expect(glyphs.map((glyph) => glyph.style.getPropertyValue('--mm-letter-index'))).toEqual(
-        Array.from({ length: label.length }, (_, index) => String(index)),
+        Array.from({ length: visibleLabel.length }, (_, index) => String(index)),
       );
-      expect(glyphs.every((glyph) => glyph.style.getPropertyValue('--mm-letter-count') === String(label.length))).toBe(true);
+      expect(
+        glyphs.every((glyph) => glyph.style.getPropertyValue('--mm-letter-count') === String(visibleLabel.length)),
+      ).toBe(true);
     }
 
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
@@ -1211,18 +1214,18 @@ describe('Workflows Entrypoint', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1035');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1036');
 
-    const waitingPills = screen.getAllByText('AWAITING DEP');
+    const waitingPills = screen.getAllByText('Waiting on dependencies');
     expect(waitingPills.length).toBeGreaterThan(0);
     for (const pill of waitingPills) {
       expect(pill.closest('span')?.dataset.effect).toBeUndefined();
-      expect(pill.closest('span')?.className).toContain('status-awaiting-dependencies');
+      expect(pill.closest('span')?.className).toContain('status-waiting-on-dependencies');
     }
 
     const nonExecutingStatusPills = Array.from(
       document.querySelectorAll<HTMLElement>('.queue-table-cell-status span.status, .queue-card-status span.status'),
     );
 
-    const awaitingPills = nonExecutingStatusPills.filter((pill) => pill.textContent === 'awaiting external');
+    const awaitingPills = nonExecutingStatusPills.filter((pill) => pill.textContent === 'Awaiting external');
     expect(awaitingPills.length).toBeGreaterThan(0);
     for (const pill of awaitingPills) {
       expect(pill.dataset.effect).toBeUndefined();
@@ -1439,9 +1442,9 @@ describe('Workflows Entrypoint', () => {
     expect(optionLabels).toEqual([
       'scheduled',
       'initializing',
-      'AWAITING DEP',
+      'Waiting on dependencies',
       'planning',
-      'AWAITING SLOT',
+      'Awaiting slot',
       'executing',
       'proposals',
       'awaiting external',
@@ -1480,14 +1483,14 @@ describe('Workflows Entrypoint', () => {
     fireEvent.change(statusFilter, { target: { value: 'failed' } });
 
     const pillList = screen.getByLabelText('Selected status filters');
-    expect(pillList.textContent).toContain('completed');
-    expect(pillList.textContent).toContain('failed');
+    expect(pillList.textContent).toContain('Completed');
+    expect(pillList.textContent).toContain('Failed');
     expect(pillList.querySelector('.status-completed')).toBeTruthy();
     expect(pillList.querySelector('.status-failed')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove completed' }));
-    expect(pillList.textContent).not.toContain('completed');
-    expect(pillList.textContent).toContain('failed');
+    expect(pillList.textContent).not.toContain('Completed');
+    expect(pillList.textContent).toContain('Failed');
 
     applyFilterDrawer();
 
@@ -1525,7 +1528,7 @@ describe('Workflows Entrypoint', () => {
     expect(pillList.querySelector('.status-running')).toBeTruthy();
     expect(pillList.querySelector('.status-scheduled')).toBeTruthy();
     expect(pillList.querySelector('.status-awaiting-slot')).toBeTruthy();
-    expect(pillList.querySelector('.status-awaiting-dependencies')).toBeTruthy();
+    expect(pillList.querySelector('.status-waiting-on-dependencies')).toBeTruthy();
     expect(pillList.querySelector('.status-awaiting-external')).toBeTruthy();
     expect(pillList.querySelector('.status-initializing')).toBeTruthy();
     expect(pillList.querySelector('.status-planning')).toBeTruthy();
@@ -1653,9 +1656,9 @@ describe('Workflows Entrypoint', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Status filter: completed, failed' }));
     const selectedStatuses = screen.getByLabelText('Selected status filters');
-    expect(selectedStatuses.textContent).toContain('completed');
-    expect(selectedStatuses.textContent).toContain('failed');
-    expect(selectedStatuses.textContent).not.toContain('canceled');
+    expect(selectedStatuses.textContent).toContain('Completed');
+    expect(selectedStatuses.textContent).toContain('Failed');
+    expect(selectedStatuses.textContent).not.toContain('Canceled');
   });
 
   it('summarizes multi-value excluded status filters unambiguously with a bounded label', async () => {

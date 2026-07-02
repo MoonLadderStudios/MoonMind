@@ -974,7 +974,7 @@ describe('Dashboard shared entry', () => {
       '.status-queued',
       '.status-scheduled',
       '.status-awaiting-slot',
-      '.status-awaiting-dependencies',
+      '.status-waiting-on-dependencies',
       '.status-awaiting-external',
       '.status-initializing',
       '.status-planning',
@@ -1003,21 +1003,24 @@ describe('Dashboard shared entry', () => {
   it('defines MM-1035 exact workflow status color roles', async () => {
     const queueBlock = cssRuleBlocks(
       dashboardCss,
-      '.status-queued, .status-scheduled, .status-awaiting-slot',
+      '.status-queued, .status-pending, .status-scheduled, .status-awaiting-slot',
     ).join('\n');
     expect(queueBlock).toContain('color: rgb(var(--mm-status-queued, 99 102 241))');
     expect(queueBlock).toContain('rgb(var(--mm-status-queued, 99 102 241) / 0.14)');
 
     const waitBlock = cssRuleBlocks(
       dashboardCss,
-      '.status-awaiting_action, .status-waiting, .status-awaiting-dependencies, .status-awaiting-external',
+      '.status-awaiting-action, .status-waiting, .status-waiting-on-dependencies, .status-awaiting-external',
     ).join('\n');
     expect(dashboardCss).toContain('--mm-status-waiting: 146 64 14');
     expect(dashboardCss).toContain('--mm-status-waiting: 250 204 21');
     expect(waitBlock).toContain('color: rgb(var(--mm-status-waiting))');
     expect(waitBlock).toContain('rgb(var(--mm-status-waiting) / 0.14)');
 
-    const setupBlock = cssRuleBlocks(dashboardCss, '.status-initializing, .status-planning').join('\n');
+    const setupBlock = cssRuleBlocks(
+      dashboardCss,
+      '.status-initializing, .status-ready, .status-reviewing, .status-planning',
+    ).join('\n');
     expect(setupBlock).toContain('color: rgb(var(--mm-status-setup, 37 99 235))');
     expect(setupBlock).toContain('rgb(var(--mm-status-setup, 37 99 235) / 0.14)');
 
