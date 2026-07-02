@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/integration/test_profile_creation_on_register.py (score: 1.000, trust: canonical)\n    line 46: assert resp.status_code == 201\n2. moonmind/mcp/__init__.py (score: 1.000, trust: canonical)\n    line 3: from moonmind.mcp.jira_tool_registry import (\n3. moonmind/integrations/pentest/models.py (score: 1.000, trust: canonical)\n    line 12: from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit\n4. tests/integration/skills/test_batch_dependabot_resolver_e2e.py (score: 1.000, trust: canonical)\n    line 140: args=[\"gh\"], returncode=0, stdout=json.dumps(_mixed_pr_set()), stderr=\"\"\n5. moonmind/integrations/jira/client.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Low-level Jira REST client with bounded retries and sanitized errors.\"\"\"\n6. moonmind/integrations/jira/models.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Strict request models for Jira MCP tools.\"\"\"\n7. moonmind/mcp/skills_on_demand_registry.py (score: 1.000, trust: canonical)\n    line 169: or initial_result.code != \"enabled_mode_not_implemented\"\n8. moonmind/integrations/jira/errors.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Sanitized Jira integration error types.\"\"\"",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/integration/test_profile_creation_on_register.py",
+      "text": "line 46: assert resp.status_code == 201",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 46,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/mcp/__init__.py",
+      "text": "line 3: from moonmind.mcp.jira_tool_registry import (",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/pentest/models.py",
+      "text": "line 12: from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 12,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/integration/skills/test_batch_dependabot_resolver_e2e.py",
+      "text": "line 140: args=[\"gh\"], returncode=0, stdout=json.dumps(_mixed_pr_set()), stderr=\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 140,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/client.py",
+      "text": "line 1: \"\"\"Low-level Jira REST client with bounded retries and sanitized errors.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/models.py",
+      "text": "line 1: \"\"\"Strict request models for Jira MCP tools.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/mcp/skills_on_demand_registry.py",
+      "text": "line 169: or initial_result.code != \"enabled_mode_not_implemented\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 169,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/errors.py",
+      "text": "line 1: \"\"\"Sanitized Jira integration error types.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-07-02T08:25:16Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
