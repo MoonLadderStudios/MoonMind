@@ -1,6 +1,6 @@
 export const WORKFLOW_STATUS_TRACEABILITY = Object.freeze({
   jiraIssue: 'MM-488',
-  relatedJiraIssues: ['MM-489', 'MM-490', 'MM-491', 'MM-704', 'MM-1035', 'MM-1036', 'MM-1073'],
+  relatedJiraIssues: ['MM-489', 'MM-490', 'MM-491', 'MM-704', 'MM-1035', 'MM-1036', 'MM-1073', 'MM-1083'],
   designRequirements: [
     'DESIGN-REQ-001',
     'DESIGN-REQ-002',
@@ -46,6 +46,10 @@ const WORKFLOW_STATUS_LABELS: Record<WorkflowStatusKey, string> = {
   canceled: 'Canceled',
 };
 
+const WORKFLOW_COMPATIBILITY_ALIASES: Record<string, WorkflowStatusKey> = {
+  no_changes: 'no_commit',
+};
+
 const WORKFLOW_STATUS_CLASSES: Record<WorkflowStatusKey, string> = {
   scheduled: 'status status-scheduled',
   initializing: 'status status-initializing',
@@ -87,6 +91,24 @@ function isWorkflowStatusKey(key: string): key is WorkflowStatusKey {
   return Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_LABELS, key);
 }
 
+export function isWorkflowLifecycleStatus(status: string | null | undefined): boolean {
+  return isWorkflowStatusKey(normalizedWorkflowStatusKey(status));
+}
+
+function warnUnknownWorkflowStatus(key: string): void {
+  if (key) {
+    console.warn(`Unknown workflow lifecycle status: ${key}`);
+  }
+}
+
+function canonicalWorkflowCompatibilityKey(status: string | null | undefined): string {
+  const key = normalizedWorkflowStatusKey(status);
+  if (Object.prototype.hasOwnProperty.call(WORKFLOW_COMPATIBILITY_ALIASES, key)) {
+    return WORKFLOW_COMPATIBILITY_ALIASES[key]!;
+  }
+  return key;
+}
+
 export function formatWorkflowStatusLabel(
   status: string | null | undefined,
   fallback = '-',
@@ -96,6 +118,7 @@ export function formatWorkflowStatusLabel(
   if (isWorkflowStatusKey(key)) {
     return WORKFLOW_STATUS_LABELS[key];
   }
+  warnUnknownWorkflowStatus(key);
   return fallback;
 }
 
@@ -110,9 +133,11 @@ export function workflowStatusPillProps(
   options: WorkflowStatusPillOptions = {},
 ): WorkflowStatusPillProps {
   const key = normalizedWorkflowStatusKey(status);
-  const className = isWorkflowStatusKey(key)
-    ? WORKFLOW_STATUS_CLASSES[key]
-    : 'status status-neutral';
+  const className = isWorkflowStatusKey(key) ? WORKFLOW_STATUS_CLASSES[key] : 'status status-neutral';
+
+  if (!isWorkflowStatusKey(key)) {
+    warnUnknownWorkflowStatus(key);
+  }
 
   if (options.enableMotion !== false && isShimmerSweepStatusKey(key)) {
     return {
@@ -124,4 +149,25 @@ export function workflowStatusPillProps(
   }
 
   return { className };
+}
+
+export function formatWorkflowCompatibilityStatusLabel(
+  status: string | null | undefined,
+  fallback = '-',
+): string {
+  const key = canonicalWorkflowCompatibilityKey(status);
+  if (!key) return fallback;
+  if (isWorkflowStatusKey(key)) {
+    return WORKFLOW_STATUS_LABELS[key];
+  }
+  warnUnknownWorkflowStatus(key);
+  return fallback;
+}
+
+export function workflowCompatibilityStatusPillProps(
+  status: string | null | undefined,
+  options: WorkflowStatusPillOptions = {},
+): WorkflowStatusPillProps {
+  const key = canonicalWorkflowCompatibilityKey(status);
+  return workflowStatusPillProps(key, options);
 }

@@ -64,21 +64,42 @@ const STEP_STATUS_CLASSES: Record<StepStatusKey, string> = {
   superseded: 'status status-neutral',
 };
 
+function normalizedStepStatusKey(status: string | null | undefined): string {
+  return String(status || '').toLowerCase().trim().replace(/\s+/g, '_');
+}
+
 function isStepStatusKey(key: string): key is StepStatusKey {
   return Object.prototype.hasOwnProperty.call(STEP_STATUS_LABELS, key);
+}
+
+export function isStepLedgerStatus(status: string | null | undefined): boolean {
+  return isStepStatusKey(normalizedStepStatusKey(status));
+}
+
+function warnUnknownStepStatus(key: string): void {
+  if (key) {
+    console.warn(`Unknown step ledger status: ${key}`);
+  }
 }
 
 export function formatStepStatusLabel(
   status: string | null | undefined,
   fallback = '-',
 ): string {
-  const key = String(status || '').toLowerCase().trim().replace(/\s+/g, '_');
+  const key = normalizedStepStatusKey(status);
   if (!key) return fallback;
-  return isStepStatusKey(key) ? STEP_STATUS_LABELS[key] : fallback;
+  if (isStepStatusKey(key)) {
+    return STEP_STATUS_LABELS[key];
+  }
+  warnUnknownStepStatus(key);
+  return fallback;
 }
 
 export function stepStatusPillProps(status: string | null | undefined): Readonly<{ className: string }> {
-  const key = String(status || '').toLowerCase().trim().replace(/\s+/g, '_');
+  const key = normalizedStepStatusKey(status);
   const className = isStepStatusKey(key) ? STEP_STATUS_CLASSES[key] : 'status status-neutral';
+  if (!isStepStatusKey(key)) {
+    warnUnknownStepStatus(key);
+  }
   return { className };
 }
