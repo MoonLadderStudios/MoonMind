@@ -253,6 +253,7 @@ class RecurringWorkflowDefinition(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
     runs: Mapped[list["RecurringWorkflowRun"]] = relationship(
         "RecurringWorkflowRun",
         back_populates="definition",
@@ -407,6 +408,257 @@ class OmnigentExternalRun(Base):
         onupdate=func.now(),
     )
 
+
+class WorkflowCheckpointBranch(Base):
+    """Product-level checkpoint branch persisted separately from git refs."""
+
+    __tablename__ = "workflow_checkpoint_branches"
+    __table_args__ = (
+        Index("ix_checkpoint_branches_workflow", "workflow_id"),
+        Index("ix_checkpoint_branches_checkpoint", "source_checkpoint_ref"),
+        Index("ix_checkpoint_branches_state", "state"),
+    )
+
+    branch_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    root_workflow_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    logical_step_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_execution_ordinal: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source_checkpoint_boundary: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_checkpoint_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_checkpoint_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    parent_branch_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    parent_turn_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    state: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="created", server_default="created"
+    )
+    branch_kind: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="checkpoint", server_default="checkpoint"
+    )
+    workspace_policy: Mapped[str] = mapped_column(String(64), nullable=False)
+    runtime_context_policy: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    git_repository: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    git_base_branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    git_base_commit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    git_work_branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    current_head_step_execution_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    current_head_checkpoint_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    current_head_commit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    pull_request_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    artifact_refs: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    diagnostics: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    promoted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    turns: Mapped[list["WorkflowCheckpointBranchTurn"]] = relationship(
+        "WorkflowCheckpointBranchTurn",
+        back_populates="branch",
+        cascade="all, delete-orphan",
+        foreign_keys=lambda: [WorkflowCheckpointBranchTurn.branch_id],
+        order_by="WorkflowCheckpointBranchTurn.created_at",
+    )
+    git_binding: Mapped[Optional["WorkflowCheckpointBranchGitBinding"]] = relationship(
+        "WorkflowCheckpointBranchGitBinding",
+        back_populates="branch",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    artifacts: Mapped[list["WorkflowCheckpointBranchArtifact"]] = relationship(
+        "WorkflowCheckpointBranchArtifact",
+        back_populates="branch",
+        cascade="all, delete-orphan",
+        order_by="WorkflowCheckpointBranchArtifact.created_at",
+    )
+
+
+class WorkflowCheckpointBranchTurn(Base):
+    """Immutable instruction-bearing turn for a checkpoint branch."""
+
+    __tablename__ = "workflow_checkpoint_branch_turns"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", name="uq_checkpoint_branch_turn_idempotency_key"
+        ),
+        Index("ix_checkpoint_branch_turns_branch", "branch_id"),
+        Index("ix_checkpoint_branch_turns_status", "status"),
+    )
+
+    branch_turn_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    branch_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    parent_turn_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey(
+            "workflow_checkpoint_branch_turns.branch_turn_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
+    source_checkpoint_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_checkpoint_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    instruction_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    instruction_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    context_bundle_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    workspace_policy: Mapped[str] = mapped_column(String(64), nullable=False)
+    git_work_branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    workspace_restore_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    git_binding_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    step_execution_manifest_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    created_step_execution_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    runtime_agent_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    provider_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="preparing", server_default="preparing"
+    )
+    diagnostics: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    branch: Mapped[WorkflowCheckpointBranch] = relationship(
+        "WorkflowCheckpointBranch",
+        back_populates="turns",
+        foreign_keys=[branch_id],
+    )
+
+
+class WorkflowCheckpointBranchGitBinding(Base):
+    """Git/worktree/provider workspace binding for one product checkpoint branch."""
+
+    __tablename__ = "workflow_checkpoint_branch_git_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "repository",
+            "work_branch",
+            name="uq_checkpoint_branch_git_binding_work_branch",
+        ),
+        Index("ix_checkpoint_branch_git_bindings_repository", "repository"),
+    )
+
+    branch_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    repository: Mapped[str] = mapped_column(String(512), nullable=False)
+    base_branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    base_commit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    work_branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    worktree_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    provider_workspace_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    head_commit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    patch_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    pull_request_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    workspace_policy: Mapped[str] = mapped_column(String(64), nullable=False)
+    creation_mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    publish_status: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="not_published",
+        server_default="not_published",
+    )
+    binding_metadata: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    branch: Mapped[WorkflowCheckpointBranch] = relationship(
+        "WorkflowCheckpointBranch", back_populates="git_binding"
+    )
+
+
+class WorkflowCheckpointBranchArtifact(Base):
+    """Artifact refs attached to checkpoint branch or branch-turn evidence."""
+
+    __tablename__ = "workflow_checkpoint_branch_artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "branch_id",
+            "branch_turn_id",
+            "artifact_kind",
+            name="uq_checkpoint_branch_artifact_kind",
+        ),
+        Index("ix_checkpoint_branch_artifacts_branch", "branch_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    branch_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    branch_turn_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey("workflow_checkpoint_branch_turns.branch_turn_id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    artifact_kind: Mapped[str] = mapped_column(String(128), nullable=False)
+    artifact_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    branch: Mapped[WorkflowCheckpointBranch] = relationship(
+        "WorkflowCheckpointBranch", back_populates="artifacts"
+    )
+
+
 __all__ = [
     "Base",
     "User",
@@ -419,6 +671,10 @@ __all__ = [
     "RecurringWorkflowScheduleType",
     "RecurringWorkflowScopeType",
     "OmnigentExternalRun",
+    "WorkflowCheckpointBranch",
+    "WorkflowCheckpointBranchTurn",
+    "WorkflowCheckpointBranchGitBinding",
+    "WorkflowCheckpointBranchArtifact",
     "TemporalWorkflowType",
     "MoonMindWorkflowState",
     "TemporalExecutionCloseStatus",
