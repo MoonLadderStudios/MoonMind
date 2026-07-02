@@ -101,6 +101,20 @@ PENTEST_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
 pytestmark = [pytest.mark.asyncio]
 
 
+async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -> None:
+    prepared = TemporalAgentRuntimeActivities._prepare_managed_codex_turn_text(
+        "Run moonspec-verify.",
+        parameters={
+            "metadata": {"moonmind": {"selectedSkill": "moonspec-verify"}},
+            "verify_artifact_path": "var/artifacts/moonspec-verify/verify-final.json",
+        },
+    )
+
+    assert "MoonSpec verification output contract:" in prepared
+    assert "var/artifacts/moonspec-verify/verify-final.json" in prepared
+    assert "complete structured verifier JSON" in prepared
+
+
 async def test_checkpoint_activity_runtime_bindings_are_registered() -> None:
     catalog = TemporalActivityCatalog(
         activities=(

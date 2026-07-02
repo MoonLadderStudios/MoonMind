@@ -2499,6 +2499,59 @@ def test_moonspec_verify_text_verdict_parser_is_not_a_branch_boundary(
     )
 
 
+def test_moonspec_verify_gate_accepts_report_shaped_markdown(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "lastAssistantText": (
+                "# MoonSpec Verification Report\n\n"
+                "**Feature**: MM-1099\n"
+                "**Verdict**: `FULLY_IMPLEMENTED`\n"
+                "**Confidence**: HIGH\n"
+            ),
+            "operator_summary": "stale session text from an earlier step",
+            "diagnosticsRef": "art_verify_report",
+        },
+    )
+
+    gate_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert gate_context["verdict"] == "FULLY_IMPLEMENTED"
+    assert gate_context["summary"] == (
+        "MoonSpec verification report verdict: FULLY_IMPLEMENTED"
+    )
+    assert gate_context["diagnosticsRef"] == "art_verify_report"
+    assert gate_context["invalid"] is False
+    assert gate_context["degraded"] is False
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is False
+
+
+def test_moonspec_verify_gate_report_fallback_ignores_stale_operator_summary(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "lastAssistantText": (
+                "# MoonSpec Verification Report\n\n"
+                "**Feature**: MM-1099\n"
+                "**Verdict**: ADDITIONAL_WORK_NEEDED\n"
+                "**Confidence**: MEDIUM\n"
+            ),
+            "operator_summary": "stale Jira updater transcript",
+            "diagnosticsRef": "art_verify_report",
+        },
+    )
+
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    blocked_message = mock_run_workflow._plan_blocked_message or ""
+    assert "ADDITIONAL_WORK_NEEDED" in blocked_message
+    assert "MoonSpec verification report verdict" in blocked_message
+    assert "stale Jira updater transcript" not in blocked_message
+    assert "art_verify_report" in blocked_message
+
+
 def test_moonspec_verify_gate_records_nested_summary_and_report(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -2545,6 +2598,37 @@ def test_moonspec_verify_gate_fails_closed_for_verdict_looking_prose_output(
     assert gate_context["diagnosticsRef"] == "art_verify_prose_only"
     assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
     assert "NO_DETERMINATION" in (mock_run_workflow._plan_blocked_message or "")
+
+
+def test_moonspec_verify_default_artifact_path_is_added_to_parameters(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    parameters: dict[str, Any] = {}
+
+    mock_run_workflow._ensure_moonspec_verify_parameters(
+        parameters=parameters,
+        node_inputs={"inputs": {}},
+        node_id="tpl:jira-orchestrate:11:e7cc7ca9",
+    )
+
+    assert parameters["verify_artifact_path"] == (
+        "var/artifacts/moonspec-verify/"
+        "tpl-jira-orchestrate-11-e7cc7ca9.json"
+    )
+
+
+def test_moonspec_verify_artifact_path_uses_nested_skill_args(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    parameters: dict[str, Any] = {}
+
+    mock_run_workflow._ensure_moonspec_verify_parameters(
+        parameters=parameters,
+        node_inputs={"inputs": {"verifyArtifactPath": "var/artifacts/custom.json"}},
+        node_id="verify-final",
+    )
+
+    assert parameters["verify_artifact_path"] == "var/artifacts/custom.json"
 
 
 def test_moonspec_verify_blocked_attempt_one_stops_with_remaining_budget(

@@ -7960,6 +7960,10 @@ class TemporalAgentRuntimeActivities:
             parameters=parameters,
             skill_materialization_metadata=skill_materialization_metadata,
         )
+        prepared = cls._append_moonspec_verify_artifact_hint(
+            prepared,
+            parameters=parameters,
+        )
         prepared = cls._append_skills_on_demand_notice(
             prepared,
             parameters=parameters,
@@ -8168,6 +8172,37 @@ class TemporalAgentRuntimeActivities:
         if not on_demand_instruction or on_demand_instruction in instructions:
             return instructions
         return instructions.rstrip() + "\n\n" + on_demand_instruction
+
+    @staticmethod
+    def _append_moonspec_verify_artifact_hint(
+        instructions: str,
+        *,
+        parameters: Mapping[str, Any] | None,
+    ) -> str:
+        params = parameters if isinstance(parameters, Mapping) else {}
+        if selected_agent_skill(params) != "moonspec-verify":
+            return instructions
+        verify_artifact_path = ""
+        for key in (
+            "verify_artifact_path",
+            "verifyArtifactPath",
+            "verification_artifact_path",
+            "verificationArtifactPath",
+        ):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                verify_artifact_path = value.strip()
+                break
+        if not verify_artifact_path or verify_artifact_path in instructions:
+            return instructions
+        block = (
+            "MoonSpec verification output contract:\n"
+            f"- Write the complete structured verifier JSON to `{verify_artifact_path}`.\n"
+            "- The JSON must include the canonical `verdict`, `recommendedNextAction`, "
+            "`recoverableInCurrentRuntime`, and `remainingWork` fields.\n"
+            "- Still return the Markdown MoonSpec Verification Report in the assistant response."
+        )
+        return instructions.rstrip() + "\n\n" + block
 
     @staticmethod
     def _append_managed_step_boundary(instructions: str) -> str:
