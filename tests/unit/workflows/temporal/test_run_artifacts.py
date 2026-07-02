@@ -1059,7 +1059,7 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
         "Workflow blocked by plan step: Required dependency is not done."
     )
     assert workflow._publish_status == "not_required"
-    assert steps[0]["status"] == "succeeded"
+    assert steps[0]["status"] == "completed"
     assert steps[1]["status"] == "skipped"
 
 @pytest.mark.asyncio
