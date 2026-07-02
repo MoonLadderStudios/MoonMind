@@ -42,7 +42,7 @@ Do not use this skill for a single natural-language feature request. Use `moonsp
 
 Classify the source design before extracting coverage points, using the document classes in `docs/Workflows/MoonSpecDocumentModel.md`:
 
-- `canonical-declarative`: a readable repo path under `docs/` (or `.specify/memory/constitution.md`) describing desired state.
+- `canonical-declarative`: a readable repo path under `docs/` describing desired state.
 - `declarative-text`: pasted declarative design text, trusted Jira issue description, workflow instructions, or a file-backed declarative design outside `docs/`.
 - `imperative-input`: a selected source whose primary framing is steps, phases, checkboxes, status, or migration sequencing.
 
