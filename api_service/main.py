@@ -40,6 +40,7 @@ from api_service.api.routers.execution_integrations import (
     router as execution_integrations_router,
 )
 from api_service.api.routers.executions import router as executions_router
+from api_service.api.routers.checkpoint_branches import router as checkpoint_branches_router
 from api_service.api.routers.manifests import router as manifests_router
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.jira_browser import router as jira_browser_router
@@ -457,6 +458,7 @@ app.include_router(proxy_router, prefix="/api/v1")
 app.include_router(system_operations_router)
 app.include_router(deployment_operations_router)
 app.include_router(executions_router)
+app.include_router(checkpoint_branches_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)
 
