@@ -2800,9 +2800,9 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .status-no-commit {
-  color: #159376;
-  background: rgb(21 147 118 / 0.14);
-  border-color: rgb(26 153 123 / 0.62);
+  color: rgb(var(--mm-muted));
+  background: rgb(var(--mm-muted) / 0.12);
+  border-color: rgb(var(--mm-border) / 0.75);
 }
 
 .status-failed {

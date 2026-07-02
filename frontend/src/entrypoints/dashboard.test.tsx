@@ -1029,7 +1029,7 @@ describe('Dashboard shared entry', () => {
     expect(cssRuleBlock(dashboardCss, '.status-canceled')).toContain(
       'color: rgb(var(--mm-status-canceled, 249 115 22))',
     );
-    expect(cssRuleBlock(dashboardCss, '.status-no-commit')).toContain('color: #159376');
+    expect(cssRuleBlock(dashboardCss, '.status-no-commit')).toContain('color: rgb(var(--mm-muted))');
     expect(cssRuleBlock(dashboardCss, '.status-running, .status-running.is-executing')).toContain(
       'color: rgb(var(--mm-accent-2))',
     );
