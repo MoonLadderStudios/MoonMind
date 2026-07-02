@@ -505,6 +505,7 @@ RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
 RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
+RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_EMIT_EPHEMERAL_STEP_CHECKPOINTS_PATCH = (
     "run-emit-ephemeral-step-checkpoints-v1"
@@ -1373,6 +1374,9 @@ class MoonMindRunWorkflow:
         resolved_summary = summary
 
         if phase in {"start", "launch_blocked"}:
+            canonical_step_status_vocab = workflow.patched(
+                RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH
+            )
             compensation_plan = self._orchestrate_reattempt_compensation(
                 logical_step_id,
                 execution_ordinal=attempt,
@@ -1384,7 +1388,13 @@ class MoonMindRunWorkflow:
             launch_blocked = phase == "launch_blocked" or (
                 self._workspace_policy_launch_blocked(workspace)
             )
-            resolved_status = "blocked" if launch_blocked else "executing"
+            resolved_status = (
+                "blocked"
+                if launch_blocked
+                else "executing"
+                if canonical_step_status_vocab
+                else "running"
+            )
             if launch_blocked:
                 resolved_terminal_disposition = "blocked"
                 resolved_summary = "Workspace policy rejected before launch."
@@ -2695,6 +2705,8 @@ class MoonMindRunWorkflow:
                     "Recovery source preserved step requires logical step ID."
                 )
             status = self._recovery_source_text(preserved, "status").lower()
+            if status == "succeeded":
+                status = "completed"
             if status and status not in {"completed", "skipped"}:
                 raise ValueError(
                     f"preserved step {logical_step_id} must be completed before Resume"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Literal, Optional
 
@@ -2089,6 +2090,13 @@ class RecoveryCheckpointPreservedStepModel(BaseModel):
     )
     step_checkpoint_ref: Optional[str] = Field(None, alias="stepCheckpointRef")
 
+    @field_validator("status", mode="before")
+    @classmethod
+    def _normalize_legacy_status(cls, value: Any) -> Any:
+        if str(value or "").strip().lower() == "succeeded":
+            return "completed"
+        return value
+
     @field_validator("artifacts", mode="before")
     @classmethod
     def _validate_compact_artifacts(cls, value: Any) -> dict[str, Any]:
@@ -2557,6 +2565,18 @@ class ExecutionProgressModel(BaseModel):
     canceled: int = Field(0, alias="canceled", ge=0)
     current_step_title: str | None = Field(None, alias="currentStepTitle")
     updated_at: datetime = Field(..., alias="updatedAt")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_progress_fields(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        payload = dict(value)
+        if payload.get("executing") is None and payload.get("running") is not None:
+            payload["executing"] = payload["running"]
+        if payload.get("completed") is None and payload.get("succeeded") is not None:
+            payload["completed"] = payload["succeeded"]
+        return payload
 
 class ExecutionMergeAutomationBlockerModel(BaseModel):
     """Operator-visible merge automation blocker."""

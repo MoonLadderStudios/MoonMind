@@ -19,6 +19,7 @@ from moonmind.workflows.temporal.step_ledger import (
     build_progress_summary,
     mark_step_execution_manifest_evidence,
     mark_step_checkpoint_evidence,
+    refresh_ready_steps,
     upsert_step_check,
     update_step_row,
 )
@@ -28,8 +29,10 @@ def test_step_execution_artifact_status_converts_explicitly_to_step_ledger_statu
     assert step_execution_to_ledger_status("pending") == "pending"
     assert step_execution_to_ledger_status("preparing") == "executing"
     assert step_execution_to_ledger_status("executing") == "executing"
+    assert step_execution_to_ledger_status("running") == "executing"
     assert step_execution_to_ledger_status("checking") == "reviewing"
     assert step_execution_to_ledger_status("completed") == "completed"
+    assert step_execution_to_ledger_status("succeeded") == "completed"
     assert step_execution_to_ledger_status("blocked") == "awaiting_external"
     assert step_execution_to_ledger_status("superseded") == "skipped"
 
@@ -236,6 +239,30 @@ def test_progress_summary_prefers_active_step_title_and_counts_statuses() -> Non
         "currentStepTitle": "Run tests",
         "updatedAt": updated_at.isoformat(),
     }
+
+def test_progress_summary_normalizes_legacy_replayed_statuses() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 5, tzinfo=UTC)
+    progress = build_progress_summary(
+        [
+            {
+                "logicalStepId": "step-1",
+                "status": "succeeded",
+                "title": "Prepare workspace",
+                "updatedAt": updated_at.isoformat(),
+            },
+            {
+                "logicalStepId": "step-2",
+                "status": "running",
+                "title": "Run tests",
+                "updatedAt": updated_at.isoformat(),
+            },
+        ],
+        updated_at=updated_at,
+    )
+
+    assert progress["executing"] == 1
+    assert progress["completed"] == 1
+    assert progress["currentStepTitle"] == "Run tests"
 
 def test_progress_summary_does_not_treat_ready_step_as_current() -> None:
     updated_at = datetime(2026, 4, 7, 12, 6, tzinfo=UTC)
@@ -529,6 +556,30 @@ def test_update_step_row_allows_explicit_last_error_clear() -> None:
     )
 
     assert rows[0]["status"] == "completed"
+
+def test_refresh_ready_steps_treats_legacy_succeeded_dependency_as_ready() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 12, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "prepare",
+                "tool": {"type": "skill", "name": "repo.prepare"},
+                "inputs": {"title": "Prepare"},
+            },
+            {
+                "id": "run-tests",
+                "tool": {"type": "skill", "name": "repo.test"},
+                "inputs": {"title": "Run tests"},
+            },
+        ],
+        dependency_map={"prepare": [], "run-tests": ["prepare"]},
+        updated_at=updated_at,
+    )
+    rows[0]["status"] = "succeeded"
+
+    refresh_ready_steps(rows, updated_at=updated_at)
+
+    assert rows[1]["status"] == "ready"
 
 def test_upsert_step_check_updates_existing_review_state() -> None:
     updated_at = datetime(2026, 4, 7, 12, 15, tzinfo=UTC)

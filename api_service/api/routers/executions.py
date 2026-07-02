@@ -2178,12 +2178,16 @@ def _bounded_execution_progress_from_sources(
             "total": source.get("total"),
             "pending": source.get("pending"),
             "ready": source.get("ready"),
-            "executing": source.get("executing"),
+            "executing": source.get("executing")
+            if source.get("executing") is not None
+            else source.get("running"),
             "awaitingExternal": source.get("awaitingExternal")
             if source.get("awaitingExternal") is not None
             else source.get("awaiting_external"),
             "reviewing": source.get("reviewing"),
-            "completed": source.get("completed"),
+            "completed": source.get("completed")
+            if source.get("completed") is not None
+            else source.get("succeeded"),
             "failed": source.get("failed"),
             "skipped": source.get("skipped"),
             "canceled": source.get("canceled"),

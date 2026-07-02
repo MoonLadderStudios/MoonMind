@@ -14,8 +14,10 @@ class StepExecutionArtifactStatus(str, enum.Enum):
     PENDING = "pending"
     PREPARING = "preparing"
     EXECUTING = "executing"
+    RUNNING = "running"
     CHECKING = "checking"
     COMPLETED = "completed"
+    SUCCEEDED = "succeeded"
     FAILED = "failed"
     BLOCKED = "blocked"
     CANCELED = "canceled"
@@ -26,8 +28,10 @@ StepExecutionArtifactStatusValue = Literal[
     "pending",
     "preparing",
     "executing",
+    "running",
     "checking",
     "completed",
+    "succeeded",
     "failed",
     "blocked",
     "canceled",
@@ -67,8 +71,10 @@ STEP_EXECUTION_ARTIFACT_STATUS_TO_LEDGER_STATUS: dict[
     StepExecutionArtifactStatus.PENDING: StepLedgerStatus.PENDING,
     StepExecutionArtifactStatus.PREPARING: StepLedgerStatus.EXECUTING,
     StepExecutionArtifactStatus.EXECUTING: StepLedgerStatus.EXECUTING,
+    StepExecutionArtifactStatus.RUNNING: StepLedgerStatus.EXECUTING,
     StepExecutionArtifactStatus.CHECKING: StepLedgerStatus.REVIEWING,
     StepExecutionArtifactStatus.COMPLETED: StepLedgerStatus.COMPLETED,
+    StepExecutionArtifactStatus.SUCCEEDED: StepLedgerStatus.COMPLETED,
     StepExecutionArtifactStatus.FAILED: StepLedgerStatus.FAILED,
     StepExecutionArtifactStatus.BLOCKED: StepLedgerStatus.AWAITING_EXTERNAL,
     StepExecutionArtifactStatus.CANCELED: StepLedgerStatus.CANCELED,

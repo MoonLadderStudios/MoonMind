@@ -119,6 +119,18 @@ def test_step_execution_artifact_statuses_map_to_ledger_statuses() -> None:
     )
     assert (
         STEP_EXECUTION_ARTIFACT_STATUS_TO_LEDGER_STATUS[
+            StepExecutionArtifactStatus.RUNNING
+        ]
+        is StepLedgerStatus.EXECUTING
+    )
+    assert (
+        STEP_EXECUTION_ARTIFACT_STATUS_TO_LEDGER_STATUS[
+            StepExecutionArtifactStatus.SUCCEEDED
+        ]
+        is StepLedgerStatus.COMPLETED
+    )
+    assert (
+        STEP_EXECUTION_ARTIFACT_STATUS_TO_LEDGER_STATUS[
             StepExecutionArtifactStatus.SUPERSEDED
         ]
         is StepLedgerStatus.SKIPPED

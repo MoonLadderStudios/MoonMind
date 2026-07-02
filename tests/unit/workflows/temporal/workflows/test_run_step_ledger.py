@@ -50,7 +50,11 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         "upsert_search_attributes",
         search_updates.append,
     )
-    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH,
+    )
     return memo_updates
 
 def _ordered_nodes() -> list[dict]:
@@ -1817,6 +1821,57 @@ async def test_external_continuation_manifest_records_side_effects_and_checkpoin
         "workspaceCheckpointRef": "artifact://checkpoints/workspace",
         "stepCheckpointRef": "artifact://checkpoints/step",
     }
+
+
+@pytest.mark.asyncio
+async def test_run_records_legacy_start_manifest_status_when_status_vocab_unpatched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return f"artifact-attempt-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "run-tests",
+                "tool": {"type": "skill", "name": "repo.run_tests"},
+                "inputs": {"title": "Run tests"},
+            }
+        ],
+        dependency_map={"run-tests": []},
+        updated_at=now,
+    )
+
+    workflow._mark_step_running("run-tests", updated_at=now, summary="Run tests")
+    await workflow._record_step_execution_manifest(
+        "run-tests",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+
+    assert writes[0]["payload"]["status"] == "running"
 
 
 @pytest.mark.asyncio

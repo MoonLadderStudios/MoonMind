@@ -62,6 +62,10 @@ const STEP_STATUS_ICON_KEYS = {
   canceled: 'canceled',
 } as const satisfies Record<CanonicalStepStatus, WorkflowStatusIconKey>;
 
+const STATUS_ICON_LABEL_OVERRIDES: Record<string, string> = {
+  waiting_on_dependencies: 'Awaiting dependencies',
+};
+
 function normalizedStatusKey(status: string | null | undefined): string {
   return String(status || '')
     .toLowerCase()
@@ -77,11 +81,34 @@ function isCanonicalStepStatus(key: string): key is CanonicalStepStatus {
   return (CANONICAL_STEP_STATUSES as readonly string[]).includes(key);
 }
 
+function defaultStatusIconLabel(status: string | null | undefined): string {
+  const key = normalizedStatusKey(status);
+  const override = Object.prototype.hasOwnProperty.call(STATUS_ICON_LABEL_OVERRIDES, key)
+    ? STATUS_ICON_LABEL_OVERRIDES[key]
+    : undefined;
+  if (override) return override;
+  const label = formatStatusLabel(status);
+  const knownStatus =
+    isWorkflowStatusIconKey(key) ||
+    isCanonicalStepStatus(key) ||
+    key === 'running' ||
+    key === 'succeeded' ||
+    key === 'awaiting_action';
+  return label === '—' || !label || !knownStatus
+    ? label
+    : `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
+}
+
 export function statusIconKey(
   status: string | null | undefined,
   domain: StatusIconDomain,
 ): WorkflowStatusIconKey {
-  const key = normalizedStatusKey(status);
+  let key = normalizedStatusKey(status);
+  if (key === 'succeeded') {
+    key = 'completed';
+  } else if (key === 'running') {
+    key = 'executing';
+  }
   if (domain === 'step') {
     if (isCanonicalStepStatus(key)) {
       return STEP_STATUS_ICON_KEYS[key];
@@ -91,8 +118,6 @@ export function statusIconKey(
   if (isWorkflowStatusIconKey(key)) {
     return key;
   }
-  if (key === 'succeeded') return 'completed';
-  if (key === 'running') return 'executing';
   if (key === 'awaiting_action') return 'awaiting_external';
   return 'executing';
 }
@@ -110,7 +135,7 @@ export function StatusIcon({
   title?: string;
   'data-testid'?: string;
 }) {
-  const label = title ?? formatStatusLabel(status);
+  const label = title ?? defaultStatusIconLabel(status);
   const Icon = WORKFLOW_STATUS_ICONS[statusIconKey(status, domain)];
   const pillProps = executionStatusPillProps(status, { enableMotion: false });
 

@@ -3675,8 +3675,10 @@ function formatStepLastError(lastError: unknown): string | null {
 function stepTerminal(status: string | null | undefined): boolean {
   const normalized = String(status || '').trim().toLowerCase();
   return normalized === 'completed'
+    || normalized === 'succeeded'
     || normalized === 'failed'
     || normalized === 'canceled'
+    || normalized === 'cancelled'
     || normalized === 'skipped';
 }
 
@@ -4226,6 +4228,7 @@ function StepLedgerRowCard({
             <span className="step-tl-right">
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
               <ExecutionStatusPill status={row.status} />
+              <span className="sr-only">{formatStatusLabel(row.status)}</span>
               {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}
               <StepProvenanceMarker row={row} />
               <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>

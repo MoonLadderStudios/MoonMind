@@ -1145,6 +1145,32 @@ def test_serialize_execution_nulls_progress_for_legacy_rows() -> None:
 
     assert payload["progress"] is None
 
+
+def test_serialize_execution_normalizes_legacy_progress_keys() -> None:
+    record = _build_execution_record()
+    record.memo = {
+        **record.memo,
+        "progress": {
+            "total": 3,
+            "pending": 1,
+            "ready": 0,
+            "running": 1,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Run tests",
+        },
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["progress"]["executing"] == 1
+    assert payload["progress"]["completed"] == 1
+    assert payload["progress"]["currentStepTitle"] == "Run tests"
+
 def _override_temporal_client(app: FastAPI) -> AsyncMock:
     client = AsyncMock()
     app.dependency_overrides[get_temporal_client] = lambda: client

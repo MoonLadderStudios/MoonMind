@@ -18,6 +18,8 @@ from moonmind.schemas.step_execution_models import (
 from moonmind.schemas.temporal_models import (
     EnvironmentDiagnosticReferenceModel,
     EvidenceRefStatusModel,
+    ExecutionProgressModel,
+    RecoveryCheckpointPreservedStepModel,
     RecoveryEligibilityDiagnosticModel,
     StepEvidenceSummaryModel,
 )
@@ -104,6 +106,56 @@ def test_manifest_rejects_unsupported_reason_status_and_disposition(
 
     with pytest.raises(ValidationError):
         StepExecutionManifestModel(**payload)
+
+
+def test_manifest_accepts_legacy_persisted_status_tokens() -> None:
+    now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
+    manifest = StepExecutionManifestModel(
+        workflowId="wf-1",
+        runId="run-1",
+        logicalStepId="implement",
+        executionOrdinal=1,
+        reason="initial_execution",
+        status="running",
+        startedAt=now,
+        updatedAt=now,
+    )
+
+    assert manifest.status == "running"
+
+
+def test_execution_progress_model_normalizes_legacy_progress_fields() -> None:
+    progress = ExecutionProgressModel.model_validate(
+        {
+            "total": 2,
+            "pending": 0,
+            "ready": 0,
+            "running": 1,
+            "succeeded": 1,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "updatedAt": "2026-05-17T12:00:00Z",
+        }
+    )
+
+    assert progress.executing == 1
+    assert progress.completed == 1
+
+
+def test_recovery_checkpoint_preserved_step_normalizes_legacy_success_status() -> None:
+    preserved = RecoveryCheckpointPreservedStepModel.model_validate(
+        {
+            "logicalStepId": "prepare",
+            "order": 1,
+            "status": "succeeded",
+            "sourceExecutionOrdinal": 1,
+            "artifacts": {"outputSummary": "artifact://summary"},
+            "stateCheckpointRef": "artifact://state",
+        }
+    )
+
+    assert preserved.status == "completed"
 
 
 def test_execution_contract_keeps_retry_reexecution_and_recovery_terms_distinct() -> None:

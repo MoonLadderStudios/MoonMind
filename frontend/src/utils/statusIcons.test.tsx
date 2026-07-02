@@ -22,4 +22,11 @@ describe('statusIcons', () => {
     expect(CANONICAL_STEP_STATUSES).not.toContain('running');
     expect(CANONICAL_STEP_STATUSES).not.toContain('succeeded');
   });
+
+  it('normalizes legacy persisted statuses before selecting icons', () => {
+    expect(statusIconKey('running', 'step')).toBe('executing');
+    expect(statusIconKey('succeeded', 'step')).toBe('completed');
+    expect(statusIconKey('running', 'workflow')).toBe('executing');
+    expect(statusIconKey('succeeded', 'workflow')).toBe('completed');
+  });
 });
