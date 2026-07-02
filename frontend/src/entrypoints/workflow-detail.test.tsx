@@ -3111,7 +3111,7 @@ describe('Workflow Detail Entrypoint', () => {
                     checks: [
                       {
                         kind: 'approval_policy',
-                        status: 'failed',
+                        status: 'pending',
                         summary: 'Reviewer requested another retry',
                         retryCount: 2,
                         artifactRef: 'art-review-2',
@@ -3143,7 +3143,19 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('Retry count: 2')).toBeTruthy();
       expect(screen.getByText('art-review-2')).toBeTruthy();
-      expect(screen.getAllByText('approval policy: failed')[0]).toBeTruthy();
+      const activeCheckBadge = document.querySelector<HTMLElement>(
+        '.step-check-badge[data-effect="shimmer-sweep"]',
+      );
+      expect(activeCheckBadge).toBeTruthy();
+      expect(activeCheckBadge?.textContent).toBe('approval policy: pending');
+      expect(activeCheckBadge?.dataset.effect).toBe('shimmer-sweep');
+      expect(activeCheckBadge?.dataset.state).toBe('executing');
+      expect(activeCheckBadge?.className).toContain('is-executing');
+      expect(activeCheckBadge?.className).toContain('check-pending');
+      expect(activeCheckBadge?.getAttribute('aria-label')).toBe('approval policy: pending');
+      expect(activeCheckBadge?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe(
+        'approval policy: pending',
+      );
     });
   });
 
