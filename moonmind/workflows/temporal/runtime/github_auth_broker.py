@@ -56,9 +56,12 @@ def build_github_socket_path(
         if workdir:
             candidate_roots.append(Path(workdir).resolve() / _SHARED_SOCKET_DIRNAME)
         candidate_roots.append(_SHARED_WORKSPACE_ROOT / _SHARED_SOCKET_DIRNAME)
-        if support_path.name == ".moonmind" and len(support_path.parents) >= 3:
-            candidate_roots.append(support_path.parents[2] / _SHARED_SOCKET_DIRNAME)
-        candidate_roots.append(support_path.parent / _SHARED_SOCKET_DIRNAME)
+        if support_path.name == ".moonmind":
+            if len(support_path.parents) >= 3:
+                candidate_roots.append(support_path.parents[2] / _SHARED_SOCKET_DIRNAME)
+            candidate_roots.append(support_path.parent / _SHARED_SOCKET_DIRNAME)
+        else:
+            candidate_roots.append(support_path / _SHARED_SOCKET_DIRNAME)
 
     for root in dict.fromkeys(candidate_roots):
         path = root / digest / "github.sock"
