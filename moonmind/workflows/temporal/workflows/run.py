@@ -10224,13 +10224,19 @@ class MoonMindRunWorkflow:
             "jira_orchestration"
         )
         if isinstance(orchestration, Mapping):
-            status = str(orchestration.get("status") or "").strip()
-            created_count = orchestration.get("createdTaskCount")
+            status = str(
+                orchestration.get("workflowStatus")
+                or orchestration.get("status")
+                or ""
+            ).strip()
+            created_count = orchestration.get(
+                "createdWorkflowCount", orchestration.get("createdTaskCount")
+            )
             story_count = orchestration.get("storyCount")
             dependency_count = orchestration.get("dependencyCount")
             parts = []
             if isinstance(created_count, int):
-                parts.append(f"createdTasks={created_count}")
+                parts.append(f"createdWorkflows={created_count}")
             if isinstance(story_count, int):
                 parts.append(f"stories={story_count}")
             if isinstance(dependency_count, int):
@@ -10248,7 +10254,7 @@ class MoonMindRunWorkflow:
                     )
             if status:
                 suffix = f" ({'; '.join(parts)})" if parts else ""
-                return f"Jira downstream task creation {status}{suffix}."
+                return f"Jira downstream workflow creation {status}{suffix}."
 
         github_orchestration = outputs.get("githubWorkflowOrchestration") or outputs.get(
             "github_workflow_orchestration"

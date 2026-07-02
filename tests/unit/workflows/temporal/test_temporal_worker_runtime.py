@@ -1698,7 +1698,7 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
                             "type": "skill",
                             "name": "story.create_jira_orchestrate_tasks",
                         },
-                        "instructions": "Create dependent Jira Orchestrate tasks.",
+                        "instructions": "Create dependent Jira Orchestrate workflow executions.",
                         "jiraOrchestration": {
                             "task": {
                                 "repository": "MoonLadderStudios/MoonMind",
@@ -1790,7 +1790,7 @@ def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
                             "type": "skill",
                             "name": "story.create_jira_implement_tasks",
                         },
-                        "instructions": "Create dependent Jira Implement tasks.",
+                        "instructions": "Create dependent Jira Implement workflow executions.",
                         "jiraOrchestration": {
                             "task": {
                                 "repository": "MoonLadderStudios/MoonMind",
@@ -1950,10 +1950,10 @@ def test_runtime_planner_dedupes_repeated_identical_preset_steps():
     }
     orchestrate_step = {
         "id": "tpl:jira-breakdown-orchestrate:1.0.0:03:6bfb1360",
-        "title": "Create dependent Jira Orchestrate tasks",
+        "title": "Create dependent Jira Orchestrate workflow executions",
         "type": "skill",
         "skill": {"id": "story.create_jira_orchestrate_tasks"},
-        "instructions": "Create dependent Jira Orchestrate tasks.",
+        "instructions": "Create dependent Jira Orchestrate workflow executions.",
         "jiraOrchestration": {
             "task": {
                 "repository": "MoonLadderStudios/Tactics",
