@@ -1,4 +1,9 @@
-"""Broker GitHub credentials to local helper scripts without writing PATs to disk."""
+"""Broker GitHub credentials to local managed runtimes without writing PATs to disk.
+
+This module is for MoonMind-managed runtime processes and containers. External
+agent adapters, including Omnigent, must keep credential handling behind their
+own adapter/activity boundary instead of using these local helper scripts.
+"""
 
 from __future__ import annotations
 
@@ -27,12 +32,12 @@ def build_github_socket_path(
     support_root: str | None,
     socket_root: str | None = None,
 ) -> str:
-    """Build a short broker socket path visible to managed runtime containers.
+    """Build a short broker socket path visible to local managed runtimes.
 
-    Managed-session agent containers share ``/work/agent_jobs`` with the worker
-    process, but they do not share the worker's ``/tmp``. Prefer a compact
-    workspace-volume path when the support root lives under that volume, then
-    fall back to ``/tmp/mm-gh`` for local/direct subprocess runs.
+    MoonMind-managed session containers share ``/work/agent_jobs`` with the
+    worker process, but they do not share the worker's ``/tmp``. Prefer a
+    compact workspace-volume path when the support root lives under that
+    volume, then fall back to ``/tmp/mm-gh`` for local/direct subprocess runs.
     """
 
     material = run_id
