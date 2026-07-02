@@ -829,6 +829,7 @@ async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
     monkeypatch,
+    tmp_path,
 ) -> None:
     calls: list[str] = []
 
@@ -869,6 +870,7 @@ async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
         },
     )
 
+    artifact_gateway = LocalOmnigentArtifactGateway(root=tmp_path)
     result = await run_omnigent_execution(
         AgentExecutionRequest(
             agentKind="external",
@@ -882,11 +884,17 @@ async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
                     "prompt": {"text": "continue"},
                 },
             },
-        )
+        ),
+        artifact_gateway=artifact_gateway,
     )
 
+    external_state = json.loads(
+        await artifact_gateway.read_text(result.metadata["externalStateRef"])
+    )
     assert result.summary == "reattached"
     assert calls == []
+    assert external_state["firstMessage"]["state"] == "posted"
+    assert "firstMessageResponseRef" not in external_state["artifactRefs"]
 
 
 @pytest.mark.asyncio
@@ -969,6 +977,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     assert external_state["retry"]["attached"] is True
     assert external_state["retry"]["attachSource"] == "durable_idempotency_mapping"
     assert external_state["retry"]["firstMessageOutcome"] == "already_posted"
+    assert external_state["firstMessage"]["state"] == "posted"
     assert external_state["artifactRefs"]["diagnosticsRef"] == result.diagnostics_ref
 
 

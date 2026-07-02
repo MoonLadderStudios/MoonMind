@@ -1450,6 +1450,7 @@ async def run_omnigent_execution(
                     ),
                     "postedBeforeRetry": first_message_posted,
                     "reconcileRequired": first_message_reconcile_required,
+                    "state": "posted" if first_message_posted else "prepared",
                 }
             )
             if run_store is not None:
@@ -1570,6 +1571,7 @@ async def run_omnigent_execution(
                         "markerFound": True,
                     }
                 )
+                external_state["firstMessage"]["state"] = "posted"
             if not first_message_posted:
                 stream_queue = asyncio.Queue()
                 stream_task = asyncio.create_task(
@@ -1598,8 +1600,10 @@ async def run_omnigent_execution(
                     }
                 )
                 external_state["retry"]["firstMessageOutcome"] = "posted"
+                external_state["firstMessage"]["state"] = "posted"
             elif external_state["retry"]["firstMessageOutcome"] == "pending":
                 external_state["retry"]["firstMessageOutcome"] = "already_posted"
+                external_state["firstMessage"]["state"] = "posted"
 
             event_count = {"value": 0}
             heartbeat_status = {"value": "running"}

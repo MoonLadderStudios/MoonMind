@@ -2224,6 +2224,7 @@ class MoonMindRunWorkflow:
             ("runtimeStdout", "stdoutRef"),
             ("runtimeStderr", "stderrRef"),
             ("runtimeMergedLogs", "logsRef"),
+            ("externalStateRef", "externalStateRef"),
         ):
             value = artifacts.get(source_key)
             if isinstance(value, str) and value.strip():
@@ -3797,6 +3798,12 @@ class MoonMindRunWorkflow:
                 "provider_snapshot_ref",
             ),
         }
+        external_state_ref = _output_ref(
+            "externalStateRef",
+            "external_state_ref",
+        )
+        if external_state_ref is not None:
+            artifacts["externalStateRef"] = external_state_ref
         checkpoint_ref = _output_ref(
             "stateCheckpointRef",
             "state_checkpoint_ref",

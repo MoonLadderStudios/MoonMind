@@ -2728,7 +2728,7 @@ class StepLedgerRefsModel(BaseModel):
 class StepLedgerArtifactsModel(BaseModel):
     """Stable semantic artifact slots for step evidence."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     output_summary: str | None = Field(None, alias="outputSummary")
     output_primary: str | None = Field(None, alias="outputPrimary")

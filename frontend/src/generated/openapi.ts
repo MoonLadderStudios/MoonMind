@@ -8700,6 +8700,8 @@ export interface components {
             stepExecutionManifestRef?: string | null;
             /** Stepexecutionmanifestrefs */
             stepExecutionManifestRefs?: string[];
+        } & {
+            [key: string]: unknown;
         };
         /**
          * StepLedgerCheckModel
