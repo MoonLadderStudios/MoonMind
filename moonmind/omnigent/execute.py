@@ -601,6 +601,7 @@ def build_omnigent_result(
         metadata["captureManifestRef"] = capture_bundle.capture_manifest_ref
     if capture_bundle.external_state_ref:
         metadata["externalStateRef"] = capture_bundle.external_state_ref
+        metadata["stateCheckpointRef"] = capture_bundle.external_state_ref
     metadata.update(capture_bundle.metadata_refs)
     snapshot_metadata_keys = {
         "omnigentAgentName": "omnigent_agent_name",
@@ -1474,7 +1475,10 @@ async def run_omnigent_execution(
                 "moonmindFirstMessageDigest"
             ] = digest
             first_message["metadata"]["moonmindIdempotencyKey"] = request.idempotency_key
-            if selection.prompt.get("includeIdempotencyMarker", True):
+            idempotency_marker_present = bool(
+                selection.prompt.get("includeIdempotencyMarker", True)
+            )
+            if idempotency_marker_present:
                 first_message_text = _first_message_text(first_message)
                 first_message["data"]["content"][0]["text"] = (
                     f"{first_message_text}\n\n{marker}".strip()
@@ -1491,14 +1495,16 @@ async def run_omnigent_execution(
                     )
                     retry_evidence["firstMessageState"] = durable_row.first_message_state
                     retry_evidence["firstMessageDigest"] = digest
-                    retry_evidence["idempotencyMarkerPresent"] = True
+                    retry_evidence["idempotencyMarkerPresent"] = (
+                        idempotency_marker_present
+                    )
                 except OmnigentDigestMismatchError as exc:
                     retry_evidence.update(
                         {
                             "outcome": "unrecoverable_mismatch",
                             "mismatch": True,
                             "firstMessageDigest": digest,
-                            "idempotencyMarkerPresent": True,
+                            "idempotencyMarkerPresent": idempotency_marker_present,
                             "diagnosticsCode": "omnigent_first_message_digest_mismatch",
                         }
                     )
@@ -1601,7 +1607,7 @@ async def run_omnigent_execution(
                         "reconciled": True,
                         "firstMessageState": FIRST_MESSAGE_POSTED,
                         "firstMessageDigest": digest,
-                        "idempotencyMarkerPresent": True,
+                        "idempotencyMarkerPresent": idempotency_marker_present,
                     }
                 )
             if not first_message_posted:
@@ -1640,7 +1646,7 @@ async def run_omnigent_execution(
                         ),
                         "firstMessageState": FIRST_MESSAGE_POSTED,
                         "firstMessageDigest": digest,
-                        "idempotencyMarkerPresent": True,
+                        "idempotencyMarkerPresent": idempotency_marker_present,
                     }
                 )
 
