@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +44,9 @@ from api_service.db.models import (
     TemporalArtifactStatus,
     TemporalArtifactRetentionClass,
     User,
+    WorkflowCheckpointBranch,
+    WorkflowCheckpointBranchOperation,
+    WorkflowCheckpointBranchTurn,
 )
 from moonmind.config.settings import settings
 from moonmind.statuses.compat import (
@@ -106,6 +110,21 @@ from moonmind.schemas.temporal_models import (
     AGENT_RUN_ID_PARAM_KEYS,
     AGENT_RUN_ID_SEARCH_ATTR_KEYS,
     normalize_dependency_ids,
+)
+from moonmind.schemas.checkpoint_branch_models import (
+    CheckpointBranchArchiveRequest,
+    CheckpointBranchCompareResponse,
+    CheckpointBranchContinueRequest,
+    CheckpointBranchCreateRequest,
+    CheckpointBranchForkRequest,
+    CheckpointBranchListResponse,
+    CheckpointBranchModel,
+    CheckpointBranchPromoteRequest,
+    CheckpointBranchPublishRequest,
+    CheckpointBranchTurnListResponse,
+    CheckpointBranchTurnModel,
+    CheckpointListResponse,
+    CheckpointSummaryModel,
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
@@ -494,6 +513,391 @@ class RemediationApprovalDecisionResponse(BaseModel):
     workflowId: str
     requestId: str
     decision: str
+_PROTECTED_BRANCH_REFS = {"head", "main", "master", "develop", "trunk", "prod", "production"}
+_SAFE_PROMOTION_SIDE_EFFECT_STATES = {
+    "none",
+    "isolated",
+    "compensated",
+    "approved",
+    "accepted",
+}
+_PASSING_GATE_VERDICTS = {"passed", "pass", "success", "fully_implemented"}
+
+
+def _operation_digest(payload: BaseModel | Mapping[str, Any]) -> str:
+    if isinstance(payload, BaseModel):
+        raw = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
+    else:
+        raw = dict(payload)
+    encoded = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _scoped_operation_digest(
+    payload: BaseModel, *, scope: Mapping[str, Any]
+) -> str:
+    return _operation_digest(
+        {
+            "scope": dict(scope),
+            "payload": payload.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+        }
+    )
+
+
+def _new_checkpoint_branch_id() -> str:
+    return f"cbr_{uuid4().hex[:24]}"
+
+
+def _new_checkpoint_branch_turn_id() -> str:
+    return f"cbt_{uuid4().hex[:24]}"
+
+
+def _instruction_identity(instructions: Any) -> tuple[str, str]:
+    instruction_ref = str(getattr(instructions, "instruction_ref", "") or "").strip()
+    instruction_digest = str(
+        getattr(instructions, "instruction_digest", "") or ""
+    ).strip()
+    text = str(getattr(instructions, "text", "") or "")
+    if instruction_ref and instruction_digest:
+        return instruction_ref, instruction_digest
+    digest = f"sha256:{hashlib.sha256(text.encode()).hexdigest()}"
+    return (
+        f"inline://checkpoint-branch-instruction/{digest.removeprefix('sha256:')}",
+        digest,
+    )
+
+
+def _checkpoint_branch_head_identity(branch: WorkflowCheckpointBranch) -> str:
+    return (
+        branch.current_head_commit
+        or branch.current_head_checkpoint_ref
+        or branch.source_checkpoint_ref
+    )
+
+
+def _branch_comparison_record(
+    *,
+    workflow_id: str,
+    branch: WorkflowCheckpointBranch,
+    other: WorkflowCheckpointBranch,
+) -> dict[str, Any]:
+    summary_text = (
+        f"Branch {branch.branch_id} is {branch.state}; "
+        f"comparison branch {other.branch_id} is {other.state}."
+    )
+    summary = {
+        "text": summary_text,
+        "branchState": branch.state,
+        "againstState": other.state,
+        "branchHeadStepExecutionId": branch.current_head_step_execution_id,
+        "againstHeadStepExecutionId": other.current_head_step_execution_id,
+        "branchHeadCheckpointRef": branch.current_head_checkpoint_ref,
+        "againstHeadCheckpointRef": other.current_head_checkpoint_ref,
+        "branchHeadCommit": branch.current_head_commit,
+        "againstHeadCommit": other.current_head_commit,
+    }
+    evidence_refs = {
+        key: value
+        for key, value in {
+            "branchCheckpointRef": branch.current_head_checkpoint_ref
+            or branch.source_checkpoint_ref,
+            "againstCheckpointRef": other.current_head_checkpoint_ref
+            or other.source_checkpoint_ref,
+            "branchGitRange": {
+                "base": branch.git_base_commit,
+                "head": branch.current_head_commit,
+            }
+            if branch.git_base_commit or branch.current_head_commit
+            else None,
+            "againstGitRange": {
+                "base": other.git_base_commit,
+                "head": other.current_head_commit,
+            }
+            if other.git_base_commit or other.current_head_commit
+            else None,
+            "branchPromotionEvidence": branch.promotion_evidence,
+            "againstPromotionEvidence": other.promotion_evidence,
+        }.items()
+        if value
+    }
+    record_payload = {
+        "schemaVersion": 1,
+        "recordType": "checkpoint_branch_comparison",
+        "workflowId": workflow_id,
+        "branchId": branch.branch_id,
+        "againstBranchId": other.branch_id,
+        "summaryText": summary_text,
+        "summary": summary,
+        "evidenceRefs": evidence_refs,
+        "diagnosticsRefs": [],
+        "createdAt": datetime.now(UTC).isoformat(),
+    }
+    record_digest = _operation_digest(record_payload)
+    summary_ref = (
+        "artifact://checkpoint-branch-comparisons/"
+        f"{workflow_id}/{branch.branch_id}/against/{other.branch_id}/"
+        f"{record_digest.removeprefix('sha256:')}.json"
+    )
+    record_payload["summaryRef"] = summary_ref
+    record_payload["digest"] = record_digest
+    return record_payload
+
+
+def _checkpoint_ref_artifact_value(ref: object) -> str:
+    if isinstance(ref, Mapping):
+        ref = ref.get("artifactRef") or ref.get("checkpointRef") or ref.get("ref")
+    return str(ref or "").strip()
+
+
+def _branch_to_model(branch: WorkflowCheckpointBranch) -> CheckpointBranchModel:
+    return CheckpointBranchModel.model_validate(branch)
+
+
+def _turn_to_model(turn: WorkflowCheckpointBranchTurn) -> CheckpointBranchTurnModel:
+    return CheckpointBranchTurnModel.model_validate(turn)
+
+
+def _is_protected_ref(ref: str | None) -> bool:
+    normalized = str(ref or "").strip().removeprefix("refs/heads/").lower()
+    return normalized in _PROTECTED_BRANCH_REFS or normalized.startswith("release/")
+
+
+def _checkpoint_summaries_from_record(record: Any) -> list[CheckpointSummaryModel]:
+    seen: set[tuple[str, str]] = set()
+    items: list[CheckpointSummaryModel] = []
+
+    def add(
+        ref: object,
+        *,
+        boundary: object = "after_execution",
+        run_id: object | None = None,
+        logical_step_id: object | None = None,
+        execution_ordinal: object | None = None,
+        digest: object | None = None,
+    ) -> None:
+        if isinstance(ref, Mapping) and digest is None:
+            digest = ref.get("checkpointDigest") or ref.get("digest")
+        ref_value = _checkpoint_ref_artifact_value(ref)
+        boundary_value = str(boundary or "after_execution").strip()
+        if not ref_value.startswith("artifact://") or not boundary_value:
+            return
+        key = (ref_value, boundary_value)
+        ordinal_value: int | None = None
+        if isinstance(execution_ordinal, int) and not isinstance(
+            execution_ordinal, bool
+        ):
+            ordinal_value = execution_ordinal
+        elif isinstance(execution_ordinal, str) and execution_ordinal.isdigit():
+            ordinal_value = int(execution_ordinal)
+        digest_value = str(digest or "").strip() or None
+        if key in seen:
+            if digest_value:
+                for item in items:
+                    if (
+                        item.checkpoint_ref == ref_value
+                        and item.checkpoint_boundary == boundary_value
+                        and not item.checkpoint_digest
+                    ):
+                        item.checkpoint_digest = digest_value
+                        break
+            return
+        seen.add(key)
+        items.append(
+            CheckpointSummaryModel(
+                checkpointRef=ref_value,
+                checkpointBoundary=boundary_value,
+                runId=str(run_id or getattr(record, "run_id", "") or "") or None,
+                logicalStepId=str(logical_step_id or "").strip() or None,
+                executionOrdinal=ordinal_value,
+                checkpointDigest=digest_value,
+            )
+        )
+
+    memo = dict(getattr(record, "memo", None) or {})
+    params = dict(getattr(record, "parameters", None) or {})
+    finish = dict(getattr(record, "finish_summary_json", None) or {})
+
+    for key, boundary in (
+        ("recovery_checkpoint_ref", "before_recovery_restoration"),
+        ("recoveryCheckpointRef", "before_recovery_restoration"),
+        ("step_checkpoint_ref", "after_execution"),
+        ("stepCheckpointRef", "after_execution"),
+        ("stateCheckpointRef", "after_execution"),
+        ("checkpointRef", "after_execution"),
+    ):
+        add(memo.get(key), boundary=boundary)
+
+    recovery_manifest = finish.get("recoveryManifest")
+    if isinstance(recovery_manifest, Mapping):
+        add(
+            recovery_manifest.get("checkpointRef"),
+            boundary=recovery_manifest.get("boundary") or "before_recovery_restoration",
+            digest=recovery_manifest.get("checkpointDigest"),
+        )
+
+    def walk(value: object, *, logical_step_id: object | None = None) -> None:
+        if isinstance(value, Mapping):
+            step_id = (
+                value.get("logicalStepId") or value.get("stepId") or logical_step_id
+            )
+            ordinal = value.get("executionOrdinal") or value.get("attempt")
+            refs = value.get("checkpointRefsByBoundary")
+            if isinstance(refs, Mapping):
+                for boundary, ref in refs.items():
+                    add(
+                        ref,
+                        boundary=boundary,
+                        logical_step_id=step_id,
+                        execution_ordinal=ordinal,
+                    )
+            for key, boundary in (
+                ("checkpointRef", value.get("checkpointBoundary") or "after_execution"),
+                ("stateCheckpointRef", "after_execution"),
+                ("stepCheckpointRef", "after_execution"),
+                ("checkpointBeforeRef", "before_execution"),
+                ("checkpointAfterRef", "after_execution"),
+            ):
+                add(
+                    value.get(key),
+                    boundary=boundary,
+                    logical_step_id=step_id,
+                    execution_ordinal=ordinal,
+                    digest=value.get("checkpointDigest"),
+                )
+            for child in value.values():
+                walk(child, logical_step_id=step_id)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child, logical_step_id=logical_step_id)
+
+    walk(params)
+    walk(finish)
+    return items
+
+
+def _validate_branch_source(
+    *,
+    workflow_id: str,
+    record: Any,
+    source: Any,
+) -> None:
+    source_workflow_id = str(getattr(source, "workflow_id", "") or "").strip()
+    if source_workflow_id and source_workflow_id != workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_source", "reason": "source_workflow_mismatch"},
+        )
+    if str(getattr(source, "run_id", "") or "") != str(
+        getattr(record, "run_id", "") or ""
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_source", "reason": "source_run_mismatch"},
+        )
+    checkpoints = _checkpoint_summaries_from_record(record)
+    if not checkpoints:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "checkpoint_missing", "reason": "checkpoint_missing"},
+        )
+    matching = [
+        checkpoint
+        for checkpoint in checkpoints
+        if checkpoint.checkpoint_ref == source.checkpoint_ref
+        and checkpoint.checkpoint_boundary == source.checkpoint_boundary
+    ]
+    if not matching:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "checkpoint_invalid", "reason": "checkpoint_invalid"},
+        )
+    if source.checkpoint_digest:
+        known_digests = {
+            checkpoint.checkpoint_digest
+            for checkpoint in matching
+            if checkpoint.checkpoint_digest
+        }
+        if known_digests and source.checkpoint_digest not in known_digests:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "checkpoint_digest_mismatch",
+                    "reason": "checkpoint_digest_mismatch",
+                },
+            )
+
+
+def _validate_branch_policy(
+    *,
+    workspace_policy: str,
+    runtime_context_policy: str,
+    publish_mode: str | None = None,
+    git_work_branch: str | None = None,
+    max_budget_usd: float | None = None,
+) -> None:
+    if runtime_context_policy == "external_provider_continuation":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "provider_continuation_unsupported",
+                "reason": "provider_continuation_unsupported",
+            },
+        )
+    if publish_mode and publish_mode != "none" and not git_work_branch:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "invalid_publish_request",
+                "reason": "protected_ref_unknown",
+            },
+        )
+    if _is_protected_ref(git_work_branch):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "protected_branch_ref", "reason": "protected_branch_ref"},
+        )
+    if workspace_policy == "continue_from_previous_execution" and publish_mode not in {
+        None,
+        "none",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "workspace_policy_incompatible",
+                "reason": "workspace_policy_incompatible",
+            },
+        )
+    if max_budget_usd == 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "budget_exhausted", "reason": "budget_exhausted"},
+        )
+
+
+async def _load_checkpoint_branch(
+    session: AsyncSession,
+    *,
+    workflow_id: str,
+    branch_id: str,
+    include_archived: bool = True,
+) -> WorkflowCheckpointBranch:
+    result = await session.execute(
+        select(WorkflowCheckpointBranch).where(
+            WorkflowCheckpointBranch.workflow_id == workflow_id,
+            WorkflowCheckpointBranch.branch_id == branch_id,
+        )
+    )
+    branch = result.scalar_one_or_none()
+    if branch is None or (not include_archived and branch.state == "archived"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "checkpoint_branch_not_found"},
+        )
+    return branch
+
+
 _PR_URL_CANDIDATE_SOURCES = (
     ("memo", "pull_request_url"),
     ("memo", "pullRequestUrl"),
@@ -10548,6 +10952,779 @@ async def describe_execution_steps(
         workflow_id=canonical_workflow_id,
         fallback_record=record,
     )
+
+@router.get("/{workflow_id}/checkpoints", response_model=CheckpointListResponse)
+async def list_execution_checkpoints(
+    workflow_id: str,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> CheckpointListResponse:
+    record = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    return CheckpointListResponse(items=_checkpoint_summaries_from_record(record))
+
+
+@router.get(
+    "/{workflow_id}/checkpoint-branches",
+    response_model=CheckpointBranchListResponse,
+)
+async def list_checkpoint_branches(
+    workflow_id: str,
+    active: bool = Query(True),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchListResponse:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    conditions = [WorkflowCheckpointBranch.workflow_id == workflow_id]
+    if active:
+        conditions.append(WorkflowCheckpointBranch.state != "archived")
+    result = await session.execute(
+        select(WorkflowCheckpointBranch)
+        .where(*conditions)
+        .order_by(WorkflowCheckpointBranch.created_at.desc())
+    )
+    return CheckpointBranchListResponse(
+        items=[_branch_to_model(branch) for branch in result.scalars().all()]
+    )
+
+
+@router.post(
+    "/{workflow_id}/checkpoint-branches",
+    response_model=CheckpointBranchModel,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_checkpoint_branch(
+    workflow_id: str,
+    payload: CheckpointBranchCreateRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchModel:
+    record = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    _validate_branch_source(
+        workflow_id=workflow_id, record=record, source=payload.source
+    )
+    _validate_branch_policy(
+        workspace_policy=payload.workspace_policy,
+        runtime_context_policy=payload.runtime_context_policy,
+        publish_mode=payload.publish_mode,
+        git_work_branch=payload.git_work_branch,
+        max_budget_usd=payload.max_budget_usd,
+    )
+    request_digest = _operation_digest(payload)
+    existing_op = await session.execute(
+        select(WorkflowCheckpointBranchOperation).where(
+            WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+            WorkflowCheckpointBranchOperation.idempotency_key
+            == payload.idempotency_key,
+        )
+    )
+    operation = existing_op.scalar_one_or_none()
+    if operation is not None:
+        if (
+            operation.operation != "checkpoint_branch.create"
+            or operation.request_digest != request_digest
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "idempotency_key_conflict"},
+            )
+        branch = await _load_checkpoint_branch(
+            session,
+            workflow_id=workflow_id,
+            branch_id=str(operation.branch_id),
+        )
+        return _branch_to_model(branch)
+
+    branch = WorkflowCheckpointBranch(
+        branch_id=_new_checkpoint_branch_id(),
+        workflow_id=workflow_id,
+        root_workflow_id=workflow_id,
+        source_run_id=payload.source.run_id,
+        logical_step_id=payload.source.logical_step_id,
+        source_execution_ordinal=payload.source.execution_ordinal,
+        source_checkpoint_boundary=payload.source.checkpoint_boundary,
+        source_checkpoint_ref=payload.source.checkpoint_ref,
+        source_checkpoint_digest=payload.source.checkpoint_digest,
+        label=payload.label,
+        state="draft",
+        branch_kind="checkpoint",
+        workspace_policy=payload.workspace_policy,
+        runtime_context_policy=payload.runtime_context_policy,
+        git_work_branch=payload.git_work_branch,
+        current_head_checkpoint_ref=payload.source.checkpoint_ref,
+        publish_status="unpublished",
+        idempotency_key=payload.idempotency_key,
+        created_by=getattr(user, "email", None) or _owner_id(user),
+    )
+    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
+    turn = WorkflowCheckpointBranchTurn(
+        branch_turn_id=_new_checkpoint_branch_turn_id(),
+        branch_id=branch.branch_id,
+        source_checkpoint_ref=payload.source.checkpoint_ref,
+        source_checkpoint_digest=payload.source.checkpoint_digest,
+        instruction_ref=instruction_ref,
+        instruction_digest=instruction_digest,
+        workspace_policy=payload.workspace_policy,
+        runtime_context_policy=payload.runtime_context_policy,
+        idempotency_key=payload.idempotency_key,
+        status="created",
+    )
+    session.add(branch)
+    session.add(turn)
+    session.add(
+        WorkflowCheckpointBranchOperation(
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            branch_turn_id=turn.branch_turn_id,
+            operation="checkpoint_branch.create",
+            idempotency_key=payload.idempotency_key,
+            request_digest=request_digest,
+            response_payload={
+                "branchId": branch.branch_id,
+                "branchTurnId": turn.branch_turn_id,
+            },
+        )
+    )
+    await session.commit()
+    await session.refresh(branch)
+    return _branch_to_model(branch)
+
+
+@router.get(
+    "/{workflow_id}/checkpoint-branches/{branch_id}",
+    response_model=CheckpointBranchModel,
+)
+async def describe_checkpoint_branch(
+    workflow_id: str,
+    branch_id: str,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    return _branch_to_model(
+        await _load_checkpoint_branch(
+            session, workflow_id=workflow_id, branch_id=branch_id
+        )
+    )
+
+
+@router.get(
+    "/{workflow_id}/checkpoint-branches/{branch_id}/turns",
+    response_model=CheckpointBranchTurnListResponse,
+)
+async def list_checkpoint_branch_turns(
+    workflow_id: str,
+    branch_id: str,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchTurnListResponse:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    await _load_checkpoint_branch(session, workflow_id=workflow_id, branch_id=branch_id)
+    result = await session.execute(
+        select(WorkflowCheckpointBranchTurn)
+        .where(WorkflowCheckpointBranchTurn.branch_id == branch_id)
+        .order_by(WorkflowCheckpointBranchTurn.created_at.asc())
+    )
+    return CheckpointBranchTurnListResponse(
+        items=[_turn_to_model(turn) for turn in result.scalars().all()]
+    )
+
+
+async def _record_branch_turn_operation(
+    *,
+    workflow_id: str,
+    branch: WorkflowCheckpointBranch,
+    payload: CheckpointBranchContinueRequest,
+    operation_name: str,
+    session: AsyncSession,
+    parent_turn_id: str | None = None,
+) -> CheckpointBranchTurnModel:
+    _validate_branch_policy(
+        workspace_policy=payload.workspace_policy,
+        runtime_context_policy=payload.runtime_context_policy,
+        max_budget_usd=payload.max_budget_usd,
+    )
+    if branch.state in {"archived", "promoted", "superseded"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_branch_state", "state": branch.state},
+        )
+    request_digest = _scoped_operation_digest(
+        payload, scope={"branchId": branch.branch_id}
+    )
+    existing_op = await session.execute(
+        select(WorkflowCheckpointBranchOperation).where(
+            WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+            WorkflowCheckpointBranchOperation.idempotency_key
+            == payload.idempotency_key,
+        )
+    )
+    operation = existing_op.scalar_one_or_none()
+    if operation is not None:
+        if (
+            operation.operation != operation_name
+            or operation.branch_id != branch.branch_id
+            or operation.request_digest != request_digest
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "idempotency_key_conflict"},
+            )
+        result = await session.execute(
+            select(WorkflowCheckpointBranchTurn).where(
+                WorkflowCheckpointBranchTurn.branch_turn_id == operation.branch_turn_id
+            )
+        )
+        turn = result.scalar_one()
+        return _turn_to_model(turn)
+
+    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
+    turn = WorkflowCheckpointBranchTurn(
+        branch_turn_id=_new_checkpoint_branch_turn_id(),
+        branch_id=branch.branch_id,
+        parent_turn_id=parent_turn_id,
+        source_checkpoint_ref=branch.current_head_checkpoint_ref
+        or branch.source_checkpoint_ref,
+        source_checkpoint_digest=branch.source_checkpoint_digest,
+        instruction_ref=instruction_ref,
+        instruction_digest=instruction_digest,
+        workspace_policy=payload.workspace_policy,
+        runtime_context_policy=payload.runtime_context_policy,
+        idempotency_key=payload.idempotency_key,
+        status="created",
+    )
+    branch.state = "running"
+    branch.label = payload.label or branch.label
+    branch.workspace_policy = payload.workspace_policy
+    branch.runtime_context_policy = payload.runtime_context_policy
+    session.add(turn)
+    session.add(
+        WorkflowCheckpointBranchOperation(
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            branch_turn_id=turn.branch_turn_id,
+            operation=operation_name,
+            idempotency_key=payload.idempotency_key,
+            request_digest=request_digest,
+            response_payload={
+                "branchId": branch.branch_id,
+                "branchTurnId": turn.branch_turn_id,
+            },
+        )
+    )
+    await session.commit()
+    await session.refresh(turn)
+    return _turn_to_model(turn)
+
+
+@router.post(
+    "/{workflow_id}/checkpoint-branches/{branch_id}/continue",
+    response_model=CheckpointBranchTurnModel,
+    status_code=status.HTTP_201_CREATED,
+)
+async def continue_checkpoint_branch(
+    workflow_id: str,
+    branch_id: str,
+    payload: CheckpointBranchContinueRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchTurnModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    branch = await _load_checkpoint_branch(
+        session, workflow_id=workflow_id, branch_id=branch_id
+    )
+    return await _record_branch_turn_operation(
+        workflow_id=workflow_id,
+        branch=branch,
+        payload=payload,
+        operation_name="checkpoint_branch.continue",
+        session=session,
+    )
+
+
+@router.post(
+    "/{workflow_id}/checkpoint-branches/{branch_id}/fork",
+    response_model=CheckpointBranchModel,
+    status_code=status.HTTP_201_CREATED,
+)
+async def fork_checkpoint_branch(
+    workflow_id: str,
+    branch_id: str,
+    payload: CheckpointBranchForkRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    parent = await _load_checkpoint_branch(
+        session, workflow_id=workflow_id, branch_id=branch_id
+    )
+    _validate_branch_policy(
+        workspace_policy=payload.workspace_policy,
+        runtime_context_policy=payload.runtime_context_policy,
+        max_budget_usd=payload.max_budget_usd,
+    )
+    if parent.state in {"archived", "superseded"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_branch_state", "state": parent.state},
+        )
+    parent_turn = None
+    if payload.parent_turn_id:
+        parent_turn_result = await session.execute(
+            select(WorkflowCheckpointBranchTurn).where(
+                WorkflowCheckpointBranchTurn.branch_turn_id == payload.parent_turn_id
+            )
+        )
+        parent_turn = parent_turn_result.scalar_one_or_none()
+        if parent_turn is None or parent_turn.branch_id != parent.branch_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "invalid_parent_turn"},
+            )
+    fork_source_ref = (
+        parent_turn.source_checkpoint_ref
+        if parent_turn is not None
+        else parent.current_head_checkpoint_ref or parent.source_checkpoint_ref
+    )
+    fork_source_digest = (
+        parent_turn.source_checkpoint_digest
+        if parent_turn is not None
+        else parent.source_checkpoint_digest
+    )
+    request_digest = _scoped_operation_digest(
+        payload, scope={"parentBranchId": parent.branch_id}
+    )
+    existing_op = await session.execute(
+        select(WorkflowCheckpointBranchOperation).where(
+            WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+            WorkflowCheckpointBranchOperation.idempotency_key
+            == payload.idempotency_key,
+        )
+    )
+    operation = existing_op.scalar_one_or_none()
+    if operation is not None:
+        if (
+            operation.operation != "checkpoint_branch.fork"
+            or operation.request_digest != request_digest
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "idempotency_key_conflict"},
+            )
+        branch = await _load_checkpoint_branch(
+            session,
+            workflow_id=workflow_id,
+            branch_id=str(operation.branch_id),
+        )
+        return _branch_to_model(branch)
+
+    forked = WorkflowCheckpointBranch(
+        branch_id=_new_checkpoint_branch_id(),
+        workflow_id=workflow_id,
+        root_workflow_id=parent.root_workflow_id,
+        source_run_id=parent.source_run_id,
+        logical_step_id=parent.logical_step_id,
+        source_execution_ordinal=parent.source_execution_ordinal,
+        source_checkpoint_boundary=parent.source_checkpoint_boundary,
+        source_checkpoint_ref=fork_source_ref,
+        source_checkpoint_digest=fork_source_digest,
+        parent_branch_id=parent.branch_id,
+        parent_turn_id=payload.parent_turn_id,
+        label=payload.label or f"Fork of {parent.label}",
+        state="draft",
+        branch_kind="fork",
+        workspace_policy=payload.workspace_policy,
+        runtime_context_policy=payload.runtime_context_policy,
+        current_head_checkpoint_ref=fork_source_ref,
+        publish_status="unpublished",
+        idempotency_key=payload.idempotency_key,
+        created_by=getattr(user, "email", None) or _owner_id(user),
+    )
+    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
+    turn = WorkflowCheckpointBranchTurn(
+        branch_turn_id=_new_checkpoint_branch_turn_id(),
+        branch_id=forked.branch_id,
+        parent_turn_id=payload.parent_turn_id,
+        source_checkpoint_ref=forked.source_checkpoint_ref,
+        source_checkpoint_digest=forked.source_checkpoint_digest,
+        instruction_ref=instruction_ref,
+        instruction_digest=instruction_digest,
+        workspace_policy=payload.workspace_policy,
+        runtime_context_policy=payload.runtime_context_policy,
+        idempotency_key=payload.idempotency_key,
+        status="created",
+    )
+    session.add(forked)
+    session.add(turn)
+    session.add(
+        WorkflowCheckpointBranchOperation(
+            workflow_id=workflow_id,
+            branch_id=forked.branch_id,
+            branch_turn_id=turn.branch_turn_id,
+            operation="checkpoint_branch.fork",
+            idempotency_key=payload.idempotency_key,
+            request_digest=request_digest,
+            response_payload={
+                "branchId": forked.branch_id,
+                "branchTurnId": turn.branch_turn_id,
+            },
+        )
+    )
+    await session.commit()
+    await session.refresh(forked)
+    return _branch_to_model(forked)
+
+
+@router.get(
+    "/{workflow_id}/checkpoint-branches/{branch_id}/compare",
+    response_model=CheckpointBranchCompareResponse,
+)
+async def compare_checkpoint_branches(
+    workflow_id: str,
+    branch_id: str,
+    against: str = Query(...),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchCompareResponse:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    branch = await _load_checkpoint_branch(
+        session, workflow_id=workflow_id, branch_id=branch_id
+    )
+    other = await _load_checkpoint_branch(
+        session, workflow_id=workflow_id, branch_id=against
+    )
+    comparison_record = _branch_comparison_record(
+        workflow_id=workflow_id, branch=branch, other=other
+    )
+    request_digest = _operation_digest(
+        {
+            "workflowId": workflow_id,
+            "branchId": branch.branch_id,
+            "againstBranchId": other.branch_id,
+        }
+    )
+    branch_head = _checkpoint_branch_head_identity(branch)
+    other_head = _checkpoint_branch_head_identity(other)
+    idempotency_key = (
+        f"checkpoint_branch.compare:{branch.branch_id}:{branch_head}:"
+        f"against:{other.branch_id}:{other_head}"
+    )
+    existing_op = await session.execute(
+        select(WorkflowCheckpointBranchOperation).where(
+            WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+            WorkflowCheckpointBranchOperation.idempotency_key == idempotency_key,
+        )
+    )
+    operation = existing_op.scalar_one_or_none()
+    if operation is None:
+        session.add(
+            WorkflowCheckpointBranchOperation(
+                workflow_id=workflow_id,
+                branch_id=branch.branch_id,
+                operation="checkpoint_branch.compare",
+                idempotency_key=idempotency_key,
+                request_digest=request_digest,
+                response_payload=comparison_record,
+            )
+        )
+        await session.commit()
+    else:
+        comparison_record = dict(operation.response_payload or comparison_record)
+    return CheckpointBranchCompareResponse(
+        branchId=branch.branch_id,
+        againstBranchId=other.branch_id,
+        workflowId=workflow_id,
+        branchState=branch.state,
+        againstState=other.state,
+        branchHeadStepExecutionId=branch.current_head_step_execution_id,
+        againstHeadStepExecutionId=other.current_head_step_execution_id,
+        summaryRef=comparison_record["summaryRef"],
+        diagnosticsRefs=list(comparison_record.get("diagnosticsRefs") or []),
+        comparisonRecord=comparison_record,
+    )
+
+
+@router.post(
+    "/{workflow_id}/checkpoint-branches/{branch_id}/promote",
+    response_model=CheckpointBranchModel,
+)
+async def promote_checkpoint_branch(
+    workflow_id: str,
+    branch_id: str,
+    payload: CheckpointBranchPromoteRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    branch = await _load_checkpoint_branch(
+        session, workflow_id=workflow_id, branch_id=branch_id
+    )
+    request_digest = _operation_digest(payload)
+    existing_op = await session.execute(
+        select(WorkflowCheckpointBranchOperation).where(
+            WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+            WorkflowCheckpointBranchOperation.idempotency_key
+            == payload.idempotency_key,
+        )
+    )
+    operation = existing_op.scalar_one_or_none()
+    if operation is not None:
+        if (
+            operation.operation != "checkpoint_branch.promote"
+            or operation.request_digest != request_digest
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "idempotency_key_conflict"},
+            )
+        return _branch_to_model(branch)
+    if branch.state == "archived":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_branch_state", "state": branch.state},
+        )
+    if not branch.current_head_step_execution_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "checkpoint_head_missing",
+                "reason": "checkpoint_head_missing",
+            },
+        )
+    if (
+        payload.expected_head_step_execution_id
+        != branch.current_head_step_execution_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "checkpoint_head_mismatch",
+                "reason": "checkpoint_head_mismatch",
+            },
+        )
+    if (
+        branch.current_head_commit
+        and payload.expected_head_commit
+        and payload.expected_head_commit != branch.current_head_commit
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "git_base_commit_mismatch",
+                "reason": "git_base_commit_mismatch",
+            },
+        )
+    gate_verdict = str(
+        payload.gate_evidence.get("verdict")
+        or payload.gate_evidence.get("status")
+        or ""
+    ).strip().lower()
+    if gate_verdict not in _PASSING_GATE_VERDICTS:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "side_effect_policy_blocked",
+                "reason": "gate_evidence_not_passing",
+            },
+        )
+    side_effect_state = str(
+        payload.side_effect_disposition.get("status")
+        or payload.side_effect_disposition.get("disposition")
+        or ""
+    )
+    if side_effect_state not in _SAFE_PROMOTION_SIDE_EFFECT_STATES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "side_effect_policy_blocked",
+                "reason": "side_effect_disposition_required",
+            },
+        )
+    if payload.policy_requires_approval and not payload.approval_evidence:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "approval_required", "reason": "approval_required"},
+        )
+    promoted_sibling_result = await session.execute(
+        select(WorkflowCheckpointBranch).where(
+            WorkflowCheckpointBranch.workflow_id == workflow_id,
+            WorkflowCheckpointBranch.branch_id != branch.branch_id,
+            WorkflowCheckpointBranch.source_checkpoint_ref == branch.source_checkpoint_ref,
+            WorkflowCheckpointBranch.state == "promoted",
+        )
+    )
+    if promoted_sibling_result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "promoted_branch_conflict",
+                "reason": "promoted_branch_conflict",
+            },
+        )
+    now = datetime.now(UTC)
+    branch.state = "promoted"
+    branch.current_head_step_execution_id = payload.expected_head_step_execution_id
+    branch.current_head_commit = (
+        payload.expected_head_commit or branch.current_head_commit
+    )
+    branch.promotion_evidence = {
+        "gateEvidence": payload.gate_evidence,
+        "sideEffectDisposition": payload.side_effect_disposition,
+        "approvalEvidence": payload.approval_evidence,
+    }
+    branch.promoted_at = now
+    session.add(
+        WorkflowCheckpointBranchOperation(
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            operation="checkpoint_branch.promote",
+            idempotency_key=payload.idempotency_key,
+            request_digest=request_digest,
+            response_payload={"branchId": branch.branch_id, "state": "promoted"},
+        )
+    )
+    await session.commit()
+    await session.refresh(branch)
+    return _branch_to_model(branch)
+
+
+@router.post(
+    "/{workflow_id}/checkpoint-branches/{branch_id}/archive",
+    response_model=CheckpointBranchModel,
+)
+async def archive_checkpoint_branch(
+    workflow_id: str,
+    branch_id: str,
+    payload: CheckpointBranchArchiveRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    branch = await _load_checkpoint_branch(
+        session, workflow_id=workflow_id, branch_id=branch_id
+    )
+    request_digest = _operation_digest(payload)
+    existing_op = await session.execute(
+        select(WorkflowCheckpointBranchOperation).where(
+            WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+            WorkflowCheckpointBranchOperation.idempotency_key
+            == payload.idempotency_key,
+        )
+    )
+    operation = existing_op.scalar_one_or_none()
+    if operation is not None:
+        if (
+            operation.operation != "checkpoint_branch.archive"
+            or operation.request_digest != request_digest
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "idempotency_key_conflict"},
+            )
+        return _branch_to_model(branch)
+    branch.state = "archived"
+    branch.archived_at = datetime.now(UTC)
+    branch.archive_reason = payload.reason
+    session.add(
+        WorkflowCheckpointBranchOperation(
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            operation="checkpoint_branch.archive",
+            idempotency_key=payload.idempotency_key,
+            request_digest=request_digest,
+            response_payload={"branchId": branch.branch_id, "state": "archived"},
+        )
+    )
+    await session.commit()
+    await session.refresh(branch)
+    return _branch_to_model(branch)
+
+
+@router.post(
+    "/{workflow_id}/checkpoint-branches/{branch_id}/publish",
+    response_model=CheckpointBranchModel,
+)
+async def publish_checkpoint_branch(
+    workflow_id: str,
+    branch_id: str,
+    payload: CheckpointBranchPublishRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    branch = await _load_checkpoint_branch(
+        session, workflow_id=workflow_id, branch_id=branch_id
+    )
+    if branch.state in {"archived", "superseded"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_branch_state", "state": branch.state},
+        )
+    if payload.provider != "github":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "provider_continuation_unsupported"},
+        )
+    if _is_protected_ref(payload.head_branch):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "protected_branch_ref", "reason": "protected_branch_ref"},
+        )
+    request_digest = _operation_digest(payload)
+    existing_op = await session.execute(
+        select(WorkflowCheckpointBranchOperation).where(
+            WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+            WorkflowCheckpointBranchOperation.idempotency_key
+            == payload.idempotency_key,
+        )
+    )
+    operation = existing_op.scalar_one_or_none()
+    if operation is not None:
+        if (
+            operation.operation != "checkpoint_branch.publish"
+            or operation.request_digest != request_digest
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "idempotency_key_conflict"},
+            )
+        return _branch_to_model(branch)
+    branch.git_repository = payload.repository
+    branch.git_base_branch = payload.base_branch
+    branch.git_work_branch = payload.head_branch
+    branch.publish_status = "published"
+    if branch.state != "promoted":
+        branch.state = "published"
+    session.add(
+        WorkflowCheckpointBranchOperation(
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            operation="checkpoint_branch.publish",
+            idempotency_key=payload.idempotency_key,
+            request_digest=request_digest,
+            response_payload={
+                "branchId": branch.branch_id,
+                "publishStatus": "published",
+            },
+        )
+    )
+    await session.commit()
+    await session.refresh(branch)
+    return _branch_to_model(branch)
+
 
 @router.get("/{workflow_id}", response_model=ExecutionModel)
 async def describe_execution(

@@ -207,6 +207,8 @@ class CheckpointBranchService:
             head_commit=model.head_commit,
             patch_ref=model.patch_ref,
             pull_request_url=model.pull_request_url,
+            workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+            creation_mode="manual",
             publish_status=CheckpointBranchPublishStatus(model.publish_status),
         )
         self._session.add(record)
