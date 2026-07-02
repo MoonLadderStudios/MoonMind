@@ -1,6 +1,10 @@
-"""Add checkpoint branch git binding records for MM-1090.
+"""Create the checkpoint branch graph tables (MM-1088/MM-1090/MM-1091).
 
-Revision ID: 333_mm1090_cp_bindings
+Consolidates the parallel MM-1088, MM-1090, and MM-1091 checkpoint branch
+migrations into one canonical schema matching ``api_service.db.models``.
+Source design traceability: MM-1087.
+
+Revision ID: 333_checkpoint_branch_graph
 Revises: 332_mm1024_no_commit_status
 Create Date: 2026-07-02
 """
@@ -12,8 +16,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-
-revision: str = "333_mm1090_cp_bindings"
+revision: str = "333_checkpoint_branch_graph"
 down_revision: Union[str, None] = "332_mm1024_no_commit_status"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -31,15 +34,17 @@ def upgrade() -> None:
         sa.Column("source_checkpoint_boundary", sa.String(length=64), nullable=False),
         sa.Column("source_checkpoint_ref", sa.String(length=1024), nullable=False),
         sa.Column("source_checkpoint_digest", sa.String(length=128), nullable=True),
+        sa.Column("source_state_kind", sa.String(length=64), nullable=True),
+        sa.Column("source_state_ref", sa.String(length=512), nullable=True),
+        sa.Column("source_state_digest", sa.String(length=128), nullable=True),
         sa.Column("parent_branch_id", sa.String(length=255), nullable=True),
         sa.Column("parent_turn_id", sa.String(length=255), nullable=True),
         sa.Column("label", sa.String(length=255), nullable=True),
-        sa.Column("state", sa.String(length=64), nullable=False, server_default="created"),
         sa.Column(
-            "branch_kind",
-            sa.String(length=64),
-            nullable=False,
-            server_default="checkpoint",
+            "state", sa.String(length=64), nullable=False, server_default="created"
+        ),
+        sa.Column(
+            "branch_kind", sa.String(length=64), nullable=False, server_default="root"
         ),
         sa.Column("workspace_policy", sa.String(length=64), nullable=False),
         sa.Column("runtime_context_policy", sa.String(length=64), nullable=True),
@@ -47,15 +52,33 @@ def upgrade() -> None:
         sa.Column("git_base_branch", sa.String(length=255), nullable=True),
         sa.Column("git_base_commit", sa.String(length=128), nullable=True),
         sa.Column("git_work_branch", sa.String(length=255), nullable=True),
-        sa.Column("current_head_step_execution_id", sa.String(length=255), nullable=True),
-        sa.Column("current_head_checkpoint_ref", sa.String(length=1024), nullable=True),
+        sa.Column(
+            "current_head_step_execution_id", sa.String(length=255), nullable=True
+        ),
+        sa.Column(
+            "current_head_checkpoint_ref", sa.String(length=1024), nullable=True
+        ),
         sa.Column("current_head_commit", sa.String(length=128), nullable=True),
         sa.Column("pull_request_url", sa.String(length=1024), nullable=True),
-        sa.Column("artifact_refs", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
-        sa.Column("diagnostics", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column("publish_status", sa.String(length=64), nullable=True),
+        sa.Column("promotion_evidence", sa.JSON(), nullable=True),
+        sa.Column("archive_reason", sa.Text(), nullable=True),
+        sa.Column("idempotency_key", sa.String(length=512), nullable=True),
+        sa.Column(
+            "artifact_refs",
+            sa.JSON(),
+            nullable=False,
+            server_default=sa.text("'{}'"),
+        ),
+        sa.Column(
+            "diagnostics",
+            sa.JSON(),
+            nullable=False,
+            server_default=sa.text("'{}'"),
+        ),
         sa.Column("promoted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_by", sa.Uuid(), nullable=True),
+        sa.Column("created_by", sa.String(length=255), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -68,7 +91,6 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.func.now(),
         ),
-        sa.ForeignKeyConstraint(["created_by"], ["user.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(
             ["parent_branch_id"],
             ["workflow_checkpoint_branches.branch_id"],
@@ -98,20 +120,33 @@ def upgrade() -> None:
         sa.Column("parent_turn_id", sa.String(length=255), nullable=True),
         sa.Column("source_checkpoint_ref", sa.String(length=1024), nullable=False),
         sa.Column("source_checkpoint_digest", sa.String(length=128), nullable=True),
+        sa.Column("source_state_kind", sa.String(length=64), nullable=True),
+        sa.Column("source_state_ref", sa.String(length=512), nullable=True),
+        sa.Column("source_state_digest", sa.String(length=128), nullable=True),
         sa.Column("instruction_ref", sa.String(length=1024), nullable=False),
         sa.Column("instruction_digest", sa.String(length=128), nullable=False),
         sa.Column("context_bundle_ref", sa.String(length=1024), nullable=True),
-        sa.Column("workspace_policy", sa.String(length=64), nullable=False),
+        sa.Column("workspace_policy", sa.String(length=96), nullable=False),
+        sa.Column("runtime_context_policy", sa.String(length=64), nullable=True),
         sa.Column("git_work_branch", sa.String(length=255), nullable=True),
         sa.Column("workspace_restore_ref", sa.String(length=1024), nullable=True),
         sa.Column("git_binding_ref", sa.String(length=1024), nullable=True),
-        sa.Column("step_execution_manifest_ref", sa.String(length=1024), nullable=True),
+        sa.Column(
+            "step_execution_manifest_ref", sa.String(length=1024), nullable=True
+        ),
         sa.Column("created_step_execution_id", sa.String(length=255), nullable=True),
         sa.Column("runtime_agent_run_id", sa.String(length=255), nullable=True),
         sa.Column("provider_session_id", sa.String(length=255), nullable=True),
         sa.Column("idempotency_key", sa.String(length=512), nullable=False),
-        sa.Column("status", sa.String(length=64), nullable=False, server_default="preparing"),
-        sa.Column("diagnostics", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column(
+            "status", sa.String(length=64), nullable=False, server_default="preparing"
+        ),
+        sa.Column(
+            "diagnostics",
+            sa.JSON(),
+            nullable=False,
+            server_default=sa.text("'{}'"),
+        ),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
@@ -169,9 +204,14 @@ def upgrade() -> None:
             "publish_status",
             sa.String(length=64),
             nullable=False,
-            server_default="not_published",
+            server_default="unpublished",
         ),
-        sa.Column("binding_metadata", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column(
+            "binding_metadata",
+            sa.JSON(),
+            nullable=False,
+            server_default=sa.text("'{}'"),
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -239,8 +279,51 @@ def upgrade() -> None:
         ["branch_id"],
     )
 
+    op.create_table(
+        "workflow_checkpoint_branch_operations",
+        sa.Column("operation_id", sa.Uuid(), primary_key=True),
+        sa.Column("workflow_id", sa.String(length=255), nullable=False),
+        sa.Column("branch_id", sa.String(length=64), nullable=True),
+        sa.Column("branch_turn_id", sa.String(length=64), nullable=True),
+        sa.Column("operation", sa.String(length=64), nullable=False),
+        sa.Column("idempotency_key", sa.String(length=512), nullable=False),
+        sa.Column("request_digest", sa.String(length=128), nullable=False),
+        sa.Column(
+            "response_payload",
+            sa.JSON(),
+            nullable=False,
+            server_default=sa.text("'{}'"),
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.ForeignKeyConstraint(
+            ["workflow_id"],
+            ["temporal_execution_sources.workflow_id"],
+            ondelete="CASCADE",
+        ),
+        sa.UniqueConstraint(
+            "workflow_id",
+            "idempotency_key",
+            name="uq_workflow_checkpoint_branch_operations_workflow_idempotency",
+        ),
+    )
+    op.create_index(
+        "ix_workflow_checkpoint_branch_operations_branch",
+        "workflow_checkpoint_branch_operations",
+        ["branch_id", "operation"],
+    )
+
 
 def downgrade() -> None:
+    op.drop_index(
+        "ix_workflow_checkpoint_branch_operations_branch",
+        table_name="workflow_checkpoint_branch_operations",
+    )
+    op.drop_table("workflow_checkpoint_branch_operations")
     op.drop_index(
         "ix_checkpoint_branch_artifacts_branch",
         table_name="workflow_checkpoint_branch_artifacts",
