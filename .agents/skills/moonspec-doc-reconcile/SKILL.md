@@ -12,7 +12,7 @@ metadata:
 
 Use this skill as the final doc-reconciliation pass of a MoonSpec orchestration run. It decides whether verified implementation discoveries definitely require updating the canonical document that owns the affected claim, applies the smallest correct update when they do, and reports a structured outcome either way.
 
-This skill operationalizes the reconciliation expectation in `docs/Workflows/MoonSpecDocumentModel.md`, the authority ladder and module-owned contract policy in `docs/DocumentationArchitecture.md`, and Constitution XI ("update the owning `docs/` files first").
+This skill operationalizes the reconciliation expectation in `docs/Workflows/MoonSpecDocumentModel.md`, the authority ladder and module-owned contract policy in `docs/DocumentationArchitecture.md`, and the rule that durable decisions belong in the owning `docs/` files.
 
 ## Preconditions
 
@@ -45,7 +45,7 @@ Apply this bounded procedure:
    - migration/status text: temporary artifact, never canonical desired state.
 3. Use the source document path, discovery evidence, cited docs, and nearby module ownership to locate the owning canonical document. The owning document may be different from the original source document.
 4. Edit the owning canonical document when the evidence shows that document is incomplete or wrong. Edit a non-owning canonical document only when it conflicts with the owner and must be reconciled to the owner's desired state.
-5. Escalate instead of guessing when ownership is ambiguous, when two plausible owners claim the same contract, when the relevant module-owned contract cannot be identified, or when the required update would alter constitution/document-model/documentation-architecture policy or a published contract without clear authority.
+5. Escalate instead of guessing when ownership is ambiguous, when two plausible owners claim the same contract, when the relevant module-owned contract cannot be identified, or when the required update would alter repo guidance, document-model policy, documentation-architecture policy, or a published contract without clear authority.
 
 Never downgrade a canonical document to match incomplete or buggy code. Verification must establish that the implementation is correct for the agreed story before this skill updates desired-state documentation.
 
@@ -76,7 +76,7 @@ When no discovery passes the gate, report `no_update_required` with a one-line r
 
 ## Escalation
 
-If a required update would conflict with the constitution, `README.md`, the Document Model, `docs/DocumentationArchitecture.md`, a module-owned contract, or the declared architecture direction — or the owning document/correct desired state is genuinely uncertain — do not edit. Instead:
+If a required update would conflict with repo guidance, `README.md`, the Document Model, `docs/DocumentationArchitecture.md`, a module-owned contract, or the declared architecture direction — or the owning document/correct desired state is genuinely uncertain — do not edit. Instead:
 
 1. Read `.agents/skills/jira-issue-creator/SKILL.md` and follow its workflow.
 2. Create a Jira issue containing the document path, the contradicted claim, the implementation evidence, and why the update may conflict with project direction.

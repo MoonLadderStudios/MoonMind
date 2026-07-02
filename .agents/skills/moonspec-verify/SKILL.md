@@ -28,9 +28,13 @@ This skill answers:
 ## Inputs
 
 - Treat the user's text as optional verification focus.
-- Work from the active feature directory resolved by the prerequisite script unless the user provides a specific feature directory, `spec.md`, or issue-brief verification inputs.
+- Select a target mode before loading artifacts. Supported target modes are `moonspec_feature`, `issue_brief`, and `auto`.
+- Accept target mode from `target_mode`, `targetMode`, `verification_target`, or clear prose such as "verification target issue_brief".
+- In `auto` mode, use `issue_brief` when an issue brief artifact or issue-brief verification inputs are provided; otherwise use `moonspec_feature`.
+- Work from the active feature directory resolved by the prerequisite script unless target mode is `issue_brief` or the user provides a specific feature directory, `spec.md`, or issue-brief verification inputs.
 - In MoonSpec feature-directory mode, require `spec.md`, `plan.md`, and `tasks.md`.
 - In issue-brief verification mode, use the provided issue brief artifact, issue reference, acceptance criteria, and assessment artifact as the verification baseline without requiring a MoonSpec feature directory, `spec.md`, `plan.md`, or `tasks.md`.
+- When `verification_artifact_path`, `verificationArtifactPath`, `verify_artifact_path`, or `verifyArtifactPath` is supplied, write the requested structured JSON artifact there after building the Markdown report.
 - Read `AGENTS.md` when present for project principles, repo constraints, and test discipline.
 - Use absolute paths in reports.
 - Keep the verdict conservative when evidence is incomplete.
@@ -75,21 +79,30 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 
 ## Setup
 
-If the user provides issue-brief verification inputs, use issue-brief verification mode. Accept inputs expressed in prose or preset instructions such as:
+Resolve target mode first:
+
+- `moonspec_feature`: require a MoonSpec feature directory or `spec.md`, then load `spec.md`, `plan.md`, and `tasks.md`.
+- `issue_brief`: require an issue brief artifact path and do not require MoonSpec feature files.
+- `auto`: choose `issue_brief` when an issue brief artifact path, assessment artifact path, or issue reference is provided; otherwise choose `moonspec_feature`.
+
+If the selected target mode is `issue_brief`, use issue-brief verification mode. Accept inputs expressed in prose, skill args, or preset instructions such as:
 
 - issue provider, for example `jira` or `github`
 - issue reference, for example `MM-1063` or `owner/repo#123`
 - issue brief artifact path, such as `artifacts/jira-implement-brief.json`
 - assessment artifact path, such as `artifacts/jira-implement-assessment.json`
+- verification artifact path, such as `artifacts/jira-implement-verify.json`
 
 In issue-brief verification mode:
 
 1. Read the issue brief artifact and assessment artifact.
-2. Use the issue summary, description, acceptance criteria, loaded preset brief, and the assessment's unmet and partially-met requirements as the verification baseline.
-3. Treat a `PARTIALLY_IMPLEMENTED` assessment as a bounded backlog: verify only the previously unmet or partially met requirements unless the issue brief explicitly requires broader validation.
-4. Treat `FULLY_IMPLEMENTED` as already verified only when no implementation step made code changes after that assessment.
-5. Inspect production code and tests directly; do not treat the assessment itself as proof that new work is complete.
-6. Do not require `spec.md`, `plan.md`, `tasks.md`, or `.specify/memory/constitution.md`.
+2. Require the issue brief artifact. Treat MoonSpec feature files as optional context only when they are explicitly provided.
+3. Use the issue title or summary, description or body, acceptance criteria, labels, normalized issue brief, loaded preset brief, and the assessment's unmet and partially-met requirements as the verification baseline.
+4. When assessment artifacts include requirement rows, blocker evidence, source-resolution metadata, or prior coverage IDs, include them in the verification inventory.
+5. Treat a `PARTIALLY_IMPLEMENTED` assessment as a bounded backlog: verify only the previously unmet or partially met requirements unless the issue brief explicitly requires broader validation.
+6. Treat `FULLY_IMPLEMENTED` as already verified only when no implementation step made code changes after that assessment.
+7. Inspect production code and tests directly; do not treat the assessment itself as proof that new work is complete.
+8. Do not require `spec.md`, `plan.md`, `tasks.md`, or a standalone constitution file.
 
 If the user provides a specific `spec.md` or feature directory, use it and derive sibling artifacts from that directory.
 
@@ -188,6 +201,7 @@ Build an internal inventory before inspecting code:
 - One row per in-scope `DESIGN-REQ-*` or `DOC-REQ-*`.
 - One row per stable canonical source claim in scope for the story.
 - In issue-brief verification mode, one row per acceptance criterion and one row per unmet or partially met assessment requirement.
+- In issue-brief verification mode, derive inventory rows from the issue title, issue body or description, acceptance criteria, labels, normalized brief fields, loaded preset brief, assessment artifacts, and any explicitly provided source-resolution metadata.
 
 For each row, track:
 
@@ -262,8 +276,12 @@ Choose exactly one verdict:
 - `FULLY_IMPLEMENTED`: implementation, unit tests, integration tests, source design requirements, relevant AGENTS.md principles, and original request alignment all verify.
 - `ADDITIONAL_WORK_NEEDED`: concrete implementation or validation gaps remain.
 - `NO_DETERMINATION`: required evidence cannot be inspected or commands cannot be run enough to reach a defensible conclusion.
+- `BLOCKED`: an external, policy, credential, missing-artifact, or contaminated-workspace condition prevents verification from proceeding in the current runtime.
+- `FAILED_UNRECOVERABLE`: verification found a non-retryable runtime or infrastructure failure that remediation in the current implementation loop cannot repair.
 
 Prefer `ADDITIONAL_WORK_NEEDED` over `NO_DETERMINATION` when a concrete missing code or test gap is visible.
+
+Workflow consumers treat `FULLY_IMPLEMENTED` as passing. They treat `ADDITIONAL_WORK_NEEDED`, `NO_DETERMINATION`, `BLOCKED`, `FAILED_UNRECOVERABLE`, and `ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION` as blocking. Use `ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION` only as a diagnostic value in blocking evidence and projection-contamination metadata; the report verdict should be `BLOCKED`.
 
 When the verdict is `ADDITIONAL_WORK_NEEDED`, include a structured Remaining Work section that remediation steps can consume. Each item must identify:
 
@@ -273,9 +291,17 @@ When the verdict is `ADDITIONAL_WORK_NEEDED`, include a structured Remaining Wor
 - suggested files, commands, or evidence to inspect
 - whether the gap is recoverable in the current runtime
 
+Distinguish implementation gaps from verification gaps:
+
+- Implementation gaps mean required behavior, wiring, persistence, contracts, UI/API behavior, or configuration is absent, partial, or contradictory.
+- Verification gaps mean tests, command evidence, fixture coverage, integration evidence, or inspectable artifacts are missing or insufficient.
+- Environment gaps mean current-runtime constraints prevent a defensible check and should usually map to `BLOCKED`, `FAILED_UNRECOVERABLE`, or `NO_DETERMINATION` depending on recoverability.
+
+Emit concrete `remainingWork` for every `ADDITIONAL_WORK_NEEDED` result. Each item must be bounded enough for a remediation step to act on without reinterpreting the whole report.
+
 ## Report
 
-Return a Markdown report in the response. Do not write a file unless the user explicitly asks for one.
+Return a Markdown report in the response. Do not write a file unless the user explicitly asks for one or supplies a verification artifact path.
 
 Use this structure:
 
@@ -285,7 +311,8 @@ Use this structure:
 **Feature**: [name or spec path]
 **Spec**: [absolute path]
 **Original Request Source**: spec.md `Input`
-**Verdict**: FULLY_IMPLEMENTED | ADDITIONAL_WORK_NEEDED | NO_DETERMINATION
+**Target Mode**: moonspec_feature | issue_brief | auto -> [resolved mode]
+**Verdict**: FULLY_IMPLEMENTED | ADDITIONAL_WORK_NEEDED | NO_DETERMINATION | BLOCKED | FAILED_UNRECOVERABLE
 **Confidence**: HIGH | MEDIUM | LOW
 
 ## Test Results
@@ -358,6 +385,46 @@ Use this structured form for each Remaining Work item:
 ```
 
 Keep the report evidence-backed and concise. Cite file paths and line numbers when possible.
+
+## Structured Verification Artifact
+
+When `verification_artifact_path`, `verificationArtifactPath`, `verify_artifact_path`, or `verifyArtifactPath` is supplied, write a JSON file to that path and still return the Markdown report. The skill remains read-only except for this explicit verification artifact write and ignored disposable test artifacts.
+
+The JSON must be compact, non-secret, and shaped for workflow consumers:
+
+```json
+{
+  "schemaVersion": 1,
+  "targetMode": "moonspec_feature | issue_brief",
+  "requestedTargetMode": "moonspec_feature | issue_brief | auto",
+  "issueProvider": "jira | github | null",
+  "issueRef": "MM-1063 or owner/repo#123 or null",
+  "feature": "issue reference or feature path",
+  "specPath": "absolute path or null",
+  "issueBriefPath": "path or null",
+  "assessmentArtifactPath": "path or null",
+  "verdict": "FULLY_IMPLEMENTED | ADDITIONAL_WORK_NEEDED | NO_DETERMINATION | BLOCKED | FAILED_UNRECOVERABLE",
+  "confidence": "HIGH | MEDIUM | LOW",
+  "summary": "short evidence-backed summary",
+  "recommendedNextAction": "advance | reattempt_current_step | blocked",
+  "recoverableInCurrentRuntime": true,
+  "remainingWork": [
+    {
+      "requirement": "criterion or assessment requirement",
+      "gapType": "implementation | verification | documentation | environment",
+      "remainingWork": "bounded work",
+      "suggestedEvidence": ["file, test, command, or artifact ref"],
+      "recoverableInCurrentRuntime": true
+    }
+  ],
+  "validatedRefs": {},
+  "invalidatedRefs": [],
+  "blockingEvidenceRefs": [],
+  "diagnostics": []
+}
+```
+
+Set `recommendedNextAction` to `advance` only for `FULLY_IMPLEMENTED`, `reattempt_current_step` for recoverable `ADDITIONAL_WORK_NEEDED`, and `blocked` for `NO_DETERMINATION`, `BLOCKED`, `FAILED_UNRECOVERABLE`, or unrecoverable additional work. Use `remainingWork: []` only when no remediation work exists or the result is blocked before an inventory can be built.
 
 ## Post-Verify Hooks
 
