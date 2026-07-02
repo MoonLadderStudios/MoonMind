@@ -226,6 +226,9 @@ class StepExecutionBranchMetadataModel(BaseModel):
     )
     source_state_kind: str | None = Field(None, alias="sourceStateKind", min_length=1)
     source_state_ref: str | None = Field(None, alias="sourceStateRef", min_length=1)
+    source_state_digest: str | None = Field(
+        None, alias="sourceStateDigest", min_length=1
+    )
     parent_branch_id: str | None = Field(None, alias="parentBranchId", min_length=1)
     parent_turn_id: str | None = Field(None, alias="parentTurnId", min_length=1)
     git_work_branch: str | None = Field(None, alias="gitWorkBranch", min_length=1)

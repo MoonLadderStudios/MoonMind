@@ -110,6 +110,88 @@ def test_step_execution_manifest_accepts_canonical_payload_and_content_type() ->
     assert manifest.model_dump(by_alias=True)["terminalDisposition"] == "accepted"
 
 
+def test_mm_1089_step_execution_manifest_accepts_checkpoint_branch_metadata() -> None:
+    manifest = StepExecutionManifestModel.model_validate(
+        {
+            **_identity(),
+            "schemaVersion": "v1",
+            "stepExecutionId": "workflow-1:run-1:implement-story:execution:2",
+            "executionScope": "run",
+            "reason": "checkpoint_branch",
+            "status": "running",
+            "terminalDisposition": None,
+            "branch": {
+                "branchId": "cbr_01",
+                "branchTurnId": "cbt_01",
+                "rootCheckpointRef": "artifact://checkpoints/after-execution",
+                "parentBranchId": None,
+                "parentTurnId": None,
+                "gitWorkBranch": "mm/workflow-1/implement-story/cbr-01",
+            },
+            "input": {"taskInputSnapshotRef": "artifact://task-input"},
+            "context": {"contextBundleRef": "execution-context-bundle://sha256:ctx"},
+            "workspace": {
+                "policy": "continue_from_previous_execution",
+                "runtimeContextPolicy": "fresh_agent_run",
+            },
+            "execution": {"kind": "agent_run"},
+            "outputs": {},
+            "checks": [],
+            "sideEffects": {},
+            "dependencyEffects": {"invalidatedLogicalStepIds": []},
+            "budget": {},
+        }
+    )
+
+    dumped = manifest.model_dump(by_alias=True)
+
+    assert dumped["reason"] == "checkpoint_branch"
+    assert dumped["branch"] == {
+        "branchId": "cbr_01",
+        "branchTurnId": "cbt_01",
+        "rootCheckpointRef": "artifact://checkpoints/after-execution",
+        "sourceStateKind": None,
+        "sourceStateRef": None,
+        "sourceStateDigest": None,
+        "parentBranchId": None,
+        "parentTurnId": None,
+        "gitWorkBranch": "mm/workflow-1/implement-story/cbr-01",
+    }
+
+
+def test_mm_1089_step_execution_manifest_accepts_typed_branch_source_state() -> None:
+    manifest = StepExecutionManifestModel.model_validate(
+        {
+            **_identity(),
+            "schemaVersion": "v1",
+            "stepExecutionId": "workflow-1:run-1:implement-story:execution:2",
+            "executionScope": "run",
+            "reason": "checkpoint_branch",
+            "status": "running",
+            "branch": {
+                "branchId": "cbr_01",
+                "branchTurnId": "cbt_01",
+                "sourceStateKind": "provider_session",
+                "sourceStateRef": "provider://session/1",
+            },
+            "input": {},
+            "context": {},
+            "workspace": {},
+            "execution": {},
+            "outputs": {},
+            "checks": [],
+            "sideEffects": {},
+            "dependencyEffects": {},
+            "budget": {},
+        }
+    )
+
+    assert manifest.branch is not None
+    assert manifest.branch.root_checkpoint_ref is None
+    assert manifest.branch.source_state_kind == "provider_session"
+    assert manifest.branch.source_state_ref == "provider://session/1"
+
+
 def test_step_execution_manifest_boundary_accepts_previous_compact_payload_shape() -> (
     None
 ):
@@ -396,13 +478,19 @@ def test_step_execution_boundary_result_is_compact_and_typed() -> None:
     assert "payload" not in serialized
 
 
-def test_step_execution_semantic_operation_keeps_retry_reexecute_recovery_distinct() -> None:
+def test_mm_1089_step_execution_semantic_operation_keeps_branch_turn_distinct() -> None:
     retry = StepExecutionSemanticOperationModel.model_validate({"kind": "retry"})
-    reexecute = StepExecutionSemanticOperationModel.model_validate({"kind": "reexecute"})
+    reexecute = StepExecutionSemanticOperationModel.model_validate(
+        {"kind": "reexecute"}
+    )
     recover = StepExecutionSemanticOperationModel.model_validate({"kind": "recover"})
+    branch = StepExecutionSemanticOperationModel.model_validate(
+        {"kind": "checkpoint_branch"}
+    )
 
-    assert {retry.kind, reexecute.kind, recover.kind} == {
+    assert {retry.kind, reexecute.kind, recover.kind, branch.kind} == {
         "retry",
         "reexecute",
         "recover",
+        "checkpoint_branch",
     }
