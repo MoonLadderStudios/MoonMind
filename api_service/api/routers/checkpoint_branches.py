@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.base import get_async_session
 from api_service.services.checkpoint_branch_service import CheckpointBranchService
 from moonmind.schemas.checkpoint_branch_models import (
+    CheckpointBranchArchiveModel,
     CheckpointBranchContinueModel,
     CheckpointBranchForkModel,
     CheckpointBranchGraphCreateModel,
@@ -154,12 +155,14 @@ async def fork_checkpoint_branch(
 async def archive_checkpoint_branch(
     workflow_id: str,
     branch_id: str,
+    payload: CheckpointBranchArchiveModel,
     session: AsyncSession = Depends(get_async_session),
 ) -> CheckpointBranchStateUpdateModel:
     try:
         result = await _service(session).archive_branch(
             workflow_id=workflow_id,
             branch_id=branch_id,
+            idempotency_key=payload.idempotency_key,
         )
         await session.commit()
         return result
@@ -175,7 +178,7 @@ async def archive_checkpoint_branch(
 async def mark_checkpoint_branch_publish_ready(
     workflow_id: str,
     branch_id: str,
-    payload: CheckpointBranchPublishReadyModel | None = None,
+    payload: CheckpointBranchPublishReadyModel,
     session: AsyncSession = Depends(get_async_session),
 ) -> CheckpointBranchStateUpdateModel:
     try:
