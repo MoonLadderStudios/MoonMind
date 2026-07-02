@@ -18,7 +18,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ScrollText } from 'lucide-react';
+import { Rocket, ScrollText } from 'lucide-react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { validatePageBoot } from '../boot/pageBootSchemas';
@@ -81,13 +81,7 @@ function WorkflowsNavIcon({ className }: NavIconProps) {
 }
 
 function StartWorkflowNavIcon({ className }: NavIconProps) {
-  return (
-    <NavIcon className={className}>
-      <path d="M12 5v14" />
-      <path d="M5 12h14" />
-      <circle cx="12" cy="12" r="8" />
-    </NavIcon>
-  );
+  return <Rocket className={className} aria-hidden="true" focusable="false" />;
 }
 
 function SchedulesNavIcon({ className }: NavIconProps) {
@@ -349,7 +343,7 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
           </NavLink>
           <NavLink to="/workflows/new" className={({ isActive }) => (isActive ? 'active' : undefined)}>
             <StartWorkflowNavIcon className="route-nav-icon" />
-            Start Workflow
+            Create
           </NavLink>
           <NavLink to="/schedules" className={({ isActive }) => (isActive ? 'active' : undefined)}>
             <SchedulesNavIcon className="route-nav-icon" />
