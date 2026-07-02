@@ -184,6 +184,8 @@ def upgrade() -> None:
         sa.Column("source_state_kind", sa.String(length=64), nullable=True),
         sa.Column("source_state_ref", sa.String(length=512), nullable=True),
         sa.Column("source_state_digest", sa.String(length=128), nullable=True),
+        sa.Column("workspace_policy", workspace_policy, nullable=False),
+        sa.Column("runtime_context_policy", runtime_context_policy, nullable=False),
         sa.Column("instruction_ref", sa.String(length=512), nullable=False),
         sa.Column("instruction_digest", sa.String(length=128), nullable=False),
         sa.Column("context_bundle_ref", sa.String(length=512), nullable=True),
@@ -272,6 +274,11 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("branch_id"),
+        sa.UniqueConstraint(
+            "repository",
+            "work_branch",
+            name="uq_checkpoint_branch_git_repository_work_branch",
+        ),
     )
 
     op.create_table(

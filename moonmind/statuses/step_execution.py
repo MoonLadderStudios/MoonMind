@@ -48,6 +48,7 @@ StepExecutionReason = Literal[
     "operator_requested",
     "dependency_invalidated",
     "policy_revalidation",
+    "checkpoint_branch",
 ]
 StepExecutionTerminalDisposition = Literal[
     "accepted",

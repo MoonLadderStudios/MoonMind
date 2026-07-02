@@ -169,6 +169,12 @@ class CheckpointBranchTurnCreateModel(BaseModel):
     source_state_digest: str | None = Field(
         None, alias="sourceStateDigest", min_length=1
     )
+    workspace_policy: CheckpointBranchWorkspacePolicy = Field(
+        ..., alias="workspacePolicy"
+    )
+    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
+        ..., alias="runtimeContextPolicy"
+    )
     instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
     instruction_digest: str = Field(..., alias="instructionDigest", min_length=1)
     context_bundle_ref: str | None = Field(
@@ -195,6 +201,10 @@ class CheckpointBranchTurnCreateModel(BaseModel):
 
     @model_validator(mode="after")
     def _requires_checkpoint_or_typed_state(self) -> "CheckpointBranchTurnCreateModel":
+        if self.created_step_execution_id in {self.branch_id, self.branch_turn_id}:
+            raise ValueError(
+                "branch turn Step Execution id must differ from branch and turn ids"
+            )
         if self.source_checkpoint_ref:
             return self
         if self.source_state_kind and self.source_state_ref:

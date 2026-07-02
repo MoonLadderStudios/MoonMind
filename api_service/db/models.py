@@ -1239,6 +1239,28 @@ class WorkflowCheckpointBranchTurn(Base):
     source_state_digest: Mapped[Optional[str]] = mapped_column(
         String(128), nullable=True
     )
+    workspace_policy: Mapped[CheckpointBranchWorkspacePolicy] = mapped_column(
+        Enum(
+            CheckpointBranchWorkspacePolicy,
+            name="checkpointbranchworkspacepolicy",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+    )
+    runtime_context_policy: Mapped[CheckpointBranchRuntimeContextPolicy] = (
+        mapped_column(
+            Enum(
+                CheckpointBranchRuntimeContextPolicy,
+                name="checkpointbranchruntimecontextpolicy",
+                native_enum=True,
+                validate_strings=True,
+                values_callable=_enum_values,
+            ),
+            nullable=False,
+        )
+    )
     instruction_ref: Mapped[str] = mapped_column(String(512), nullable=False)
     instruction_digest: Mapped[str] = mapped_column(String(128), nullable=False)
     context_bundle_ref: Mapped[Optional[str]] = mapped_column(
@@ -1291,6 +1313,11 @@ class WorkflowCheckpointBranchGitBinding(Base):
         CheckConstraint(
             "work_branch NOT IN ('main', 'master', 'HEAD', '')",
             name="ck_checkpoint_branch_git_work_branch_safe",
+        ),
+        UniqueConstraint(
+            "repository",
+            "work_branch",
+            name="uq_checkpoint_branch_git_repository_work_branch",
         ),
     )
 

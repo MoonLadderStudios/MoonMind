@@ -20,6 +20,7 @@ from api_service.services.checkpoint_branch_service import (
 )
 from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchCreateModel,
+    CheckpointBranchTurnCreateModel,
     StepExecutionBranchMetadataModel,
 )
 from moonmind.schemas.temporal_models import StepExecutionManifestModel
@@ -102,7 +103,7 @@ def test_branch_manifest_metadata_is_optional_step_execution_lineage() -> None:
             "logicalStepId": "implement",
             "executionOrdinal": 3,
             "stepExecutionId": "wf-1:run-branch:implement:execution:3",
-            "reason": "operator_requested",
+            "reason": "checkpoint_branch",
             "status": "running",
             "branch": {
                 "branchId": "cbr-1",
@@ -139,6 +140,8 @@ async def test_checkpoint_branch_service_persists_branch_turn_artifact_and_git_b
             "branchId": branch.branch_id,
             "sourceCheckpointRef": branch.source_checkpoint_ref,
             "sourceCheckpointDigest": branch.source_checkpoint_digest,
+            "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+            "runtimeContextPolicy": "fresh_agent_run",
             "instructionRef": "artifact://instructions/1",
             "instructionDigest": "sha256:instructions",
             "contextBundleRef": "artifact://context/1",
@@ -177,6 +180,8 @@ async def test_checkpoint_branch_service_persists_branch_turn_artifact_and_git_b
     assert branch.source_checkpoint_digest == "sha256:checkpoint"
     assert branch.state.value == "created"
     assert turn.status.value == "created"
+    assert turn.workspace_policy.value == "apply_previous_execution_diff_to_clean_baseline"
+    assert turn.runtime_context_policy.value == "fresh_agent_run"
 
     git_binding = (
         await checkpoint_branch_session.execute(
@@ -210,6 +215,8 @@ async def test_checkpoint_branch_service_preserves_child_lineage(
             "branchTurnId": "cbt-parent",
             "branchId": parent.branch_id,
             "sourceCheckpointRef": parent.source_checkpoint_ref,
+            "workspacePolicy": "continue_from_previous_execution",
+            "runtimeContextPolicy": "fresh_agent_run",
             "instructionRef": "artifact://instructions/parent",
             "instructionDigest": "sha256:parent",
             "idempotencyKey": "MM-1088:cbr-parent:turn-1",
@@ -227,3 +234,143 @@ async def test_checkpoint_branch_service_preserves_child_lineage(
 
     assert child.parent_branch_id == "cbr-parent"
     assert child.parent_turn_id == "cbt-parent"
+
+
+def test_checkpoint_branch_turn_rejects_step_execution_identity_reuse() -> None:
+    with pytest.raises(ValidationError, match="branch and turn ids"):
+        CheckpointBranchTurnCreateModel.model_validate(
+            {
+                "branchTurnId": "cbt-1",
+                "branchId": "cbr-1",
+                "sourceCheckpointRef": "artifact://checkpoint/after",
+                "workspacePolicy": "continue_from_previous_execution",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "instructionRef": "artifact://instructions/1",
+                "instructionDigest": "sha256:instructions",
+                "createdStepExecutionId": "cbt-1",
+                "idempotencyKey": "MM-1088:cbr-1:turn-1",
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_service_rejects_cross_branch_parent_turn_and_artifact(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+
+    branch_a = await service.create_branch(_branch_payload(branchId="cbr-a"))
+    branch_b = await service.create_branch(
+        _branch_payload(
+            branchId="cbr-b",
+            gitWorkBranch="mm/wf-1/implement/cbr-b-focused-fix",
+        )
+    )
+    turn_a = await service.create_turn(
+        {
+            "branchTurnId": "cbt-a",
+            "branchId": branch_a.branch_id,
+            "sourceCheckpointRef": branch_a.source_checkpoint_ref,
+            "workspacePolicy": "continue_from_previous_execution",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "instructionRef": "artifact://instructions/a",
+            "instructionDigest": "sha256:a",
+            "idempotencyKey": "MM-1088:cbr-a:turn-1",
+        }
+    )
+
+    with pytest.raises(ValueError, match="parentTurnId must belong to branch"):
+        await service.create_turn(
+            {
+                "branchTurnId": "cbt-b",
+                "branchId": branch_b.branch_id,
+                "parentTurnId": turn_a.branch_turn_id,
+                "sourceCheckpointRef": branch_b.source_checkpoint_ref,
+                "workspacePolicy": "continue_from_previous_execution",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "instructionRef": "artifact://instructions/b",
+                "instructionDigest": "sha256:b",
+                "idempotencyKey": "MM-1088:cbr-b:turn-1",
+            }
+        )
+
+    with pytest.raises(ValueError, match="branchTurnId must belong to branch"):
+        await service.record_artifact(
+            branch_id=branch_b.branch_id,
+            branch_turn_id=turn_a.branch_turn_id,
+            artifact_ref="artifact://turn/a",
+            artifact_kind="step_execution_manifest",
+        )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_service_validates_child_parent_turn_lineage(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+
+    parent = await service.create_branch(_branch_payload(branchId="cbr-parent"))
+    other = await service.create_branch(
+        _branch_payload(
+            branchId="cbr-other",
+            gitWorkBranch="mm/wf-1/implement/cbr-other-focused-fix",
+        )
+    )
+    other_turn = await service.create_turn(
+        {
+            "branchTurnId": "cbt-other",
+            "branchId": other.branch_id,
+            "sourceCheckpointRef": other.source_checkpoint_ref,
+            "workspacePolicy": "continue_from_previous_execution",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "instructionRef": "artifact://instructions/other",
+            "instructionDigest": "sha256:other",
+            "idempotencyKey": "MM-1088:cbr-other:turn-1",
+        }
+    )
+
+    with pytest.raises(ValueError, match="parentTurnId must belong to branch"):
+        await service.create_branch(
+            _branch_payload(
+                branchId="cbr-child",
+                branchKind="child_fork",
+                parentBranchId=parent.branch_id,
+                parentTurnId=other_turn.branch_turn_id,
+                gitWorkBranch="mm/wf-1/implement/cbr-child-focused-fix",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_service_rejects_duplicate_git_work_branch(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+
+    first = await service.create_branch(_branch_payload(branchId="cbr-first"))
+    second = await service.create_branch(
+        _branch_payload(
+            branchId="cbr-second",
+            gitWorkBranch="mm/wf-1/implement/cbr-second-focused-fix",
+        )
+    )
+    await service.record_git_binding(
+        {
+            "branch_id": first.branch_id,
+            "repository": "repo://moonmind",
+            "base_branch": "main",
+            "base_commit": "abc123",
+            "work_branch": "mm/wf-1/implement/collision",
+        }
+    )
+
+    with pytest.raises(ValueError, match="already bound"):
+        await service.record_git_binding(
+            {
+                "branch_id": second.branch_id,
+                "repository": "repo://moonmind",
+                "base_branch": "main",
+                "base_commit": "abc123",
+                "work_branch": "mm/wf-1/implement/collision",
+            }
+        )

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
@@ -52,6 +53,25 @@ class CheckpointBranchService:
     def __init__(self, session: AsyncSession):
         self._session = session
 
+    async def _require_turn_on_branch(
+        self,
+        *,
+        branch_id: str,
+        branch_turn_id: str,
+        relation: str,
+    ) -> WorkflowCheckpointBranchTurn:
+        result = await self._session.execute(
+            select(WorkflowCheckpointBranchTurn).where(
+                WorkflowCheckpointBranchTurn.branch_turn_id == branch_turn_id
+            )
+        )
+        turn = result.scalar_one_or_none()
+        if turn is None:
+            raise ValueError(f"{relation} must reference an existing branch turn")
+        if turn.branch_id != branch_id:
+            raise ValueError(f"{relation} must belong to branch {branch_id}")
+        return turn
+
     async def create_branch(
         self,
         payload: CheckpointBranchCreateModel | dict[str, Any],
@@ -62,6 +82,16 @@ class CheckpointBranchService:
             else CheckpointBranchCreateModel.model_validate(payload)
         )
         source = model.source
+        if (
+            model.branch_kind == "child_fork"
+            and model.parent_branch_id
+            and model.parent_turn_id
+        ):
+            await self._require_turn_on_branch(
+                branch_id=model.parent_branch_id,
+                branch_turn_id=model.parent_turn_id,
+                relation="parentTurnId",
+            )
         record = WorkflowCheckpointBranch(
             branch_id=model.branch_id,
             workflow_id=source.workflow_id,
@@ -103,8 +133,16 @@ class CheckpointBranchService:
             if isinstance(payload, CheckpointBranchTurnCreateModel)
             else CheckpointBranchTurnCreateModel.model_validate(payload)
         )
-        if model.created_step_execution_id == model.branch_id:
-            raise ValueError("branch turn Step Execution id must differ from branch id")
+        if model.created_step_execution_id in {model.branch_id, model.branch_turn_id}:
+            raise ValueError(
+                "branch turn Step Execution id must differ from branch and turn ids"
+            )
+        if model.parent_turn_id:
+            await self._require_turn_on_branch(
+                branch_id=model.branch_id,
+                branch_turn_id=model.parent_turn_id,
+                relation="parentTurnId",
+            )
         record = WorkflowCheckpointBranchTurn(
             branch_turn_id=model.branch_turn_id,
             branch_id=model.branch_id,
@@ -114,6 +152,10 @@ class CheckpointBranchService:
             source_state_kind=model.source_state_kind,
             source_state_ref=model.source_state_ref,
             source_state_digest=model.source_state_digest,
+            workspace_policy=CheckpointBranchWorkspacePolicy(model.workspace_policy),
+            runtime_context_policy=CheckpointBranchRuntimeContextPolicy(
+                model.runtime_context_policy
+            ),
             instruction_ref=model.instruction_ref,
             instruction_digest=model.instruction_digest,
             context_bundle_ref=model.context_bundle_ref,
@@ -136,16 +178,30 @@ class CheckpointBranchService:
             if isinstance(payload, CheckpointBranchGitBindingInput)
             else CheckpointBranchGitBindingInput(**payload)
         )
+        repository = model.repository.strip()
+        base_branch = model.base_branch.strip()
+        base_commit = model.base_commit.strip()
         work_branch = model.work_branch.strip()
         if work_branch in _PROTECTED_GIT_WORK_BRANCHES:
             raise ValueError(
                 "checkpoint branch git binding requires an isolated work branch"
             )
+        existing = await self._session.execute(
+            select(WorkflowCheckpointBranchGitBinding.branch_id).where(
+                WorkflowCheckpointBranchGitBinding.repository == repository,
+                WorkflowCheckpointBranchGitBinding.work_branch == work_branch,
+            )
+        )
+        existing_branch_id = existing.scalar_one_or_none()
+        if existing_branch_id is not None and existing_branch_id != model.branch_id:
+            raise ValueError(
+                "checkpoint branch git work branch is already bound to another branch"
+            )
         record = WorkflowCheckpointBranchGitBinding(
             branch_id=model.branch_id,
-            repository=model.repository.strip(),
-            base_branch=model.base_branch.strip(),
-            base_commit=model.base_commit.strip(),
+            repository=repository,
+            base_branch=base_branch,
+            base_commit=base_commit,
             work_branch=work_branch,
             worktree_ref=model.worktree_ref,
             head_commit=model.head_commit,
@@ -171,6 +227,12 @@ class CheckpointBranchService:
         branch_turn_id = branch_turn_id.strip() if branch_turn_id else None
         if not branch_id or not artifact_ref or not artifact_kind:
             raise ValueError("branch artifact requires branch id, ref, and kind")
+        if branch_turn_id:
+            await self._require_turn_on_branch(
+                branch_id=branch_id,
+                branch_turn_id=branch_turn_id,
+                relation="branchTurnId",
+            )
         record = WorkflowCheckpointBranchArtifact(
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,
