@@ -37,10 +37,20 @@ def _request() -> AgentExecutionRequest:
 
 def _bundle(**overrides: Any) -> OmnigentCaptureBundle:
     payload = {
-        "output_refs": ["artifact://omnigent/corr-1/output.omnigent.snapshot.final.json"],
+        "output_refs": [
+            "artifact://omnigent/corr-1/output.omnigent.snapshot.final.json"
+        ],
         "diagnostics_ref": "artifact://omnigent/corr-1/diagnostics.omnigent.json",
-        "capture_manifest_ref": "artifact://omnigent/corr-1/output.omnigent.capture_manifest.json",
+        "capture_manifest_ref": (
+            "artifact://omnigent/corr-1/output.omnigent.capture_manifest.json"
+        ),
+        "external_state_ref": (
+            "artifact://omnigent/corr-1/checkpoint.omnigent.external_state.json"
+        ),
         "metadata_refs": {
+            "externalStateRef": (
+                "artifact://omnigent/corr-1/checkpoint.omnigent.external_state.json"
+            ),
             "captureManifestRef": (
                 "artifact://omnigent/corr-1/output.omnigent.capture_manifest.json"
             )
@@ -96,7 +106,11 @@ def test_build_omnigent_result_is_compact_terminal_success() -> None:
             output_refs=["artifact://transcript", "artifact://snapshot"],
             diagnostics_ref="artifact://diagnostics",
             capture_manifest_ref="artifact://capture",
-            metadata_refs={"captureManifestRef": "artifact://capture"},
+            external_state_ref="artifact://external-state",
+            metadata_refs={
+                "captureManifestRef": "artifact://capture",
+                "externalStateRef": "artifact://external-state",
+            },
         ),
     )
 
@@ -107,6 +121,9 @@ def test_build_omnigent_result_is_compact_terminal_success() -> None:
     assert result.metadata["providerName"] == "omnigent"
     assert result.metadata["normalizedStatus"] == "completed"
     assert result.metadata["captureManifestRef"] == "artifact://capture"
+    assert result.metadata["externalStateRef"] == "artifact://external-state"
+    assert result.metadata["idempotencyKey"] == "idem-1"
+    assert result.metadata["omnigentSessionId"] == "sess-1"
 
 
 def test_build_omnigent_result_maps_snake_case_metadata() -> None:
@@ -177,7 +194,10 @@ def test_build_omnigent_result_uses_valid_failure_class_for_timeout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> None:
+async def test_run_omnigent_execution_waits_for_terminal_result(
+    monkeypatch,
+    tmp_path,
+) -> None:
     created_clients: list[object] = []
     heartbeats: list[dict[str, Any]] = []
 
@@ -216,6 +236,7 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
             return {
                 "status": "completed",
                 "summary": "done",
+                "largeProviderState": "x" * 20000,
                 "outputRefs": ["artifact://final"],
                 "diagnosticsRef": "artifact://diagnostics",
             }
@@ -228,6 +249,7 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
         lambda details: heartbeats.append(details),
     )
 
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
     result = await run_omnigent_execution(
         AgentExecutionRequest(
             agentKind="external",
@@ -242,7 +264,8 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
                     "prompt": {"text": "Do the task"},
                 },
             },
-        )
+        ),
+        artifact_gateway=gateway,
     )
 
     assert result.summary == "done"
@@ -250,6 +273,46 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
     assert all(ref.startswith("artifact://omnigent/") for ref in result.output_refs)
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
     assert result.metadata["normalizedStatus"] == "completed"
+    assert result.metadata["idempotencyKey"] == "idem-1"
+    assert result.metadata["omnigentSessionId"] == "session-1"
+    assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")
+    external_state = json.loads(
+        await gateway.read_text(str(result.metadata["externalStateRef"]))
+    )
+    assert external_state["kind"] == "external_state_ref"
+    assert external_state["endpointRef"] == "default"
+    assert external_state["correlation"] == {
+        "correlationId": "corr-1",
+        "idempotencyKey": "idem-1",
+    }
+    assert external_state["session"] == {
+        "omnigentSessionId": "session-1",
+        "omnigentAgentId": "agent-1",
+        "terminalStatus": "completed",
+    }
+    assert external_state["firstMessage"]["digestSha256"]
+    assert external_state["firstMessage"]["requestRef"].startswith(
+        "artifact://omnigent/"
+    )
+    assert external_state["artifactRefs"]["rawSseStreamRef"].startswith(
+        "artifact://omnigent/"
+    )
+    assert external_state["artifactRefs"]["finalSnapshotRef"].startswith(
+        "artifact://omnigent/"
+    )
+    assert (
+        external_state["terminalResultRefs"]["diagnosticsRef"]
+        == result.diagnostics_ref
+    )
+    assert external_state["patchEvidence"] == {
+        "patchUnavailable": True,
+        "patchUnavailableDiagnostic": (
+            "Omnigent workspace diff artifact was not captured for this session"
+        ),
+        "workspaceDiffRefs": [],
+    }
+    assert "largeProviderState" not in external_state
+    assert "x" * 20000 not in json.dumps(result.model_dump(mode="json"))
     assert created_clients
     assert heartbeats
     assert all("normalizedStatus" in heartbeat for heartbeat in heartbeats)

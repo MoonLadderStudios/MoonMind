@@ -83,6 +83,7 @@ class OmnigentCaptureBundle:
     output_refs: list[str] = field(default_factory=list)
     diagnostics_ref: str = ""
     capture_manifest_ref: str = ""
+    external_state_ref: str = ""
     metadata_refs: dict[str, str] = field(default_factory=dict)
 
 
@@ -573,11 +574,24 @@ def build_omnigent_result(
     output_refs = list(capture_bundle.output_refs)
     diagnostics_ref = capture_bundle.diagnostics_ref
     if not output_refs:
-        raise OmnigentContractError("Omnigent result requires MoonMind output artifact refs")
+        raise OmnigentContractError(
+            "Omnigent result requires MoonMind output artifact refs"
+        )
     if not diagnostics_ref:
-        raise OmnigentContractError("Omnigent result requires a MoonMind diagnostics artifact ref")
+        raise OmnigentContractError(
+            "Omnigent result requires a MoonMind diagnostics artifact ref"
+        )
+    if not capture_bundle.external_state_ref:
+        raise OmnigentContractError(
+            "Omnigent result requires a MoonMind external state artifact ref"
+        )
     _assert_no_provider_native_refs(
-        [*output_refs, diagnostics_ref, *capture_bundle.metadata_refs.values()]
+        [
+            *output_refs,
+            diagnostics_ref,
+            capture_bundle.external_state_ref,
+            *capture_bundle.metadata_refs.values(),
+        ]
     )
     summary = final_snapshot.get("summary") or failure_summary
     if not summary:
@@ -593,6 +607,8 @@ def build_omnigent_result(
         "omnigentSessionId": session_id,
         "sseEventsCaptured": event_count,
         "correlationId": request.correlation_id,
+        "idempotencyKey": request.idempotency_key,
+        "externalStateRef": capture_bundle.external_state_ref,
     }
     if agent_id:
         metadata["omnigentAgentId"] = agent_id
@@ -658,6 +674,7 @@ async def _capture_cancelled_omnigent_session(
     client: OmnigentHttpClient,
     artifact_gateway: OmnigentArtifactGateway,
     request: AgentExecutionRequest,
+    endpoint_ref: str,
     session_id: str,
     agent_id: str | None,
     initial_snapshot: dict[str, Any] | None,
@@ -665,6 +682,7 @@ async def _capture_cancelled_omnigent_session(
     first_message_response: dict[str, Any] | None,
     raw_events: list[dict[str, Any]],
     normalized_events: list[dict[str, Any]],
+    reattach_state: dict[str, Any] | None,
     capture_policy: dict[str, Any] | None,
 ) -> None:
     with suppress(Exception):
@@ -673,6 +691,7 @@ async def _capture_cancelled_omnigent_session(
             client=client,
             artifact_gateway=artifact_gateway,
             request=request,
+            endpoint_ref=endpoint_ref,
             session_id=session_id,
             agent_id=agent_id,
             initial_snapshot=initial_snapshot,
@@ -686,6 +705,7 @@ async def _capture_cancelled_omnigent_session(
                 "cancelled": True,
                 "failureClass": "system_error",
             },
+            reattach_state=reattach_state,
             harvest_resources=True,
             capture_policy=capture_policy,
         )
@@ -993,6 +1013,7 @@ async def _build_capture_bundle(
     client: OmnigentHttpClient | None,
     artifact_gateway: OmnigentArtifactGateway,
     request: AgentExecutionRequest,
+    endpoint_ref: str,
     session_id: str,
     agent_id: str | None,
     initial_snapshot: dict[str, Any] | None,
@@ -1003,6 +1024,7 @@ async def _build_capture_bundle(
     normalized_events: list[dict[str, Any]],
     terminal_status: str,
     diagnostics: dict[str, Any],
+    reattach_state: dict[str, Any] | None,
     harvest_resources: bool,
     capture_policy: dict[str, Any] | None = None,
 ) -> OmnigentCaptureBundle:
@@ -1182,7 +1204,29 @@ async def _build_capture_bundle(
         payload=manifest,
         link_type="output.omnigent.capture_manifest",
     )
+    external_state_ref = await _capture_artifact_json(
+        artifact_gateway,
+        request,
+        refs,
+        key="externalStateRef",
+        name="checkpoint.omnigent.external_state.json",
+        payload=_omnigent_external_state_payload(
+            request=request,
+            endpoint_ref=endpoint_ref,
+            session_id=session_id,
+            agent_id=agent_id,
+            terminal_status=terminal_status,
+            refs=refs,
+            manifest=manifest,
+            diagnostics_ref=diagnostics_ref,
+            reattach_state=reattach_state,
+            first_message_request=first_message_request,
+            first_message_response=first_message_response,
+        ),
+        link_type="checkpoint.omnigent.external_state",
+    )
     metadata_refs = {
+        "externalStateRef": external_state_ref,
         "captureManifestRef": manifest_ref,
         "rawSseStreamRef": raw_ref,
         "normalizedEventStreamRef": normalized_ref,
@@ -1204,8 +1248,109 @@ async def _build_capture_bundle(
         output_refs=output_refs,
         diagnostics_ref=diagnostics_ref,
         capture_manifest_ref=manifest_ref,
+        external_state_ref=external_state_ref,
         metadata_refs=metadata_refs,
     )
+
+
+def _omnigent_external_state_payload(
+    *,
+    request: AgentExecutionRequest,
+    endpoint_ref: str,
+    session_id: str,
+    agent_id: str | None,
+    terminal_status: str,
+    refs: dict[str, str],
+    manifest: dict[str, Any],
+    diagnostics_ref: str,
+    reattach_state: dict[str, Any] | None,
+    first_message_request: dict[str, Any] | None,
+    first_message_response: dict[str, Any] | None,
+) -> dict[str, Any]:
+    first_message_metadata = (
+        first_message_request.get("metadata", {})
+        if isinstance(first_message_request, dict)
+        else {}
+    )
+    first_message_digest = (
+        first_message_metadata.get("moonmindFirstMessageDigest")
+        if isinstance(first_message_metadata, dict)
+        else None
+    )
+    first_message: dict[str, Any] = {
+        "state": "not_prepared" if first_message_request is None else "prepared",
+    }
+    if first_message_response is not None:
+        first_message["state"] = "posted"
+    if first_message_digest:
+        first_message["digestSha256"] = str(first_message_digest)
+    if refs.get("firstMessageRequestRef"):
+        first_message["requestRef"] = refs["firstMessageRequestRef"]
+    if refs.get("firstMessageResponseRef"):
+        first_message["responseRef"] = refs["firstMessageResponseRef"]
+
+    patch_evidence: dict[str, Any] = {
+        "patchUnavailable": bool(manifest.get("patchUnavailable", True)),
+    }
+    workspace_diffs = manifest.get("workspaceDiffs")
+    if isinstance(workspace_diffs, list):
+        patch_evidence["workspaceDiffRefs"] = [
+            {
+                "path": str(item.get("path", "")),
+                "artifactRef": str(item.get("artifactRef", "")),
+            }
+            for item in workspace_diffs
+            if isinstance(item, dict) and item.get("artifactRef")
+        ]
+    if manifest.get("workspaceDiffsUnavailable"):
+        patch_evidence["patchUnavailableDiagnostic"] = str(
+            manifest["workspaceDiffsUnavailable"]
+        )
+    elif patch_evidence["patchUnavailable"]:
+        patch_evidence["patchUnavailableDiagnostic"] = (
+            "Omnigent workspace diff artifact was not captured for this session"
+        )
+
+    artifact_refs: dict[str, Any] = {
+        "diagnosticsRef": diagnostics_ref,
+        "captureManifestRef": refs.get("captureManifestRef"),
+        "rawSseStreamRef": refs.get("rawSseStreamRef"),
+        "normalizedEventStreamRef": refs.get("normalizedEventStreamRef"),
+        "initialSnapshotRef": refs.get("initialSnapshotRef"),
+        "finalSnapshotRef": refs.get("finalSnapshotRef"),
+        "changedFilesIndexRef": refs.get("changedFilesIndexRef"),
+        "workspaceFilesIndexRef": refs.get("workspaceFilesIndexRef"),
+        "sessionFilesIndexRef": refs.get("sessionFilesIndexRef"),
+        "childSessionsRef": refs.get("childSessionsRef"),
+    }
+    compact_artifact_refs = {
+        key: value for key, value in artifact_refs.items() if value
+    }
+
+    return {
+        "schemaVersion": "v1",
+        "kind": "external_state_ref",
+        "provider": "omnigent",
+        "endpointRef": str(endpoint_ref or "default"),
+        "correlation": {
+            "correlationId": request.correlation_id,
+            "idempotencyKey": request.idempotency_key,
+        },
+        "session": {
+            "omnigentSessionId": session_id,
+            "omnigentAgentId": agent_id,
+            "terminalStatus": terminal_status,
+        },
+        "firstMessage": first_message,
+        "reattachState": reattach_state or {"source": "unknown"},
+        "artifactRefs": compact_artifact_refs,
+        "terminalResultRefs": {
+            key: compact_artifact_refs[key]
+            for key in ("finalSnapshotRef", "diagnosticsRef", "captureManifestRef")
+            if key in compact_artifact_refs
+        },
+        "patchEvidence": patch_evidence,
+    }
 
 
 def _jsonl(events: list[dict[str, Any]]) -> str:
@@ -1257,10 +1402,13 @@ async def run_omnigent_execution(
     raw_events: list[dict[str, Any]] = []
     normalized_events: list[dict[str, Any]] = []
     target_agent_id: str | None = None
+    endpoint_ref = "default"
+    reattach_state: dict[str, Any] = {"source": "new_session"}
     delete_after_harvest = False
     capture_policy: dict[str, Any] | None = None
     try:
         selection = build_omnigent_selection(request)
+        endpoint_ref = str(selection.endpoint_ref or "default")
         capture_policy = selection.capture
         delete_after_harvest = bool(
             selection.capture.get("deleteOmnigentSessionAfterHarvest", False)
@@ -1311,22 +1459,47 @@ async def run_omnigent_execution(
                 )
 
             retry_state = _heartbeat_state()
-            session_id = str(
+            persisted_session_id = str(
                 getattr(durable_row, "omnigent_session_id", None) or ""
-            ).strip() or _heartbeat_session_id(retry_state)
+            ).strip()
+            heartbeat_session_id = _heartbeat_session_id(retry_state)
+            session_id = persisted_session_id or heartbeat_session_id
+            reattach_state = {
+                "source": (
+                    "persisted_session"
+                    if persisted_session_id
+                    else "heartbeat"
+                    if heartbeat_session_id
+                    else "new_session"
+                ),
+                "reattached": bool(session_id),
+                "firstMessagePosted": bool(retry_state.get("firstMessagePosted")),
+            }
             first_message_posted = bool(retry_state.get("firstMessagePosted"))
             first_message_reconcile_required = False
             if durable_row is not None:
+                reattach_state["firstMessageState"] = str(
+                    durable_row.first_message_state
+                )
                 first_message_reconcile_required = (
                     durable_row.first_message_state == FIRST_MESSAGE_POSTING
+                )
+                reattach_state["firstMessageReconcileRequired"] = (
+                    first_message_reconcile_required
                 )
                 first_message_posted = (
                     durable_row.first_message_state
                     in {FIRST_MESSAGE_POSTED, FIRST_MESSAGE_TERMINAL}
                 )
+                reattach_state["firstMessagePosted"] = first_message_posted
             if not session_id:
                 create_response = await client.create_session(session_payload)
                 session_id = _session_id(create_response)
+                reattach_state = {
+                    "source": "new_session",
+                    "reattached": False,
+                    "firstMessagePosted": False,
+                }
                 if run_store is not None:
                     await run_store.attach_session(
                         request.idempotency_key,
@@ -1376,6 +1549,7 @@ async def run_omnigent_execution(
                         client=client,
                         artifact_gateway=artifact_gateway,
                         request=request,
+                        endpoint_ref=endpoint_ref,
                         session_id=session_id,
                         agent_id=target.agent_id,
                         initial_snapshot=initial_snapshot,
@@ -1390,6 +1564,7 @@ async def run_omnigent_execution(
                             "nonRetryable": True,
                             "failureClass": "integration_error",
                         },
+                        reattach_state=reattach_state,
                         harvest_resources=False,
                     )
                     return build_omnigent_result(
@@ -1418,6 +1593,7 @@ async def run_omnigent_execution(
                         client=client,
                         artifact_gateway=artifact_gateway,
                         request=request,
+                        endpoint_ref=endpoint_ref,
                         session_id=session_id,
                         agent_id=target.agent_id,
                         initial_snapshot=initial_snapshot,
@@ -1431,6 +1607,7 @@ async def run_omnigent_execution(
                             "error": "Unable to reconcile first-message posting state",
                             "failureClass": "integration_error",
                         },
+                        reattach_state=reattach_state,
                         harvest_resources=False,
                     )
                     return build_omnigent_result(
@@ -1567,6 +1744,7 @@ async def run_omnigent_execution(
                 client=client,
                 artifact_gateway=artifact_gateway,
                 request=request,
+                endpoint_ref=endpoint_ref,
                 session_id=session_id,
                 agent_id=target.agent_id,
                 initial_snapshot=initial_snapshot,
@@ -1577,6 +1755,7 @@ async def run_omnigent_execution(
                 normalized_events=normalized_events,
                 terminal_status=terminal_status,
                 diagnostics={"failureClass": _failure_class_for(terminal_status)},
+                reattach_state=reattach_state,
                 harvest_resources=True,
                 capture_policy=capture_policy,
             )
@@ -1614,6 +1793,7 @@ async def run_omnigent_execution(
                     client=cleanup_client,
                     artifact_gateway=artifact_gateway,
                     request=request,
+                    endpoint_ref=endpoint_ref,
                     session_id=session_id,
                     agent_id=target_agent_id,
                     initial_snapshot=initial_snapshot,
@@ -1621,6 +1801,7 @@ async def run_omnigent_execution(
                     first_message_response=first_message_response,
                     raw_events=raw_events,
                     normalized_events=normalized_events,
+                    reattach_state=reattach_state,
                     capture_policy=capture_policy,
                 )
                 if delete_after_harvest:
@@ -1640,6 +1821,7 @@ async def run_omnigent_execution(
             client=client,
             artifact_gateway=artifact_gateway,
             request=request,
+            endpoint_ref=endpoint_ref,
             session_id=session_id,
             agent_id=target_agent_id,
             initial_snapshot=initial_snapshot,
@@ -1653,6 +1835,7 @@ async def run_omnigent_execution(
                 "error": str(exc),
                 "failureClass": "integration_error",
             },
+            reattach_state=reattach_state,
             harvest_resources=bool(client and session_id),
         )
         return AgentRunResult(
@@ -1664,6 +1847,8 @@ async def run_omnigent_execution(
             metadata={
                 "normalizedStatus": "failed",
                 "providerName": "omnigent",
+                "idempotencyKey": request.idempotency_key,
+                "omnigentSessionId": session_id,
                 **bundle.metadata_refs,
             },
         )
@@ -1683,6 +1868,7 @@ async def run_omnigent_execution(
             client=client,
             artifact_gateway=artifact_gateway,
             request=request,
+            endpoint_ref=endpoint_ref,
             session_id=session_id,
             agent_id=target_agent_id,
             initial_snapshot=initial_snapshot,
@@ -1693,6 +1879,7 @@ async def run_omnigent_execution(
             normalized_events=normalized_events,
             terminal_status="failed",
             diagnostics=diagnostics,
+            reattach_state=reattach_state,
             harvest_resources=bool(client and session_id),
         )
         return AgentRunResult(
@@ -1704,6 +1891,8 @@ async def run_omnigent_execution(
             metadata={
                 "normalizedStatus": "failed",
                 "providerName": "omnigent",
+                "idempotencyKey": request.idempotency_key,
+                "omnigentSessionId": session_id,
                 **bundle.metadata_refs,
             },
         )
