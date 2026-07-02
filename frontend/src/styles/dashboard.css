@@ -2773,7 +2773,7 @@ tr[data-proposal-id].proposal-consuming td {
 
 .status-awaiting-action,
 .status-waiting,
-.status-waiting-on-dependencies,
+.status-awaiting-dependencies,
 .status-awaiting-external {
   color: rgb(var(--mm-status-waiting));
   background: rgb(var(--mm-status-waiting) / 0.14);
