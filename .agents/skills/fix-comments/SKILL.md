@@ -18,6 +18,11 @@ Run this as a full remediation workflow for the active branch PR. Do not stop af
 
 If no constraints are provided, default to addressing all applicable feedback.
 
+## Security
+
+- Never print raw environment variables. Use targeted checks such as `test -n "$GITHUB_TOKEN"` or trusted-tool health calls; do not run `printenv`, `env`, `set`, or equivalent commands that can expose secrets.
+- Before posting comments or finalizing publish output, scan outgoing text for secret-like patterns (`ghp_`, `github_pat_`, `token=`, `password=`) and stop if any are present.
+
 ## Workflow
 
 1. Resolve PR and collect all comments.
@@ -72,7 +77,7 @@ If no constraints are provided, default to addressing all applicable feedback.
 - If tracked or untracked code/documentation changes exist outside ignored artifacts, commit with a clear message (default: `Address PR feedback for #<number>`).
 - Push the current branch after committing.
 - If there was nothing to commit, still prove the current branch is published: verify the exact local `HEAD` SHA is visible on the remote PR branch using `gh pr view`, `git ls-remote`, or an equivalent GitHub connector path.
-- After any push or no-op verification, re-check that the remote PR branch head SHA equals local `HEAD`. If push or remote verification is unavailable, stop as blocked with reason `publish_unavailable`; do not report success.
+- After any push or no-op verification, re-check that the remote PR branch head SHA equals local `HEAD`. If push or remote verification is unavailable, write `var/pr_resolver/result.json` with `status=blocked`, `merge_outcome=blocked`, `mergeAutomationDisposition=manual_review`, `reason=publish_unavailable`, `final_reason=publish_unavailable`, and `next_step=manual_review`; then stop as blocked with reason `publish_unavailable`. Do not report success.
 
 ## Output
 

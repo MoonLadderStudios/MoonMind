@@ -1031,6 +1031,8 @@ def test_persist_gh_config_writes_broker_helpers_without_plaintext_token(tmp_pat
     assert "ghp_testtoken123" not in gh_wrapper.read_text(encoding="utf-8")
     assert "ghp_testtoken123" not in git_helper.read_text(encoding="utf-8")
     assert "ghp_testtoken123" not in gitconfig_text
+    assert "from moonmind" not in gh_wrapper.read_text(encoding="utf-8")
+    assert "from moonmind" not in git_helper.read_text(encoding="utf-8")
 
 def test_persist_gh_config_writes_safe_directory_without_token(tmp_path):
     env = {"PATH": "/usr/bin"}
@@ -2492,7 +2494,11 @@ async def test_launch_privilege_drop_chowns_github_broker_socket_for_claude_code
         }
     ]
     socket_path = Path(github_auth_brokers.starts[0]["socket_path"])
-    assert socket_path.parent.parent == Path("/tmp") / "mm-gh"
+    assert len(str(socket_path).encode("utf-8")) < 100
+    if socket_path.parent.parent.name == ".moonmind-gh":
+        assert socket_path.parent.parent == workspace_root.parent.parent / ".moonmind-gh"
+    else:
+        assert socket_path.parent.parent == Path("/tmp") / "mm-gh"
     assert (
         "chown",
         "app:app",
