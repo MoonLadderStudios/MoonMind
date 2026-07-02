@@ -51,3 +51,9 @@ def test_unit_workflow_keeps_api_and_temporal_boundary_ownership() -> None:
     assert "python -m pytest tests/unit/workflows/temporal" in temporal_command
     assert '-m "temporal_boundary and not slow"' in temporal_command
     assert "--junitxml=artifacts/pytest-temporal-boundary.xml" in temporal_command
+
+
+def test_required_unit_workflow_runs_status_token_audit() -> None:
+    command = _run_command("ci-required", "Audit status token domains")
+
+    assert "tools/audit_status_tokens.py --fail-on-unknown" in command

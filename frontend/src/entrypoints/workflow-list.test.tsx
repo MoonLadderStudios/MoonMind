@@ -333,7 +333,7 @@ describe('Workflows Entrypoint', () => {
             state: 'executing',
             rawState: 'executing',
             createdAt: '2026-03-28T00:00:00Z',
-            progress: { total: 4, succeeded: 2, currentStepTitle: 'Build', updatedAt: '2026-03-28T00:01:00Z' },
+            progress: { total: 4, completed: 2, currentStepTitle: 'Build', updatedAt: '2026-03-28T00:01:00Z' },
           },
           {
             taskId: 'task-most',
@@ -343,7 +343,7 @@ describe('Workflows Entrypoint', () => {
             state: 'executing',
             rawState: 'executing',
             createdAt: '2026-03-28T00:00:00Z',
-            progress: { total: 4, succeeded: 3, currentStepTitle: 'Test', updatedAt: '2026-03-28T00:02:00Z' },
+            progress: { total: 4, completed: 3, currentStepTitle: 'Test', updatedAt: '2026-03-28T00:02:00Z' },
           },
         ],
       }),
@@ -388,7 +388,7 @@ describe('Workflows Entrypoint', () => {
             createdAt: '2026-03-28T00:00:00Z',
             progress: {
               total: 4,
-              succeeded: 2,
+              completed: 2,
               failed: 1,
               currentStepTitle: 'Run tests',
               updatedAt: '2026-03-28T00:02:00Z',
@@ -404,8 +404,8 @@ describe('Workflows Entrypoint', () => {
             createdAt: '2026-03-28T00:00:00Z',
             progress: {
               total: 4,
-              succeeded: 1,
-              running: 1,
+              completed: 1,
+              executing: 1,
               currentStepTitle: 'Implement',
               updatedAt: '2026-03-28T00:01:00Z',
             },
@@ -462,8 +462,8 @@ describe('Workflows Entrypoint', () => {
             createdAt: '2026-03-28T00:00:00Z',
             progress: {
               total: 4,
-              succeeded: 1,
-              running: 1,
+              completed: 1,
+              executing: 1,
               currentStepTitle: 'Implement',
               updatedAt: '2026-03-28T00:01:00Z',
             },
@@ -478,7 +478,7 @@ describe('Workflows Entrypoint', () => {
             createdAt: '2026-03-28T00:00:00Z',
             progress: {
               total: 4,
-              succeeded: 4,
+              completed: 4,
               updatedAt: '2026-03-28T00:01:00Z',
             },
           },
@@ -492,7 +492,7 @@ describe('Workflows Entrypoint', () => {
             createdAt: '2026-03-28T00:00:00Z',
             progress: {
               total: 4,
-              succeeded: 1,
+              completed: 1,
               failed: 1,
               currentStepTitle: 'Test',
               updatedAt: '2026-03-28T00:01:00Z',
@@ -1189,10 +1189,10 @@ describe('Workflows Entrypoint', () => {
       if (label !== 'executing' && label !== 'planning' && label !== 'finalizing') {
         throw new Error(`Unexpected active status pill state: ${label}`);
       }
+      const visibleLabel = label.charAt(0).toUpperCase() + label.slice(1);
       expect(pill.dataset.state).toBe(label);
       expect(pill.className).toContain(`is-${label}`);
       expect(pill.className).toContain(`status-${label === 'executing' ? 'running' : label}`);
-      const visibleLabel = label.charAt(0).toUpperCase() + label.slice(1);
       expect(pill.dataset.shimmerLabel).toBe(visibleLabel);
       expect(pill.getAttribute('aria-label')).toBe(visibleLabel);
       expect(pill.textContent).toBe(visibleLabel);
@@ -1203,9 +1203,7 @@ describe('Workflows Entrypoint', () => {
       expect(glyphs.map((glyph) => glyph.style.getPropertyValue('--mm-letter-index'))).toEqual(
         Array.from({ length: visibleLabel.length }, (_, index) => String(index)),
       );
-      expect(
-        glyphs.every((glyph) => glyph.style.getPropertyValue('--mm-letter-count') === String(visibleLabel.length)),
-      ).toBe(true);
+      expect(glyphs.every((glyph) => glyph.style.getPropertyValue('--mm-letter-count') === String(visibleLabel.length))).toBe(true);
     }
 
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
@@ -1214,11 +1212,11 @@ describe('Workflows Entrypoint', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1035');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1036');
 
-    const waitingPills = screen.getAllByText('Waiting on dependencies');
+    const waitingPills = screen.getAllByText('Awaiting dependencies');
     expect(waitingPills.length).toBeGreaterThan(0);
     for (const pill of waitingPills) {
       expect(pill.closest('span')?.dataset.effect).toBeUndefined();
-      expect(pill.closest('span')?.className).toContain('status-waiting-on-dependencies');
+      expect(pill.closest('span')?.className).toContain('status-awaiting-dependencies');
     }
 
     const nonExecutingStatusPills = Array.from(
@@ -1442,15 +1440,15 @@ describe('Workflows Entrypoint', () => {
     expect(optionLabels).toEqual([
       'scheduled',
       'initializing',
-      'Waiting on dependencies',
+      'waiting on dependencies',
       'planning',
-      'Awaiting slot',
+      'awaiting slot',
       'executing',
       'proposals',
       'awaiting external',
       'intervention requested',
       'finalizing',
-      'No commit',
+      'no commit',
       'completed',
       'failed',
       'canceled',
@@ -1528,7 +1526,7 @@ describe('Workflows Entrypoint', () => {
     expect(pillList.querySelector('.status-running')).toBeTruthy();
     expect(pillList.querySelector('.status-scheduled')).toBeTruthy();
     expect(pillList.querySelector('.status-awaiting-slot')).toBeTruthy();
-    expect(pillList.querySelector('.status-waiting-on-dependencies')).toBeTruthy();
+    expect(pillList.querySelector('.status-awaiting-dependencies')).toBeTruthy();
     expect(pillList.querySelector('.status-awaiting-external')).toBeTruthy();
     expect(pillList.querySelector('.status-initializing')).toBeTruthy();
     expect(pillList.querySelector('.status-planning')).toBeTruthy();
@@ -2561,10 +2559,10 @@ describe('Workflows Entrypoint', () => {
               total: 6,
               pending: 2,
               ready: 0,
-              running: 1,
+              executing: 1,
               awaitingExternal: 0,
               reviewing: 0,
-              succeeded: 3,
+              completed: 3,
               failed: 0,
               skipped: 0,
               canceled: 0,
@@ -2584,10 +2582,10 @@ describe('Workflows Entrypoint', () => {
               total: 2,
               pending: 0,
               ready: 0,
-              running: 0,
+              executing: 0,
               awaitingExternal: 0,
               reviewing: 0,
-              succeeded: 1,
+              completed: 1,
               failed: 1,
               skipped: 0,
               canceled: 0,
@@ -2607,10 +2605,10 @@ describe('Workflows Entrypoint', () => {
               total: 4,
               pending: 0,
               ready: 0,
-              running: 0,
+              executing: 0,
               awaitingExternal: 0,
               reviewing: 0,
-              succeeded: 3,
+              completed: 3,
               failed: 0,
               skipped: 1,
               canceled: 0,
@@ -2630,10 +2628,10 @@ describe('Workflows Entrypoint', () => {
               total: 2,
               pending: 0,
               ready: 0,
-              running: 0,
+              executing: 0,
               awaitingExternal: 0,
               reviewing: 0,
-              succeeded: 1,
+              completed: 1,
               failed: 0,
               skipped: 0,
               canceled: 0,

@@ -167,7 +167,9 @@ class ExecutionTerminalStateInput(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     workflow_id: str = Field(..., alias="workflowId", min_length=1)
-    state: Literal["completed", "failed", "canceled"] = Field(..., alias="state")
+    state: Literal["completed", "failed", "canceled", "no_commit", "no_changes"] = (
+        Field(..., alias="state")
+    )
     close_status: Literal[
         "completed",
         "failed",

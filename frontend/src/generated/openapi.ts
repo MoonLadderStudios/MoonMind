@@ -3639,7 +3639,7 @@ export interface components {
          * @description Lifecycle states for workflow automation runs.
          * @enum {string}
          */
-        AutomationRunStatus: "queued" | "in_progress" | "completed" | "failed" | "no_commit" | "no_changes";
+        AutomationRunStatus: "queued" | "in_progress" | "completed" | "failed" | "no_commit";
         /**
          * AutomationTaskStatus
          * @description Per-phase task status values for workflow automation.
@@ -5544,10 +5544,10 @@ export interface components {
              */
             ready: number;
             /**
-             * Running
+             * Executing
              * @default 0
              */
-            running: number;
+            executing: number;
             /**
              * Awaitingexternal
              * @default 0
@@ -5559,10 +5559,10 @@ export interface components {
              */
             reviewing: number;
             /**
-             * Succeeded
+             * Completed
              * @default 0
              */
-            succeeded: number;
+            completed: number;
             /**
              * Failed
              * @default 0
@@ -8476,6 +8476,28 @@ export interface components {
             diagnosticRefs?: components["schemas"]["EnvironmentDiagnosticReferenceModel"][];
         };
         /**
+         * StepExecutionBranchMetadataModel
+         * @description Optional Step Execution manifest lineage for checkpoint branch turns.
+         */
+        StepExecutionBranchMetadataModel: {
+            /** Branchid */
+            branchId: string;
+            /** Branchturnid */
+            branchTurnId: string;
+            /** Rootcheckpointref */
+            rootCheckpointRef?: string | null;
+            /** Sourcestatekind */
+            sourceStateKind?: string | null;
+            /** Sourcestateref */
+            sourceStateRef?: string | null;
+            /** Parentbranchid */
+            parentBranchId?: string | null;
+            /** Parentturnid */
+            parentTurnId?: string | null;
+            /** Gitworkbranch */
+            gitWorkBranch?: string | null;
+        };
+        /**
          * StepExecutionDetailModel
          * @description Bounded Step Execution detail projection with section refs only.
          */
@@ -8495,10 +8517,11 @@ export interface components {
             /** Sourceexecutionordinal */
             sourceExecutionOrdinal?: number | null;
             lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
+            branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
-            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation" | "checkpoint_branch") | null;
             /** Status */
-            status?: ("pending" | "preparing" | "running" | "checking" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
+            status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
             terminalDisposition?: ("accepted" | "retryable" | "blocked" | "needs_human" | "discarded" | "superseded" | "failed_unrecoverable" | "failed_with_remaining_work") | null;
             /** Startedat */
@@ -8619,10 +8642,11 @@ export interface components {
             /** Sourceexecutionordinal */
             sourceExecutionOrdinal?: number | null;
             lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
+            branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
-            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation" | "checkpoint_branch") | null;
             /** Status */
-            status?: ("pending" | "preparing" | "running" | "checking" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
+            status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
             terminalDisposition?: ("accepted" | "retryable" | "blocked" | "needs_human" | "discarded" | "superseded" | "failed_unrecoverable" | "failed_with_remaining_work") | null;
             /** Startedat */
@@ -8676,6 +8700,8 @@ export interface components {
             stepExecutionManifestRef?: string | null;
             /** Stepexecutionmanifestrefs */
             stepExecutionManifestRefs?: string[];
+        } & {
+            [key: string]: unknown;
         };
         /**
          * StepLedgerCheckModel
@@ -8758,7 +8784,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "pending" | "ready" | "running" | "awaiting_external" | "reviewing" | "succeeded" | "failed" | "skipped" | "canceled";
+            status: "pending" | "ready" | "executing" | "awaiting_external" | "reviewing" | "completed" | "failed" | "skipped" | "canceled";
             /** Waitingreason */
             waitingReason?: string | null;
             /**

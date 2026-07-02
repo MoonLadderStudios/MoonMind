@@ -19,6 +19,14 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
+from moonmind.statuses.compat import (
+    canonicalize_finish_outcome_code_alias,
+    canonicalize_workflow_state_alias,
+)
+from moonmind.statuses.workflow import (
+    PRE_WORKFLOW_STATES,
+    WORKFLOW_STATE_TO_CLOSE_STATUS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,22 +63,8 @@ LOCAL_ONLY_EXECUTION_FIELDS = (
 # scheduled, even while it is awaiting capacity. ``mm_started_at`` is the
 # canonical source for "real work began"; see
 # moonmind.workflows.temporal.workflows.run.MoonMindRunWorkflow._mark_real_work_started.
-PRE_WORK_STATES = frozenset(
-    {
-        MoonMindWorkflowState.SCHEDULED,
-        MoonMindWorkflowState.INITIALIZING,
-        MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,
-        MoonMindWorkflowState.PLANNING,
-        MoonMindWorkflowState.AWAITING_SLOT,
-    }
-)
-
-TERMINAL_DOMAIN_STATE_TO_CLOSE_STATUS = {
-    MoonMindWorkflowState.NO_COMMIT: TemporalExecutionCloseStatus.COMPLETED,
-    MoonMindWorkflowState.COMPLETED: TemporalExecutionCloseStatus.COMPLETED,
-    MoonMindWorkflowState.FAILED: TemporalExecutionCloseStatus.FAILED,
-    MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
-}
+PRE_WORK_STATES = PRE_WORKFLOW_STATES
+TERMINAL_DOMAIN_STATE_TO_CLOSE_STATUS = WORKFLOW_STATE_TO_CLOSE_STATUS
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
@@ -125,8 +119,10 @@ def _finish_outcome_code_from_summary(
     )
     if not isinstance(finish_outcome, dict):
         return None
-    code = str(finish_outcome.get("code") or "").strip()
-    return code or None
+    return canonicalize_finish_outcome_code_alias(
+        finish_outcome.get("code"),
+        logger=logger,
+    )
 
 def _coerce_temporal_scalar(value: Any) -> str | None:
     if isinstance(value, list):
@@ -144,10 +140,11 @@ def _coerce_mm_state(search_attributes: dict[str, Any]) -> MoonMindWorkflowState
     raw_state = _coerce_temporal_scalar(search_attributes.get("mm_state"))
     if raw_state is None:
         return None
+    canonical_state = canonicalize_workflow_state_alias(raw_state, logger=logger)
+    if canonical_state is None:
+        return None
     try:
-        if raw_state == "no_changes":
-            return MoonMindWorkflowState.NO_COMMIT
-        return MoonMindWorkflowState(raw_state)
+        return MoonMindWorkflowState(canonical_state)
     except ValueError:
         logger.warning("Invalid value for mm_state search attribute: '%s'", raw_state)
         return None

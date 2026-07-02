@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -53,7 +54,78 @@ from moonmind.schemas.temporal_models import (
     has_user_workflow_plan_source,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.statuses.compat import (
+    canonicalize_finish_outcome_code_alias,
+    canonicalize_workflow_state_alias,
+    normalize_no_commit_finish_summary,
+)
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
+
+
+def test_legacy_no_changes_aliases_are_quarantined_in_compat_helpers() -> None:
+    assert canonicalize_workflow_state_alias("no_changes") == "no_commit"
+    assert canonicalize_finish_outcome_code_alias("NO_CHANGES") == "NO_COMMIT"
+    assert canonicalize_finish_outcome_code_alias(None) is None
+    assert normalize_no_commit_finish_summary(
+        {
+            "finishOutcome": {"code": "NO_CHANGES", "reason": "No local changes"},
+            "publish": {
+                "reasonCode": "no_changes",
+                "reason_code": "no_changes",
+            },
+        }
+    ) == {
+        "finishOutcome": {
+            "code": "NO_COMMIT",
+            "reason": "No repository commit was needed.",
+        },
+        "publish": {
+            "reasonCode": "no_commit",
+            "reason_code": "no_commit",
+            "reason": "No repository changes were available to commit or publish.",
+        },
+    }
+
+
+def test_finish_outcome_compat_boundary_observes_alias_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("tests.temporal_status_compat")
+
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        assert (
+            canonicalize_finish_outcome_code_alias("NO_CHANGES", logger=logger)
+            == "NO_COMMIT"
+        )
+
+    [record] = caplog.records
+    assert record.getMessage() == "Observed legacy status alias"
+    assert record.domain == "finish_outcome"
+    assert record.alias == "NO_CHANGES"
+    assert record.canonical == "NO_COMMIT"
+
+
+def test_finish_summary_compat_boundary_observes_publish_reason_alias_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("tests.temporal_finish_summary_compat")
+
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        assert normalize_no_commit_finish_summary(
+            {"publish": {"reasonCode": "no_changes"}},
+            logger=logger,
+        ) == {
+            "publish": {
+                "reasonCode": "no_commit",
+                "reason": "No repository changes were available to commit or publish.",
+            }
+        }
+
+    [record] = caplog.records
+    assert record.getMessage() == "Observed legacy status alias"
+    assert record.domain == "publish_reason"
+    assert record.alias == "no_changes"
+    assert record.canonical == "no_commit"
 
 
 def _valid_user_workflow_parameters() -> dict[str, object]:
@@ -2178,6 +2250,50 @@ async def test_record_terminal_state_accepts_no_commit_as_completed(
         assert isinstance(projection, TemporalExecutionRecord)
         assert projection.state is MoonMindWorkflowState.NO_COMMIT
         assert projection.close_status is TemporalExecutionCloseStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_accepts_legacy_state_only_at_boundary(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Legacy terminal state run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        projection = await service.record_terminal_state(
+            workflow_id=created.workflow_id,
+            state="no_changes",
+            summary="No repository commit was needed.",
+        )
+
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert source is not None
+        assert source.state is MoonMindWorkflowState.NO_COMMIT
+        assert projection.state is MoonMindWorkflowState.NO_COMMIT
+
+
+@pytest.mark.asyncio
+async def test_parse_state_rejects_legacy_alias_for_canonical_callers(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        with pytest.raises(TemporalExecutionValidationError, match="Unsupported state"):
+            service._parse_state("no_changes")
 
 
 @pytest.mark.asyncio

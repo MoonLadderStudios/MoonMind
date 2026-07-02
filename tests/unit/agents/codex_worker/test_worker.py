@@ -8556,7 +8556,7 @@ async def test_derive_default_pr_title_uses_short_correlation_fallback(
         resolved_steps=worker._resolve_task_steps(payload),
     )
 
-    assert title == f"MoonMind task result [mm:{str(job_id)[:8]}]"
+    assert title == f"MoonMind workflow result [mm:{str(job_id)[:8]}]"
     assert str(job_id) not in title
     assert len(title) <= 90
 

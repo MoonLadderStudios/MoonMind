@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
+from moonmind.statuses.temporal_status import TemporalStatusValue
+
 if TYPE_CHECKING:
     pass
 
@@ -119,9 +121,7 @@ class ManifestRunMetadataModel(BaseModel):
     workflow_id: Optional[str] = Field(None, alias="workflowId")
     temporal_run_id: Optional[str] = Field(None, alias="temporalRunId")
     workflow_type: Optional[str] = Field(None, alias="workflowType")
-    temporal_status: Optional[Literal["running", "completed", "failed", "canceled"]] = (
-        Field(None, alias="temporalStatus")
-    )
+    temporal_status: Optional[TemporalStatusValue] = Field(None, alias="temporalStatus")
     manifest_artifact_ref: Optional[str] = Field(None, alias="manifestArtifactRef")
     link: Optional[str] = Field(None, alias="link")
     started_at: Optional[datetime] = Field(None, alias="startedAt")

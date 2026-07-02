@@ -76,7 +76,7 @@ const TASK_ENTRY = 'user_workflow';
 const TIMESTAMP_SORT_FIELDS = new Set(['updatedAt', 'scheduledFor', 'createdAt', 'closedAt']);
 const PROGRESS_BUCKET_OPTIONS = ['not_started', 'in_progress', 'complete'] as const;
 const PROGRESS_SIGNAL_OPTIONS = [
-  'running',
+  'executing',
   'awaiting_external',
   'reviewing',
   'has_failed_steps',
@@ -239,9 +239,11 @@ const ExecutionRowSchema = z
         total: z.number().nullable().optional(),
         pending: z.number().nullable().optional(),
         ready: z.number().nullable().optional(),
+        executing: z.number().nullable().optional(),
         running: z.number().nullable().optional(),
         awaitingExternal: z.number().nullable().optional(),
         reviewing: z.number().nullable().optional(),
+        completed: z.number().nullable().optional(),
         succeeded: z.number().nullable().optional(),
         failed: z.number().nullable().optional(),
         skipped: z.number().nullable().optional(),
@@ -262,6 +264,13 @@ const ExecutionListResponseSchema = z.object({
 });
 
 type ExecutionRow = z.infer<typeof ExecutionRowSchema>;
+
+function normalizeProgressSignalValue(value: string): ProgressSignal | null {
+  const normalized = value === 'running' ? 'executing' : value;
+  return (PROGRESS_SIGNAL_OPTIONS as readonly string[]).includes(normalized)
+    ? (normalized as ProgressSignal)
+    : null;
+}
 
 function rowWorkflowId(row: ExecutionRow): string {
   return row.workflowId || row.taskId || '';
@@ -375,25 +384,25 @@ function formatProgress(row: ExecutionRow): { text: string; title?: string } {
   const progress = row.progress;
   const total = progress?.total ?? 0;
   if (!progress || total <= 0) return { text: '—' };
-  const succeeded = progress.succeeded ?? 0;
+  const completed = progress.completed ?? progress.succeeded ?? 0;
   const currentStepTitle = (progress.currentStepTitle || '').trim();
   const state = String(row.rawState || row.state || row.status || '').toLowerCase();
   const isCompleted = state === 'completed' || state === 'succeeded';
   const isFailed = state === 'failed';
 
   if (isCompleted) {
-    return { text: `${succeeded}/${total} complete` };
+    return { text: `${completed}/${total} complete` };
   }
   if (isFailed && currentStepTitle) {
     return {
-      text: `${succeeded}/${total} · Failed at ${currentStepTitle}`,
+      text: `${completed}/${total} · Failed at ${currentStepTitle}`,
       title: currentStepTitle,
     };
   }
   if (currentStepTitle) {
-    return { text: `${succeeded}/${total} · ${currentStepTitle}`, title: currentStepTitle };
+    return { text: `${completed}/${total} · ${currentStepTitle}`, title: currentStepTitle };
   }
-  return { text: `${succeeded}/${total}` };
+  return { text: `${completed}/${total}` };
 }
 
 function progressTotal(row: ExecutionRow): number {
@@ -401,7 +410,7 @@ function progressTotal(row: ExecutionRow): number {
 }
 
 function progressSucceeded(row: ExecutionRow): number {
-  return row.progress?.succeeded ?? 0;
+  return row.progress?.completed ?? row.progress?.succeeded ?? 0;
 }
 
 function progressPct(row: ExecutionRow): number | null {
@@ -418,7 +427,7 @@ function progressBucket(row: ExecutionRow): ProgressBucket | null {
   const succeeded = progressSucceeded(row);
   if (succeeded >= total) return 'complete';
   const active =
-    (progress.running ?? 0) > 0 ||
+    (progress.executing ?? progress.running ?? 0) > 0 ||
     (progress.awaitingExternal ?? 0) > 0 ||
     (progress.reviewing ?? 0) > 0;
   const terminal =
@@ -432,7 +441,7 @@ function progressSignals(row: ExecutionRow): ProgressSignal[] {
   const progress = row.progress;
   if (!progress) return [];
   const signals: ProgressSignal[] = [];
-  if ((progress.running ?? 0) > 0) signals.push('running');
+  if ((progress.executing ?? progress.running ?? 0) > 0) signals.push('executing');
   if ((progress.awaitingExternal ?? 0) > 0) signals.push('awaiting_external');
   if ((progress.reviewing ?? 0) > 0) signals.push('reviewing');
   if ((progress.failed ?? 0) > 0) signals.push('has_failed_steps');
@@ -449,7 +458,7 @@ function formatProgressBucket(value: string): string {
 }
 
 function formatProgressSignal(value: string): string {
-  if (value === 'running') return 'Has running step';
+  if (value === 'executing') return 'Has executing step';
   if (value === 'awaiting_external') return 'Waiting on external progress';
   if (value === 'reviewing') return 'Reviewing';
   if (value === 'has_failed_steps') return 'Has failed steps';
@@ -704,9 +713,12 @@ function progressBucketParams(params: URLSearchParams, key: string): ProgressBuc
 }
 
 function progressSignalParams(params: URLSearchParams, key: string): ProgressSignal[] {
-  return splitParam(params, key).filter((value): value is ProgressSignal =>
-    (PROGRESS_SIGNAL_OPTIONS as readonly string[]).includes(value),
-  );
+  const signals: ProgressSignal[] = [];
+  splitParam(params, key).forEach((value) => {
+    const signal = normalizeProgressSignalValue(value);
+    if (signal && !signals.includes(signal)) signals.push(signal);
+  });
+  return signals;
 }
 
 function validateCanonicalFilterPair(

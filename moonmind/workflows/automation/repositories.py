@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from moonmind.workflows.automation import models
+from moonmind.statuses.compat import canonicalize_workflow_state_alias
 
 _UNSET: object = object()
 _DEFAULT_ARTIFACT_RETENTION = timedelta(days=7)
@@ -70,9 +71,7 @@ def _coerce_run_status(
 
     if isinstance(value, models.AutomationRunStatus):
         return value
-    raw = str(value)
-    if raw == models.AutomationRunStatus.NO_CHANGES.value:
-        return models.AutomationRunStatus.NO_COMMIT
+    raw = canonicalize_workflow_state_alias(value) or ""
     return models.AutomationRunStatus(raw)
 
 def _coerce_artifact_type(

@@ -195,7 +195,7 @@ describe('Workflow Detail Entrypoint', () => {
         title: 'Plan work',
         tool: { type: 'skill', name: 'plan.generate', version: '1' },
         dependsOn: [],
-        status: 'succeeded',
+        status: 'completed',
         waitingReason: null,
         attentionRequired: false,
         executionOrdinal: 1,
@@ -221,7 +221,7 @@ describe('Workflow Detail Entrypoint', () => {
         title: 'Apply patch',
         tool: { type: 'agent_runtime', name: 'codex_cli', version: '1' },
         dependsOn: ['plan'],
-        status: 'running',
+        status: 'executing',
         waitingReason: null,
         attentionRequired: false,
         executionOrdinal: 1,
@@ -741,7 +741,6 @@ describe('Workflow Detail Entrypoint', () => {
         ['awaiting_external', 'External wait workflow'],
         ['finalizing', 'Finalizing workflow'],
         ['no_commit', 'No commit workflow'],
-        ['no_changes', 'No changes workflow'],
         ['completed', 'Completed workflow'],
         ['failed', 'Failed workflow'],
         ['canceled', 'Canceled workflow'],
@@ -764,7 +763,7 @@ describe('Workflow Detail Entrypoint', () => {
     const expectedIcons = [
       ['Scheduled workflow', 'Status: Scheduled', 'status-scheduled', 'lucide-calendar-clock'],
       ['Initializing workflow', 'Status: Initializing', 'status-initializing', 'lucide-power'],
-      ['Dependency wait workflow', 'Status: Waiting on dependencies', 'status-waiting-on-dependencies', 'lucide-link'],
+      ['Dependency wait workflow', 'Status: Awaiting dependencies', 'status-awaiting-dependencies', 'lucide-link'],
       ['Planning workflow', 'Status: Planning', 'status-planning', 'lucide-map'],
       ['Slot wait workflow', 'Status: Awaiting slot', 'status-awaiting-slot', 'lucide-hourglass'],
       ['Executing workflow', 'Status: Executing', 'status-running', 'lucide-play'],
@@ -772,11 +771,10 @@ describe('Workflow Detail Entrypoint', () => {
       ['External wait workflow', 'Status: Awaiting external', 'status-awaiting-external', 'lucide-hand'],
       ['Finalizing workflow', 'Status: Finalizing', 'status-finalizing', 'lucide-package-check'],
       ['No commit workflow', 'Status: No commit', 'status-no-commit', 'lucide-check'],
-      ['No changes workflow', 'Status: No changes', 'status-neutral', 'lucide-play'],
       ['Completed workflow', 'Status: Completed', 'status-completed', 'lucide-check'],
       ['Failed workflow', 'Status: Failed', 'status-failed', 'lucide-x'],
       ['Canceled workflow', 'Status: Canceled', 'status-canceled', 'lucide-ban'],
-      ['Unknown prototype workflow', 'Status: Constructor', 'status-neutral', 'lucide-play'],
+      ['Unknown prototype workflow', 'Status: constructor', 'status-neutral', 'lucide-play'],
     ] as const;
 
     for (const [title, ariaLabel, statusClass, iconClass] of expectedIcons) {
@@ -1077,10 +1075,11 @@ describe('Workflow Detail Entrypoint', () => {
     );
 
     const dashboardCss = await readDashboardCss();
-    expect(dashboardCss).toMatch(/\.workflow-workspace-close-sidebar[\s\S]*?width:\s*2rem;/);
     expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list,[\s\S]*?\.workflow-workspace-close-sidebar,[\s\S]*?width:\s*2rem;/);
-    expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list\s*\{[\s\S]*?background:\s*rgb\(var\(--mm-accent\)/);
     expect(dashboardCss).toMatch(/\.workflow-workspace-control-icon,[\s\S]*?\.workflow-workspace-expand-list svg[\s\S]*?width:\s*1\.05rem;/);
+    expect(dashboardCss).toMatch(
+      /\.workflow-workspace-sidebar-control:hover,[\s\S]*?background-image:\s*linear-gradient\(145deg,\s*rgb\(var\(--mm-accent\) \/ 0\.35\),\s*rgb\(var\(--mm-accent-2\) \/ 0\.25\)\);/,
+    );
   });
 
   it('MM-1002 renders sidebar titles and statuses as React text', async () => {
@@ -1563,7 +1562,7 @@ describe('Workflow Detail Entrypoint', () => {
           title: 'Plan work',
           tool: { type: 'skill', name: 'plan.generate', version: '1' },
           dependsOn: [],
-          status: 'succeeded',
+          status: 'completed',
           waitingReason: null,
           attentionRequired: false,
           executionOrdinal: 1,
@@ -1699,7 +1698,7 @@ describe('Workflow Detail Entrypoint', () => {
           title: 'Apply patch',
           tool: { type: 'agent_runtime', name: 'codex_cli', version: '1' },
           dependsOn: [],
-          status: 'succeeded',
+          status: 'completed',
           waitingReason: null,
           attentionRequired: false,
           executionOrdinal: 2,
@@ -1788,7 +1787,7 @@ describe('Workflow Detail Entrypoint', () => {
             relationship: 'recovered_from',
           },
           reason: 'dependency_invalidated',
-          status: 'succeeded',
+          status: 'completed',
           terminalDisposition: 'accepted',
           startedAt: '2026-04-09T00:00:03Z',
           updatedAt: '2026-04-09T00:00:04Z',
@@ -2664,7 +2663,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-1035');
 
-    const waitingPill = await screen.findByText('Waiting on dependencies');
+    const waitingPill = await screen.findByText('Awaiting dependencies');
     expect(waitingPill.closest('span')?.dataset.effect).toBeUndefined();
   });
 
@@ -2945,6 +2944,14 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
+    const completedIcon = await screen.findByLabelText('Status: completed');
+    expect(completedIcon.classList.contains('step-tl-icon')).toBe(true);
+    expect(completedIcon.querySelector('svg.lucide-check')).toBeTruthy();
+    expect(screen.getByText('completed')).toBeTruthy();
+    const executingIcon = await screen.findByLabelText('Status: executing');
+    expect(executingIcon.classList.contains('step-tl-icon')).toBe(true);
+    expect(executingIcon.querySelector('svg.lucide-play')).toBeTruthy();
+    expect(screen.getByText('executing')).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-step-1/observability-summary')),
     ).toBe(false);
@@ -3104,7 +3111,7 @@ describe('Workflow Detail Entrypoint', () => {
                     checks: [
                       {
                         kind: 'approval_policy',
-                        status: 'failed',
+                        status: 'pending',
                         summary: 'Reviewer requested another retry',
                         retryCount: 2,
                         artifactRef: 'art-review-2',
@@ -3136,7 +3143,19 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('Retry count: 2')).toBeTruthy();
       expect(screen.getByText('art-review-2')).toBeTruthy();
-      expect(screen.getAllByText('approval policy: failed')[0]).toBeTruthy();
+      const activeCheckBadge = document.querySelector<HTMLElement>(
+        '.step-check-badge[data-effect="shimmer-sweep"]',
+      );
+      expect(activeCheckBadge).toBeTruthy();
+      expect(activeCheckBadge?.textContent).toBe('approval policy: pending');
+      expect(activeCheckBadge?.dataset.effect).toBe('shimmer-sweep');
+      expect(activeCheckBadge?.dataset.state).toBe('executing');
+      expect(activeCheckBadge?.className).toContain('is-executing');
+      expect(activeCheckBadge?.className).toContain('check-pending');
+      expect(activeCheckBadge?.getAttribute('aria-label')).toBe('approval policy: pending');
+      expect(activeCheckBadge?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe(
+        'approval policy: pending',
+      );
     });
   });
 
@@ -3536,7 +3555,7 @@ describe('Workflow Detail Entrypoint', () => {
           logicalStepId: 'plan',
           order: 1,
           title: 'Plan',
-          status: 'succeeded',
+          status: 'completed',
           executionOrdinal: 1,
           updatedAt: '2026-03-28T00:00:01Z',
           refs: {},
@@ -4343,7 +4362,7 @@ describe('Workflow Detail Entrypoint', () => {
           logicalStepId: 'plan',
           order: 1,
           title: 'Plan',
-          status: 'succeeded',
+          status: 'completed',
           executionOrdinal: 1,
           updatedAt: '2026-03-28T00:00:01Z',
           refs: {},

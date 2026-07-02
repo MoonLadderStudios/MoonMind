@@ -14,7 +14,7 @@ Use this skill to perform an automated analyze-to-remediate workflow for an acti
 
 ## Scope
 
-This skill edits MoonSpec artifacts, not application feature code. Typical targets are:
+This skill edits MoonSpec execution artifacts, not application feature code. Typical targets are:
 
 - `spec.md`
 - `plan.md`
@@ -34,6 +34,7 @@ Do not ask the user for clarification. Resolve uncertainty by reading project co
 - Treat the user's text as optional guidance.
 - Work from the active feature directory resolved by the prerequisite script.
 - Require `spec.md`, `plan.md`, and `tasks.md`; stop with the prerequisite error if any are missing.
+- Read `AGENTS.md` when present for project principles, repo constraints, and test discipline.
 - Use absolute paths in reports.
 - Preserve user-provided source requirements and original request text exactly when they are already recorded in artifacts.
 
@@ -51,7 +52,7 @@ Parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then derive:
 - `PLAN = FEATURE_DIR/plan.md`
 - `TASKS = FEATURE_DIR/tasks.md`
 - optional docs from `AVAILABLE_DOCS`
-- `CONSTITUTION = .specify/memory/constitution.md`
+- `REPO_GUIDANCE = AGENTS.md` when present
 
 If shell arguments contain single quotes, use shell-safe escaping such as `'I'\''m Groot'`, or double quotes when possible.
 
@@ -73,9 +74,9 @@ Load enough context to make edits confidently, but do not paste whole artifacts 
 Read:
 
 - `spec.md`: input/source request, user story, acceptance scenarios, edge cases, functional requirements, success criteria, key entities, assumptions, source design coverage.
-- `plan.md`: technical context, constitution checks, project structure, phase notes, complexity tracking.
+- `plan.md`: technical context, Principles Check, project structure, phase notes, complexity tracking, and requirement status.
 - `tasks.md`: phases, task IDs, dependencies, parallel markers, file paths, tests, implementation tasks.
-- `.specify/memory/constitution.md`: principles and normative `MUST`/`SHOULD` statements.
+- `AGENTS.md` when present: project principles, repo constraints, and test discipline.
 - optional docs listed by the prerequisite script when findings refer to them.
 
 Also inspect relevant repository files when needed to resolve uncertainty, especially test framework configuration, project layout, existing contracts, and naming conventions.
@@ -88,7 +89,7 @@ Build an internal model before editing:
 - User-story inventory with acceptance scenarios and edge cases.
 - Task coverage mapping from task IDs to requirements, scenarios, success criteria, and design artifacts.
 - Artifact authority order:
-  1. Constitution and explicit source design requirements.
+  1. Explicit source design requirements and relevant `AGENTS.md` principles.
   2. Original feature input preserved in `spec.md`.
   3. `spec.md` user-visible behavior and acceptance criteria.
   4. `plan.md` architecture and technical decisions.
@@ -103,7 +104,7 @@ Identify high-signal findings. Aggregate related issues instead of creating nois
 - Duplication: overlapping requirements, repeated tasks, duplicate terminology definitions.
 - Ambiguity: vague terms such as fast, scalable, secure, intuitive, robust without measurable criteria; unresolved placeholders; unclear actors or data ownership.
 - Underspecification: requirements missing objects or outcomes, success criteria without validation path, edge cases with no acceptance coverage, tasks referencing undefined components.
-- Constitution alignment: conflicts with `MUST` statements, missing mandated quality gates, unjustified complexity.
+- Principle alignment: conflicts with `AGENTS.md` `MUST` statements, missing mandated quality gates, unjustified complexity.
 - Coverage gaps: requirements or buildable success criteria with no tasks, tests absent for required behavior, contracts not represented in quickstart or tasks.
 - Inconsistency: terminology drift, entity drift, contradictory stack choices, test strategy mismatch, task ordering conflicts, implementation tasks before required tests.
 
@@ -117,7 +118,7 @@ Use this decision process:
 2. Gather available evidence from the artifacts and repository.
 3. List 2-3 plausible resolutions.
 4. Weigh pros and cons using project context:
-   - conformance to constitution and source requirements
+   - conformance to source requirements and relevant principles
    - preservation of user-visible behavior
    - implementation blast radius
    - testability
@@ -129,7 +130,7 @@ Use this decision process:
 Default choices:
 
 - If `tasks.md` conflicts with `spec.md`, update `tasks.md` unless the spec is clearly incomplete relative to the original input.
-- If `plan.md` conflicts with the constitution or explicit source design requirement, update `plan.md`.
+- If `plan.md` conflicts with an explicit source design requirement or relevant `AGENTS.md` principle, update `plan.md`.
 - If `spec.md` is ambiguous but the repo has a clear established convention, update `spec.md` with that convention as an assumption or measurable requirement.
 - If two options are equally plausible and neither is required by higher authority, choose the simpler and more reversible option.
 - If a finding cannot be remediated without inventing product scope, add a bounded assumption and a validation task instead of asking the user.
@@ -163,7 +164,7 @@ Constraints:
 
 Use a stable top-down order so reruns are predictable:
 
-1. Constitution conflicts.
+1. Principle conflicts.
 2. Source requirement and original-input preservation issues.
 3. Spec requirement, scenario, edge-case, entity, and success-criteria issues.
 4. Plan and design artifact issues.
@@ -182,7 +183,7 @@ After editing:
    - every functional requirement has task coverage
    - every buildable success criterion has task or quickstart coverage
    - test tasks cover required unit and integration behavior where applicable
-   - no constitution `MUST` conflict remains
+   - no relevant `AGENTS.md` `MUST` conflict remains
    - no unresolved placeholders remain unless explicitly intentional and explained
    - task ordering is coherent
 4. Run lightweight repository tests or formatting commands when the edits touched generated checks, test commands, or machine-readable contracts. If no relevant command exists, say so.

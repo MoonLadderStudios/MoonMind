@@ -505,6 +505,7 @@ RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
 RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
+RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_EMIT_EPHEMERAL_STEP_CHECKPOINTS_PATCH = (
     "run-emit-ephemeral-step-checkpoints-v1"
@@ -1013,6 +1014,7 @@ class MoonMindRunWorkflow:
         self._previous_step_checkpoint_refs: dict[str, str] = {}
         self._step_checkpoint_refs_by_boundary: dict[str, dict[str, str]] = {}
         self._step_workspace_capture_inputs: dict[str, dict[str, Any]] = {}
+        self._step_external_agent_ids: dict[str, str] = {}
         self._step_execution_launch_blocks: set[str] = set()
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
         self._step_terminal_dispositions: dict[str, str] = {}
@@ -1101,10 +1103,10 @@ class MoonMindRunWorkflow:
             "total": 0,
             "pending": 0,
             "ready": 0,
-            "running": 0,
+            "executing": 0,
             "awaitingExternal": 0,
             "reviewing": 0,
-            "succeeded": 0,
+            "completed": 0,
             "failed": 0,
             "skipped": 0,
             "canceled": 0,
@@ -1372,6 +1374,9 @@ class MoonMindRunWorkflow:
         resolved_summary = summary
 
         if phase in {"start", "launch_blocked"}:
+            canonical_step_status_vocab = workflow.patched(
+                RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH
+            )
             compensation_plan = self._orchestrate_reattempt_compensation(
                 logical_step_id,
                 execution_ordinal=attempt,
@@ -1383,7 +1388,13 @@ class MoonMindRunWorkflow:
             launch_blocked = phase == "launch_blocked" or (
                 self._workspace_policy_launch_blocked(workspace)
             )
-            resolved_status = "blocked" if launch_blocked else "running"
+            resolved_status = (
+                "blocked"
+                if launch_blocked
+                else "executing"
+                if canonical_step_status_vocab
+                else "running"
+            )
             if launch_blocked:
                 resolved_terminal_disposition = "blocked"
                 resolved_summary = "Workspace policy rejected before launch."
@@ -2213,6 +2224,7 @@ class MoonMindRunWorkflow:
             ("runtimeStdout", "stdoutRef"),
             ("runtimeStderr", "stderrRef"),
             ("runtimeMergedLogs", "logsRef"),
+            ("externalStateRef", "externalStateRef"),
         ):
             value = artifacts.get(source_key)
             if isinstance(value, str) and value.strip():
@@ -2694,7 +2706,9 @@ class MoonMindRunWorkflow:
                     "Recovery source preserved step requires logical step ID."
                 )
             status = self._recovery_source_text(preserved, "status").lower()
-            if status and status not in {"succeeded", "skipped"}:
+            if status == "succeeded":
+                status = "completed"
+            if status and status not in {"completed", "skipped"}:
                 raise ValueError(
                     f"preserved step {logical_step_id} must be completed before Resume"
                 )
@@ -3071,7 +3085,7 @@ class MoonMindRunWorkflow:
         if not self._try_update_step_row(
             logical_step_id,
             updated_at=updated_at,
-            status="running",
+            status="executing",
             summary=summary,
             waiting_reason=None,
             attention_required=False,
@@ -3100,7 +3114,7 @@ class MoonMindRunWorkflow:
             )
         except KeyError:
             return
-        # First time a logical step crosses into "running" is the closest
+        # First time a logical step crosses into executing is the closest
         # existing semantic boundary for "real work began". Stamp the
         # execution-level mm_started_at exactly once here.
         if workflow.patched(RUN_REAL_STARTED_AT_PATCH):
@@ -3784,6 +3798,12 @@ class MoonMindRunWorkflow:
                 "provider_snapshot_ref",
             ),
         }
+        external_state_ref = _output_ref(
+            "externalStateRef",
+            "external_state_ref",
+        )
+        if external_state_ref is not None:
+            artifacts["externalStateRef"] = external_state_ref
         checkpoint_ref = _output_ref(
             "stateCheckpointRef",
             "state_checkpoint_ref",
@@ -3949,6 +3969,20 @@ class MoonMindRunWorkflow:
         logical_step_id: str,
         outputs: Mapping[str, Any],
     ) -> None:
+        raw_agent_kind = outputs.get("agentKind") or outputs.get("agent_kind")
+        raw_agent_id = outputs.get("agentId") or outputs.get("agent_id")
+        agent_kind = str(raw_agent_kind or "").strip().lower()
+        agent_id = str(raw_agent_id or "").strip()
+        if not agent_id:
+            agent_id = self._agent_id_from_runtime_inputs(
+                node_inputs=outputs,
+                fallback_name=None,
+            )
+            if agent_id:
+                agent_kind = self._agent_kind_for_id(agent_id)
+        if agent_kind == "external" and agent_id:
+            self._step_external_agent_ids[logical_step_id] = agent_id.lower()
+
         candidates: list[Mapping[str, Any]] = [outputs]
         workspace_spec = outputs.get("workspaceSpec") or outputs.get("workspace_spec")
         if isinstance(workspace_spec, Mapping):
@@ -4007,10 +4041,11 @@ class MoonMindRunWorkflow:
             )
             if checkpoint_kind:
                 capture_input["kind"] = checkpoint_kind
-            elif base_commit:
-                capture_input["kind"] = "git_patch"
-            else:
-                capture_input["kind"] = "worktree_archive"
+            elif self._step_external_agent_ids.get(logical_step_id) != "omnigent":
+                if base_commit:
+                    capture_input["kind"] = "git_patch"
+                else:
+                    capture_input["kind"] = "worktree_archive"
             break
 
         if capture_input:
@@ -4039,6 +4074,7 @@ class MoonMindRunWorkflow:
             if isinstance(self._recovery_source, Mapping)
             else None,
             runtime_kind=self._target_runtime,
+            external_agent_id=self._step_external_agent_ids.get(logical_step_id),
         )
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
@@ -4185,9 +4221,10 @@ class MoonMindRunWorkflow:
         node_inputs = self._node_inputs_mapping(node)
         annotations = node_inputs.get("annotations") or node.get("annotations")
         if isinstance(annotations, Mapping):
-            role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
-            if role == "moonspec-remediation":
-                return True
+            for key in ("jiraOrchestrateRole", "issueImplementRole"):
+                role = str(annotations.get(key) or "").strip().lower()
+                if role == "moonspec-remediation":
+                    return True
         skill_node = node.get("skill")
         skill_id_from_node = (
             skill_node.get("id") or skill_node.get("name")
@@ -7576,7 +7613,7 @@ class MoonMindRunWorkflow:
 
             self._mark_step_terminal(
                 node_id,
-                status="succeeded",
+                status="completed",
                 updated_at=workflow.now(),
                 summary=self._get_from_result(execution_result, "summary")
                 or self._summary,
@@ -7591,7 +7628,7 @@ class MoonMindRunWorkflow:
                 phase="terminal",
                 updated_at=workflow.now(),
                 reason=attempt_reason,
-                status="succeeded",
+                status="completed",
                 terminal_disposition="accepted",
                 budget=self._review_gate_budget_metadata(
                     max_review_attempts=max_review_attempts,
@@ -10187,13 +10224,19 @@ class MoonMindRunWorkflow:
             "jira_orchestration"
         )
         if isinstance(orchestration, Mapping):
-            status = str(orchestration.get("status") or "").strip()
-            created_count = orchestration.get("createdTaskCount")
+            status = str(
+                orchestration.get("workflowStatus")
+                or orchestration.get("status")
+                or ""
+            ).strip()
+            created_count = orchestration.get(
+                "createdWorkflowCount", orchestration.get("createdTaskCount")
+            )
             story_count = orchestration.get("storyCount")
             dependency_count = orchestration.get("dependencyCount")
             parts = []
             if isinstance(created_count, int):
-                parts.append(f"createdTasks={created_count}")
+                parts.append(f"createdWorkflows={created_count}")
             if isinstance(story_count, int):
                 parts.append(f"stories={story_count}")
             if isinstance(dependency_count, int):
@@ -10211,7 +10254,7 @@ class MoonMindRunWorkflow:
                     )
             if status:
                 suffix = f" ({'; '.join(parts)})" if parts else ""
-                return f"Jira downstream task creation {status}{suffix}."
+                return f"Jira downstream workflow creation {status}{suffix}."
 
         github_orchestration = outputs.get("githubWorkflowOrchestration") or outputs.get(
             "github_workflow_orchestration"
@@ -12857,8 +12900,10 @@ class MoonMindRunWorkflow:
         )
         return str(
             runtime_block.get("mode")
+            or runtime_block.get("agentId")
             or runtime_block.get("agent_id")
             or node_inputs.get("targetRuntime")
+            or node_inputs.get("agentId")
             or fallback_name
             or ""
         ).strip()
@@ -13830,9 +13875,9 @@ class MoonMindRunWorkflow:
             "total",
             "pending",
             "ready",
-            "running",
+            "executing",
             "reviewing",
-            "succeeded",
+            "completed",
             "failed",
             "skipped",
             "canceled",

@@ -876,9 +876,11 @@ describe('Dashboard shared entry', () => {
   it('enforces MM-429 reduced-motion suppression for live and premium effects', async () => {
     const runningIconBlock = cssRuleBlockMatching(
       dashboardCss,
-      (rule) =>
-        normalizeCssSelector(rule.selector) === '.step-tl-icon.step-icon-running' &&
-        rule.nodes.some((node) => node.type === 'decl' && node.toString() === 'animation: none !important'),
+      (rule) => {
+        const selectors = rule.selector.split(',').map(normalizeCssSelector);
+        return selectors.includes('.step-tl-icon.status-running') &&
+          rule.nodes.some((node) => node.type === 'decl' && node.toString() === 'animation: none !important');
+      },
     );
     expect(runningIconBlock).toContain('animation: none !important');
     expect(runningIconBlock).toContain('opacity: 1');
@@ -974,7 +976,7 @@ describe('Dashboard shared entry', () => {
       '.status-queued',
       '.status-scheduled',
       '.status-awaiting-slot',
-      '.status-waiting-on-dependencies',
+      '.status-awaiting-dependencies',
       '.status-awaiting-external',
       '.status-initializing',
       '.status-planning',
@@ -1003,24 +1005,21 @@ describe('Dashboard shared entry', () => {
   it('defines MM-1035 exact workflow status color roles', async () => {
     const queueBlock = cssRuleBlocks(
       dashboardCss,
-      '.status-queued, .status-pending, .status-scheduled, .status-awaiting-slot',
+      '.status-queued, .status-scheduled, .status-awaiting-slot',
     ).join('\n');
     expect(queueBlock).toContain('color: rgb(var(--mm-status-queued, 99 102 241))');
     expect(queueBlock).toContain('rgb(var(--mm-status-queued, 99 102 241) / 0.14)');
 
     const waitBlock = cssRuleBlocks(
       dashboardCss,
-      '.status-awaiting-action, .status-waiting, .status-waiting-on-dependencies, .status-awaiting-external',
+      '.status-awaiting-action, .status-waiting, .status-awaiting-dependencies, .status-awaiting-external',
     ).join('\n');
     expect(dashboardCss).toContain('--mm-status-waiting: 146 64 14');
     expect(dashboardCss).toContain('--mm-status-waiting: 250 204 21');
     expect(waitBlock).toContain('color: rgb(var(--mm-status-waiting))');
     expect(waitBlock).toContain('rgb(var(--mm-status-waiting) / 0.14)');
 
-    const setupBlock = cssRuleBlocks(
-      dashboardCss,
-      '.status-initializing, .status-ready, .status-reviewing, .status-planning',
-    ).join('\n');
+    const setupBlock = cssRuleBlocks(dashboardCss, '.status-initializing, .status-planning').join('\n');
     expect(setupBlock).toContain('color: rgb(var(--mm-status-setup, 37 99 235))');
     expect(setupBlock).toContain('rgb(var(--mm-status-setup, 37 99 235) / 0.14)');
 
@@ -1030,7 +1029,7 @@ describe('Dashboard shared entry', () => {
     expect(cssRuleBlock(dashboardCss, '.status-canceled')).toContain(
       'color: rgb(var(--mm-status-canceled, 249 115 22))',
     );
-    expect(cssRuleBlock(dashboardCss, '.status-no-commit')).toContain('color: #159376');
+    expect(cssRuleBlock(dashboardCss, '.status-no-commit')).toContain('color: rgb(var(--mm-muted))');
     expect(cssRuleBlock(dashboardCss, '.status-running, .status-running.is-executing')).toContain(
       'color: rgb(var(--mm-accent-2))',
     );

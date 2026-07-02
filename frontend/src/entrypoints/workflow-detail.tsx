@@ -3,32 +3,14 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tan
 import Anser from 'anser';
 import {
   ArrowRight,
-  Ban,
-  CalendarClock,
-  Check,
-  Link,
-  Hand,
-  Hourglass,
-  Lightbulb,
-  Map as MapIcon,
-  PackageCheck,
-  Play,
-  Power,
-  X,
-  type LucideIcon,
 } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
-import {
-  StepLedgerStatusPill,
-  WorkflowLifecycleStatusPill,
-} from '../components/ExecutionStatusPill';
+import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
-import {
-  integrationProviderStatusPillView,
-  workflowLifecycleStatusPillView,
-} from '../utils/executionStatusPillClasses';
+import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
+import { CANONICAL_STEP_STATUSES, StatusIcon } from '../utils/statusIcons';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { LogPanel } from '../components/dashboard/LogPanel';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
@@ -268,50 +250,14 @@ function workflowWorkspaceListQuery(search: URLSearchParams): string {
   return params.toString();
 }
 
-const WORKFLOW_STATUS_ICONS = {
-  scheduled: CalendarClock,
-  initializing: Power,
-  waiting_on_dependencies: Link,
-  planning: MapIcon,
-  awaiting_slot: Hourglass,
-  executing: Play,
-  proposals: Lightbulb,
-  awaiting_external: Hand,
-  finalizing: PackageCheck,
-  no_commit: Check,
-  completed: Check,
-  failed: X,
-  canceled: Ban,
-} as const satisfies Record<string, LucideIcon>;
-
-type WorkflowStatusIconKey = keyof typeof WORKFLOW_STATUS_ICONS;
-
-function workflowStatusIconKey(status: string | null | undefined): WorkflowStatusIconKey {
-  const key = String(status || '')
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '_');
-
-  if (Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_ICONS, key)) {
-    return key as WorkflowStatusIconKey;
-  }
-  return 'executing';
-}
-
 function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefined }) {
-  const { label, pillProps } = workflowLifecycleStatusPillView(status, { enableMotion: false });
-  const Icon = WORKFLOW_STATUS_ICONS[workflowStatusIconKey(status)];
-
   return (
-    <span
-      {...pillProps}
-      className={`${pillProps.className} workflow-workspace-sidebar-status-icon`}
-      aria-label={`Status: ${label}`}
-      title={label}
+    <StatusIcon
+      status={status}
+      domain="workflow"
+      className="workflow-workspace-sidebar-status-icon"
       data-testid="workflow-workspace-sidebar-status-icon"
-    >
-      <Icon aria-hidden="true" focusable="false" />
-    </span>
+    />
   );
 }
 
@@ -388,7 +334,7 @@ function WorkflowSidebarControls({
       <button
         ref={closeButtonRef}
         type="button"
-        className="secondary workflow-workspace-close-sidebar"
+        className="secondary workflow-workspace-close-sidebar workflow-workspace-sidebar-control"
         onClick={onClose}
         aria-label="Close sidebar"
         title="Close sidebar"
@@ -397,7 +343,7 @@ function WorkflowSidebarControls({
       </button>
       <a
         href={workflowListHrefFromContext(search, { markDetailReturn: true })}
-        className="secondary workflow-workspace-expand-list"
+        className="secondary workflow-workspace-expand-list workflow-workspace-sidebar-control"
         onClick={markWorkflowListReturnFocusIntent}
         aria-label="Expand to full list"
         title="Expand to full list"
@@ -576,7 +522,7 @@ export function WorkflowWorkspaceShell({
         <button
           ref={openButtonRef}
           type="button"
-          className="secondary workflow-workspace-open-sidebar"
+          className="secondary workflow-workspace-open-sidebar workflow-workspace-sidebar-control"
           onClick={() => {
             updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
             setSidebarOpen(true);
@@ -1676,7 +1622,7 @@ const StepLedgerRowSchema = z
     title: z.string(),
     tool: StepLedgerToolSchema.default({}),
     dependsOn: z.array(z.string()).default([]),
-    status: z.string(),
+    status: z.enum(CANONICAL_STEP_STATUSES),
     waitingReason: z.string().nullable().optional(),
     attentionRequired: z.boolean().optional(),
     executionOrdinal: z.number().default(0),
@@ -2550,7 +2496,6 @@ async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLe
 const TERMINAL_RUN_STATUSES = new Set([
   'completed',
   'no_commit',
-  'no_changes',
   'failed',
   'canceled',
   'cancelled',
@@ -3729,7 +3674,8 @@ function formatStepLastError(lastError: unknown): string | null {
 
 function stepTerminal(status: string | null | undefined): boolean {
   const normalized = String(status || '').trim().toLowerCase();
-  return normalized === 'succeeded'
+  return normalized === 'completed'
+    || normalized === 'succeeded'
     || normalized === 'failed'
     || normalized === 'canceled'
     || normalized === 'cancelled'
@@ -3745,12 +3691,35 @@ function stepCheckStatusClass(status: string | null | undefined): string {
   return `check-${normalized || 'unknown'}`;
 }
 
+function stepCheckStatusPillProps(status: string | null | undefined) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'pending') {
+    return {
+      ...executionStatusPillProps('executing'),
+      'data-shimmer-label': formatStatusLabel(status),
+    };
+  }
+  return executionStatusPillProps(status);
+}
+
 function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
   const checkStatusClass = stepCheckStatusClass(check.status);
-  const statusPillClassName = integrationProviderStatusPillView(check.status, { enableMotion: false }).pillProps.className;
+  const statusPillProps = stepCheckStatusPillProps(check.status);
+  const label = `${check.kind.replaceAll('_', ' ')}: ${formatStatusLabel(check.status)}`;
+  const hasShimmerSweep = statusPillProps['data-effect'] === 'shimmer-sweep';
   return (
-    <span className={`step-check-badge ${checkStatusClass} ${statusPillClassName}`}>
-      {check.kind.replaceAll('_', ' ')}: {formatStatusLabel(check.status)}
+    <span
+      {...statusPillProps}
+      aria-label={hasShimmerSweep ? label : undefined}
+      className={`step-check-badge ${checkStatusClass} ${statusPillProps.className}`}
+    >
+      {hasShimmerSweep ? (
+        <span className="status-letter-wave" aria-hidden="true" data-label={label}>
+          {label}
+        </span>
+      ) : (
+        label
+      )}
     </span>
   );
 }
@@ -3901,7 +3870,7 @@ function StepObservabilityGroup({
     return (
       <p className="small">
         {renderMissingAgentRunCopy(
-          row.status === 'running' || row.status === 'awaiting_external'
+          row.status === 'executing' || row.status === 'awaiting_external'
             ? 'waiting_for_launch'
             : 'binding_missing',
         )}
@@ -3940,16 +3909,6 @@ function StepObservabilityGroup({
       />
     </div>
   );
-}
-
-function stepStatusIcon(status: string): { icon: string; cssClass: string } {
-  const s = status.toLowerCase().trim();
-  if (s === 'succeeded' || s === 'completed') return { icon: '✓', cssClass: 'step-icon-ok' };
-  if (s === 'failed') return { icon: '✕', cssClass: 'step-icon-fail' };
-  if (s === 'canceled' || s === 'cancelled' || s === 'skipped') return { icon: '–', cssClass: 'step-icon-skip' };
-  if (s === 'running' || s === 'executing' || s === 'planning' || s === 'initializing' || s === 'finalizing')
-    return { icon: '●', cssClass: 'step-icon-running' };
-  return { icon: '○', cssClass: 'step-icon-pending' };
 }
 
 // MM-815: Collect the latest attempt's evidence refs for the default (collapsed)
@@ -4067,7 +4026,7 @@ function StepExecutionHistoryRow({
     <li className="step-execution-history-item">
       <div className="step-execution-history-head">
         <span className="step-execution-pill">Execution {execution.executionOrdinal}</span>
-        <StepLedgerStatusPill status={execution.status} />
+        <ExecutionStatusPill status={execution.status} />
         <span className="step-execution-reason">{formatStatusLabel(execution.reason)}</span>
         {downstreamInvalidated ? (
           <span
@@ -4272,12 +4231,11 @@ function StepLedgerRowCard({
   routes: AgentRunRouteTemplates;
 }) {
   const lastError = formatStepLastError(row.lastError);
-  const { icon, cssClass } = stepStatusIcon(row.status);
 
   return (
     <article className={`step-tl-row${expanded ? ' step-tl-expanded' : ''}${isLast ? ' step-tl-last' : ''}`}>
-      <div className="step-tl-gutter" aria-hidden="true">
-        <span className={`step-tl-icon ${cssClass}`} title={formatStatusLabel(row.status)}>{icon}</span>
+      <div className="step-tl-gutter">
+        <StatusIcon status={row.status} domain="step" className="step-tl-icon" title={formatStatusLabel(row.status)} />
         {!isLast ? <span className="step-tl-line" /> : null}
       </div>
       <div className="step-tl-content">
@@ -4292,7 +4250,8 @@ function StepLedgerRowCard({
             <span className="step-tl-title">{row.title}</span>
             <span className="step-tl-right">
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
-              <StepLedgerStatusPill status={row.status} />
+              <ExecutionStatusPill status={row.status} />
+              <span className="sr-only">{formatStatusLabel(row.status)}</span>
               {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}
               <StepProvenanceMarker row={row} />
               <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
@@ -6986,7 +6945,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           <div className="toolbar-identity-row">
             <p className="page-meta">Workflow {taskId || '—'}</p>
             {execution ? (
-              <WorkflowLifecycleStatusPill status={execution.rawState || execution.state || execution.status} enableMotion={false} />
+              <ExecutionStatusPill status={execution.rawState || execution.state || execution.status} enableMotion={false} />
             ) : null}
           </div>
         </div>
@@ -7515,7 +7474,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                               <strong>{item.title || item.workflowId}</strong>
                             </a>
                             <code className="text-xs break-all">{item.workflowId}</code>
-                            <WorkflowLifecycleStatusPill status={stateLabel} />
+                            <ExecutionStatusPill status={stateLabel} />
                             {isWaitingForRerun ? (
                               <p className="small">
                                 <strong>Prerequisite failed; waiting for successful rerun.</strong>{' '}
@@ -7553,7 +7512,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                             <strong>{item.title || item.workflowId}</strong>
                           </a>
                           <code className="text-xs break-all">{item.workflowId}</code>
-                          <WorkflowLifecycleStatusPill status={item.state || 'unknown'} />
+                          <ExecutionStatusPill status={item.state || 'unknown'} />
                           {item.summary ? <p className="small">{item.summary}</p> : null}
                           {item.closeStatus ? <p className="small">Close status: {formatStatusLabel(item.closeStatus)}</p> : null}
                         </div>

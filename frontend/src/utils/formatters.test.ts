@@ -3,20 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { formatStatusLabel } from './formatters';
 
 describe('formatStatusLabel', () => {
-  it('uses compact user-facing labels for dependency and slot waits', () => {
-    expect(formatStatusLabel('waiting_on_dependencies')).toBe('Waiting on dependencies');
-    expect(formatStatusLabel('WAITING ON DEPENDENCIES')).toBe('Waiting on dependencies');
-    expect(formatStatusLabel('awaiting_slot')).toBe('Awaiting slot');
-  });
-
-  it('renders canonical and legacy no-commit statuses as No commit', () => {
-    expect(formatStatusLabel('no_commit')).toBe('No commit');
-    expect(formatStatusLabel('no_changes')).toBe('No commit');
-  });
-
-  it('replaces status underscores with spaces without changing raw filter values', () => {
+  it('replaces underscores with spaces without applying domain-specific mappings', () => {
+    expect(formatStatusLabel('waiting_on_dependencies')).toBe('waiting on dependencies');
+    expect(formatStatusLabel('awaiting_slot')).toBe('awaiting slot');
+    expect(formatStatusLabel('no_commit')).toBe('no commit');
     expect(formatStatusLabel('awaiting_external')).toBe('awaiting external');
     expect(formatStatusLabel('validating_token')).toBe('validating token');
+    expect(formatStatusLabel('failed_step_execution')).toBe('Failed step execution');
     expect(formatStatusLabel('constructor')).toBe('constructor');
     expect(formatStatusLabel(null)).toBe('—');
   });

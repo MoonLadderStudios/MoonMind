@@ -1031,6 +1031,11 @@ def _story_description_with_source(
     source_lines: list[str] = []
     if source_path:
         source_lines.append(f"Source Document: {source_path}")
+    source_issue_key = _string(
+        reference.get("sourceIssueKey") or reference.get("source_issue_key")
+    )
+    if source_issue_key:
+        source_lines.append(f"Source Issue: {source_issue_key}")
     title = _string(reference.get("title"))
     if title:
         source_lines.append(f"Source Title: {title}")
@@ -1415,7 +1420,7 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
     execution_creator: ExecutionCreator | None = None,
     target_preset: str,
 ) -> ToolResult:
-    """Create dependent downstream Jira tasks (Orchestrate or Implement) from ordered issue mappings."""
+    """Create dependent downstream Jira workflow executions from ordered issue mappings."""
 
     preset = _DOWNSTREAM_PRESETS[target_preset]
     preset_label = preset["label"]
@@ -1423,7 +1428,7 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
 
     if execution_creator is None:
         raise ValueError(
-            f"execution_creator is required for {preset_label} task creation."
+            f"execution_creator is required for {preset_label} workflow creation."
         )
 
     context = _context or {}
@@ -1478,7 +1483,7 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
                 {
                     **base_result,
                     "errorCode": "missing_issue_key",
-                    "message": f"{preset_label} task creation requires issueKey.",
+                    "message": f"{preset_label} workflow creation requires issueKey.",
                 }
             )
             skipped_stories.append({**base_result, "summary": summary})
@@ -1523,7 +1528,7 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
                 idempotency_key=idempotency_key,
                 repository=repository or None,
                 integration="jira",
-                summary=f"{preset_label} task for {issue_key}.",
+                summary=f"{preset_label} workflow for {issue_key}.",
             )
             if inspect.isawaitable(created):
                 created = await created  # type: ignore[assignment]
@@ -1532,7 +1537,7 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
                 {
                     **base_result,
                     "errorCode": "task_creation_failed",
-                    "message": str(exc) or "Downstream task creation failed.",
+                    "message": str(exc) or "Downstream workflow creation failed.",
                     "dependsOn": depends_on,
                 }
             )
@@ -1549,7 +1554,7 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
                             skipped.get("issueKey") or skipped.get("issue_key")
                         ),
                         "errorCode": "dependency_not_created",
-                        "message": "Earlier downstream task creation failed.",
+                        "message": "Earlier downstream workflow creation failed.",
                     }
                 )
             break
@@ -1587,16 +1592,23 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
         status = "partial" if tasks else "no_downstream_tasks"
     else:
         status = "completed"
+    workflow_status = (
+        "no_downstream_workflows" if status == "no_downstream_tasks" else status
+    )
 
     return ToolResult(
         status="COMPLETED",
         outputs={
             "jiraOrchestration": {
                 "status": status,
+                "workflowStatus": workflow_status,
                 "storyCount": len(issue_mappings),
                 "createdTaskCount": len(tasks),
+                "createdWorkflowCount": len(tasks),
                 "dependencyCount": len(dependencies),
                 "tasks": tasks,
+                "workflows": tasks,
+                "workflowMappings": tasks,
                 "dependencies": dependencies,
                 "skippedStories": skipped_stories,
                 "failures": failures,
@@ -1614,7 +1626,7 @@ async def create_jira_orchestrate_tasks_from_issue_mappings(
     *,
     execution_creator: ExecutionCreator | None = None,
 ) -> ToolResult:
-    """Create dependent Jira Orchestrate tasks from ordered Jira issue mappings."""
+    """Create dependent Jira Orchestrate workflow executions from ordered issue mappings."""
 
     return await _create_jira_downstream_tasks_from_issue_mappings(
         inputs,
@@ -1630,7 +1642,7 @@ async def create_jira_implement_tasks_from_issue_mappings(
     *,
     execution_creator: ExecutionCreator | None = None,
 ) -> ToolResult:
-    """Create dependent Jira Implement tasks from ordered Jira issue mappings."""
+    """Create dependent Jira Implement workflow executions from ordered issue mappings."""
 
     return await _create_jira_downstream_tasks_from_issue_mappings(
         inputs,
@@ -1979,11 +1991,14 @@ async def _create_github_downstream_workflows_from_issue_mappings(
             )
             remaining = issue_mappings[index:]
             for skipped in remaining:
+                skipped_repository = _string(
+                    skipped.get("repository") or skipped.get("repo") or repository
+                )
                 skipped_stories.append(
                     {
                         "storyId": _string(skipped.get("storyId") or skipped.get("story_id")),
                         "storyIndex": skipped.get("storyIndex") or skipped.get("story_index"),
-                        "repository": _string(skipped.get("repository") or skipped.get("repo")),
+                        "repository": skipped_repository,
                         "githubIssueNumber": _string(
                             skipped.get("issueNumber")
                             or skipped.get("issue_number")
@@ -4116,6 +4131,38 @@ def _assessment_verdict_from_artifact(
     return verdict, True
 
 
+def _github_status_verification_verdict_from_artifact(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[str, bool]:
+    artifact_path = _string(
+        inputs.get("verificationArtifactPath")
+        or inputs.get("verification_artifact_path")
+    )
+    if not artifact_path:
+        return "", True
+    payload = _local_json_artifact_from_path(
+        artifact_path=artifact_path,
+        inputs=inputs,
+        context=context,
+    )
+    if payload is None:
+        return "", False
+    for key in (
+        "verdict",
+        "gateVerdict",
+        "gate_verdict",
+        "moonSpecVerdict",
+        "moonspecVerdict",
+        "verificationVerdict",
+        "verification_verdict",
+    ):
+        verdict = _string(payload.get(key)).upper()
+        if verdict:
+            return verdict, True
+    return "", True
+
+
 def _github_status_pull_request_url(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
@@ -4174,6 +4221,32 @@ async def update_github_issue_status(
             )
     pull_request_url = _github_status_pull_request_url(inputs, _context)
     if mode == "finalize_after_pr_or_done":
+        if pull_request_url:
+            verification_verdict, verification_available = (
+                _github_status_verification_verdict_from_artifact(inputs, _context)
+            )
+            if not verification_available:
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "decision": "blocked",
+                        "summary": "GitHub issue Code Review update requires a verification artifact, but it was unavailable.",
+                    },
+                )
+            if (
+                inputs.get("verificationArtifactPath")
+                or inputs.get("verification_artifact_path")
+            ) and verification_verdict != "FULLY_IMPLEMENTED":
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "decision": "blocked",
+                        "verificationVerdict": verification_verdict,
+                        "summary": f"Skipped GitHub issue Code Review update for {issue_ref} because verification verdict is not FULLY_IMPLEMENTED.",
+                    },
+                )
         mode = "code_review" if pull_request_url else "done"
     actions = _GITHUB_STATUS_ACTIONS.get(mode, {})
     service = github_service_factory()
@@ -4421,7 +4494,7 @@ async def create_document_update_tasks_from_paths(
     """Create document-update tasks from a list of document paths."""
 
     if execution_creator is None:
-        raise ValueError("execution_creator is required for document update task creation.")
+        raise ValueError("execution_creator is required for document update workflow creation.")
 
     context = _context or {}
     previous_outputs = _mapping(context.get("previousOutputs") or context.get("previous_outputs"))
@@ -4513,7 +4586,7 @@ async def create_document_update_tasks_from_paths(
                 idempotency_key=idempotency_key,
                 repository=repository or None,
                 integration="document_update",
-                summary=f"Document update task for {document_path}.",
+                summary=f"Document update workflow for {document_path}.",
             )
             if inspect.isawaitable(created):
                 created = await created  # type: ignore[assignment]
@@ -4522,7 +4595,7 @@ async def create_document_update_tasks_from_paths(
                 {
                     **base_result,
                     "errorCode": "task_creation_failed",
-                    "message": str(exc) or "Downstream task creation failed.",
+                    "message": str(exc) or "Downstream workflow creation failed.",
                     "dependsOn": depends_on,
                 }
             )
@@ -4533,7 +4606,7 @@ async def create_document_update_tasks_from_paths(
                         "documentIndex": document_paths.index(skipped_path) + 1,
                         "documentPath": skipped_path,
                         "errorCode": "dependency_not_created",
-                        "message": "Earlier downstream task creation failed.",
+                        "message": "Earlier downstream workflow creation failed.",
                     }
                 )
             break
@@ -4571,16 +4644,23 @@ async def create_document_update_tasks_from_paths(
         status = "partial" if tasks else "no_downstream_tasks"
     else:
         status = "completed"
+    workflow_status = (
+        "no_downstream_workflows" if status == "no_downstream_tasks" else status
+    )
 
     return ToolResult(
         status="COMPLETED",
         outputs={
             "documentUpdateOrchestration": {
                 "status": status,
+                "workflowStatus": workflow_status,
                 "documentCount": len(document_paths),
                 "createdTaskCount": len(tasks),
+                "createdWorkflowCount": len(tasks),
                 "dependencyCount": len(dependencies),
                 "tasks": tasks,
+                "workflows": tasks,
+                "workflowMappings": tasks,
                 "dependencies": dependencies,
                 "failures": failures,
                 "traceability": {

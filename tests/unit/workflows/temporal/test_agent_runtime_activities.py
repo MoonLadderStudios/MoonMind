@@ -5087,13 +5087,23 @@ async def test_commit_workspace_changes_filters_skill_projection_from_string_wor
     projection.symlink_to(backing, target_is_directory=True)
     activities = TemporalAgentRuntimeActivities()
     recorded_calls: list[tuple[object, ...]] = []
+    call_count = 0
 
     async def _mock_exec(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
         recorded_calls.append(args)
         proc = AsyncMock()
-        proc.communicate = AsyncMock(
-            return_value=(b" D .agents/skills/pr-resolver/SKILL.md\0", b"")
-        )
+        if call_count == 1:
+            proc.communicate = AsyncMock(
+                return_value=(b" D .agents/skills/pr-resolver/SKILL.md\0", b"")
+            )
+        elif call_count == 2:
+            proc.communicate = AsyncMock(
+                return_value=(b".agents/skills/pr-resolver/SKILL.md\n", b"")
+            )
+        else:
+            raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
         proc.returncode = 0
         return proc
 
@@ -5107,7 +5117,63 @@ async def test_commit_workspace_changes_filters_skill_projection_from_string_wor
         )
 
     assert result == {}
-    assert len(recorded_calls) == 1
+    assert len(recorded_calls) == 2
+
+
+async def test_commit_workspace_changes_commits_only_publishable_staged_paths(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    activities = TemporalAgentRuntimeActivities()
+    recorded_calls: list[tuple[object, ...]] = []
+    call_count = 0
+
+    async def _mock_exec(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        recorded_calls.append(args)
+        proc = AsyncMock()
+        if call_count == 1:
+            proc.communicate = AsyncMock(
+                return_value=(b"D  publishable.txt\0D  CLAUDE.md\0", b"")
+            )
+        elif call_count == 2:
+            proc.communicate = AsyncMock(
+                return_value=(b"publishable.txt\nCLAUDE.md\n", b"")
+            )
+        elif call_count == 3:
+            proc.communicate = AsyncMock(return_value=(b"[main abc123] commit\n", b""))
+        else:
+            raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
+        proc.returncode = 0
+        return proc
+
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(asyncio, "create_subprocess_exec", _mock_exec)
+        result = await activities._commit_workspace_changes_if_needed(
+            str(workspace),
+            run_id="run-1",
+            env={},
+            commit_message="publish result",
+        )
+
+    assert result == {"push_commit_message": "publish result"}
+    assert recorded_calls[0][-4:] == (
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+    )
+    assert recorded_calls[1][-3:] == ("diff", "--cached", "--name-only")
+    assert recorded_calls[2][-5:] == (
+        "commit",
+        "-m",
+        "publish result",
+        "--",
+        "publishable.txt",
+    )
+    assert "CLAUDE.md" not in recorded_calls[2]
 
 
 async def test_publish_path_filter_allows_checked_in_skill_directory(

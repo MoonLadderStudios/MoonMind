@@ -2949,12 +2949,54 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "Mark GitHub issue In Progress",
         "Implement the issue",
         "Verify implementation",
+        "Remediate verification gaps",
+        "Verify remediation",
         "Create pull request",
         "Finalize GitHub issue status",
     ]
     assert expanded["steps"][0]["tool"]["id"] == "github.load_issue_preset_brief"
     assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
     assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
+    assert expanded["steps"][5]["skill"]["id"] == "moonspec-verify"
+    assert expanded["steps"][5]["skill"]["args"] == {
+        "verification_target": "issue_brief",
+        "issue_provider": "github",
+        "issue_ref": "MoonLadderStudios/MoonMind#123",
+        "brief_artifact_path": "artifacts/github-issue-implement-brief.json",
+        "assessment_artifact_path": "artifacts/github-issue-implement-assessment.json",
+        "verify_artifact_path": "artifacts/github-issue-implement-verify.json",
+    }
+    assert "verification target issue_brief" in expanded["steps"][5]["instructions"]
+    assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][5][
+        "instructions"
+    ]
+    assert expanded["steps"][6]["skill"]["id"] == "auto"
+    assert "ADDITIONAL_WORK_NEEDED" in expanded["steps"][6]["instructions"]
+    assert expanded["steps"][6]["annotations"] == {
+        "issueImplementRole": "moonspec-remediation",
+        "moonSpecRemediationAttempt": 1,
+        "moonSpecRemediationMaxAttempts": 1,
+    }
+    assert expanded["steps"][7]["skill"]["id"] == "moonspec-verify"
+    assert expanded["steps"][7]["skill"]["args"]["verify_artifact_path"] == (
+        "artifacts/github-issue-implement-verify.json"
+    )
+    assert expanded["steps"][7]["annotations"] == {
+        "issueImplementRole": "moonspec-verification-gate",
+        "moonSpecRemediationAttempt": 1,
+        "moonSpecRemediationMaxAttempts": 1,
+        "moonSpecFinalRemediationGate": True,
+    }
+    assert "controlling verification gate" in expanded["steps"][7]["instructions"]
+    assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][8][
+        "instructions"
+    ]
+    assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
+        expanded["steps"][8]["instructions"]
+    )
+    assert expanded["steps"][9]["tool"]["inputs"]["verificationArtifactPath"] == (
+        "artifacts/github-issue-implement-verify.json"
+    )
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
         "github-issue-implement",
         "issue-implement-assessment",
@@ -3004,11 +3046,11 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "Check GitHub issue blockers before orchestration",
         "Mark GitHub issue In Progress",
         "Classify request and resume point",
-        "Create or select Moon Spec",
+        "Create or select MoonSpec",
         "Split broad designs when needed",
         "Plan selected spec",
         "Generate TDD task breakdown",
-        "Align Moon Spec artifacts",
+        "Align MoonSpec artifacts",
         "Implement the task breakdown",
         "Verify completion",
         "Remediate verification gaps 1 of 6",
@@ -3144,7 +3186,7 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
                 "jira-breakdown"
             )
             assert template.annotations["output"] == (
-                "dependent-jira-orchestrate-tasks"
+                "dependent-jira-orchestrate-workflows"
             )
             assert [
                 (step.get("skill") or step.get("tool"))["id"]
@@ -3193,7 +3235,10 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
             }
             downstream = expanded["steps"][4]
             assert downstream["skill"]["id"] == "story.create_jira_orchestrate_tasks"
-            assert "Create one Jira Orchestrate task" in downstream["instructions"]
+            assert (
+                "Create one Jira Orchestrate workflow execution"
+                in downstream["instructions"]
+            )
             assert "dependsOn" in downstream["instructions"]
             assert "MM-404" in downstream["instructions"]
             assert "Selected Jira board" not in expanded["steps"][3]["instructions"]
