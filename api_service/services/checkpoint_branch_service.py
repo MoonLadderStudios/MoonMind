@@ -44,6 +44,8 @@ class CheckpointBranchGitBindingInput:
     head_commit: str | None = None
     patch_ref: str | None = None
     pull_request_url: str | None = None
+    workspace_policy: str = "apply_previous_execution_diff_to_clean_baseline"
+    creation_mode: str = "manual"
     publish_status: str = "unpublished"
 
 
@@ -207,8 +209,10 @@ class CheckpointBranchService:
             head_commit=model.head_commit,
             patch_ref=model.patch_ref,
             pull_request_url=model.pull_request_url,
-            workspace_policy="apply_previous_execution_diff_to_clean_baseline",
-            creation_mode="manual",
+            workspace_policy=CheckpointBranchWorkspacePolicy(
+                model.workspace_policy
+            ).value,
+            creation_mode=model.creation_mode,
             publish_status=CheckpointBranchPublishStatus(model.publish_status),
         )
         self._session.add(record)

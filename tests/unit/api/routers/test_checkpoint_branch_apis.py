@@ -283,7 +283,7 @@ async def test_checkpoint_branch_publish_does_not_promote_and_archive_hides_acti
     )
     assert published.status_code == 200
     assert published.json()["publishStatus"] == "published"
-    assert published.json()["state"] == "published"
+    assert published.json()["state"] == "created"
     assert published.json()["promotedAt"] is None
 
     archived = await checkpoint_branch_client.post(

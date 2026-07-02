@@ -11051,8 +11051,8 @@ async def create_checkpoint_branch(
         source_checkpoint_ref=payload.source.checkpoint_ref,
         source_checkpoint_digest=payload.source.checkpoint_digest,
         label=payload.label,
-        state="draft",
-        branch_kind="checkpoint",
+        state="created",
+        branch_kind="root",
         workspace_policy=payload.workspace_policy,
         runtime_context_policy=payload.runtime_context_policy,
         git_work_branch=payload.git_work_branch,
@@ -11200,7 +11200,7 @@ async def _record_branch_turn_operation(
         idempotency_key=payload.idempotency_key,
         status="created",
     )
-    branch.state = "running"
+    branch.state = "active"
     branch.label = payload.label or branch.label
     branch.workspace_policy = payload.workspace_policy
     branch.runtime_context_policy = payload.runtime_context_policy
@@ -11340,8 +11340,8 @@ async def fork_checkpoint_branch(
         parent_branch_id=parent.branch_id,
         parent_turn_id=payload.parent_turn_id,
         label=payload.label or f"Fork of {parent.label}",
-        state="draft",
-        branch_kind="fork",
+        state="created",
+        branch_kind="child_fork",
         workspace_policy=payload.workspace_policy,
         runtime_context_policy=payload.runtime_context_policy,
         current_head_checkpoint_ref=fork_source_ref,
@@ -11489,7 +11489,7 @@ async def promote_checkpoint_branch(
                 detail={"code": "idempotency_key_conflict"},
             )
         return _branch_to_model(branch)
-    if branch.state == "archived":
+    if branch.state in {"archived", "superseded"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "invalid_branch_state", "state": branch.state},
@@ -11706,8 +11706,6 @@ async def publish_checkpoint_branch(
     branch.git_base_branch = payload.base_branch
     branch.git_work_branch = payload.head_branch
     branch.publish_status = "published"
-    if branch.state != "promoted":
-        branch.state = "published"
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,

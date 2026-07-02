@@ -13,28 +13,26 @@ from moonmind.statuses.checkpoint_branch import (
 )
 
 
-BranchState = Literal[
-    "draft",
-    "running",
-    "blocked",
-    "failed",
-    "promotable",
-    "published",
-    "promoted",
-    "archived",
-    "superseded",
-]
-WorkspacePolicy = Literal[
-    "apply_previous_execution_diff_to_clean_baseline",
+CheckpointBranchKind = Literal["root", "child_fork"]
+CheckpointBranchWorkspacePolicy = Literal[
     "continue_from_previous_execution",
-    "from_checkpoint_worktree",
-    "from_last_accepted_commit",
+    "restore_pre_execution",
+    "apply_previous_execution_diff_to_clean_baseline",
+    "start_from_last_passed_commit",
+    "fresh_branch_from_source",
 ]
-RuntimeContextPolicy = Literal[
+CheckpointBranchRuntimeContextPolicy = Literal[
     "fresh_agent_run",
     "reuse_session_new_epoch",
     "reuse_session_same_epoch",
     "external_provider_continuation",
+]
+CheckpointBranchPublishStatus = Literal[
+    "unpublished",
+    "preparing",
+    "published",
+    "failed",
+    "archived",
 ]
 PublishMode = Literal["none", "branch", "pull_request"]
 
@@ -104,8 +102,8 @@ class CheckpointBranchCreateRequest(BaseModel):
     source: CheckpointBranchApiSourceModel
     label: str = Field(..., min_length=1, max_length=200)
     instructions: CheckpointBranchInstructionsModel
-    workspace_policy: WorkspacePolicy = Field(..., alias="workspacePolicy")
-    runtime_context_policy: RuntimeContextPolicy = Field(
+    workspace_policy: CheckpointBranchWorkspacePolicy = Field(..., alias="workspacePolicy")
+    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
         "fresh_agent_run", alias="runtimeContextPolicy"
     )
     publish_mode: PublishMode = Field("none", alias="publishMode")
@@ -121,10 +119,10 @@ class CheckpointBranchContinueRequest(BaseModel):
 
     label: str | None = Field(None, max_length=200)
     instructions: CheckpointBranchInstructionsModel
-    workspace_policy: WorkspacePolicy = Field(
+    workspace_policy: CheckpointBranchWorkspacePolicy = Field(
         "continue_from_previous_execution", alias="workspacePolicy"
     )
-    runtime_context_policy: RuntimeContextPolicy = Field(
+    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
         "reuse_session_new_epoch", alias="runtimeContextPolicy"
     )
     idempotency_key: str = Field(
@@ -135,10 +133,10 @@ class CheckpointBranchContinueRequest(BaseModel):
 
 class CheckpointBranchForkRequest(CheckpointBranchContinueRequest):
     parent_turn_id: str | None = Field(None, alias="parentTurnId")
-    workspace_policy: WorkspacePolicy = Field(
+    workspace_policy: CheckpointBranchWorkspacePolicy = Field(
         "apply_previous_execution_diff_to_clean_baseline", alias="workspacePolicy"
     )
-    runtime_context_policy: RuntimeContextPolicy = Field(
+    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
         "fresh_agent_run", alias="runtimeContextPolicy"
     )
 
@@ -224,7 +222,7 @@ class CheckpointBranchModel(BaseModel):
     parent_branch_id: str | None = Field(None, alias="parentBranchId")
     parent_turn_id: str | None = Field(None, alias="parentTurnId")
     label: str
-    state: BranchState
+    state: CheckpointBranchStateValue
     branch_kind: str = Field(..., alias="branchKind")
     workspace_policy: str = Field(..., alias="workspacePolicy")
     runtime_context_policy: str = Field(..., alias="runtimeContextPolicy")
@@ -281,29 +279,6 @@ class CheckpointBranchCompareResponse(BaseModel):
 
 
 # Persistence/service contract models.
-CheckpointBranchKind = Literal["root", "child_fork"]
-CheckpointBranchWorkspacePolicy = Literal[
-    "continue_from_previous_execution",
-    "restore_pre_execution",
-    "apply_previous_execution_diff_to_clean_baseline",
-    "start_from_last_passed_commit",
-    "fresh_branch_from_source",
-]
-CheckpointBranchRuntimeContextPolicy = Literal[
-    "fresh_agent_run",
-    "reuse_session_new_epoch",
-    "reuse_session_same_epoch",
-    "external_provider_continuation",
-]
-CheckpointBranchPublishStatus = Literal[
-    "unpublished",
-    "preparing",
-    "published",
-    "failed",
-    "archived",
-]
-
-
 def _optional_text(value: Any) -> str | None:
     if value is None:
         return None

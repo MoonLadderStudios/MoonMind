@@ -1,4 +1,4 @@
-"""Integration coverage for MM-1091 checkpoint branch migration."""
+"""Integration coverage for the consolidated checkpoint branch graph migration."""
 
 from __future__ import annotations
 
@@ -21,10 +21,10 @@ def _load_migration_module():
         / "api_service"
         / "migrations"
         / "versions"
-        / "333_mm1091_checkpoint_branch_apis.py"
+        / "333_checkpoint_branch_graph.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "mm1091_checkpoint_branch_apis",
+        "mm_checkpoint_branch_graph",
         migration_path,
     )
     assert spec is not None
@@ -34,7 +34,7 @@ def _load_migration_module():
     return module
 
 
-def test_checkpoint_branch_migration_creates_tables_and_idempotency_ledger(
+def test_checkpoint_branch_migration_creates_graph_and_idempotency_ledger(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     migration = _load_migration_module()
@@ -63,6 +63,8 @@ def test_checkpoint_branch_migration_creates_tables_and_idempotency_ledger(
         assert {
             "workflow_checkpoint_branches",
             "workflow_checkpoint_branch_turns",
+            "workflow_checkpoint_branch_git_bindings",
+            "workflow_checkpoint_branch_artifacts",
             "workflow_checkpoint_branch_operations",
         }.issubset(set(inspector.get_table_names()))
 
@@ -71,15 +73,23 @@ def test_checkpoint_branch_migration_creates_tables_and_idempotency_ledger(
                 "INSERT INTO workflow_checkpoint_branches "
                 "(branch_id, workflow_id, root_workflow_id, source_run_id, "
                 "source_checkpoint_boundary, source_checkpoint_ref, label, "
-                "branch_kind, workspace_policy, runtime_context_policy, "
-                "idempotency_key) "
+                "workspace_policy, runtime_context_policy, idempotency_key) "
                 "VALUES ('cbr_test', 'mm:wf-branch', 'mm:wf-branch', "
                 "'run-branch', 'after_execution', "
                 "'artifact://checkpoints/after-implement', 'Branch', "
-                "'checkpoint', 'apply_previous_execution_diff_to_clean_baseline', "
+                "'apply_previous_execution_diff_to_clean_baseline', "
                 "'fresh_agent_run', 'mm-1091:create')"
             )
         )
+        row = conn.execute(
+            sa.text(
+                "SELECT state, branch_kind FROM workflow_checkpoint_branches "
+                "WHERE branch_id = 'cbr_test'"
+            )
+        ).one()
+        assert row.state == "created"
+        assert row.branch_kind == "root"
+
         conn.execute(
             sa.text(
                 "INSERT INTO workflow_checkpoint_branch_operations "

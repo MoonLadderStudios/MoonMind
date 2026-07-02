@@ -140,7 +140,7 @@ class CheckpointBranchGitBindingModel(BaseModel):
     source_checkpoint_digest: str | None = Field(
         None, alias="sourceCheckpointDigest"
     )
-    publish_status: str = Field("not_published", alias="publishStatus")
+    publish_status: str = Field("unpublished", alias="publishStatus")
     created_at: datetime = Field(..., alias="createdAt")
 
 

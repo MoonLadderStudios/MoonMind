@@ -442,7 +442,7 @@ class WorkflowCheckpointBranch(Base):
         String(64), nullable=False, default="created", server_default="created"
     )
     branch_kind: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="checkpoint", server_default="checkpoint"
+        String(64), nullable=False, default="root", server_default="root"
     )
     workspace_policy: Mapped[str] = mapped_column(String(64), nullable=False)
     runtime_context_policy: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -611,8 +611,8 @@ class WorkflowCheckpointBranchGitBinding(Base):
     publish_status: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
-        default="not_published",
-        server_default="not_published",
+        default="unpublished",
+        server_default="unpublished",
     )
     binding_metadata: Mapped[dict[str, Any]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
