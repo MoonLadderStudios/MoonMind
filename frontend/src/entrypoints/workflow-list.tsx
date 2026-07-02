@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
-import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
+import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
 import {
@@ -117,7 +117,7 @@ const TABLE_COLUMNS: TableColumnDef[] = [
   { field: 'title', label: 'Workflow', sortable: true, colClassName: 'queue-table-column-workflow' },
   { field: 'status', label: 'Status', sortable: true, colClassName: 'queue-table-column-status' },
   { field: 'progress', label: 'Progress', sortable: true, colClassName: 'queue-table-column-progress' },
-  { field: 'repository', label: 'Repository', sortable: true, colClassName: 'queue-table-column-repository' },
+  { field: 'repository', label: 'Repo', sortable: true, colClassName: 'queue-table-column-repository' },
   { field: 'targetRuntime', label: 'Runtime', sortable: true, colClassName: 'queue-table-column-runtime' },
   { field: 'updatedAt', label: 'Updated', sortable: true, colClassName: 'queue-table-column-date' },
 ];
@@ -137,7 +137,7 @@ const FILTER_FIELDS = [
   ['title', 'Title'],
   ['status', 'Status'],
   ['progress', 'Progress'],
-  ['repository', 'Repository'],
+  ['repository', 'Repo'],
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
   ['updatedAt', 'Updated'],
@@ -168,7 +168,7 @@ const DRAWER_FILTER_FIELDS: Array<[FilterField, string]> = [
   ['title', 'Title'],
   ['status', 'Status'],
   ['progress', 'Progress'],
-  ['repository', 'Repository'],
+  ['repository', 'Repo'],
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
   ['updatedAt', 'Updated'],
@@ -1733,7 +1733,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             values={draft.values}
             options={[...TEMPORAL_STATUSES]}
             formatValue={formatStatusLabel}
-            renderValue={(value) => <ExecutionStatusPill status={value} enableMotion={false} />}
+            renderValue={(value) => <WorkflowLifecycleStatusPill status={value} enableMotion={false} />}
             disabled={!listEnabled}
             ariaLabelAdd="Status filter value"
             ariaLabelSelected="Selected status filters"
@@ -2558,7 +2558,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           </td>
                           {isColumnVisible('status') ? (
                             <td className="queue-table-cell-status">
-                              <ExecutionStatusPill status={row.rawState || row.state || row.status} />
+                              <WorkflowLifecycleStatusPill status={row.rawState || row.state || row.status} />
                               {statusSupplements.map((item) => (
                                 <div key={item} className="workflow-list-status-supplement small">
                                   {item}
@@ -2617,7 +2617,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         </a>
                       </div>
                       <div className="queue-card-status">
-                        <ExecutionStatusPill status={row.rawState || row.state || row.status} />
+                        <WorkflowLifecycleStatusPill status={row.rawState || row.state || row.status} />
                         {statusSupplements.map((item) => (
                           <div key={item} className="workflow-list-status-supplement small">
                             {item}
@@ -2637,7 +2637,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <dd>{formatRuntimeLabel(row.targetRuntime)}</dd>
                       </div>
                       <div>
-                        <dt>Repository</dt>
+                        <dt>Repo</dt>
                         <dd>{row.repository || '—'}</dd>
                       </div>
                       <div>

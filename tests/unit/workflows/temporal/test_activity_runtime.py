@@ -26,7 +26,7 @@ from moonmind.integrations.pentest.models import (
     PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
 )
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
-from moonmind.schemas.agent_runtime_models import AgentRunResult
+from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
 from moonmind.schemas.jules_models import JulesTaskResponse
 from moonmind.schemas.workload_models import (
     ValidatedWorkloadRequest,
@@ -94,11 +94,26 @@ from moonmind.workflows.temporal.artifacts import (
     build_artifact_ref,
 )
 from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_result
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workloads.registry import RunnerProfileRegistry
 
 PENTEST_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
 
 pytestmark = [pytest.mark.asyncio]
+
+
+async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -> None:
+    prepared = TemporalAgentRuntimeActivities._prepare_managed_codex_turn_text(
+        "Run moonspec-verify.",
+        parameters={
+            "metadata": {"moonmind": {"selectedSkill": "moonspec-verify"}},
+            "verify_artifact_path": "var/artifacts/moonspec-verify/verify-final.json",
+        },
+    )
+
+    assert "MoonSpec verification output contract:" in prepared
+    assert "var/artifacts/moonspec-verify/verify-final.json" in prepared
+    assert "complete structured verifier JSON" in prepared
 
 
 async def test_checkpoint_activity_runtime_bindings_are_registered() -> None:
@@ -4879,7 +4894,6 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
                 link_type="report.primary",
                 latest_only=True,
             )
-
             assert len(reports) == 1
             assert reports[0].metadata_json["report_type"] == "integration_test_report"
             assert reports[0].metadata_json["report_scope"] == "final"
@@ -4891,6 +4905,89 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
             )
             body = path.read_bytes()
             assert body.decode("utf-8") == "# Integration test report\n\nAll tests passed.\n"
+
+
+async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace = tmp_path / "workspace"
+            verify_path = workspace / "var/artifacts/moonspec-verify/final.json"
+            verify_path.parent.mkdir(parents=True)
+            verify_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "verdict": "FULLY_IMPLEMENTED",
+                        "recommendedNextAction": "publish",
+                        "recoverableInCurrentRuntime": True,
+                        "remainingWork": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run_store = ManagedRunStore(tmp_path / "runs")
+            run_store.save(
+                ManagedRunRecord(
+                    runId="verify-run-1",
+                    agentId="codex_cli",
+                    runtimeId="codex_cli",
+                    status="completed",
+                    startedAt=datetime.now(timezone.utc),
+                    workspacePath=workspace.as_posix(),
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                run_store=run_store,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities,
+                "execution_notify_completion",
+                _skip_notify,
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:verify",
+                    workflow_run_id="child-run-verify",
+                ),
+            )
+
+            result = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Completed.",
+                    metadata={
+                        "agentRunId": "verify-run-1",
+                        "verify_artifact_path": (
+                            "var/artifacts/moonspec-verify/final.json"
+                        ),
+                    },
+                )
+            )
+
+            assert isinstance(result, AgentRunResult)
+            assert result.metadata["gateResultRef"].startswith("art_")
+            assert result.metadata["moonSpecVerifyArtifactRef"] == (
+                result.metadata["gateResultRef"]
+            )
+            assert result.metadata["moonSpecVerify"]["verdict"] == "FULLY_IMPLEMENTED"
+            assert result.metadata["moonSpecVerify"]["gateResultRef"] == (
+                result.metadata["gateResultRef"]
+            )
+
 
 async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_report_body(
     tmp_path: Path,

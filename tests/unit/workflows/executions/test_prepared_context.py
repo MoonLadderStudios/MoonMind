@@ -9,9 +9,14 @@ from moonmind.memory.procedural import (
     extract_error_signature,
 )
 from moonmind.workflows.executions.prepared_context import (
+    MINIMUM_BRANCH_ARTIFACT_NAMES,
+    MINIMUM_BRANCH_TURN_ARTIFACT_NAMES,
     PreparedContextFailure,
     PreparedInputEntry,
     PreparedInputManifest,
+    branch_turn_step_execution_manifest_projection,
+    build_branch_turn_artifact_manifest,
+    build_branch_turn_context_bundle,
     build_durable_retrieval_manifest_artifact,
     build_execution_context_bundle,
     build_memory_manifest,
@@ -496,6 +501,259 @@ def test_execution_context_records_required_attempt_contract_fields() -> None:
     assert projection["context"]["priorEvidenceRefs"] == [
         "artifact://attempt-1-manifest"
     ]
+
+
+def test_mm_1089_branch_turn_context_records_immutable_launch_evidence() -> None:
+    bundle = build_branch_turn_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-branch-turn-1",
+        logical_step_id="implement-story",
+        execution_ordinal=3,
+        branch_id="cbr_01",
+        branch_turn_id="cbt_01",
+        source_checkpoint={
+            "workflowId": "workflow-1",
+            "runId": "run-source",
+            "logicalStepId": "implement-story",
+            "sourceExecutionOrdinal": 2,
+            "checkpointBoundary": "after_execution",
+            "checkpointRef": "artifact://checkpoints/after-execution",
+            "checkpointDigest": "sha256:checkpoint",
+        },
+        initial_instruction_ref="artifact://branch/initial-instructions",
+        initial_instruction_digest="sha256:initial",
+        instruction_artifact_ref="artifact://branch-turn/instructions",
+        instruction_digest="sha256:turn",
+        runtime_context_policy="fresh_agent_run",
+        workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+        workspace_baseline={"kind": "git_patch", "patchRef": "artifact://patch"},
+        prior_evidence_refs=["artifact://attempt-2-manifest"],
+        bounded_summaries=["Previous attempt failed the unit gate."],
+        runtime_selection={"runtimeId": "codex_cli", "model": "gpt-5"},
+        policy_refs={"workspacePolicyRef": "artifact://policies/workspace"},
+        git_work_branch="mm/workflow-1/implement-story/cbr-01",
+    )
+
+    dumped = bundle.model_dump(by_alias=True, exclude_none=True)
+
+    assert dumped["reason"] == "checkpoint_branch"
+    assert dumped["executionOrdinal"] == 3
+    assert dumped["branch"]["branchId"] == "cbr_01"
+    assert dumped["branch"]["branchTurnId"] == "cbt_01"
+    assert dumped["branch"]["sourceCheckpoint"]["checkpointRef"] == (
+        "artifact://checkpoints/after-execution"
+    )
+    assert dumped["branch"]["traceability"] == "MM-1089"
+    assert dumped["instructionRefs"] == [
+        "artifact://branch/initial-instructions",
+        "artifact://branch-turn/instructions",
+    ]
+    assert dumped["instructionDigests"] == {
+        "artifact://branch/initial-instructions": "sha256:initial",
+        "artifact://branch-turn/instructions": "sha256:turn",
+    }
+    assert dumped["workspacePolicy"] == (
+        "apply_previous_execution_diff_to_clean_baseline"
+    )
+    assert dumped["runtimeContextPolicy"] == "fresh_agent_run"
+    assert dumped["checkpointRefs"]["source"] == (
+        "artifact://checkpoints/after-execution"
+    )
+    assert bundle.context_bundle_ref == (
+        f"execution-context-bundle://{bundle.context_bundle_digest}"
+    )
+    projection = bundle.to_manifest_projection()["context"]
+    assert projection["branch"]["branchTurnId"] == "cbt_01"
+    assert projection["runtimeContextPolicy"] == "fresh_agent_run"
+    assert branch_turn_step_execution_manifest_projection(bundle) == {
+        "branch": {
+            "branchId": "cbr_01",
+            "branchTurnId": "cbt_01",
+            "rootCheckpointRef": "artifact://checkpoints/after-execution",
+            "gitWorkBranch": "mm/workflow-1/implement-story/cbr-01",
+        }
+    }
+
+
+def test_mm_1089_branch_turn_artifact_manifest_names_minimum_evidence() -> None:
+    bundle = build_branch_turn_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-branch-turn-1",
+        logical_step_id="implement-story",
+        execution_ordinal=3,
+        branch_id="cbr_01",
+        branch_turn_id="cbt_01",
+        source_checkpoint={
+            "workflowId": "workflow-1",
+            "runId": "run-source",
+            "checkpointBoundary": "after_execution",
+            "checkpointRef": "artifact://checkpoints/after-execution",
+        },
+        instruction_artifact_ref="artifact://branch-turn/instructions",
+        instruction_digest="sha256:turn",
+        runtime_context_policy="reuse_session_new_epoch",
+        workspace_policy="continue_from_previous_execution",
+    )
+
+    manifest = build_branch_turn_artifact_manifest(
+        branch_id="cbr_01",
+        branch_turn_id="cbt_01",
+        context_bundle=bundle,
+    )
+
+    names = [artifact["name"] for artifact in manifest["artifacts"]]
+    assert names == [
+        *MINIMUM_BRANCH_ARTIFACT_NAMES,
+        *MINIMUM_BRANCH_TURN_ARTIFACT_NAMES,
+    ]
+    assert manifest["traceability"] == "MM-1089"
+    assert manifest["contextBundleRef"] == bundle.context_bundle_ref
+    assert manifest["artifactManifestDigest"].startswith("sha256:")
+    instruction_entry = next(
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact["name"] == "input.branch_turn.instructions.md"
+    )
+    assert instruction_entry["artifactRefStatus"] == "planned"
+    assert "artifactRef" not in instruction_entry
+
+
+def test_mm_1089_branch_turn_artifact_manifest_uses_real_refs_when_available() -> None:
+    bundle = build_branch_turn_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-branch-turn-1",
+        logical_step_id="implement-story",
+        execution_ordinal=3,
+        branch_id="cbr_01",
+        branch_turn_id="cbt_01",
+        source_checkpoint={
+            "workflowId": "workflow-1",
+            "runId": "run-source",
+            "checkpointBoundary": "after_execution",
+            "checkpointRef": "art_checkpoint",
+        },
+        instruction_artifact_ref="art_instruction",
+        instruction_digest="sha256:turn",
+        runtime_context_policy="reuse_session_new_epoch",
+        workspace_policy="continue_from_previous_execution",
+    )
+
+    manifest = build_branch_turn_artifact_manifest(
+        branch_id="cbr_01",
+        branch_turn_id="cbt_01",
+        context_bundle=bundle,
+        artifact_refs={
+            "input.branch.root_checkpoint.json": "art_checkpoint",
+            "input.branch_turn.instructions.md": "art_instruction",
+        },
+    )
+
+    by_name = {artifact["name"]: artifact for artifact in manifest["artifacts"]}
+    assert by_name["input.branch.root_checkpoint.json"]["artifactRef"] == (
+        "art_checkpoint"
+    )
+    assert by_name["input.branch.root_checkpoint.json"]["artifactRefStatus"] == (
+        "persisted"
+    )
+    assert by_name["input.branch_turn.instructions.md"]["artifactRef"] == (
+        "art_instruction"
+    )
+    assert by_name["runtime.branch_turn.agent_result.json"][
+        "artifactRefStatus"
+    ] == "planned"
+
+
+def test_mm_1089_branch_turn_context_accepts_typed_source_state() -> None:
+    bundle = build_branch_turn_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-branch-turn-1",
+        logical_step_id="implement-story",
+        execution_ordinal=3,
+        branch_id="cbr_01",
+        branch_turn_id="cbt_01",
+        source_checkpoint={
+            "workflowId": "workflow-1",
+            "runId": "run-source",
+            "sourceStateKind": "provider_session",
+            "sourceStateRef": "provider://session/1",
+            "sourceStateDigest": "sha256:provider-state",
+        },
+        instruction_artifact_ref="art_instruction",
+        instruction_digest="sha256:turn",
+        runtime_context_policy="external_provider_continuation",
+        workspace_policy="continue_from_previous_execution",
+    )
+
+    branch = bundle.model_dump(by_alias=True, exclude_none=True)["branch"]
+    assert branch["sourceStateKind"] == "provider_session"
+    assert branch["sourceStateRef"] == "provider://session/1"
+    assert "rootCheckpointRef" not in branch
+    assert branch_turn_step_execution_manifest_projection(bundle) == {
+        "branch": {
+            "branchId": "cbr_01",
+            "branchTurnId": "cbt_01",
+            "sourceStateKind": "provider_session",
+            "sourceStateRef": "provider://session/1",
+            "sourceStateDigest": "sha256:provider-state",
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {"instruction_artifact_ref": "inline instruction text"},
+            "instruction_artifact_ref must be an artifact ref",
+        ),
+        (
+            {"instruction_digest": "not-a-digest"},
+            "instruction_digest must be a sha256 digest",
+        ),
+        (
+            {"source_checkpoint": {"checkpointRef": "artifact://checkpoint"}},
+            "source_checkpoint.workflowId",
+        ),
+        (
+            {
+                "source_checkpoint": {
+                    "workflowId": "workflow-1",
+                    "runId": "run-source",
+                    "checkpointBoundary": "after_execution",
+                    "checkpointRef": "artifact://checkpoint",
+                    "providerPayload": {"messages": ["raw"]},
+                }
+            },
+            "provider payload",
+        ),
+    ],
+)
+def test_mm_1089_branch_turn_context_rejects_unsafe_or_incomplete_inputs(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    base = {
+        "workflow_id": "workflow-1",
+        "run_id": "run-branch-turn-1",
+        "logical_step_id": "implement-story",
+        "execution_ordinal": 3,
+        "branch_id": "cbr_01",
+        "branch_turn_id": "cbt_01",
+        "source_checkpoint": {
+            "workflowId": "workflow-1",
+            "runId": "run-source",
+            "checkpointBoundary": "after_execution",
+            "checkpointRef": "artifact://checkpoints/after-execution",
+        },
+        "instruction_artifact_ref": "artifact://branch-turn/instructions",
+        "instruction_digest": "sha256:turn",
+        "runtime_context_policy": "fresh_agent_run",
+        "workspace_policy": "continue_from_previous_execution",
+    }
+    base.update(kwargs)
+
+    with pytest.raises(ValueError, match=match):
+        build_branch_turn_context_bundle(**base)
 
 
 def test_with_retrieval_manifest_ref_recomputes_digest() -> None:

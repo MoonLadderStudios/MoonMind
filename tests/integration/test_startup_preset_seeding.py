@@ -168,6 +168,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             if step["title"] == "Verify remediation 6 of 6"
         )
         assert remediation_verify_step["skill"]["id"] == "moonspec-verify"
+        assert remediation_verify_step["skill"]["args"]["verify_artifact_path"] == (
+            "var/artifacts/moonspec-verify/jira-orchestrate.json"
+        )
         assert "controlling verification gate" in remediation_verify_step["instructions"]
         doc_reconcile_step = next(
             step

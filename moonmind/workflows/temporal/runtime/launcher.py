@@ -9,7 +9,6 @@ import os
 import re
 import shlex
 import shutil
-import tempfile
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,7 +31,12 @@ from moonmind.workflows.temporal.jira_tool_hints import (
     append_selected_jira_tool_hint,
 )
 
-from .github_auth_broker import GitHubAuthBrokerManager
+from .github_auth_broker import (
+    GitHubAuthBrokerManager,
+    build_github_socket_path,
+    render_gh_wrapper_script,
+    render_git_credential_helper_script,
+)
 from .git_auth import build_github_token_git_environment
 from .store import ManagedRunStore
 from .log_streamer import RuntimeLogStreamer
@@ -344,16 +348,7 @@ class ManagedRuntimeLauncher:
     @staticmethod
     def _build_github_socket_path(*, run_id: str, support_root: str | None) -> str:
         """Keep broker sockets on a short path to avoid AF_UNIX length limits."""
-        socket_root = Path("/tmp")
-        if not socket_root.is_dir():
-            socket_root = Path(tempfile.gettempdir())
-        socket_root = socket_root / "mm-gh"
-
-        material = run_id
-        if support_root:
-            material = f"{Path(support_root).resolve()}::{run_id}"
-        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
-        return str(socket_root / digest / "github.sock")
+        return build_github_socket_path(run_id=run_id, support_root=support_root)
 
     async def _make_github_broker_accessible_to_app(
         self,
@@ -741,23 +736,14 @@ class ManagedRuntimeLauncher:
 
     @staticmethod
     def _render_gh_wrapper_script(*, socket_path: str, real_gh_path: str) -> str:
-        return (
-            "#!/usr/bin/env python3\n"
-            "from moonmind.workflows.temporal.runtime.github_auth_broker import run_gh_wrapper\n"
-            "\n"
-            "if __name__ == \"__main__\":\n"
-            f"    raise SystemExit(run_gh_wrapper(socket_path={socket_path!r}, real_gh_path={real_gh_path!r}))\n"
+        return render_gh_wrapper_script(
+            socket_path=socket_path,
+            real_gh_path=real_gh_path,
         )
 
     @staticmethod
     def _render_git_credential_helper_script(*, socket_path: str) -> str:
-        return (
-            "#!/usr/bin/env python3\n"
-            "from moonmind.workflows.temporal.runtime.github_auth_broker import run_git_credential_helper\n"
-            "\n"
-            "if __name__ == \"__main__\":\n"
-            f"    raise SystemExit(run_git_credential_helper(socket_path={socket_path!r}))\n"
-        )
+        return render_git_credential_helper_script(socket_path=socket_path)
 
     @staticmethod
     def _format_git_config_value(value: str) -> str:

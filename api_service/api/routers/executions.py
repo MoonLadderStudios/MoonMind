@@ -1458,8 +1458,11 @@ def _state_include_clause(values: list[str]) -> str | None:
         for status in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE.get(value, ())
     ))
     unknown = [
-        value
+        expanded
         for value in deduped
+        for expanded in (
+            ("no_commit", "no_changes") if value == "no_commit" else (value,)
+        )
         if value not in _NON_TERMINAL_MM_STATES
         and value not in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE
     ]
@@ -1518,7 +1521,13 @@ def _append_state_temporal_filter(
                 escaped = _escape_temporal_value(status_value)
                 query_parts.append(f'ExecutionStatus!="{escaped}"')
             continue
-        query_parts.append(f'mm_state!="{_escape_temporal_value(normalized)}"')
+        excluded_values = (
+            ("no_commit", "no_changes") if normalized == "no_commit" else (normalized,)
+        )
+        for excluded_value in excluded_values:
+            query_parts.append(
+                f'mm_state!="{_escape_temporal_value(excluded_value)}"'
+            )
 
 
 def _append_exact_or_multi_temporal_filter(
@@ -5843,6 +5852,7 @@ def _step_execution_projection_payload(
         "executionOrdinal": manifest.execution_ordinal,
         "sourceExecutionOrdinal": source_execution_ordinal,
         "lineage": manifest.lineage,
+        "branch": manifest.branch,
         "reason": manifest.reason,
         "status": manifest.status,
         "terminalDisposition": manifest.terminal_disposition,
@@ -11059,6 +11069,8 @@ async def create_checkpoint_branch(
         source_checkpoint_digest=payload.source.checkpoint_digest,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        workspace_policy=payload.workspace_policy,
+        runtime_context_policy=payload.runtime_context_policy,
         idempotency_key=payload.idempotency_key,
         status="created",
     )
@@ -11183,6 +11195,8 @@ async def _record_branch_turn_operation(
         source_checkpoint_digest=branch.source_checkpoint_digest,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        workspace_policy=payload.workspace_policy,
+        runtime_context_policy=payload.runtime_context_policy,
         idempotency_key=payload.idempotency_key,
         status="created",
     )
@@ -11344,6 +11358,8 @@ async def fork_checkpoint_branch(
         source_checkpoint_digest=forked.source_checkpoint_digest,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        workspace_policy=payload.workspace_policy,
+        runtime_context_policy=payload.runtime_context_policy,
         idempotency_key=payload.idempotency_key,
         status="created",
     )

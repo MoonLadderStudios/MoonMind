@@ -12,7 +12,6 @@ import posixpath
 import re
 import shlex
 import shutil
-import tempfile
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -51,7 +50,12 @@ from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_pro
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
 from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
-from .github_auth_broker import GitHubAuthBrokerManager
+from .github_auth_broker import (
+    GitHubAuthBrokerManager,
+    build_github_socket_path,
+    render_gh_wrapper_script,
+    render_git_credential_helper_script,
+)
 from .git_auth import build_github_token_git_environment
 from .managed_session_observability import ManagedSessionObservabilityBridge
 from .managed_session_store import ManagedSessionStore
@@ -1047,25 +1051,11 @@ class DockerCodexManagedSessionController:
 
     @staticmethod
     def _render_gh_wrapper_script(*, socket_path: str) -> str:
-        return (
-            "#!/usr/bin/env python3\n"
-            "from moonmind.workflows.temporal.runtime.github_auth_broker "
-            "import run_gh_wrapper\n"
-            "\n"
-            "if __name__ == \"__main__\":\n"
-            f"    raise SystemExit(run_gh_wrapper(socket_path={socket_path!r}))\n"
-        )
+        return render_gh_wrapper_script(socket_path=socket_path)
 
     @staticmethod
     def _render_git_credential_helper_script(*, socket_path: str) -> str:
-        return (
-            "#!/usr/bin/env python3\n"
-            "from moonmind.workflows.temporal.runtime.github_auth_broker "
-            "import run_git_credential_helper\n"
-            "\n"
-            "if __name__ == \"__main__\":\n"
-            f"    raise SystemExit(run_git_credential_helper(socket_path={socket_path!r}))\n"
-        )
+        return render_git_credential_helper_script(socket_path=socket_path)
 
     @staticmethod
     def _format_git_config_value(value: str) -> str:
@@ -1212,19 +1202,11 @@ class DockerCodexManagedSessionController:
         socket_root: str | None = None,
     ) -> str:
         """Keep broker sockets on a short path to avoid AF_UNIX length limits."""
-        resolved_socket_root = Path(socket_root) if socket_root else Path("/tmp")
-        if not resolved_socket_root.is_dir() and socket_root is None:
-            resolved_socket_root = Path(tempfile.gettempdir())
-        resolved_socket_root = (
-            resolved_socket_root / "mm-gh"
-            if socket_root is None
-            else resolved_socket_root
+        return build_github_socket_path(
+            run_id=run_id,
+            support_root=support_root,
+            socket_root=socket_root,
         )
-        material = run_id
-        if support_root:
-            material = f"{Path(support_root).resolve()}::{run_id}"
-        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
-        return str(resolved_socket_root / digest / "github.sock")
 
     @staticmethod
     def _record_status_from_handle_status(status: str) -> ManagedSessionRecordStatus:

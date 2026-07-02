@@ -2292,7 +2292,8 @@ class TemporalExecutionService:
         finish_summary: dict[str, Any] | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         normalized_state = canonicalize_workflow_state_alias(
-            str(state or "").strip().lower()
+            str(state or "").strip().lower(),
+            logger=logger,
         )
         try:
             target_state = coerce_workflow_state(normalized_state or "")
@@ -2382,23 +2383,28 @@ class TemporalExecutionService:
     ) -> None:
         if finish_summary is None:
             return
-        normalized_summary = normalize_no_commit_finish_summary(finish_summary)
+        normalized_summary = normalize_no_commit_finish_summary(
+            finish_summary,
+            logger=logger,
+        )
         if normalized_summary is None:
             return
         finish_outcome = normalized_summary.get(
             "finishOutcome"
         ) or normalized_summary.get("finish_outcome")
-        outcome_code = str(
+        outcome_code = (
             finish_outcome_code
             or (
                 finish_outcome.get("code")
                 if isinstance(finish_outcome, dict)
                 else None
             )
-            or ""
-        ).strip()
-        outcome_code = canonicalize_finish_outcome_code_alias(outcome_code) or ""
-        record.finish_outcome_code = outcome_code or None
+        )
+        outcome_code = canonicalize_finish_outcome_code_alias(
+            outcome_code,
+            logger=logger,
+        )
+        record.finish_outcome_code = str(outcome_code).strip() if outcome_code else None
         record.finish_summary_json = normalized_summary
 
     async def mark_execution_planning(
@@ -3983,8 +3989,7 @@ class TemporalExecutionService:
 
     def _parse_state(self, raw: str) -> MoonMindWorkflowState:
         try:
-            state = canonicalize_workflow_state_alias(raw)
-            return coerce_workflow_state(state or "")
+            return coerce_workflow_state(raw)
         except ValueError as exc:
             raise TemporalExecutionValidationError(f"Unsupported state: {raw}") from exc
 

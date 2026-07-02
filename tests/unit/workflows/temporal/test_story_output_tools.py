@@ -2787,7 +2787,10 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
     assert orchestration["status"] == "completed"
     assert orchestration["storyCount"] == 3
     assert orchestration["createdTaskCount"] == 3
+    assert orchestration["createdWorkflowCount"] == 3
     assert orchestration["dependencyCount"] == 2
+    assert orchestration["workflows"] == orchestration["tasks"]
+    assert orchestration["workflowMappings"] == orchestration["tasks"]
     assert [task["jiraIssueKey"] for task in orchestration["tasks"]] == [
         "MM-501",
         "MM-502",
@@ -3037,8 +3040,10 @@ async def test_create_jira_orchestrate_tasks_handles_one_and_zero_story_results(
 
     assert one.outputs["jiraOrchestration"]["status"] == "completed"
     assert one.outputs["jiraOrchestration"]["createdTaskCount"] == 1
+    assert one.outputs["jiraOrchestration"]["createdWorkflowCount"] == 1
     assert one.outputs["jiraOrchestration"]["dependencyCount"] == 0
     assert one.outputs["jiraOrchestration"]["tasks"][0]["dependsOn"] == []
+    assert one.outputs["jiraOrchestration"]["workflows"][0]["dependsOn"] == []
 
     zero = await create_jira_orchestrate_tasks_from_issue_mappings(
         {"jira": {"issueMappings": []}, "traceability": {"sourceIssueKey": "MM-404"}},
@@ -3046,7 +3051,11 @@ async def test_create_jira_orchestrate_tasks_handles_one_and_zero_story_results(
     )
 
     assert zero.outputs["jiraOrchestration"]["status"] == "no_downstream_tasks"
+    assert zero.outputs["jiraOrchestration"]["workflowStatus"] == (
+        "no_downstream_workflows"
+    )
     assert zero.outputs["jiraOrchestration"]["createdTaskCount"] == 0
+    assert zero.outputs["jiraOrchestration"]["createdWorkflowCount"] == 0
     assert zero.outputs["jiraOrchestration"]["dependencyCount"] == 0
 
 @pytest.mark.asyncio
@@ -3136,7 +3145,10 @@ async def test_create_jira_implement_tasks_targets_jira_implement_preset():
     orchestration = result.outputs["jiraOrchestration"]
     assert orchestration["status"] == "completed"
     assert orchestration["createdTaskCount"] == 2
+    assert orchestration["createdWorkflowCount"] == 2
     assert orchestration["dependencyCount"] == 1
+    assert orchestration["workflows"] == orchestration["tasks"]
+    assert orchestration["workflowMappings"] == orchestration["tasks"]
     assert orchestration["tasks"][0]["dependsOn"] == []
     assert orchestration["tasks"][1]["dependsOn"] == ["mm:story-1"]
 
@@ -3144,7 +3156,7 @@ async def test_create_jira_implement_tasks_targets_jira_implement_preset():
     assert first_request["idempotency_key"] == (
         "jira-implement:MM-404:STORY-001:MM-501"
     )
-    assert "Jira Implement task for MM-501" in first_request["summary"]
+    assert "Jira Implement workflow for MM-501" in first_request["summary"]
     first_task = first_request["initial_parameters"]["workflow"]
     assert first_task["taskTemplate"] == {
         "slug": "jira-implement",
@@ -3376,7 +3388,10 @@ async def test_create_document_update_tasks_from_inline_paths():
     assert orchestration["status"] == "completed"
     assert orchestration["documentCount"] == 2
     assert orchestration["createdTaskCount"] == 2
+    assert orchestration["createdWorkflowCount"] == 2
     assert orchestration["dependencyCount"] == 1
+    assert orchestration["workflows"] == orchestration["tasks"]
+    assert orchestration["workflowMappings"] == orchestration["tasks"]
 
     first = orchestration["tasks"][0]
     assert first["documentPath"] == "/docs/readme.md"
@@ -3424,6 +3439,7 @@ async def test_create_document_update_tasks_from_previous_outputs():
 
     assert result.status == "COMPLETED"
     assert result.outputs["documentUpdateOrchestration"]["createdTaskCount"] == 1
+    assert result.outputs["documentUpdateOrchestration"]["createdWorkflowCount"] == 1
     assert creator.requests[0]["initial_parameters"]["workflow"]["inputs"]["document_path"] == "/docs/guide.md"
 
 
@@ -3436,7 +3452,11 @@ async def test_create_document_update_tasks_handles_empty_paths():
 
     assert result.status == "COMPLETED"
     assert result.outputs["documentUpdateOrchestration"]["status"] == "no_downstream_tasks"
+    assert result.outputs["documentUpdateOrchestration"]["workflowStatus"] == (
+        "no_downstream_workflows"
+    )
     assert result.outputs["documentUpdateOrchestration"]["createdTaskCount"] == 0
+    assert result.outputs["documentUpdateOrchestration"]["createdWorkflowCount"] == 0
 
 
 @pytest.mark.asyncio
@@ -3465,6 +3485,7 @@ async def test_create_document_update_tasks_reports_partial_failures():
     orchestration = result.outputs["documentUpdateOrchestration"]
     assert orchestration["status"] == "partial"
     assert orchestration["createdTaskCount"] == 1
+    assert orchestration["createdWorkflowCount"] == 1
     assert orchestration["dependencyCount"] == 0
     assert orchestration["failures"][0]["documentPath"] == "/docs/b.md"
     assert orchestration["failures"][0]["errorCode"] == "task_creation_failed"

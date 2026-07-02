@@ -17,6 +17,7 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
+from moonmind.schemas.checkpoint_branch_models import StepExecutionBranchMetadataModel
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 from moonmind.statuses.step_execution import (
@@ -344,7 +345,12 @@ class StepEvidenceSummaryModel(BaseModel):
     diagnostic_refs: list[EnvironmentDiagnosticReferenceModel] = Field(
         default_factory=list, alias="diagnosticRefs"
     )
-StepExecutionSemanticOperation = Literal["retry", "reexecute", "recover"]
+StepExecutionSemanticOperation = Literal[
+    "retry",
+    "reexecute",
+    "recover",
+    "checkpoint_branch",
+]
 StepExecutionCheckpointBoundary = Literal[
     "after_prepare",
     "before_execution",
@@ -764,6 +770,57 @@ class StepExecutionSummaryRefModel(BaseModel):
     summary: str | None = Field(None, alias="summary", max_length=1000)
 
 
+class StepExecutionBranchMetadataModel(BaseModel):
+    """Optional Checkpoint Branch lineage attached to a Step Execution manifest."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    branch_id: str = Field(..., alias="branchId", min_length=1)
+    branch_turn_id: str = Field(..., alias="branchTurnId", min_length=1)
+    root_checkpoint_ref: str | None = Field(
+        None, alias="rootCheckpointRef", min_length=1
+    )
+    source_state_kind: str | None = Field(None, alias="sourceStateKind", min_length=1)
+    source_state_ref: str | None = Field(None, alias="sourceStateRef", min_length=1)
+    source_state_digest: str | None = Field(
+        None, alias="sourceStateDigest", min_length=1
+    )
+    parent_branch_id: str | None = Field(None, alias="parentBranchId")
+    parent_turn_id: str | None = Field(None, alias="parentTurnId")
+    git_work_branch: str | None = Field(None, alias="gitWorkBranch")
+
+    @field_validator(
+        "branch_id",
+        "branch_turn_id",
+        "root_checkpoint_ref",
+        "source_state_kind",
+        "source_state_ref",
+        "source_state_digest",
+        "parent_branch_id",
+        "parent_turn_id",
+        "git_work_branch",
+        mode="before",
+    )
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @model_validator(mode="after")
+    def _requires_checkpoint_or_typed_state(
+        self,
+    ) -> "StepExecutionBranchMetadataModel":
+        if self.root_checkpoint_ref:
+            return self
+        if self.source_state_kind and self.source_state_ref:
+            return self
+        raise ValueError(
+            "branch manifest metadata requires rootCheckpointRef or typed sourceStateRef"
+        )
+
+
 class StepExecutionManifestModel(BaseModel):
     """Artifact-backed Step Execution manifest payload."""
 
@@ -777,6 +834,7 @@ class StepExecutionManifestModel(BaseModel):
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
     execution_scope: Literal["run"] = Field("run", alias="executionScope")
     lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
+    branch: StepExecutionBranchMetadataModel | None = Field(None, alias="branch")
     reason: StepExecutionReason = Field(..., alias="reason")
     status: StepExecutionStatus = Field(..., alias="status")
     terminal_disposition: StepExecutionTerminalDisposition | None = Field(
@@ -834,6 +892,7 @@ class StepExecutionManifestModel(BaseModel):
             "execution": self.execution,
             "outputs": self.outputs,
             "checks": self.checks,
+            "branch": self.branch.model_dump(by_alias=True) if self.branch else None,
             "sideEffects": self.side_effects,
             "dependencyEffects": self.dependency_effects,
             "recoverySource": self.recovery_source,
@@ -899,7 +958,11 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
     patch_ref: str | None = Field(None, alias="patchRef")
     archive_ref: str | None = Field(None, alias="archiveRef")
     workspace_ref: str | None = Field(None, alias="workspaceRef")
+    workspace_artifact_ref: str | None = Field(None, alias="workspaceArtifactRef")
     external_state_ref: str | None = Field(None, alias="externalStateRef")
+    idempotency_key: str | None = Field(None, alias="idempotencyKey")
+    omnigent_session_id: str | None = Field(None, alias="omnigentSessionId")
+    provider_session_ref: str | None = Field(None, alias="providerSessionRef")
     manifest_ref: str | None = Field(None, alias="manifestRef")
     branch: str | None = Field(None, alias="branch")
     includes_untracked: bool = Field(False, alias="includesUntracked")
@@ -913,7 +976,11 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
         "patch_ref",
         "archive_ref",
         "workspace_ref",
+        "workspace_artifact_ref",
         "external_state_ref",
+        "idempotency_key",
+        "omnigent_session_id",
+        "provider_session_ref",
         "manifest_ref",
         "branch",
         mode="before",
@@ -943,9 +1010,12 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
             raise ValueError(
                 "worktree_archive checkpoint requires archiveRef and manifestRef"
             )
-        if self.kind == "ephemeral_workspace_ref" and not self.workspace_ref:
+        if self.kind == "ephemeral_workspace_ref" and not (
+            self.workspace_ref or self.workspace_artifact_ref
+        ):
             raise ValueError(
-                "ephemeral_workspace_ref checkpoint requires workspaceRef"
+                "ephemeral_workspace_ref checkpoint requires workspaceRef or "
+                "workspaceArtifactRef"
             )
         if self.kind == "external_state_ref" and not self.external_state_ref:
             raise ValueError("external_state_ref checkpoint requires externalStateRef")
@@ -1138,6 +1208,7 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
     kind: WorkspaceCheckpointKind = Field(..., alias="kind")
     workspace_root_ref: str | None = Field(None, alias="workspaceRootRef")
     workspace_path: str | None = Field(None, alias="workspacePath")
+    external_state_ref: str | None = Field(None, alias="externalStateRef")
     artifact_namespace: str = Field(..., alias="artifactNamespace", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     base_commit: str | None = Field(None, alias="baseCommit")
@@ -1152,6 +1223,7 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
     @field_validator(
         "workspace_root_ref",
         "workspace_path",
+        "external_state_ref",
         "base_commit",
         "pull_auth_context_ref",
         "provider_lease_context_ref",
@@ -1173,7 +1245,12 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_input(self) -> "WorkspaceCheckpointCaptureInput":
-        if self.workspace_root_ref is None and self.workspace_path is None:
+        if self.kind == "external_state_ref":
+            if self.external_state_ref is None and self.workspace_root_ref is None:
+                raise ValueError(
+                    "external_state_ref checkpoint capture requires externalStateRef"
+                )
+        elif self.workspace_root_ref is None and self.workspace_path is None:
             raise ValueError("workspace capture requires workspaceRootRef or workspacePath")
         if self.kind == "git_patch" and self.base_commit is None:
             raise ValueError("git_patch checkpoint capture requires baseCommit")
@@ -2720,7 +2797,7 @@ class StepLedgerRefsModel(BaseModel):
 class StepLedgerArtifactsModel(BaseModel):
     """Stable semantic artifact slots for step evidence."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     output_summary: str | None = Field(None, alias="outputSummary")
     output_primary: str | None = Field(None, alias="outputPrimary")
@@ -2865,6 +2942,7 @@ class StepExecutionProjectionModel(BaseModel):
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
     source_execution_ordinal: int | None = Field(None, alias="sourceExecutionOrdinal", ge=1)
     lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
+    branch: StepExecutionBranchMetadataModel | None = Field(None, alias="branch")
     reason: StepExecutionReason | None = Field(None, alias="reason")
     status: StepExecutionStatus | None = Field(None, alias="status")
     terminal_disposition: StepExecutionTerminalDisposition | None = Field(

@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/integration/test_interventions.py (score: 1.000, trust: canonical)\n    line 3: from httpx import AsyncClient, ASGITransport\n2. moonmind/omnigent/__init__.py (score: 1.000, trust: canonical)\n    line 3: from moonmind.omnigent.settings import (\n3. docs/Workflows/PrMergeAutomation.md (score: 1.000, trust: canonical)\n    line 18: 3. waits for external merge-readiness signals such as GitHub review/check completion and optional Jira state,\n4. api_service/main.py (score: 1.000, trust: canonical)\n    line 5: from moonmind.config.logging import configure_logging\n5. moonmind/indexers/google_drive_indexer.py (score: 1.000, trust: canonical)\n    line 2: from typing import Dict, List, Optional, Union\n6. moonmind/indexers/confluence_indexer.py (score: 1.000, trust: canonical)\n    line 2: from typing import Dict, List, Optional, Union\n7. api_service/ui_assets.py (score: 1.000, trust: canonical)\n    line 1: import json\n8. moonmind/indexers/local_data_indexer.py (score: 1.000, trust: canonical)\n    line 3: from typing import Dict, Union",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/integration/test_interventions.py",
+      "text": "line 3: from httpx import AsyncClient, ASGITransport",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/omnigent/__init__.py",
+      "text": "line 3: from moonmind.omnigent.settings import (",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/PrMergeAutomation.md",
+      "text": "line 18: 3. waits for external merge-readiness signals such as GitHub review/check completion and optional Jira state,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 18,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/main.py",
+      "text": "line 5: from moonmind.config.logging import configure_logging",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/google_drive_indexer.py",
+      "text": "line 2: from typing import Dict, List, Optional, Union",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 2,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/confluence_indexer.py",
+      "text": "line 2: from typing import Dict, List, Optional, Union",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 2,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/ui_assets.py",
+      "text": "line 1: import json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/local_data_indexer.py",
+      "text": "line 3: from typing import Dict, Union",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-07-02T18:16:57Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
