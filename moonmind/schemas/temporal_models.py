@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Literal, Optional
 
@@ -18,6 +19,13 @@ from pydantic.json_schema import SkipJsonSchema
 
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
+from moonmind.statuses.step_execution import (
+    StepExecutionReason,
+    StepExecutionStatus,
+    StepExecutionTerminalDisposition,
+)
+from moonmind.statuses.step_ledger import StepLedgerStatusValue
+from moonmind.statuses.temporal_status import TemporalStatusValue
 
 SUPPORTED_WORKFLOW_TYPES = (
     "MoonMind.UserWorkflow",
@@ -65,39 +73,6 @@ STEP_EXECUTION_MANIFEST_CONTENT_TYPE = (
 STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE = (
     "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
 )
-
-StepExecutionReason = Literal[
-    "initial_execution",
-    "quality_gate_failed",
-    "tests_failed",
-    "runtime_recovered",
-    "recover_from_failed_step",
-    "remediation_context",
-    "operator_requested",
-    "dependency_invalidated",
-    "policy_revalidation",
-]
-StepExecutionStatus = Literal[
-    "pending",
-    "preparing",
-    "running",
-    "checking",
-    "succeeded",
-    "failed",
-    "blocked",
-    "canceled",
-    "superseded",
-]
-StepExecutionTerminalDisposition = Literal[
-    "accepted",
-    "retryable",
-    "blocked",
-    "needs_human",
-    "discarded",
-    "superseded",
-    "failed_unrecoverable",
-    "failed_with_remaining_work",
-]
 
 EvidenceCategory = Literal[
     "checkpoint",
@@ -2106,7 +2081,7 @@ class RecoveryCheckpointPreservedStepModel(BaseModel):
 
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     order: int = Field(..., alias="order", ge=1)
-    status: Literal["succeeded", "skipped"] = Field(..., alias="status")
+    status: Literal["completed", "skipped"] = Field(..., alias="status")
     source_execution_ordinal: int = Field(..., alias="sourceExecutionOrdinal", ge=1)
     artifacts: dict[str, Any] = Field(default_factory=dict, alias="artifacts")
     state_checkpoint_ref: Optional[str] = Field(None, alias="stateCheckpointRef")
@@ -2114,6 +2089,13 @@ class RecoveryCheckpointPreservedStepModel(BaseModel):
         None, alias="workspaceCheckpointRef"
     )
     step_checkpoint_ref: Optional[str] = Field(None, alias="stepCheckpointRef")
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _normalize_legacy_status(cls, value: Any) -> Any:
+        if str(value or "").strip().lower() == "succeeded":
+            return "completed"
+        return value
 
     @field_validator("artifacts", mode="before")
     @classmethod
@@ -2574,15 +2556,27 @@ class ExecutionProgressModel(BaseModel):
     total: int = Field(0, alias="total", ge=0)
     pending: int = Field(0, alias="pending", ge=0)
     ready: int = Field(0, alias="ready", ge=0)
-    running: int = Field(0, alias="running", ge=0)
+    executing: int = Field(0, alias="executing", ge=0)
     awaiting_external: int = Field(0, alias="awaitingExternal", ge=0)
     reviewing: int = Field(0, alias="reviewing", ge=0)
-    succeeded: int = Field(0, alias="succeeded", ge=0)
+    completed: int = Field(0, alias="completed", ge=0)
     failed: int = Field(0, alias="failed", ge=0)
     skipped: int = Field(0, alias="skipped", ge=0)
     canceled: int = Field(0, alias="canceled", ge=0)
     current_step_title: str | None = Field(None, alias="currentStepTitle")
     updated_at: datetime = Field(..., alias="updatedAt")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_progress_fields(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        payload = dict(value)
+        if payload.get("executing") is None and payload.get("running") is not None:
+            payload["executing"] = payload["running"]
+        if payload.get("completed") is None and payload.get("succeeded") is not None:
+            payload["completed"] = payload["succeeded"]
+        return payload
 
 class ExecutionMergeAutomationBlockerModel(BaseModel):
     """Operator-visible merge automation blocker."""
@@ -2804,17 +2798,7 @@ class StepLedgerRowModel(BaseModel):
     title: str = Field(..., alias="title", min_length=1)
     tool: dict[str, Any] = Field(default_factory=dict, alias="tool")
     depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
-    status: Literal[
-        "pending",
-        "ready",
-        "running",
-        "awaiting_external",
-        "reviewing",
-        "succeeded",
-        "failed",
-        "skipped",
-        "canceled",
-    ] = Field(..., alias="status")
+    status: StepLedgerStatusValue = Field(..., alias="status")
     waiting_reason: str | None = Field(None, alias="waitingReason")
     attention_required: bool = Field(False, alias="attentionRequired")
     execution_ordinal: int = Field(
@@ -3147,7 +3131,7 @@ class ExecutionModel(BaseModel):
     ] = Field(..., alias="dashboardStatus")
     state: str = Field(..., alias="state")
     raw_state: str = Field(..., alias="rawState")
-    temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
+    temporal_status: TemporalStatusValue = Field(
         ..., alias="temporalStatus"
     )
     close_status: Optional[str] = Field(None, alias="closeStatus")
@@ -3318,7 +3302,7 @@ class ExecutionListItemModel(BaseModel):
     ] = Field(..., alias="dashboardStatus")
     state: str = Field(..., alias="state")
     raw_state: str = Field(..., alias="rawState")
-    temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
+    temporal_status: TemporalStatusValue = Field(
         ..., alias="temporalStatus"
     )
     close_status: Optional[str] = Field(None, alias="closeStatus")

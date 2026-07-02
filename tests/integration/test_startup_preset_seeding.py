@@ -281,7 +281,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert jira_implement_steps[1] == "auto"
         assert jira_implement_steps[2] == "jira.check_blockers"
         assert jira_implement_steps[-1] == "jira-issue-updater"
-        assert len(jira_implement_steps) == 8
+        assert len(jira_implement_steps) == 10
         implement_step_titles = [step["title"] for step in expanded_steps]
         assert implement_step_titles[0] == "Load Jira preset brief"
         assert implement_step_titles[1] == "Assess existing implementation state"
@@ -289,6 +289,8 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert implement_step_titles[3] == "Move Jira issue to In Progress"
         assert "Implement the issue" in implement_step_titles
         assert "Verify implementation" in implement_step_titles
+        assert "Remediate verification gaps" in implement_step_titles
+        assert "Verify remediation" in implement_step_titles
         assert "Create pull request" in implement_step_titles
         assert implement_step_titles[-1] == "Finalize Jira status"
         implement_brief_step = expanded_steps[0]
@@ -346,6 +348,52 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             for step in expanded_steps
             if step["title"] == "Create pull request"
         )
+        verify_step = next(
+            step
+            for step in expanded_steps
+            if step["title"] == "Verify implementation"
+        )
+        assert verify_step["skill"]["id"] == "moonspec-verify"
+        assert verify_step["skill"]["args"] == {
+            "verification_target": "issue_brief",
+            "issue_provider": "jira",
+            "issue_ref": "MM-999",
+            "brief_artifact_path": "artifacts/jira-implement-brief.json",
+            "assessment_artifact_path": "artifacts/jira-implement-assessment.json",
+            "verify_artifact_path": "artifacts/jira-implement-verify.json",
+        }
+        assert "verification target issue_brief" in verify_step["instructions"]
+        assert "artifacts/jira-implement-verify.json" in verify_step["instructions"]
+        remediation_step = next(
+            step
+            for step in expanded_steps
+            if step["title"] == "Remediate verification gaps"
+        )
+        assert remediation_step["annotations"] == {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 1,
+            "moonSpecRemediationMaxAttempts": 1,
+        }
+        verify_remediation_step = next(
+            step
+            for step in expanded_steps
+            if step["title"] == "Verify remediation"
+        )
+        assert verify_remediation_step["skill"]["args"]["verify_artifact_path"] == (
+            "artifacts/jira-implement-verify.json"
+        )
+        assert verify_remediation_step["annotations"] == {
+            "issueImplementRole": "moonspec-verification-gate",
+            "moonSpecRemediationAttempt": 1,
+            "moonSpecRemediationMaxAttempts": 1,
+            "moonSpecFinalRemediationGate": True,
+        }
+        assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
+            implement_pr_step["instructions"]
+        )
+        assert "artifacts/jira-implement-verify.json" in implement_pr_step[
+            "instructions"
+        ]
         assert "merge automation" in implement_pr_step["instructions"]
         assert "Done automatically" in implement_pr_step["instructions"]
         assert "artifacts/jira-implement-pr.json" in implement_pr_step["instructions"]
@@ -356,6 +404,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "Done" in implement_finalize_step["instructions"]
         assert "status Review" in implement_finalize_step["instructions"]
         assert "pull_request_url" in implement_finalize_step["instructions"]
+        assert "artifacts/jira-implement-verify.json" in (
+            implement_finalize_step["instructions"]
+        )
         assert (
             "FULLY_IMPLEMENTED" in implement_finalize_step["instructions"]
         )
@@ -433,7 +484,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "Selected Jira board ID" not in implement_jira_step["instructions"]
         assert "boardId" not in implement_jira_step["storyOutput"]["jira"]
         assert (
-            "Create one Jira Implement task"
+            "Create one Jira Implement workflow execution"
             in implement_downstream_step["instructions"]
         )
         assert "dependsOn" in implement_downstream_step["instructions"]
@@ -443,6 +494,55 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
             },
         }
+
+        for slug, title, downstream_skill in (
+            (
+                "github-issue-breakdown-implement",
+                "Breakdown and GitHub Issue Implement",
+                "story.create_github_issue_implement_workflows",
+            ),
+            (
+                "github-issue-breakdown-orchestrate",
+                "Breakdown and GitHub Issue Orchestrate",
+                "story.create_github_issue_orchestrate_workflows",
+            ),
+        ):
+            result = await session.execute(
+                select(Preset)
+                .where(
+                    Preset.slug == slug,
+                    Preset.scope_type == PresetScopeType.GLOBAL,
+                    Preset.scope_ref.is_(None),
+                )
+            )
+            github_breakdown_template = result.scalar_one_or_none()
+            assert github_breakdown_template is not None
+            assert github_breakdown_template.title == title
+            assert [
+                (step.get("skill") or step.get("tool"))["id"]
+                for step in github_breakdown_template.steps
+            ] == [
+                "moonspec-breakdown",
+                "story-reconcile-implementation",
+                "story.create_github_issues",
+                downstream_skill,
+            ]
+            github_create_step = github_breakdown_template.steps[2]
+            assert github_create_step["storyOutput"]["github"] == {
+                "repository": "{{ inputs.github_repository }}",
+                "sourceIssueKey": "{{ inputs.source_issue_key }}",
+            }
+            github_downstream_step = github_breakdown_template.steps[3]
+            assert "workflow execution" in github_downstream_step["instructions"]
+            assert "Create workflow dependencies with dependsOn" in (
+                github_downstream_step["instructions"]
+            )
+            assert github_downstream_step["githubOrchestration"]["task"]["publish"] == {
+                "mode": "{{ inputs.publish_mode }}",
+            }
+            assert github_downstream_step["githubOrchestration"]["traceability"] == {
+                "sourceIssueKey": "{{ inputs.source_issue_key }}"
+            }
 
         result = await session.execute(
             select(Preset)
@@ -506,26 +606,42 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert batch_template is not None
         batch_annotations = batch_template.annotations or {}
         assert batch_annotations["runtimeInheritance"] == "caller"
-        assert batch_annotations["inputSchema"]["properties"]["source_kind"][
-            "enum"
-        ] == ["jira_board_column", "github_repo_issues"]
-        assert (
-            "target_preset_version"
-            not in batch_annotations["inputSchema"]["properties"]
-        )
-        assert batch_annotations["bindings"]["jira-implement"]["jira_issue_key"] == (
-            "{{ target.jiraIssue.key }}"
-        )
-        assert batch_annotations["bindings"]["github-issue-implement"][
+        batch_schema = batch_annotations["inputSchema"]
+        assert batch_schema["required"] == [
+            "jira_project_key",
+            "jira_status",
+            "run_ref",
+        ]
+        assert batch_schema["properties"]["run_ref"]["enum"] == [
+            "skill:jira-verify",
+            "preset:jira-implement",
+        ]
+        assert "source_kind" not in batch_schema["properties"]
+        assert "target_preset_slug" not in batch_schema["properties"]
+        assert "target_preset_version" not in batch_schema["properties"]
+        assert batch_annotations["uiSchema"]["run_ref"]["widget"] == "select"
+        assert batch_annotations["uiSchema"]["constraints"]["widget"] == "textarea"
+        assert batch_annotations["bindings"]["skill:jira-verify"][
+            "jira_issue_key"
+        ] == "{{ target.jiraIssue.key }}"
+        assert batch_annotations["bindings"]["preset:jira-implement"][
+            "jira_issue_key"
+        ] == "{{ target.jiraIssue.key }}"
+        assert batch_annotations["bindings"]["preset:github-issue-implement"][
             "github_issue_ref"
         ] == "{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}"
         batch_steps = batch_template.steps
         assert len(batch_steps) == 1
         assert batch_steps[0]["skill"]["id"] == "batch-workflows"
         assert batch_steps[0]["batchOrchestration"]["runtime"]["inherit"] == "caller"
+        assert batch_steps[0]["batchOrchestration"]["source"]["kind"] == "jira_status"
         assert (
             batch_steps[0]["batchOrchestration"]["publish"]["mode"]
             == "{{ inputs.publish_mode }}"
+        )
+        assert (
+            batch_steps[0]["batchOrchestration"]["target"]["runRef"]
+            == "{{ inputs.run_ref }}"
         )
 
 @pytest.mark.asyncio

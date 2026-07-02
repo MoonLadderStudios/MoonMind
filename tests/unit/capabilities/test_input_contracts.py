@@ -1,4 +1,5 @@
 import datetime as dt
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,32 @@ from moonmind.capabilities.input_contracts import (
     parse_skill_capability_input_contract,
     validate_capability_inputs,
 )
+
+
+def test_jira_verify_skill_exposes_batch_bindable_input_contract() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    markdown = (
+        repo_root / ".agents" / "skills" / "jira-verify" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    contract = parse_skill_capability_input_contract(
+        skill_id="jira-verify",
+        label="Jira Verify",
+        markdown=markdown,
+    )
+
+    assert contract["inputSchema"]["required"] == ["jira_issue_key"]
+    properties = contract["inputSchema"]["properties"]
+    assert properties["jira_issue_key"]["x-moonmind-provider"] == "jira"
+    assert properties["repository"]["x-moonmind-context-default"] == "repository"
+    assert properties["verification_mode"]["enum"] == ["auto", "branch", "main"]
+    assert properties["update_status"]["default"] is False
+    assert contract["uiSchema"]["constraints"]["widget"] == "textarea"
+    assert contract["defaults"] == {
+        "verification_mode": "auto",
+        "update_status": False,
+    }
+    assert contract["diagnostics"] == []
 
 
 def test_skill_frontmatter_snake_case_normalizes_to_camel_case_contract() -> None:

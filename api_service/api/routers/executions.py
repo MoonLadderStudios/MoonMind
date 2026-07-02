@@ -45,13 +45,13 @@ from api_service.db.models import (
     User,
 )
 from moonmind.config.settings import settings
+from moonmind.statuses.compat import (
+    canonicalize_finish_outcome_code_alias,
+    normalize_no_commit_finish_summary,
+)
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
 from moonmind.workflows.executions.routing import _coerce_bool
-from moonmind.workflows.no_commit_compatibility import (
-    canonicalize_legacy_finish_outcome_code,
-    normalize_no_commit_finish_summary_aliases,
-)
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
@@ -300,7 +300,7 @@ _TEMPORAL_STATUS_VALUES = (
 _PROGRESS_BUCKET_VALUES = frozenset({"not_started", "in_progress", "complete"})
 _PROGRESS_SIGNAL_VALUES = frozenset(
     {
-        "running",
+        "executing",
         "awaiting_external",
         "reviewing",
         "has_failed_steps",
@@ -791,22 +791,22 @@ def _execution_progress_pct(execution: ExecutionModel) -> float | None:
     progress = execution.progress
     if progress is None or progress.total <= 0:
         return None
-    return max(0.0, min(100.0, (progress.succeeded / progress.total) * 100.0))
+    return max(0.0, min(100.0, (progress.completed / progress.total) * 100.0))
 
 
 def _execution_progress_bucket(execution: ExecutionModel) -> str | None:
     progress = execution.progress
     if progress is None or progress.total <= 0:
         return None
-    if progress.succeeded >= progress.total:
+    if progress.completed >= progress.total:
         return "complete"
     active = (
-        progress.running > 0
+        progress.executing > 0
         or progress.awaiting_external > 0
         or progress.reviewing > 0
     )
     terminal = progress.failed > 0 or progress.skipped > 0 or progress.canceled > 0
-    if progress.succeeded > 0 or active or terminal:
+    if progress.completed > 0 or active or terminal:
         return "in_progress"
     return "not_started"
 
@@ -816,8 +816,8 @@ def _execution_progress_signals(execution: ExecutionModel) -> set[str]:
     if progress is None:
         return set()
     signals: set[str] = set()
-    if progress.running > 0:
-        signals.add("running")
+    if progress.executing > 0:
+        signals.add("executing")
     if progress.awaiting_external > 0:
         signals.add("awaiting_external")
     if progress.reviewing > 0:
@@ -920,7 +920,7 @@ def _sort_executions_by_progress(
         return (
             1 if pct is None else 0,
             pct or 0.0,
-            progress.succeeded if progress else 0,
+            progress.completed if progress else 0,
             progress.total if progress else 0,
             updated_at.timestamp() if updated_at else 0.0,
             item.workflow_id,
@@ -2187,12 +2187,16 @@ def _bounded_execution_progress_from_sources(
             "total": source.get("total"),
             "pending": source.get("pending"),
             "ready": source.get("ready"),
-            "running": source.get("running"),
+            "executing": source.get("executing")
+            if source.get("executing") is not None
+            else source.get("running"),
             "awaitingExternal": source.get("awaitingExternal")
             if source.get("awaitingExternal") is not None
             else source.get("awaiting_external"),
             "reviewing": source.get("reviewing"),
-            "succeeded": source.get("succeeded"),
+            "completed": source.get("completed")
+            if source.get("completed") is not None
+            else source.get("succeeded"),
             "failed": source.get("failed"),
             "skipped": source.get("skipped"),
             "canceled": source.get("canceled"),
@@ -2769,10 +2773,8 @@ def _serialize_execution(
         else memo_finish_summary
     )
     finish_summary = _normalize_no_commit_finish_summary(finish_summary)
-    finish_outcome_code = getattr(record, "finish_outcome_code", None)
-    finish_outcome_code = canonicalize_legacy_finish_outcome_code(
-        finish_outcome_code,
-        domain="execution_api.finishOutcomeCode",
+    finish_outcome_code = canonicalize_finish_outcome_code_alias(
+        getattr(record, "finish_outcome_code", None),
         logger=logger,
     )
     proposal_summary = _proposal_summary_from_memo(memo)
@@ -3189,13 +3191,7 @@ def _recommended_next_action(
             if not pr_url
             else "Review published pull request."
         )
-    if code:
-        code = canonicalize_legacy_finish_outcome_code(
-            code,
-            domain="execution_api.nextAction.finishOutcome.code",
-            logger=logger,
-        )
-    if code == "NO_COMMIT":
+    if canonicalize_finish_outcome_code_alias(code) == "NO_COMMIT":
         return "No follow-up required unless the outcome is unexpected."
     if code == "PUBLISH_DISABLED":
         return "Review generated artifacts; publishing was disabled."
@@ -4804,7 +4800,7 @@ def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | 
                 int(row.get("executionOrdinal") or row.get("attempt") or 0),
                 1,
             )
-            row["status"] = "awaiting_external" if waiting_reason else "running"
+            row["status"] = "awaiting_external" if waiting_reason else "executing"
             row["executionOrdinal"] = execution_ordinal
             row["startedAt"] = row.get("startedAt") or updated_at.isoformat()
             row["updatedAt"] = updated_at.isoformat()
@@ -5804,11 +5800,7 @@ def _build_debug_fields(
 def _normalize_no_commit_finish_summary(
     finish_summary: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    return normalize_no_commit_finish_summary_aliases(
-        finish_summary,
-        domain="execution_api.finishSummary",
-        logger=logger,
-    )
+    return normalize_no_commit_finish_summary(finish_summary, logger=logger)
 
 def _coerce_artifact_ref(value: Any) -> str | None:
     if value is None:

@@ -5431,9 +5431,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     () => resolveTaskSubmitPageMode(window.location.search),
     [],
   );
-  const [workflowStartHeadingQuote, setWorkflowStartHeadingQuote] = useState(
-    () => randomWorkflowStartHeading(),
-  );
+  const [workflowStartHeadingQuote] = useState(() => randomWorkflowStartHeading());
   const temporalTaskEditingEnabled = Boolean(
     dashboardConfig.features?.temporalDashboard?.temporalWorkflowEditing ??
       dashboardConfig.features?.temporalDashboard?.temporalTaskEditing,
@@ -10473,18 +10471,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const isTemporalFormBlocked =
     pageMode.mode !== "create" &&
     (temporalDraftQuery.isLoading || Boolean(modeLoadError));
-
-  useEffect(() => {
-    if (pageMode.mode !== "create") {
-      return undefined;
-    }
-    const intervalId = window.setInterval(() => {
-      setWorkflowStartHeadingQuote((current) =>
-        randomWorkflowStartHeading(current),
-      );
-    }, 5000);
-    return () => window.clearInterval(intervalId);
-  }, [pageMode.mode]);
 
   useEffect(() => {
     if (!showPrimaryCtaArrow || isTemporalFormBlocked) {

@@ -2770,7 +2770,7 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(var(--mm-status-queued, 99 102 241) / 0.62);
 }
 
-.status-awaiting_action,
+.status-awaiting-action,
 .status-waiting,
 .status-awaiting-dependencies,
 .status-awaiting-external {
@@ -2800,9 +2800,9 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .status-no-commit {
-  color: #159376;
-  background: rgb(21 147 118 / 0.14);
-  border-color: rgb(26 153 123 / 0.62);
+  color: rgb(var(--mm-muted));
+  background: rgb(var(--mm-muted) / 0.12);
+  border-color: rgb(var(--mm-border) / 0.75);
 }
 
 .status-failed {
@@ -3910,41 +3910,47 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 1.35rem;
   height: 1.35rem;
   border-radius: 50%;
-  font-size: 0.72rem;
-  font-weight: 700;
-  line-height: 1;
   flex-shrink: 0;
   border: 1.5px solid rgb(var(--mm-border) / 0.6);
   background: rgb(var(--mm-panel));
   color: rgb(var(--mm-muted));
 }
 
-.step-tl-icon.step-icon-ok {
+.step-tl-icon svg {
+  width: 0.78rem;
+  height: 0.78rem;
+  stroke-width: 2.4;
+}
+
+.step-tl-icon.status-completed {
   border-color: rgb(var(--mm-ok) / 0.7);
   color: rgb(var(--mm-ok));
   background: rgb(var(--mm-ok) / 0.12);
 }
 
-.step-tl-icon.step-icon-fail {
+.step-tl-icon.status-failed {
   border-color: rgb(var(--mm-danger) / 0.7);
   color: rgb(var(--mm-danger));
   background: rgb(var(--mm-danger) / 0.12);
 }
 
-.step-tl-icon.step-icon-skip {
+.step-tl-icon.status-canceled {
   border-color: rgb(var(--mm-border) / 0.5);
   color: rgb(var(--mm-muted));
   background: rgb(var(--mm-panel));
 }
 
-.step-tl-icon.step-icon-running {
+.step-tl-icon.status-running,
+.step-tl-icon.status-awaiting-external {
   border-color: rgb(var(--mm-accent-2) / 0.7);
   color: rgb(var(--mm-accent-2));
   background: rgb(var(--mm-accent-2) / 0.12);
   animation: step-pulse 1.8s ease-in-out infinite;
 }
 
-.step-tl-icon.step-icon-pending {
+.step-tl-icon.status-awaiting-dependencies,
+.step-tl-icon.status-awaiting-slot,
+.step-tl-icon.status-neutral {
   border-color: rgb(var(--mm-border) / 0.45);
   color: rgb(var(--mm-muted) / 0.6);
 }
@@ -5509,6 +5515,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding-inline-end: 2.25rem;
 }
 
+.skill-combobox-input-row--with-description > input {
+  padding-inline-end: 4.5rem;
+}
+
 .skill-combobox-toggle {
   position: absolute;
   inset-block: 0;
@@ -5540,6 +5550,19 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .skill-combobox-toggle svg {
   transition: transform 0.15s ease;
+}
+
+.skill-combobox-description-toggle {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  min-width: 44px;
+  min-height: 44px;
+  touch-action: manipulation;
 }
 
 .skill-combobox-listbox {
@@ -6696,7 +6719,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .step-tl-icon.step-icon-running {
+  .step-tl-icon.status-running,
+  .step-tl-icon.status-awaiting-external {
     animation: none !important;
     opacity: 1;
   }
@@ -6898,10 +6922,18 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding-bottom: 0.4rem;
 }
 
+/* Shared icon-button styling for compact workflow sidebar controls. */
+.workflow-workspace-sidebar-control {
+  background: rgb(var(--mm-panel));
+  background-image: linear-gradient(145deg, rgb(var(--mm-panel) / 0.95), rgb(var(--mm-panel) / 0.65));
+  border-color: rgb(var(--mm-border) / 0.7);
+  box-shadow: 0 10px 25px -18px rgb(var(--mm-ink) / 0.8);
+  transform-origin: center;
+}
+
 /* The sidebar controls are compact icon buttons rather than full-text buttons. */
 .workflow-workspace-expand-list,
 .workflow-workspace-close-sidebar,
-.workflow-workspace-expand-list,
 .workflow-workspace-open-sidebar {
   display: inline-flex;
   align-items: center;
@@ -6918,16 +6950,44 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transition: var(--mm-control-transition);
 }
 
-.workflow-workspace-expand-list:hover,
-.workflow-workspace-expand-list:focus-visible {
-  background: rgb(var(--mm-accent) / 0.08);
-  border-color: rgb(var(--mm-accent));
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
+.workflow-workspace-sidebar-control:hover,
+.workflow-workspace-sidebar-control:focus-visible {
+  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.35), rgb(var(--mm-accent-2) / 0.25));
   color: rgb(var(--mm-ink));
+  border-color: rgb(var(--mm-accent));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 12px 24px -14px rgb(var(--mm-accent) / 0.78);
+  transform: scale(var(--mm-control-hover-scale));
+  filter: brightness(1.08) saturate(1.04);
 }
 
-.workflow-workspace-expand-list:focus-visible {
+.workflow-workspace-sidebar-control:active,
+.workflow-workspace-sidebar-control.is-clicked {
+  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.5), rgb(var(--mm-accent-2) / 0.4));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.42),
+    0 0 0 1px rgb(255 255 255 / 0.56),
+    0 0 14px 1px rgb(var(--mm-accent) / 0.76);
+  transform: scale(var(--mm-control-press-scale));
+  filter: brightness(1.2) saturate(1.12);
+}
+
+.workflow-workspace-sidebar-control:disabled,
+.workflow-workspace-sidebar-control:disabled:hover {
+  opacity: var(--mm-control-disabled-opacity);
+  cursor: not-allowed;
+  background: rgb(var(--mm-panel) / 0.4);
+  border-color: rgb(var(--mm-border) / 0.4);
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+
+.workflow-workspace-sidebar-control:focus-visible {
   outline: none;
+  box-shadow:
+    var(--mm-control-focus-ring),
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    0 12px 24px -14px rgb(var(--mm-accent) / 0.78);
 }
 
 .workflow-workspace-control-icon,
@@ -6935,22 +6995,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 1.05rem;
   height: 1.05rem;
   flex: 0 0 auto;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-/* The expand-to-list control keeps the accent emphasis so it stays visually
- * distinct from the neutral collapse control. */
-.workflow-workspace-expand-list {
-  background: rgb(var(--mm-accent) / 0.16);
-  border-color: rgb(var(--mm-accent) / 0.45);
-  color: rgb(var(--mm-accent));
-  box-shadow: none;
-}
-
-.workflow-workspace-expand-list:hover,
-.workflow-workspace-expand-list:focus-visible {
-  background: rgb(var(--mm-accent) / 0.24);
-  border-color: rgb(var(--mm-accent) / 0.82);
-}
 
 .workflow-workspace-sidebar-list {
   display: flex;

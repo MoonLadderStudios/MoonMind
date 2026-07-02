@@ -888,6 +888,8 @@ _AUTHORED_STEP_METADATA_KEYS = (
     "skill",
     "jiraOrchestration",
     "jira_orchestration",
+    "githubOrchestration",
+    "github_orchestration",
     "documentUpdateOrchestration",
     "document_update_orchestration",
     "storyOutput",

@@ -1863,7 +1863,7 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if name == "story.create_jira_issues":
         return {
             "name": name,
-            "description": "Create Jira issues from Moon Spec story breakdown output.",
+            "description": "Create Jira issues from MoonSpec story breakdown output.",
             "inputs": {
                 "schema": {
                     "type": "object",
@@ -1902,7 +1902,7 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if name == "story.create_github_issues":
         return {
             "name": name,
-            "description": "Create GitHub issues from Moon Spec story breakdown output.",
+            "description": "Create GitHub issues from MoonSpec story breakdown output.",
             "inputs": {
                 "schema": {
                     "type": "object",
@@ -9320,6 +9320,16 @@ class TemporalAgentRuntimeActivities:
     @staticmethod
     def _parse_git_status_records(status_output: bytes) -> tuple[tuple[str, str], ...]:
         """Extract ``(status, path)`` records from `git status --porcelain=v1 -z`."""
+        entries = TemporalAgentRuntimeActivities._parse_git_status_record_entries(
+            status_output
+        )
+        return tuple((status, path) for status, path, _is_source_path in entries)
+
+    @staticmethod
+    def _parse_git_status_record_entries(
+        status_output: bytes,
+    ) -> tuple[tuple[str, str, bool], ...]:
+        """Extract Git status records and mark rename/copy source paths."""
 
         def _decode_path(path_bytes: bytes) -> str:
             return os.fsdecode(path_bytes)
@@ -9329,7 +9339,7 @@ class TemporalAgentRuntimeActivities:
             return ()
 
         entries = raw_output.split(b"\0")
-        records: list[tuple[str, str]] = []
+        records: list[tuple[str, str, bool]] = []
         index = 0
         while index < len(entries):
             record = entries[index]
@@ -9343,7 +9353,7 @@ class TemporalAgentRuntimeActivities:
             path_bytes = record[3:]
             if not path_bytes:
                 raise ValueError(f"missing path in git status record: {record!r}")
-            records.append((status, _decode_path(path_bytes)))
+            records.append((status, _decode_path(path_bytes), False))
 
             if "R" in status or "C" in status:
                 index += 1
@@ -9356,14 +9366,21 @@ class TemporalAgentRuntimeActivities:
                     raise ValueError(
                         f"missing original path for git rename/copy record: {record!r}"
                     )
-                records.append((status, _decode_path(original_path_bytes)))
+                records.append((status, _decode_path(original_path_bytes), True))
 
             index += 1
 
-        deduped: dict[str, tuple[str, str]] = {}
-        for status, path in records:
-            deduped.setdefault(path, (status, path))
+        deduped: dict[str, tuple[str, str, bool]] = {}
+        for status, path, is_source_path in records:
+            deduped.setdefault(path, (status, path, is_source_path))
         return tuple(deduped.values())
+
+    @staticmethod
+    def _git_status_needs_worktree_stage(status: str) -> bool:
+        """Return True when a porcelain status has unstaged worktree changes."""
+        if len(status) != 2 or status in {"??", "!!"}:
+            return False
+        return status[1] != " "
 
     @staticmethod
     def _should_exclude_publish_path(
@@ -9886,7 +9903,11 @@ class TemporalAgentRuntimeActivities:
             workspace_path = Path(workspace).expanduser().resolve()
             tracked_paths: list[str] = []
             untracked_paths: list[str] = []
-            for status, path in self._parse_git_status_records(status_stdout):
+            for (
+                status,
+                path,
+                is_source_path,
+            ) in self._parse_git_status_record_entries(status_stdout):
                 if self._should_exclude_publish_path(
                     path,
                     workspace=workspace_path,
@@ -9894,15 +9915,17 @@ class TemporalAgentRuntimeActivities:
                     continue
                 if status == "??":
                     untracked_paths.append(path)
-                elif status != "!!":
+                elif (
+                    status != "!!"
+                    and not is_source_path
+                    and self._git_status_needs_worktree_stage(status)
+                ):
                     tracked_paths.append(path)
         except ValueError as exc:
             return {
                 "push_status": "failed",
                 "push_error": f"could not parse workspace changes: {exc}",
             }
-        if not tracked_paths and not untracked_paths:
-            return {}
 
         async def _stage_paths(
             *,
@@ -9960,17 +9983,32 @@ class TemporalAgentRuntimeActivities:
                 "push_error": f"could not inspect staged workspace changes: {detail}",
             }
 
-        if not staged_stdout.decode("utf-8", errors="replace").strip():
+        staged_paths = [
+            path.strip()
+            for path in staged_stdout.decode("utf-8", errors="replace").splitlines()
+            if path.strip()
+        ]
+        publishable_staged_paths = [
+            path
+            for path in staged_paths
+            if not self._should_exclude_publish_path(path, workspace=workspace_path)
+        ]
+        if not publishable_staged_paths:
             return {}
 
         normalized_message = (
             str(commit_message).strip()
             if isinstance(commit_message, str) and commit_message.strip()
-            else f"MoonMind task result for run {run_id}"
+            else f"MoonMind workflow result for run {run_id}"
         )
         commit_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(
-                workspace, "commit", "-m", normalized_message,
+                workspace,
+                "commit",
+                "-m",
+                normalized_message,
+                "--",
+                *publishable_staged_paths,
             ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

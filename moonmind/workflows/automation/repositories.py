@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -16,13 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from moonmind.workflows.automation import models
-from moonmind.workflows.no_commit_compatibility import (
-    canonicalize_legacy_workflow_state,
-)
+from moonmind.statuses.compat import canonicalize_workflow_state_alias
 
 _UNSET: object = object()
 _DEFAULT_ARTIFACT_RETENTION = timedelta(days=7)
-logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class CodexShardHealth:
@@ -75,11 +71,7 @@ def _coerce_run_status(
 
     if isinstance(value, models.AutomationRunStatus):
         return value
-    raw = canonicalize_legacy_workflow_state(
-        str(value),
-        domain="automation_run.status",
-        logger=logger,
-    )
+    raw = canonicalize_workflow_state_alias(value) or ""
     return models.AutomationRunStatus(raw)
 
 def _coerce_artifact_type(
