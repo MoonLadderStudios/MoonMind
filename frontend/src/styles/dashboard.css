@@ -4381,6 +4381,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-family: var(--mm-font-sans);
 }
 
+.td-chat-region .live-logs-panel {
+  min-height: min(72vh, 58rem);
+}
+
+.td-chat-region .live-logs-viewer-shell {
+  min-height: min(58vh, 44rem);
+}
+
 .chat-session-header {
   display: flex;
   align-items: flex-start;
@@ -4428,6 +4436,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .chat-session-blocks {
+  display: grid;
+  max-height: min(58vh, 44rem);
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.chat-session-blocks-inner {
   display: grid;
   gap: 0.65rem;
 }
@@ -4479,6 +4494,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   background: rgb(168 85 247 / 0.1);
 }
 
+.chat-session-block-system {
+  border-color: rgb(148 163 184 / 0.24);
+  background: rgb(15 23 42 / 0.34);
+}
+
+.chat-session-block-error {
+  border-color: rgb(239 68 68 / 0.4);
+  background: rgb(239 68 68 / 0.12);
+}
+
 .chat-session-block-heading {
   display: flex;
   flex-wrap: wrap;
@@ -4512,6 +4537,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .chat-session-status-denied {
   background: rgb(239 68 68 / 0.2);
   color: rgb(254 202 202);
+}
+
+.chat-session-status-pending,
+.chat-session-status-streaming {
+  background: rgb(59 130 246 / 0.18);
+  color: rgb(191 219 254);
 }
 
 .chat-session-block-text,
@@ -4585,6 +4616,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-family: var(--mm-font-mono);
   font-size: 0.72rem;
   white-space: pre-wrap;
+}
+
+.chat-session-composer {
+  display: grid;
+  gap: 0.55rem;
+  border-top: 1px solid rgb(255 255 255 / 0.12);
+  padding-top: 0.75rem;
+}
+
+.chat-session-composer textarea {
+  min-height: 5.5rem;
 }
 
 .raw-timeline-escape-hatch {

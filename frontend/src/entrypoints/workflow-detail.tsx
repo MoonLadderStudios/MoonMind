@@ -5,6 +5,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
+import { useStickToBottom } from 'use-stick-to-bottom';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
@@ -41,6 +42,11 @@ import {
   isRemediationEligibleTarget,
   type WorkflowActionMenuItem,
 } from '../lib/workflowActions';
+import {
+  projectChatSessionBlocks,
+  type ChatBlock as ProjectedChatBlock,
+  type OptimisticUserMessage,
+} from '../lib/chatSession';
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number; detail?: number; events?: number };
@@ -188,7 +194,7 @@ function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolea
   return config?.features?.liveLogsStructuredHistoryEnabled !== false;
 }
 
-type WorkflowDetailSubroute = 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
+type WorkflowDetailSubroute = 'chat' | 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
 type SegmentedNavItem<T extends string> = {
   value: T;
   label: string;
@@ -200,8 +206,8 @@ type WorkflowDialogKind =
   | 'send-message';
 
 function workflowDetailSubrouteFromPath(pathname: string): WorkflowDetailSubroute {
-  const match = pathname.match(/^\/workflows\/[^/]+(?:\/(steps|artifacts|runs|debug))?$/);
-  return (match?.[1] as WorkflowDetailSubroute) || 'overview';
+  const match = pathname.match(/^\/workflows\/[^/]+(?:\/(chat|overview|steps|artifacts|runs|debug))?$/);
+  return (match?.[1] as WorkflowDetailSubroute) || 'chat';
 }
 
 function workflowDetailSubrouteHref(
@@ -209,7 +215,7 @@ function workflowDetailSubrouteHref(
   subroute: WorkflowDetailSubroute,
   search: URLSearchParams,
 ): string {
-  const suffix = subroute === 'overview' ? '' : `/${subroute}`;
+  const suffix = subroute === 'chat' ? '' : `/${subroute}`;
   const query = search.toString();
   return `/workflows/${encodeURIComponent(workflowId)}${suffix}${query ? `?${query}` : ''}`;
 }
@@ -2710,201 +2716,6 @@ function mapEventsToTimelineRows(
   return payload.events.flatMap((event) => eventToTimelineRows(event));
 }
 
-type ChatBlockBase = {
-  id: string;
-  rows: TimelineRow[];
-  timestamp: string | null;
-  turnId: string | null;
-};
-
-type ChatToolOutput = {
-  id: string;
-  text: string;
-  kind: string | null;
-};
-
-type ChatBlock =
-  | (ChatBlockBase & { type: 'user' | 'assistant' | 'boundary' | 'status'; text: string })
-  | (ChatBlockBase & {
-      type: 'tool';
-      title: string;
-      status: 'running' | 'completed' | 'failed';
-      outputs: ChatToolOutput[];
-    })
-  | (ChatBlockBase & {
-      type: 'approval';
-      text: string;
-      status: 'pending' | 'granted' | 'denied' | 'resolved';
-    });
-
-type ChatSessionReducerState = {
-  blocks: ChatBlock[];
-  latestToolBlockIdByKey: Map<string, string>;
-  latestToolBlockIdByTurn: Map<string, string>;
-  latestApprovalBlockIdByKey: Map<string, string>;
-  latestApprovalBlockId: string | null;
-};
-
-function emptyChatSessionReducerState(): ChatSessionReducerState {
-  return {
-    blocks: [],
-    latestToolBlockIdByKey: new Map(),
-    latestToolBlockIdByTurn: new Map(),
-    latestApprovalBlockIdByKey: new Map(),
-    latestApprovalBlockId: null,
-  };
-}
-
-function chatMetadataString(row: TimelineRow, ...keys: string[]): string {
-  return metadataString(row.metadata, ...keys);
-}
-
-function toolCorrelationKey(row: TimelineRow): string | null {
-  const explicit = chatMetadataString(row, 'toolCallId', 'tool_call_id', 'callId', 'call_id', 'requestId', 'request_id');
-  if (explicit) return explicit;
-  const name = chatMetadataString(row, 'toolName', 'tool_name', 'name');
-  if (name && row.turnId) return `${row.turnId}:${name}`;
-  return row.turnId;
-}
-
-function approvalCorrelationKey(row: TimelineRow): string | null {
-  const explicit = chatMetadataString(row, 'approvalRequestId', 'approval_request_id', 'requestId', 'request_id', 'interventionId', 'intervention_id');
-  if (explicit) return explicit;
-  return row.turnId;
-}
-
-function replaceChatBlock(blocks: ChatBlock[], id: string, updater: (block: ChatBlock) => ChatBlock): ChatBlock[] {
-  return blocks.map((block) => (block.id === id ? updater(block) : block));
-}
-
-function appendChatBlock(state: ChatSessionReducerState, block: ChatBlock): ChatSessionReducerState {
-  return {
-    ...state,
-    blocks: [...state.blocks, block],
-  };
-}
-
-function chatSessionReducer(state: ChatSessionReducerState, row: TimelineRow): ChatSessionReducerState {
-  if (row.rowType === 'fallback' || row.rowType === 'output' || row.rowType === 'system') {
-    return state;
-  }
-
-  if (row.rowType === 'tool') {
-    const key = toolCorrelationKey(row);
-    const turnKey = row.turnId ?? row.activeTurnId;
-    const previousBlockId =
-      (key ? state.latestToolBlockIdByKey.get(key) : null)
-      ?? (turnKey && row.kind !== 'tool_call_started' ? state.latestToolBlockIdByTurn.get(turnKey) : null);
-
-    if (row.kind === 'tool_call_output' && previousBlockId) {
-      return {
-        ...state,
-        blocks: replaceChatBlock(state.blocks, previousBlockId, (block) => {
-          if (block.type !== 'tool') return block;
-          return {
-            ...block,
-            rows: [...block.rows, row],
-            outputs: [...block.outputs, { id: row.id, text: row.text, kind: row.kind }],
-          };
-        }),
-      };
-    }
-
-    if ((row.kind === 'tool_call_completed' || row.kind === 'tool_call_failed') && previousBlockId) {
-      return {
-        ...state,
-        blocks: replaceChatBlock(state.blocks, previousBlockId, (block) => {
-          if (block.type !== 'tool') return block;
-          return {
-            ...block,
-            rows: [...block.rows, row],
-            status: row.kind === 'tool_call_failed' ? 'failed' : 'completed',
-          };
-        }),
-      };
-    }
-
-    const block: ChatBlock = {
-      id: `chat-tool-${row.id}`,
-      type: 'tool',
-      rows: [row],
-      timestamp: row.timestamp,
-      turnId: row.turnId,
-      title: chatMetadataString(row, 'toolName', 'tool_name', 'name') || row.text || 'Tool call',
-      status: row.kind === 'tool_call_failed' ? 'failed' : row.kind === 'tool_call_completed' ? 'completed' : 'running',
-      outputs: row.kind === 'tool_call_output' ? [{ id: row.id, text: row.text, kind: row.kind }] : [],
-    };
-    const nextState = appendChatBlock(state, block);
-    if (key) nextState.latestToolBlockIdByKey = new Map(nextState.latestToolBlockIdByKey).set(key, block.id);
-    if (turnKey) nextState.latestToolBlockIdByTurn = new Map(nextState.latestToolBlockIdByTurn).set(turnKey, block.id);
-    return nextState;
-  }
-
-  if (row.rowType === 'approval') {
-    const key = approvalCorrelationKey(row);
-    const previousBlockId = key ? state.latestApprovalBlockIdByKey.get(key) : state.latestApprovalBlockId;
-    const resolvedStatus =
-      row.kind === 'approval_granted'
-        ? 'granted'
-        : row.kind === 'approval_denied'
-          ? 'denied'
-          : row.kind === 'approval_resolved' || row.kind === 'intervention_resolved'
-            ? 'resolved'
-            : null;
-
-    if (resolvedStatus && previousBlockId) {
-      return {
-        ...state,
-        blocks: replaceChatBlock(state.blocks, previousBlockId, (block) => {
-          if (block.type !== 'approval') return block;
-          return {
-            ...block,
-            rows: [...block.rows, row],
-            text: block.text || row.text,
-            status: resolvedStatus,
-          };
-        }),
-      };
-    }
-
-    const block: ChatBlock = {
-      id: `chat-approval-${row.id}`,
-      type: 'approval',
-      rows: [row],
-      timestamp: row.timestamp,
-      turnId: row.turnId,
-      text: row.text,
-      status: resolvedStatus ?? 'pending',
-    };
-    const nextState = appendChatBlock(state, block);
-    if (key) nextState.latestApprovalBlockIdByKey = new Map(nextState.latestApprovalBlockIdByKey).set(key, block.id);
-    nextState.latestApprovalBlockId = block.id;
-    return nextState;
-  }
-
-  const blockType =
-    row.rowType === 'user'
-      ? 'user'
-      : row.rowType === 'assistant'
-        ? 'assistant'
-        : row.rowType === 'boundary'
-          ? 'boundary'
-          : 'status';
-
-  return appendChatBlock(state, {
-    id: `chat-${blockType}-${row.id}`,
-    type: blockType,
-    rows: [row],
-    timestamp: row.timestamp,
-    turnId: row.turnId,
-    text: row.text,
-  });
-}
-
-export function reduceTimelineRowsToChatBlocks(rows: TimelineRow[]): ChatBlock[] {
-  return rows.reduce(chatSessionReducer, emptyChatSessionReducerState()).blocks;
-}
-
 function deriveSessionSnapshotFromEvent(
   event: ObservabilityEvent,
   previous: SessionSnapshot | null,
@@ -3457,25 +3268,38 @@ function renderTimelineRow(
   );
 }
 
-function chatBlockLabel(block: ChatBlock): string {
-  const firstRow = block.rows[0];
-  const treatmentLabel = firstRow ? getTimelineRowTreatmentLabel(firstRow) : null;
-  if (treatmentLabel) return treatmentLabel;
-  if (block.type === 'user') return 'User';
-  if (block.type === 'assistant') return 'Assistant';
-  if (block.type === 'tool') return 'Tool';
-  if (block.type === 'approval') return 'Approval';
-  if (block.type === 'boundary') return 'Session boundary';
+function chatBlockLabel(block: ProjectedChatBlock): string {
+  if (block.kind === 'user') return 'User';
+  if (block.kind === 'assistant') return 'Assistant';
+  if (block.kind === 'tool') return block.toolName ? `Tool: ${block.toolName}` : 'Tool';
+  if (block.kind === 'approval') return 'Approval';
+  if (block.kind === 'boundary') return 'Session boundary';
+  if (block.kind === 'error') return 'Error';
+  if (block.kind === 'system') return 'System';
   return 'Status';
 }
 
-function chatBlockKindLabel(block: ChatBlock): string | null {
-  const kind = block.rows.at(-1)?.kind;
-  return kind ? kind.replaceAll('_', ' ') : null;
+function chatBlockKindLabel(block: ProjectedChatBlock): string | null {
+  const sourceKind = typeof block.metadata?.sourceKind === 'string' ? block.metadata.sourceKind : null;
+  return sourceKind ? sourceKind.replaceAll('_', ' ') : null;
 }
 
-function chatBlockArtifactLinks(block: ChatBlock, apiBase: string): TimelineArtifactLink[] {
-  const links = block.rows.flatMap((row) => buildTimelineArtifactLinks(row, apiBase));
+function rowsForProjectedChatBlock(block: ProjectedChatBlock, rows: TimelineRow[]): TimelineRow[] {
+  return rows.filter((row) => {
+    const sequence = row.sequence ?? undefined;
+    if (sequence === undefined) return false;
+    if (block.sequenceStart !== undefined && sequence < block.sequenceStart) return false;
+    if (block.sequenceEnd !== undefined && sequence > block.sequenceEnd) return false;
+    return true;
+  });
+}
+
+function chatBlockArtifactLinks(
+  block: ProjectedChatBlock,
+  rows: TimelineRow[],
+  apiBase: string,
+): TimelineArtifactLink[] {
+  const links = rowsForProjectedChatBlock(block, rows).flatMap((row) => buildTimelineArtifactLinks(row, apiBase));
   const seen = new Set<string>();
   return links.filter((link) => {
     if (seen.has(link.key)) return false;
@@ -3484,60 +3308,40 @@ function chatBlockArtifactLinks(block: ChatBlock, apiBase: string): TimelineArti
   });
 }
 
-function renderChatBlock(block: ChatBlock, wrapLines: boolean, apiBase: string): ReactNode {
+function renderChatBlock(
+  block: ProjectedChatBlock,
+  rows: TimelineRow[],
+  wrapLines: boolean,
+  apiBase: string,
+): ReactNode {
   const className = [
     'chat-session-block',
-    `chat-session-block-${block.type}`,
+    `chat-session-block-${block.kind}`,
     wrapLines ? 'is-wrapped' : 'is-unwrapped',
   ].join(' ');
   const roleLabel = chatBlockLabel(block);
   const kindLabel = chatBlockKindLabel(block);
   const displayKindLabel = kindLabel && kindLabel.toLowerCase() !== roleLabel.toLowerCase() ? kindLabel : null;
-  const artifactLinks = chatBlockArtifactLinks(block, apiBase);
+  const artifactLinks = chatBlockArtifactLinks(block, rows, apiBase);
 
-  if (block.type === 'tool') {
+  if (block.kind === 'tool') {
+    const outputCount = block.text ? splitLogText(block.text).length : 0;
     return (
       <div key={block.id} className={className} data-chat-block-type="tool">
         <div className="chat-session-block-heading">
           <span className="chat-session-role-label">{roleLabel}</span>
-          <span className={`chat-session-status-chip chat-session-status-${block.status}`}>{block.status}</span>
+          {block.status ? (
+            <span className={`chat-session-status-chip chat-session-status-${block.status}`}>{block.status}</span>
+          ) : null}
           {displayKindLabel ? <span className="chat-session-kind-chip">{displayKindLabel}</span> : null}
         </div>
-        <div
-          className="chat-session-block-text"
-          data-kind={block.rows[0]?.kind ?? undefined}
-          data-row-type="tool"
-        >
-          {block.title}
-        </div>
-        {block.rows.length > 1 ? (
-          <div className="chat-session-tool-events">
-            {block.rows
-              .filter((row) => row.kind !== 'tool_call_output' && row.id !== block.rows[0]?.id)
-              .map((row) => (
-                <div
-                  key={row.id}
-                  className="chat-session-tool-event"
-                  data-kind={row.kind ?? undefined}
-                  data-row-type="tool"
-                >
-                  {getTimelineRowTreatmentLabel(row) ? (
-                    <span className="chat-session-kind-chip">{getTimelineRowTreatmentLabel(row)}</span>
-                  ) : null}
-                  <span>{row.text}</span>
-                </div>
-              ))}
-          </div>
-        ) : null}
-        {block.outputs.length > 0 ? (
+        {block.text ? (
           <details className="chat-session-tool-output" open={block.status !== 'running'}>
             <summary>
-              <span>Tool output</span> <span>({block.outputs.length})</span>
+              <span>Tool output</span> {outputCount > 0 ? <span>({outputCount})</span> : null}
             </summary>
             <div className="chat-session-tool-output-body">
-              {block.outputs.map((output) => (
-                <pre key={output.id} data-kind={output.kind ?? undefined} data-row-type="tool">{output.text}</pre>
-              ))}
+              <pre data-row-type="tool">{block.text}</pre>
             </div>
           </details>
         ) : null}
@@ -3546,39 +3350,38 @@ function renderChatBlock(block: ChatBlock, wrapLines: boolean, apiBase: string):
     );
   }
 
-  if (block.type === 'approval') {
+  if (block.kind === 'approval') {
     return (
       <div key={block.id} className={className} data-chat-block-type="approval">
         <div className="chat-session-block-heading">
           <span className="chat-session-role-label">{roleLabel}</span>
-          <span className={`chat-session-status-chip chat-session-status-${block.status}`}>{block.status}</span>
+          {block.status ? (
+            <span className={`chat-session-status-chip chat-session-status-${block.status}`}>{block.status}</span>
+          ) : null}
           {displayKindLabel ? <span className="chat-session-kind-chip">{displayKindLabel}</span> : null}
         </div>
         <div
           className="chat-session-block-text"
-          data-kind={block.rows[0]?.kind ?? undefined}
           data-row-type="approval"
         >
           {block.text}
         </div>
-        {block.rows.length > 1 ? (
-          <div className="chat-session-resolution-text">{block.rows.at(-1)?.text}</div>
-        ) : null}
         <TimelineArtifactLinks links={artifactLinks} />
       </div>
     );
   }
 
+  const isOptimistic = typeof block.metadata?.optimisticKey === 'string';
   return (
-    <div key={block.id} className={className} data-chat-block-type={block.type}>
+    <div key={block.id} className={className} data-chat-block-type={block.kind}>
       <div className="chat-session-block-heading">
         <span className="chat-session-role-label">{roleLabel}</span>
+        {isOptimistic ? <span className="chat-session-status-chip chat-session-status-pending">Sending</span> : null}
         {displayKindLabel ? <span className="chat-session-kind-chip">{displayKindLabel}</span> : null}
       </div>
       <div
         className="chat-session-block-text"
-        data-kind={block.rows[0]?.kind ?? undefined}
-        data-row-type={block.rows[0]?.rowType}
+        data-row-type={block.kind}
       >
         {block.text}
       </div>
@@ -3592,13 +3395,19 @@ function ChatSessionView({
   chatBlocks,
   rows,
   wrapLines,
+  children,
 }: {
   apiBase: string;
-  chatBlocks: ChatBlock[];
+  chatBlocks: ProjectedChatBlock[];
   rows: TimelineRow[];
   wrapLines: boolean;
+  children?: ReactNode;
 }) {
   const hasFallbackRows = rows.some((row) => row.rowType === 'fallback' || row.rowType === 'output');
+  const { scrollRef, contentRef } = useStickToBottom({
+    initial: 'smooth',
+    resize: 'smooth',
+  });
 
   return (
     <div className="chat-session-view" aria-label="Chat session projection">
@@ -3616,10 +3425,13 @@ function ChatSessionView({
           Structured chat projection is unavailable for these rows. Use Raw Timeline for durable history.
         </div>
       ) : (
-        <div className="chat-session-blocks">
-          {chatBlocks.map((block) => renderChatBlock(block, wrapLines, apiBase))}
+        <div className="chat-session-blocks" ref={scrollRef}>
+          <div className="chat-session-blocks-inner" ref={contentRef}>
+            {chatBlocks.map((block) => renderChatBlock(block, rows, wrapLines, apiBase))}
+          </div>
         </div>
       )}
+      {children}
     </div>
   );
 }
@@ -4338,7 +4150,9 @@ function StepLedgerRowCard({
 function LiveLogsPanel({
   apiBase,
   agentRunId,
+  targetRuntime,
   isTerminal,
+  invalidateWorkflowDetail,
   autoExpand = false,
   disclosure = true,
   routes,
@@ -4347,7 +4161,9 @@ function LiveLogsPanel({
 }: {
   apiBase: string;
   agentRunId: string;
+  targetRuntime?: string | null | undefined;
   isTerminal: boolean;
+  invalidateWorkflowDetail?: () => void;
   autoExpand?: boolean;
   // When false, render the log content directly without the collapsible
   // "Live Logs" disclosure chrome (used when the panel is embedded under an
@@ -4357,6 +4173,7 @@ function LiveLogsPanel({
   sessionTimelineEnabled: boolean;
   structuredHistoryEnabled: boolean;
 }) {
+  const queryClient = useQueryClient();
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
   // When rendered without disclosure chrome the panel is always visible, so it
@@ -4370,7 +4187,26 @@ function LiveLogsPanel({
   const isTerminalRef = useRef(isTerminal);
   const [sessionSnapshot, setSessionSnapshot] = useState<SessionSnapshot | null>(null);
   const [rawTimelineExpanded, setRawTimelineExpanded] = useState(false);
-  const chatBlocks = useMemo(() => reduceTimelineRowsToChatBlocks(logContent), [logContent]);
+  const [followUpMessage, setFollowUpMessage] = useState('');
+  const [panelError, setPanelError] = useState<string | null>(null);
+  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticChatSessionMessage[]>([]);
+  const optimisticMessageSequenceRef = useRef(0);
+  const projectedOptimisticMessages = useMemo<OptimisticUserMessage[]>(
+    () =>
+      optimisticMessages.map((message) => ({
+        key: message.clientEventKey,
+        agentRunId,
+        text: message.message,
+        sessionId: message.sessionId,
+        sessionEpoch: message.sessionEpoch,
+        timestamp: new Date().toISOString(),
+      })),
+    [agentRunId, optimisticMessages],
+  );
+  const chatBlocks = useMemo(
+    () => projectChatSessionBlocks(logContent, agentRunId, projectedOptimisticMessages).blocks,
+    [agentRunId, logContent, projectedOptimisticMessages],
+  );
 
   // Keep isTerminalRef current so the onerror handler always sees the latest value.
   useEffect(() => {
@@ -4383,6 +4219,9 @@ function LiveLogsPanel({
     lastSeqRef.current = null;
     setViewerState('starting');
     setRawTimelineExpanded(false);
+    setFollowUpMessage('');
+    setPanelError(null);
+    setOptimisticMessages([]);
   }, [agentRunId]);
 
   useEffect(() => {
@@ -4399,6 +4238,65 @@ function LiveLogsPanel({
     // The summary indicates stream availability; refetch occasionally if not terminal
     staleTime: 1000 * 10,
     refetchOnMount: 'always',
+  });
+  const interventionCapabilities =
+    summaryQuery.data?.interventionCapabilities ?? InterventionCapabilitiesSchema.parse({});
+  const sessionId = sessionSnapshot?.sessionId ?? summaryQuery.data?.sessionSnapshot?.sessionId ?? null;
+  const sessionEpoch = sessionSnapshot?.sessionEpoch ?? summaryQuery.data?.sessionSnapshot?.sessionEpoch ?? null;
+
+  const controlMutation = useMutation({
+    mutationFn: async (body: ArtifactSessionControlRequest) => {
+      if (!sessionId) throw new Error('Managed session is unavailable.');
+      return controlArtifactSession(apiBase, agentRunId, sessionId, body, routes.artifactSessionControl);
+    },
+    onSuccess: (result) => {
+      setPanelError(null);
+      void queryClient.setQueryData(
+        ['agent-run-session-projection', agentRunId, sessionId],
+        result.projection,
+      );
+      void queryClient.invalidateQueries({ queryKey: ['observability-summary', agentRunId] });
+      void queryClient.invalidateQueries({ queryKey: ['agent-run-observability-events', agentRunId] });
+      invalidateWorkflowDetail?.();
+    },
+    onError: (error: Error) => setPanelError(error.message),
+  });
+
+  const followUpMutation = useMutation({
+    mutationFn: async (event: ChatSessionMessageEvent) => {
+      if (!sessionId) throw new Error('Managed session is unavailable.');
+      return controlArtifactSession(
+        apiBase,
+        agentRunId,
+        sessionId,
+        chatSessionMessageEventToControlRequest(event),
+        routes.artifactSessionControl,
+      );
+    },
+    onSuccess: (result, event) => {
+      setPanelError(null);
+      setOptimisticMessages((messages) =>
+        messages.filter((message) => message.clientEventKey !== event.clientEventKey),
+      );
+      void queryClient.setQueryData(
+        ['agent-run-session-projection', agentRunId, sessionId],
+        result.projection,
+      );
+      void queryClient.invalidateQueries({ queryKey: ['observability-summary', agentRunId] });
+      void queryClient.invalidateQueries({ queryKey: ['agent-run-observability-events', agentRunId] });
+      invalidateWorkflowDetail?.();
+      setFollowUpMessage('');
+    },
+    onError: (error: Error, event) => {
+      setPanelError(error.message);
+      setOptimisticMessages((messages) =>
+        messages.map((message) =>
+          message.clientEventKey === event.clientEventKey
+            ? { ...message, status: 'failed', error: error.message }
+            : message,
+        ),
+      );
+    },
   });
 
   const historyQuery = useQuery({
@@ -4633,6 +4531,120 @@ function LiveLogsPanel({
       ].filter(([, value]) => value) as Array<[string, string]>
     : [];
   const showRawTimeline = rawTimelineExpanded || (sessionTimelineEnabled && logContent.length > 0 && chatBlocks.length === 0);
+  const busy = controlMutation.isPending || followUpMutation.isPending;
+  const managedRuntimeControlsAllowed = Boolean(invalidateWorkflowDetail) && (!targetRuntime || isCodexManagedRuntime(targetRuntime));
+  const canSendFollowUp = Boolean(
+    managedRuntimeControlsAllowed && sessionId && sessionEpoch !== null && interventionCapabilities.sendFollowUp && !isTerminal,
+  );
+  const canClearSession = Boolean(
+    managedRuntimeControlsAllowed && sessionId && interventionCapabilities.clearSession && !isTerminal,
+  );
+  const canInterruptTurn = Boolean(
+    managedRuntimeControlsAllowed && sessionId && interventionCapabilities.interruptTurn && !isTerminal,
+  );
+  const canCancelSession = Boolean(
+    managedRuntimeControlsAllowed && sessionId && interventionCapabilities.cancelSession && !isTerminal,
+  );
+
+  const submitFollowUp = () => {
+    const message = followUpMessage.trim();
+    if (!message || !sessionId || sessionEpoch === null) return;
+    const event: ChatSessionMessageEvent = {
+      type: 'chat_session.message_submitted',
+      clientEventKey: `MM-1097:${sessionId}:${sessionEpoch}:${optimisticMessageSequenceRef.current++}`,
+      sessionId,
+      sessionEpoch,
+      message,
+    };
+    setPanelError(null);
+    setOptimisticMessages((messages) => [
+      ...messages.filter((pending) => pending.clientEventKey !== event.clientEventKey),
+      { ...event, status: 'pending' },
+    ]);
+    followUpMutation.mutate(event);
+  };
+
+  const clearSession = () => {
+    setPanelError(null);
+    controlMutation.mutate({ action: 'clear_session' });
+  };
+
+  const interruptTurn = () => {
+    setPanelError(null);
+    controlMutation.mutate({ action: 'interrupt_turn' });
+  };
+
+  const cancelSession = () => {
+    setPanelError(null);
+    controlMutation.mutate({ action: 'cancel_session' });
+  };
+
+  const chatComposer = sessionTimelineEnabled && (canSendFollowUp || canClearSession || canInterruptTurn || canCancelSession || panelError) ? (
+    <div className="chat-session-composer" aria-label="Session controls">
+      {panelError ? <div className="notice error">{panelError}</div> : null}
+      <label htmlFor="session-follow-up">Follow-up message</label>
+      <textarea
+        id="session-follow-up"
+        value={followUpMessage}
+        onChange={(event) => setFollowUpMessage(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && canInterruptTurn && !busy) {
+            event.preventDefault();
+            interruptTurn();
+          }
+          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && canSendFollowUp && !busy) {
+            event.preventDefault();
+            submitFollowUp();
+          }
+        }}
+        rows={3}
+        placeholder="Send a follow-up turn to the managed session."
+        disabled={busy || !canSendFollowUp}
+      />
+      <div className="actions">
+        {canSendFollowUp ? (
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || !followUpMessage.trim()}
+            onClick={submitFollowUp}
+          >
+            Send follow-up
+          </button>
+        ) : null}
+        {canInterruptTurn ? (
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            onClick={interruptTurn}
+          >
+            Interrupt turn
+          </button>
+        ) : null}
+        {canClearSession ? (
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            onClick={clearSession}
+          >
+            Clear / Reset
+          </button>
+        ) : null}
+        {canCancelSession ? (
+          <button
+            type="button"
+            className="queue-action queue-action-danger"
+            disabled={busy}
+            onClick={cancelSession}
+          >
+            Cancel session
+          </button>
+        ) : null}
+      </div>
+    </div>
+  ) : null;
 
   const panelBody = (
     <div className="stack live-logs-panel">
@@ -4665,11 +4677,11 @@ function LiveLogsPanel({
         </div>
       ) : null}
       <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
-        {logContent.length === 0 ? (
-          <div className="live-logs-empty">{emptyLabel}</div>
-        ) : sessionTimelineEnabled ? (
+        {sessionTimelineEnabled ? (
           <div data-testid="chat-session-viewer" className="chat-session-viewer">
-            <ChatSessionView apiBase={apiBase} chatBlocks={chatBlocks} rows={logContent} wrapLines={wrapLines} />
+            <ChatSessionView apiBase={apiBase} chatBlocks={chatBlocks} rows={logContent} wrapLines={wrapLines}>
+              {chatComposer}
+            </ChatSessionView>
             <details
               className="raw-timeline-escape-hatch"
               open={showRawTimeline}
@@ -4688,6 +4700,8 @@ function LiveLogsPanel({
               ) : null}
             </details>
           </div>
+        ) : logContent.length === 0 ? (
+          <div className="live-logs-empty">{emptyLabel}</div>
         ) : (
           <div data-testid="live-logs-legacy-viewer" className="live-logs-legacy-viewer">
             {logContent.map((line) => renderTimelineRow(line, wrapLines, false, apiBase))}
@@ -5075,17 +5089,14 @@ function SessionContinuityPanel({
   agentRunId,
   targetRuntime,
   isTerminal,
-  invalidateWorkflowDetail,
   routes,
 }: {
   apiBase: string;
   agentRunId: string;
   targetRuntime: string | null | undefined;
   isTerminal: boolean;
-  invalidateWorkflowDetail: () => void;
   routes: AgentRunRouteTemplates;
 }) {
-  const queryClient = useQueryClient();
   const canPollSessionCapabilities = isCodexManagedRuntime(targetRuntime);
   const summaryQuery = useQuery({
     queryKey: ['observability-summary', agentRunId],
@@ -5108,12 +5119,7 @@ function SessionContinuityPanel({
   });
   const summary = summaryQuery.data;
   const sessionSnapshot = summary?.sessionSnapshot ?? null;
-  const interventionCapabilities = summary?.interventionCapabilities ?? InterventionCapabilitiesSchema.parse({});
   const sessionId = sessionSnapshot?.sessionId ?? null;
-  const [followUpMessage, setFollowUpMessage] = useState('');
-  const [panelError, setPanelError] = useState<string | null>(null);
-  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticChatSessionMessage[]>([]);
-  const optimisticMessageSequenceRef = useRef(0);
 
   const projectionQuery = useQuery({
     queryKey: ['agent-run-session-projection', agentRunId, sessionId],
@@ -5147,62 +5153,6 @@ function SessionContinuityPanel({
       );
     },
     retry: false,
-  });
-
-  const controlMutation = useMutation({
-    mutationFn: async (body: ArtifactSessionControlRequest) => {
-      if (!sessionId) throw new Error('Managed session is unavailable.');
-      return controlArtifactSession(apiBase, agentRunId, sessionId, body, routes.artifactSessionControl);
-    },
-    onSuccess: (result) => {
-      setPanelError(null);
-      void queryClient.setQueryData(
-        ['agent-run-session-projection', agentRunId, sessionId],
-        result.projection,
-      );
-      void queryClient.invalidateQueries({ queryKey: ['observability-summary', agentRunId] });
-      invalidateWorkflowDetail();
-      if (result.action === 'send_follow_up') {
-        setFollowUpMessage('');
-      }
-    },
-    onError: (error: Error) => setPanelError(error.message),
-  });
-
-  const followUpMutation = useMutation({
-    mutationFn: async (event: ChatSessionMessageEvent) => {
-      if (!sessionId) throw new Error('Managed session is unavailable.');
-      return controlArtifactSession(
-        apiBase,
-        agentRunId,
-        sessionId,
-        chatSessionMessageEventToControlRequest(event),
-        routes.artifactSessionControl,
-      );
-    },
-    onSuccess: (result, event) => {
-      setPanelError(null);
-      setOptimisticMessages((messages) =>
-        messages.filter((message) => message.clientEventKey !== event.clientEventKey),
-      );
-      void queryClient.setQueryData(
-        ['agent-run-session-projection', agentRunId, sessionId],
-        result.projection,
-      );
-      void queryClient.invalidateQueries({ queryKey: ['observability-summary', agentRunId] });
-      invalidateWorkflowDetail();
-      setFollowUpMessage('');
-    },
-    onError: (error: Error, event) => {
-      setPanelError(error.message);
-      setOptimisticMessages((messages) =>
-        messages.map((message) =>
-          message.clientEventKey === event.clientEventKey
-            ? { ...message, status: 'failed', error: error.message }
-            : message,
-        ),
-      );
-    },
   });
 
   if (summaryQuery.isLoading) {
@@ -5255,50 +5205,6 @@ function SessionContinuityPanel({
     ['Latest Control', projection.latest_control_event_ref?.artifact_id ?? null],
     ['Latest Reset', projection.latest_reset_boundary_ref?.artifact_id ?? null],
   ].filter(([, artifactId]) => artifactId !== null) as Array<[string, string]>;
-  const busy = controlMutation.isPending || followUpMutation.isPending;
-  const canSendFollowUp = Boolean(sessionId && interventionCapabilities.sendFollowUp && !isTerminal);
-  const canClearSession = Boolean(sessionId && interventionCapabilities.clearSession && !isTerminal);
-  const canInterruptTurn = Boolean(sessionId && interventionCapabilities.interruptTurn && !isTerminal);
-  const canCancelSession = Boolean(sessionId && interventionCapabilities.cancelSession && !isTerminal);
-
-  const submitFollowUp = () => {
-    const message = followUpMessage.trim();
-    if (!message || !sessionId) return;
-    const event: ChatSessionMessageEvent = {
-      type: 'chat_session.message_submitted',
-      clientEventKey: `MM-1015:MM-977:${sessionId}:${sessionSnapshot?.sessionEpoch ?? projection.session_epoch}:${optimisticMessageSequenceRef.current++}`,
-      sessionId,
-      sessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
-      message,
-    };
-    setPanelError(null);
-    setOptimisticMessages((messages) => [
-      ...messages.filter((pending) => pending.clientEventKey !== event.clientEventKey),
-      { ...event, status: 'pending' },
-    ]);
-    followUpMutation.mutate(event);
-  };
-
-  const clearSession = () => {
-    setPanelError(null);
-    controlMutation.mutate({
-      action: 'clear_session',
-    });
-  };
-
-  const interruptTurn = () => {
-    setPanelError(null);
-    controlMutation.mutate({
-      action: 'interrupt_turn',
-    });
-  };
-
-  const cancelSession = () => {
-    setPanelError(null);
-    controlMutation.mutate({
-      action: 'cancel_session',
-    });
-  };
 
   return (
     <section className="stack">
@@ -5311,8 +5217,6 @@ function SessionContinuityPanel({
           Session <code>{projection.session_id}</code> — Epoch {projection.session_epoch}
         </p>
       </div>
-
-      {panelError ? <div className="notice error">{panelError}</div> : null}
 
       <div className="grid-2">
         <Card label="Session ID">
@@ -5382,78 +5286,6 @@ function SessionContinuityPanel({
         ))}
       </div>
 
-      <div className="stack">
-        {optimisticMessages.length > 0 ? (
-          <div className="chat-session-message-list" aria-label="Pending session messages">
-            {optimisticMessages.map((message) => (
-              <div
-                key={message.clientEventKey}
-                className={`chat-session-message chat-session-message-${message.status}`}
-                data-client-event-key={message.clientEventKey}
-              >
-                <div className="chat-session-message-meta">
-                  Operator message · {message.status === 'pending' ? 'Sending' : 'Failed'}
-                </div>
-                <div className="chat-session-message-text">{message.message}</div>
-                {message.error ? (
-                  <div className="chat-session-message-error">{message.error}</div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : null}
-        <label htmlFor="session-follow-up">Follow-up message</label>
-        <textarea
-          id="session-follow-up"
-          value={followUpMessage}
-          onChange={(event) => setFollowUpMessage(event.target.value)}
-          rows={3}
-          placeholder="Send a follow-up turn to the managed Codex session."
-          disabled={busy || !canSendFollowUp}
-        />
-        <div className="actions">
-          {canSendFollowUp ? (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy || !followUpMessage.trim()}
-              onClick={submitFollowUp}
-            >
-              Send follow-up
-            </button>
-          ) : null}
-          {canClearSession ? (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={clearSession}
-            >
-              Clear / Reset
-            </button>
-          ) : null}
-          {canInterruptTurn ? (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={interruptTurn}
-            >
-              Interrupt turn
-            </button>
-          ) : null}
-          {canCancelSession ? (
-            <button
-              type="button"
-              className="queue-action queue-action-danger"
-              disabled={busy}
-              onClick={cancelSession}
-            >
-              Cancel session
-            </button>
-          ) : null}
-        </div>
-      </div>
     </section>
   );
 }
@@ -5996,6 +5828,7 @@ function WorkflowDetailSubrouteNav({
   runCount?: number | null;
 }) {
   const items: Array<SegmentedNavItem<WorkflowDetailSubroute>> = [
+    { value: 'chat', label: 'Chat', href: workflowDetailSubrouteHref(workflowId, 'chat', search) },
     { value: 'overview', label: 'Overview', href: workflowDetailSubrouteHref(workflowId, 'overview', search) },
     {
       value: 'steps',
@@ -6276,6 +6109,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const missingAgentRunState = execution && !resolvedAgentRunId ? inferMissingAgentRunState(execution) : null;
 
+  const chatTabActive = detailSubroute === 'chat';
   const stepsTabActive = detailSubroute === 'steps';
   const artifactsTabActive = detailSubroute === 'artifacts';
   const overviewTabActive = detailSubroute === 'overview';
@@ -7075,6 +6909,36 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             <RuntimeCommandDetail command={runtimeCommand} />
           ) : null}
 
+          {chatTabActive ? (
+            <section className="stack td-chat-region td-evidence-region" aria-label="Workflow chat">
+              {logStreamingEnabled ? (
+                resolvedAgentRunId ? (
+                  <>
+                    {showAgentRunAttachNotice ? (
+                      <p className="small">Waiting for managed runtime launch to create chat events.</p>
+                    ) : null}
+                    <LiveLogsPanel
+                      apiBase={payload.apiBase}
+                      agentRunId={resolvedAgentRunId}
+                      targetRuntime={execution.targetRuntime}
+                      isTerminal={isTerminalExecution}
+                      invalidateWorkflowDetail={invalidate}
+                      autoExpand
+                      disclosure={false}
+                      routes={agentRunRoutes}
+                      sessionTimelineEnabled
+                      structuredHistoryEnabled={structuredHistoryEnabled}
+                    />
+                  </>
+                ) : (
+                  <p className="small">{renderMissingAgentRunCopy(missingAgentRunState ?? 'waiting_for_launch')}</p>
+                )
+              ) : (
+                <p className="small">Chat observation is disabled in the server dashboard config.</p>
+              )}
+            </section>
+          ) : null}
+
           {runsTabActive ? (
             <>
               <ExecutionHistoryPanel execution={execution} />
@@ -7670,7 +7534,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               agentRunId={resolvedAgentRunId}
               targetRuntime={execution.targetRuntime}
               isTerminal={isTerminalExecution}
-              invalidateWorkflowDetail={invalidate}
               routes={agentRunRoutes}
             />
           ) : null}

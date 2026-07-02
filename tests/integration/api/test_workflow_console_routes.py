@@ -112,6 +112,8 @@ async def async_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
             "/workflows/mm%3A5cd204e5-4f32-484a-a2ed-2222b214961c%3A"
             "%7B%7B.ScheduleTime%7D%7D-2026-06-27T13%3A00%3A00Z"
         ),
+        "/workflows/mm:workflow-123/chat",
+        "/workflows/mm:workflow-123/overview",
         "/workflows/mm:workflow-123/steps",
         "/workflows/mm:workflow-123/artifacts",
         "/workflows/mm:workflow-123/runs",

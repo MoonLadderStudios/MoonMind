@@ -1285,13 +1285,27 @@ describe('Workflow Detail Entrypoint', () => {
     rendered.rerender(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'Chat' }).getAttribute('aria-current')).toBe('page');
     });
     expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).not.toBe('page');
   });
 
+  it('MM-1097 makes Chat the default workflow detail tab', async () => {
+    window.history.pushState({}, 'Default Chat Test', '/workflows/test-123?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Chat' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'Chat' }).getAttribute('href')).toBe('/workflows/test-123?source=temporal');
+      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123/overview?source=temporal');
+      expect(screen.queryByRole('heading', { name: 'Summary' })).toBeNull();
+    });
+  });
+
   it('MM-801 renders Overview as a concise summary with stable segmented tabs', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
@@ -1315,7 +1329,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('MM-1020 switches Workflow Detail tabs with pushState without remounting or preloading tab data', async () => {
-    window.history.pushState({}, 'Client Tab Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Client Tab Test', '/workflows/test-123/overview?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
@@ -1930,14 +1944,14 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('MM-957 keeps raw Temporal facts out of the default overview while preserving summary and evidence sections', async () => {
-    window.history.pushState({}, 'Overview Debug IA Test', '/workflows/test-123?source=temporal');
+  it('MM-957 keeps raw Temporal facts out of the overview while preserving summary and evidence sections', async () => {
+    window.history.pushState({}, 'Overview Debug IA Test', '/workflows/test-123/overview?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      // Summary renders on the default overview without the old preview cards.
+      // Summary renders on the overview without the old preview cards.
       expect(screen.getByRole('heading', { name: 'Summary' })).toBeTruthy();
       expect(screen.getByText('Focused route summary')).toBeTruthy();
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
@@ -1986,7 +2000,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(debugLink.tagName).toBe('A');
     expect(debugLink.getAttribute('href')).toBe('/workflows/test-123/debug?source=temporal');
     // Overview is reachable from the Debug subroute (deep links round-trip).
-    expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123?source=temporal');
+    expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123/overview?source=temporal');
 
     // Raw Temporal facts are scoped to Debug only — not the Overview preview cards.
     expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
@@ -2119,7 +2133,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders the required workflow execution identity and section labels', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -2273,7 +2287,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders compact proposal delivery diagnostics from execution detail outcomes', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -2445,7 +2459,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('displays original slash instructions and missing runtime command metadata state', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -2492,7 +2506,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('displays slash command interpretation metadata from the execution snapshot', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -2550,7 +2564,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('displays legacy snake_case slash command metadata from historical execution snapshots', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -2604,7 +2618,7 @@ describe('Workflow Detail Entrypoint', () => {
 
 
   it('renders planning detail pills with setup coloring and keeps dependency pills inactive when appropriate', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4505,7 +4519,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders workflow details on successful fetch', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4647,7 +4661,7 @@ describe('Workflow Detail Entrypoint', () => {
       payload: { model: 'gpt-5-codex', requestedModel: 'gpt-5-codex' },
     },
   ])('displays the Model fact consistently — $label', async ({ payload }) => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4699,7 +4713,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('hides the Model fact when no model field is populated', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -5608,7 +5622,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders empty skill provenance when task skill metadata is missing', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -5660,7 +5674,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders structured run summary details from the summary artifact', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -5746,7 +5760,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('does not render a PR link for unsafe execution or run-summary URLs', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -6888,7 +6902,7 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getAllByRole('heading', { name: 'Execution History' })).toHaveLength(1);
       expect(screen.getByRole('link', { name: 'Runs' }).getAttribute('aria-current')).toBe('page');
-      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123?source=temporal');
+      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123/overview?source=temporal');
       expect(screen.getAllByText(/^Current Run ID:?$/).length).toBeGreaterThan(0);
       expect(screen.getAllByText('01-run').length).toBeGreaterThan(0);
       expect(screen.getAllByText('test-456').length).toBeGreaterThan(0);
@@ -7254,6 +7268,22 @@ describe('Workflow Detail Entrypoint', () => {
       if (url.includes('/observability/events')) {
         return Promise.resolve({
           ok: true,
+          json: async () => ({
+            events: [],
+            truncated: false,
+            sessionSnapshot: {
+              sessionId: 'sess:wf-task-1:codex_cli',
+              sessionEpoch: 1,
+              containerId: 'ctr-1',
+              threadId: 'thread-1',
+              activeTurnId: 'turn-1',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
           json: async () => ({ events: [], truncated: false }),
         } as Response);
       }
@@ -7549,7 +7579,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('routes Session Continuity follow-up and reset controls through the agent-run session control API', async () => {
+  it('MM-1097 routes Chat follow-up and reset controls through the agent-run session control API', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,
       initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
@@ -7601,6 +7631,22 @@ describe('Workflow Detail Entrypoint', () => {
                 interruptTurn: false,
                 cancelSession: false,
               },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [],
+            truncated: false,
+            sessionSnapshot: {
+              sessionId: 'sess:wf-task-1:codex_cli',
+              sessionEpoch: 1,
+              containerId: 'ctr-1',
+              threadId: 'thread-1',
+              activeTurnId: null,
             },
           }),
         } as Response);
@@ -7672,13 +7718,10 @@ describe('Workflow Detail Entrypoint', () => {
     ).length;
     fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
 
-    const pendingMessages = await screen.findByLabelText('Pending session messages');
-    const optimisticBubble = within(pendingMessages).getByText('Continue with the existing session.');
-    const optimisticContainer = optimisticBubble.closest('.chat-session-message');
-    expect(optimisticContainer?.getAttribute('data-client-event-key')).toMatch(
-      /^MM-1015:MM-977:sess:wf-task-1:codex_cli:1:\d+$/,
-    );
-    expect(screen.getByText('Operator message · Sending')).toBeTruthy();
+    const optimisticBubble = await screen.findByText('Continue with the existing session.');
+    const optimisticContainer = optimisticBubble.closest('.chat-session-block');
+    expect(optimisticContainer?.getAttribute('data-chat-block-type')).toBe('user');
+    expect(optimisticContainer?.textContent).toContain('Sending');
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -7713,7 +7756,7 @@ describe('Workflow Detail Entrypoint', () => {
       } as Response);
     });
     await waitFor(() => {
-      expect(screen.queryByText('Operator message · Sending')).toBeNull();
+      expect(screen.queryByText('Sending')).toBeNull();
     });
     await waitFor(() => {
       expect(
@@ -7741,7 +7784,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('marks optimistic follow-up bubbles failed when durable control confirmation fails', async () => {
+  it('surfaces Chat follow-up control errors when durable confirmation fails', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,
       initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
@@ -7794,6 +7837,22 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [],
+            truncated: false,
+            sessionSnapshot: {
+              sessionId: 'sess:wf-task-1:codex_cli',
+              sessionEpoch: 1,
+              containerId: 'ctr-1',
+              threadId: 'thread-1',
+              activeTurnId: null,
+            },
+          }),
+        } as Response);
+      }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
         return Promise.resolve({
           ok: false,
@@ -7832,12 +7891,10 @@ describe('Workflow Detail Entrypoint', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
 
-    const pendingMessages = await screen.findByLabelText('Pending session messages');
-    expect(within(pendingMessages).getByText('Try the next turn.')).toBeTruthy();
+    expect(await screen.findByText('Try the next turn.')).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByText('Operator message · Failed')).toBeTruthy();
+      expect(screen.getAllByText('Follow-up is not supported for this session.').length).toBeGreaterThan(0);
     });
-    expect(screen.getAllByText('Follow-up is not supported for this session.').length).toBeGreaterThan(0);
   });
 
   it('routes active-turn interrupt and cancel controls through the agent-run session control API', async () => {
@@ -9389,11 +9446,8 @@ describe('LiveLogsPanel', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
     await waitFor(() => {
-      expect(
-        within(screen.getByLabelText('Pending session messages')).getByText(
-          'Continue with the MM-1032 session.',
-        ),
-      ).toBeTruthy();
+      const optimisticBubble = screen.getByText('Continue with the MM-1032 session.');
+      expect(optimisticBubble.closest('.chat-session-block')?.getAttribute('data-chat-block-type')).toBe('user');
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/agent-runs/agent-run-mm-1032/artifact-sessions/sess%3Aagent-run-mm-1032%3Acodex_cli/control',
         expect.objectContaining({
@@ -9423,7 +9477,7 @@ describe('LiveLogsPanel', () => {
         }),
       } as Response);
     });
-    await waitFor(() => expect(screen.queryByText('Operator message · Sending')).toBeNull());
+    await waitFor(() => expect(screen.queryByText('Sending')).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'Clear / Reset' }));
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
