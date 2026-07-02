@@ -2944,11 +2944,11 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
-    const completedIcon = screen.getByLabelText('Status: completed');
+    const completedIcon = await screen.findByLabelText('Status: completed');
     expect(completedIcon.classList.contains('step-tl-icon')).toBe(true);
     expect(completedIcon.querySelector('svg.lucide-check')).toBeTruthy();
     expect(screen.getByText('completed')).toBeTruthy();
-    const executingIcon = screen.getByLabelText('Status: executing');
+    const executingIcon = await screen.findByLabelText('Status: executing');
     expect(executingIcon.classList.contains('step-tl-icon')).toBe(true);
     expect(executingIcon.querySelector('svg.lucide-play')).toBeTruthy();
     expect(screen.getByText('executing')).toBeTruthy();
