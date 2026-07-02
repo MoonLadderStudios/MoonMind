@@ -27,7 +27,6 @@ export const WORKFLOW_STATUS_ICONS = {
   awaiting_external: Hand,
   finalizing: PackageCheck,
   no_commit: Check,
-  no_changes: Check,
   completed: Check,
   failed: X,
   canceled: Ban,
