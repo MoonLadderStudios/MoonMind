@@ -31,7 +31,7 @@ Use **No Commit** for that outcome.
 
 | Layer | Canonical value | Meaning |
 | --- | --- | --- |
-| Exact lifecycle state | `no_commit` | Terminal, success-adjacent state: workflow completed without creating a repository commit. |
+| Exact lifecycle state | `no_commit` | Terminal completed-without-commit state: workflow completed without creating a repository commit. |
 | Finish outcome code | `NO_COMMIT` | Structured finish-summary outcome for the same condition. |
 | Publish status | `skipped` | Publish stage intentionally skipped branch/PR creation because no commit was needed. |
 | Publish reason code | `no_commit` | Stable machine-readable publish reason. |

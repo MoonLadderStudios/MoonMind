@@ -100,7 +100,7 @@ Rationale: `awaiting_slot` represents a workflow that is waiting for capacity, n
 | `waiting_on_dependencies` | Awaiting dep | Blocked yellow | `#92400E` | `#FACC15` | Furthest non-terminal distance from active execution; blocked on prerequisite workflow state and kept legible against purple dashboard backgrounds. |
 | `awaiting_external` | Awaiting external | Blocked yellow | `#92400E` | `#FACC15` | Furthest non-terminal distance from active execution; waiting on an external system, provider, or human and kept legible against purple dashboard backgrounds. |
 | `finalizing` | Finalizing | Finalization slate | `#64748B` | `#64748B` | Wrap-up, recording, publish summary, and terminalization work. |
-| `no_commit` | No commit | No-commit teal | `#159376` | `#1A997B` | Successful or side-effectful completion with no repository commit/publish artifact. |
+| `no_commit` | No commit | No-commit gray | Muted gray token | Muted gray token | Successful or side-effectful completion with no repository commit/publish artifact. |
 
 ---
 
@@ -113,9 +113,9 @@ Terminal outcomes should remain visually stable and easy to scan:
 - `completed` is green.
 - `failed` is red.
 - `canceled` is orange.
-- `no_commit` is teal and success-adjacent, not green.
+- `no_commit` is neutral gray, not green or teal.
 
-`no_commit` must not be colored green because that would hide the fact that a publish-mode workflow did not produce a commit or PR. It must not be colored red, orange, purple, or yellow because the outcome is not a failure or blocker when the workflow correctly determined no commit was required.
+`no_commit` must not be colored green or teal because that would hide the fact that a publish-mode workflow did not produce a commit or PR. It must not be colored red, orange, purple, or yellow because the outcome is not a failure or blocker when the workflow correctly determined no commit was required. Neutral gray keeps the terminal state distinct without implying a successful commit-producing outcome.
 
 ### 5.2 Active execution
 
