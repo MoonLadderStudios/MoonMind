@@ -556,6 +556,7 @@ def test_update_step_row_allows_explicit_last_error_clear() -> None:
     )
 
     assert rows[0]["status"] == "completed"
+    assert rows[0]["endedAt"] == updated_at.isoformat()
 
 def test_refresh_ready_steps_treats_legacy_succeeded_dependency_as_ready() -> None:
     updated_at = datetime(2026, 4, 7, 12, 12, tzinfo=UTC)

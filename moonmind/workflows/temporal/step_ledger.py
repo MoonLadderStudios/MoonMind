@@ -804,6 +804,7 @@ def update_step_row(
         if _normalize_replayed_step_status(status) in TERMINAL_STEP_STATUSES:
             row["waitingReason"] = None
             row["attentionRequired"] = False
+            row["endedAt"] = updated_at.isoformat()
         row["updatedAt"] = updated_at.isoformat()
         return row
     raise KeyError(f"Unknown logical step id: {logical_step_id}")

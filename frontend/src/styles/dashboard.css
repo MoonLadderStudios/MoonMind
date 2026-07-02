@@ -4056,6 +4056,48 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   -webkit-box-orient: vertical;
 }
 
+.step-duration-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.45rem;
+  border-radius: 999px;
+  padding: 0.12rem 0.52rem;
+  border: 1px solid rgb(var(--mm-border) / 0.55);
+  background: rgb(var(--mm-ink) / 0.04);
+  color: rgb(var(--mm-ink) / 0.78);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.step-duration-chip--live {
+  border-color: rgb(var(--mm-accent) / 0.42);
+  background: rgb(var(--mm-accent) / 0.1);
+  color: rgb(var(--mm-accent));
+}
+
+.step-duration-chip--unavailable {
+  color: rgb(var(--mm-muted));
+}
+
+.step-duration-bar {
+  position: relative;
+  overflow: hidden;
+  height: 0.22rem;
+  margin-top: 0.45rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-border) / 0.28);
+}
+
+.step-duration-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgb(var(--mm-accent) / 0.72), rgb(var(--mm-ok) / 0.72));
+}
+
 .step-execution-pill {
   display: inline-flex;
   align-items: center;
@@ -4197,6 +4239,81 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.4rem;
 }
 
+.step-timing-overview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgb(var(--mm-border) / 0.42);
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-panel) / 0.45);
+  color: rgb(var(--mm-ink) / 0.82);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.step-timing-overview strong {
+  color: rgb(var(--mm-muted));
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.step-timeline-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.step-wall-clock-timeline {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid rgb(var(--mm-border) / 0.38);
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-panel) / 0.35);
+}
+
+.step-wall-clock-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 16rem) minmax(10rem, 1fr);
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.step-wall-clock-label {
+  overflow: hidden;
+  color: rgb(var(--mm-muted));
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-wall-clock-track {
+  position: relative;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-border) / 0.28);
+}
+
+.step-wall-clock-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 0.25rem;
+  border-radius: inherit;
+  background: rgb(var(--mm-accent) / 0.72);
+}
+
+.step-wall-clock-bar.status-completed {
+  background: rgb(var(--mm-ok) / 0.72);
+}
+
+.step-wall-clock-bar.status-failed,
+.step-wall-clock-bar.status-canceled {
+  background: rgb(var(--mm-danger) / 0.72);
+}
+
 /* MM-831: expanded Step Execution history surface */
 .step-execution-history-count {
   margin: 0 0 0.4rem;
@@ -4295,6 +4412,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   .step-execution-fact {
     grid-template-columns: 1fr;
     gap: 0.1rem;
+  }
+
+  .step-wall-clock-row {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
   }
 }
 

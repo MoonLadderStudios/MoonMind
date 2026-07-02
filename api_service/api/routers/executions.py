@@ -114,7 +114,11 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
-from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
+from moonmind.workflows.temporal.step_ledger import (
+    ACTIVE_STEP_STATUSES,
+    TERMINAL_STEP_STATUSES,
+    build_initial_step_rows,
+)
 from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
@@ -4652,6 +4656,104 @@ async def _enrich_step_ledger_agent_run_refs(payload: Any) -> Any:
     return enriched_payload
 
 
+def _step_ledger_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _step_timing_payload(
+    step: Mapping[str, Any],
+    *,
+    server_now: datetime,
+) -> dict[str, Any]:
+    status_value = str(step.get("status") or "").strip()
+    started_at = _step_ledger_datetime(
+        step.get("startedAt") or step.get("started_at")
+    )
+    explicit_ended_at = _step_ledger_datetime(
+        step.get("endedAt") or step.get("ended_at")
+    )
+    fallback_ended_at = _step_ledger_datetime(
+        step.get("updatedAt") or step.get("updated_at")
+    )
+    server_now_iso = server_now.isoformat().replace("+00:00", "Z")
+
+    timing: dict[str, Any] = {
+        "startedAt": started_at.isoformat().replace("+00:00", "Z")
+        if started_at is not None
+        else None,
+        "endedAt": explicit_ended_at.isoformat().replace("+00:00", "Z")
+        if explicit_ended_at is not None
+        else None,
+        "durationMs": None,
+        "elapsedMs": None,
+        "serverNow": server_now_iso,
+        "precision": "unavailable",
+    }
+
+    if started_at is None:
+        return timing
+
+    if status_value in TERMINAL_STEP_STATUSES:
+        ended_at = explicit_ended_at or fallback_ended_at
+        if ended_at is None or ended_at < started_at:
+            return timing
+        duration_ms = max(0, int((ended_at - started_at).total_seconds() * 1000))
+        timing["endedAt"] = ended_at.isoformat().replace("+00:00", "Z")
+        timing["durationMs"] = duration_ms
+        timing["elapsedMs"] = duration_ms
+        timing["precision"] = "exact" if explicit_ended_at is not None else "fallback"
+        return timing
+
+    if status_value in ACTIVE_STEP_STATUSES:
+        elapsed_ms = max(0, int((server_now - started_at).total_seconds() * 1000))
+        timing["elapsedMs"] = elapsed_ms
+        timing["precision"] = "live"
+        return timing
+
+    return timing
+
+
+def _enrich_step_ledger_timing(payload: Any) -> Any:
+    if not isinstance(payload, Mapping):
+        return payload
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return payload
+    server_now = datetime.now(UTC)
+    enriched_steps: list[Any] = []
+    changed = False
+    for step in steps:
+        if not isinstance(step, Mapping):
+            enriched_steps.append(step)
+            continue
+        enriched_step = dict(step)
+        timing = _step_timing_payload(enriched_step, server_now=server_now)
+        enriched_step["timing"] = timing
+        if timing["endedAt"] is not None:
+            enriched_step.setdefault("endedAt", timing["endedAt"])
+        enriched_steps.append(enriched_step)
+        changed = True
+    if not changed:
+        return payload
+    enriched_payload = dict(payload)
+    enriched_payload["steps"] = enriched_steps
+    return enriched_payload
+
+
 def _fallback_step_tool_payload(step: Mapping[str, Any]) -> dict[str, str]:
     step_type = str(step.get("type") or "").strip()
     tool = step.get("tool") if isinstance(step.get("tool"), Mapping) else None
@@ -4913,7 +5015,10 @@ async def _load_execution_step_ledger(
                 "Serving fallback step ledger for %s from stored workflow parameters",
                 workflow_id,
             )
-            return fallback
+            fallback_payload = fallback.model_dump(by_alias=True)
+            return StepLedgerSnapshotModel.model_validate(
+                _enrich_step_ledger_timing(fallback_payload)
+            )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -4923,6 +5028,7 @@ async def _load_execution_step_ledger(
         ) from exc
 
     enriched_payload = await _enrich_step_ledger_agent_run_refs(payload)
+    enriched_payload = _enrich_step_ledger_timing(enriched_payload)
 
     try:
         return StepLedgerSnapshotModel.model_validate(enriched_payload)

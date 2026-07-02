@@ -9635,6 +9635,12 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
     assert payload["steps"][0]["workload"]["agentRunId"] == "agent-run-1"
     assert payload["steps"][0]["workload"]["profileId"] == "local-python"
     assert payload["steps"][0]["workload"]["imageRef"] == "python:3.12-slim"
+    assert payload["steps"][0]["timing"]["startedAt"] == "2026-04-08T12:00:00Z"
+    assert payload["steps"][0]["timing"]["endedAt"] is None
+    assert payload["steps"][0]["timing"]["durationMs"] is None
+    assert payload["steps"][0]["timing"]["elapsedMs"] >= 0
+    assert payload["steps"][0]["timing"]["serverNow"]
+    assert payload["steps"][0]["timing"]["precision"] == "live"
     assert payload["steps"][0]["workload"]["sessionContext"] == {
         "sessionId": "session-1",
         "sessionEpoch": 4,

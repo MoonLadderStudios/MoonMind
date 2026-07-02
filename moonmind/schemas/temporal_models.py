@@ -2796,6 +2796,23 @@ class PreservedStepProvenanceModel(BaseModel):
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
 
+
+class StepLedgerTimingModel(BaseModel):
+    """User-facing logical-step timing for the active/latest step row."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    started_at: datetime | None = Field(None, alias="startedAt")
+    ended_at: datetime | None = Field(None, alias="endedAt")
+    duration_ms: int | None = Field(None, alias="durationMs", ge=0)
+    elapsed_ms: int | None = Field(None, alias="elapsedMs", ge=0)
+    server_now: datetime | None = Field(None, alias="serverNow")
+    precision: Literal["exact", "live", "fallback", "unavailable"] = Field(
+        "unavailable",
+        alias="precision",
+    )
+
+
 class StepLedgerRowModel(BaseModel):
     """Current/latest Step Execution state for one logical step in the active run."""
 
@@ -2816,6 +2833,8 @@ class StepLedgerRowModel(BaseModel):
         ge=0,
     )
     started_at: datetime | None = Field(None, alias="startedAt")
+    ended_at: datetime | None = Field(None, alias="endedAt")
+    timing: StepLedgerTimingModel | None = Field(None, alias="timing")
     updated_at: datetime = Field(..., alias="updatedAt")
     summary: str | None = Field(None, alias="summary")
     checks: list[StepLedgerCheckModel] = Field(default_factory=list, alias="checks")

@@ -200,6 +200,15 @@ describe('Workflow Detail Entrypoint', () => {
         attentionRequired: false,
         executionOrdinal: 1,
         startedAt: '2026-04-09T00:00:01Z',
+        endedAt: '2026-04-09T00:00:02Z',
+        timing: {
+          startedAt: '2026-04-09T00:00:01Z',
+          endedAt: '2026-04-09T00:00:02Z',
+          durationMs: 1000,
+          elapsedMs: 1000,
+          serverNow: '2026-04-09T00:00:04Z',
+          precision: 'exact',
+        },
         updatedAt: '2026-04-09T00:00:02Z',
         summary: 'Plan complete',
         checks: [],
@@ -226,6 +235,15 @@ describe('Workflow Detail Entrypoint', () => {
         attentionRequired: false,
         executionOrdinal: 1,
         startedAt: '2026-04-09T00:00:03Z',
+        endedAt: null,
+        timing: {
+          startedAt: '2026-04-09T00:00:03Z',
+          endedAt: null,
+          durationMs: null,
+          elapsedMs: 1000,
+          serverNow: '2026-04-09T00:00:04Z',
+          precision: 'live',
+        },
         updatedAt: '2026-04-09T00:00:04Z',
         summary: 'Applying repository changes',
         checks: [
@@ -264,6 +282,15 @@ describe('Workflow Detail Entrypoint', () => {
         attentionRequired: false,
         executionOrdinal: 0,
         startedAt: null,
+        endedAt: null,
+        timing: {
+          startedAt: null,
+          endedAt: null,
+          durationMs: null,
+          elapsedMs: null,
+          serverNow: '2026-04-09T00:00:04Z',
+          precision: 'unavailable',
+        },
         updatedAt: '2026-04-09T00:00:04Z',
         summary: 'Ready to start',
         checks: [],
@@ -2469,6 +2496,34 @@ describe('Workflow Detail Entrypoint', () => {
     };
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/executions/test-123/steps/apply/step-executions')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            workflowId: 'test-123',
+            runId: '02-run',
+            runScope: 'latest',
+            logicalStepId: 'apply',
+            stepExecutions: [
+              {
+                manifestArtifactRef: 'artifact://step-executions/apply/1',
+                stepExecutionId: 'test-123:02-run:apply:execution:1',
+                workflowId: 'test-123',
+                runId: '02-run',
+                logicalStepId: 'apply',
+                executionOrdinal: 1,
+                reason: 'initial_execution',
+                status: 'executing',
+                startedAt: '2026-04-09T00:00:03Z',
+                updatedAt: '2026-04-09T00:00:04Z',
+                runtimeChildRefs: {},
+                manifestRefs: {},
+                outputRefs: {},
+              },
+            ],
+          }),
+        } as Response);
+      }
       if (url.includes('/executions/test-123/steps')) {
         return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
       }
@@ -2952,6 +3007,12 @@ describe('Workflow Detail Entrypoint', () => {
     expect(executingIcon.classList.contains('step-tl-icon')).toBe(true);
     expect(executingIcon.querySelector('svg.lucide-play')).toBeTruthy();
     expect(screen.getByText('executing')).toBeTruthy();
+    expect(screen.getByText('Longest step')).toBeTruthy();
+    expect(screen.getByText('Completed steps')).toBeTruthy();
+    expect(screen.getAllByText('1.0 s').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Ready').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Timeline view' }));
+    expect(screen.getByLabelText('Workflow wall clock timeline')).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-step-1/observability-summary')),
     ).toBe(false);
@@ -2960,11 +3021,13 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getAllByRole('heading', { name: 'Summary' }).length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Timing' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Checks' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Logs & Diagnostics' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Artifacts' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Metadata' })).toBeTruthy();
       expect(screen.getByText('Auto-approved')).toBeTruthy();
+      expect(screen.getAllByText(/so far$/).length).toBeGreaterThan(0);
       expect(screen.getByText('art-step-summary')).toBeTruthy();
       expect(screen.getByText('child-wf-1')).toBeTruthy();
       expect(screen.getByText('step scoped log line')).toBeTruthy();
