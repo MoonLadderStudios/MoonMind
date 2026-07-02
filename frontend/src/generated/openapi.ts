@@ -8498,7 +8498,7 @@ export interface components {
             /** Reason */
             reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
-            status?: ("pending" | "preparing" | "executing" | "checking" | "completed" | "failed" | "blocked" | "canceled" | "superseded") | null;
+            status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
             terminalDisposition?: ("accepted" | "retryable" | "blocked" | "needs_human" | "discarded" | "superseded" | "failed_unrecoverable" | "failed_with_remaining_work") | null;
             /** Startedat */
@@ -8622,7 +8622,7 @@ export interface components {
             /** Reason */
             reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
-            status?: ("pending" | "preparing" | "executing" | "checking" | "completed" | "failed" | "blocked" | "canceled" | "superseded") | null;
+            status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
             terminalDisposition?: ("accepted" | "retryable" | "blocked" | "needs_human" | "discarded" | "superseded" | "failed_unrecoverable" | "failed_with_remaining_work") | null;
             /** Startedat */
