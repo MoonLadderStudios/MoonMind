@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/integration/test_interventions.py (score: 1.000, trust: canonical)\n    line 76: assert response.status_code == 202, response.text\n2. api_service/ui_assets.py (score: 1.000, trust: canonical)\n    line 94: except json.JSONDecodeError:\n3. moonmind/billing/costs.py (score: 1.000, trust: canonical)\n    line 123: except json.JSONDecodeError:\n4. moonmind/indexers/google_drive_indexer.py (score: 1.000, trust: canonical)\n    line 50: status_code=500,\n5. moonmind/planning/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"\n6. moonmind/factories/indexers_factory.py (score: 1.000, trust: canonical)\n    line 5: from moonmind.indexers.jira_indexer import JiraIndexer  # New import\n7. moonmind/planning/jira_story_planner.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"\n8. moonmind/indexers/github_indexer.py (score: 1.000, trust: canonical)\n    line 104: status_code=500, detail=f\"Failed to initialize GitHub reader: {e}\"",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/integration/test_interventions.py",
+      "text": "line 76: assert response.status_code == 202, response.text",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 76,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/ui_assets.py",
+      "text": "line 94: except json.JSONDecodeError:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 94,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/billing/costs.py",
+      "text": "line 123: except json.JSONDecodeError:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 123,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/google_drive_indexer.py",
+      "text": "line 50: status_code=500,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 50,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/__init__.py",
+      "text": "line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/factories/indexers_factory.py",
+      "text": "line 5: from moonmind.indexers.jira_indexer import JiraIndexer  # New import",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/jira_story_planner.py",
+      "text": "line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/github_indexer.py",
+      "text": "line 104: status_code=500, detail=f\"Failed to initialize GitHub reader: {e}\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 104,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-07-02T00:32:26Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
