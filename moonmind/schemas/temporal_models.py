@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Literal, Optional
 
@@ -2080,7 +2081,7 @@ class RecoveryCheckpointPreservedStepModel(BaseModel):
 
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     order: int = Field(..., alias="order", ge=1)
-    status: Literal["succeeded", "skipped"] = Field(..., alias="status")
+    status: Literal["completed", "skipped"] = Field(..., alias="status")
     source_execution_ordinal: int = Field(..., alias="sourceExecutionOrdinal", ge=1)
     artifacts: dict[str, Any] = Field(default_factory=dict, alias="artifacts")
     state_checkpoint_ref: Optional[str] = Field(None, alias="stateCheckpointRef")
@@ -2088,6 +2089,13 @@ class RecoveryCheckpointPreservedStepModel(BaseModel):
         None, alias="workspaceCheckpointRef"
     )
     step_checkpoint_ref: Optional[str] = Field(None, alias="stepCheckpointRef")
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _normalize_legacy_status(cls, value: Any) -> Any:
+        if str(value or "").strip().lower() == "succeeded":
+            return "completed"
+        return value
 
     @field_validator("artifacts", mode="before")
     @classmethod
@@ -2548,15 +2556,27 @@ class ExecutionProgressModel(BaseModel):
     total: int = Field(0, alias="total", ge=0)
     pending: int = Field(0, alias="pending", ge=0)
     ready: int = Field(0, alias="ready", ge=0)
-    running: int = Field(0, alias="running", ge=0)
+    executing: int = Field(0, alias="executing", ge=0)
     awaiting_external: int = Field(0, alias="awaitingExternal", ge=0)
     reviewing: int = Field(0, alias="reviewing", ge=0)
-    succeeded: int = Field(0, alias="succeeded", ge=0)
+    completed: int = Field(0, alias="completed", ge=0)
     failed: int = Field(0, alias="failed", ge=0)
     skipped: int = Field(0, alias="skipped", ge=0)
     canceled: int = Field(0, alias="canceled", ge=0)
     current_step_title: str | None = Field(None, alias="currentStepTitle")
     updated_at: datetime = Field(..., alias="updatedAt")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_progress_fields(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        payload = dict(value)
+        if payload.get("executing") is None and payload.get("running") is not None:
+            payload["executing"] = payload["running"]
+        if payload.get("completed") is None and payload.get("succeeded") is not None:
+            payload["completed"] = payload["succeeded"]
+        return payload
 
 class ExecutionMergeAutomationBlockerModel(BaseModel):
     """Operator-visible merge automation blocker."""

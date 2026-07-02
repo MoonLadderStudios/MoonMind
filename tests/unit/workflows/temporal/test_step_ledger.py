@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+from pydantic import ValidationError
+
 from moonmind.schemas.temporal_models import (
     ExecutionProgressModel,
     StepLedgerArtifactsModel,
@@ -16,6 +19,7 @@ from moonmind.workflows.temporal.step_ledger import (
     build_progress_summary,
     mark_step_execution_manifest_evidence,
     mark_step_checkpoint_evidence,
+    refresh_ready_steps,
     upsert_step_check,
     update_step_row,
 )
@@ -23,8 +27,12 @@ from moonmind.workflows.temporal.step_ledger import (
 
 def test_step_execution_artifact_status_converts_explicitly_to_step_ledger_status() -> None:
     assert step_execution_to_ledger_status("pending") == "pending"
-    assert step_execution_to_ledger_status("preparing") == "running"
+    assert step_execution_to_ledger_status("preparing") == "executing"
+    assert step_execution_to_ledger_status("executing") == "executing"
+    assert step_execution_to_ledger_status("running") == "executing"
     assert step_execution_to_ledger_status("checking") == "reviewing"
+    assert step_execution_to_ledger_status("completed") == "completed"
+    assert step_execution_to_ledger_status("succeeded") == "completed"
     assert step_execution_to_ledger_status("blocked") == "awaiting_external"
     assert step_execution_to_ledger_status("superseded") == "skipped"
 
@@ -105,6 +113,31 @@ def test_step_ledger_refs_track_latest_and_historical_step_execution_manifests()
         "artifact-attempt-2"
     )
 
+
+def test_step_ledger_row_rejects_removed_status_tokens() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 10, tzinfo=UTC)
+    base_row = {
+        "logicalStepId": "run-tests",
+        "order": 1,
+        "title": "Run tests",
+        "tool": {"type": "skill", "name": "repo.run_tests"},
+        "dependsOn": [],
+        "waitingReason": None,
+        "attentionRequired": False,
+        "executionOrdinal": 1,
+        "updatedAt": updated_at.isoformat(),
+        "summary": None,
+        "checks": [],
+        "refs": {"childWorkflowId": None, "childRunId": None, "agentRunId": None},
+        "artifacts": {},
+        "lastError": None,
+    }
+
+    for removed_status in ("running", "succeeded"):
+        with pytest.raises(ValidationError):
+            StepLedgerRowModel.model_validate({**base_row, "status": removed_status})
+
+
 def test_build_initial_step_rows_skips_blank_node_ids() -> None:
     updated_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
 
@@ -172,13 +205,13 @@ def test_progress_summary_prefers_active_step_title_and_counts_statuses() -> Non
         [
             {
                 "logicalStepId": "step-1",
-                "status": "succeeded",
+                "status": "completed",
                 "title": "Prepare workspace",
                 "updatedAt": updated_at.isoformat(),
             },
             {
                 "logicalStepId": "step-2",
-                "status": "running",
+                "status": "executing",
                 "title": "Run tests",
                 "updatedAt": updated_at.isoformat(),
             },
@@ -196,16 +229,40 @@ def test_progress_summary_prefers_active_step_title_and_counts_statuses() -> Non
         "total": 3,
         "pending": 1,
         "ready": 0,
-        "running": 1,
+        "executing": 1,
         "awaitingExternal": 0,
         "reviewing": 0,
-        "succeeded": 1,
+        "completed": 1,
         "failed": 0,
         "skipped": 0,
         "canceled": 0,
         "currentStepTitle": "Run tests",
         "updatedAt": updated_at.isoformat(),
     }
+
+def test_progress_summary_normalizes_legacy_replayed_statuses() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 5, tzinfo=UTC)
+    progress = build_progress_summary(
+        [
+            {
+                "logicalStepId": "step-1",
+                "status": "succeeded",
+                "title": "Prepare workspace",
+                "updatedAt": updated_at.isoformat(),
+            },
+            {
+                "logicalStepId": "step-2",
+                "status": "running",
+                "title": "Run tests",
+                "updatedAt": updated_at.isoformat(),
+            },
+        ],
+        updated_at=updated_at,
+    )
+
+    assert progress["executing"] == 1
+    assert progress["completed"] == 1
+    assert progress["currentStepTitle"] == "Run tests"
 
 def test_progress_summary_does_not_treat_ready_step_as_current() -> None:
     updated_at = datetime(2026, 4, 7, 12, 6, tzinfo=UTC)
@@ -239,10 +296,10 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
             "total": 3,
             "pending": 0,
             "ready": 0,
-            "running": 0,
+            "executing": 0,
             "awaitingExternal": 1,
             "reviewing": 1,
-            "succeeded": 1,
+            "completed": 1,
             "failed": 0,
             "skipped": 0,
             "canceled": 0,
@@ -257,7 +314,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
             "title": "Run tests",
             "tool": {"type": "skill", "name": "repo.run_tests"},
             "dependsOn": ["prepare-workspace"],
-            "status": "running",
+            "status": "executing",
             "waitingReason": None,
             "attentionRequired": False,
             "attempt": 2,
@@ -413,7 +470,7 @@ def test_mark_step_checkpoint_evidence_marks_completed_step_eligible() -> None:
         rows,
         "implement",
         updated_at=updated_at,
-        status="succeeded",
+        status="completed",
         artifacts={"outputPrimary": "artifact://output"},
     )
 
@@ -458,7 +515,7 @@ def test_mark_step_checkpoint_evidence_records_bounded_ineligible_reason() -> No
         rows,
         "plan",
         updated_at=updated_at,
-        status="succeeded",
+        status="completed",
     )
 
     mark_step_checkpoint_evidence(rows, "plan", updated_at=updated_at)
@@ -494,11 +551,35 @@ def test_update_step_row_allows_explicit_last_error_clear() -> None:
         rows,
         "run-tests",
         updated_at=updated_at,
-        status="succeeded",
+        status="completed",
         last_error=None,
     )
 
-    assert rows[0]["status"] == "succeeded"
+    assert rows[0]["status"] == "completed"
+
+def test_refresh_ready_steps_treats_legacy_succeeded_dependency_as_ready() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 12, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "prepare",
+                "tool": {"type": "skill", "name": "repo.prepare"},
+                "inputs": {"title": "Prepare"},
+            },
+            {
+                "id": "run-tests",
+                "tool": {"type": "skill", "name": "repo.test"},
+                "inputs": {"title": "Run tests"},
+            },
+        ],
+        dependency_map={"prepare": [], "run-tests": ["prepare"]},
+        updated_at=updated_at,
+    )
+    rows[0]["status"] = "succeeded"
+
+    refresh_ready_steps(rows, updated_at=updated_at)
+
+    assert rows[1]["status"] == "ready"
 
 def test_upsert_step_check_updates_existing_review_state() -> None:
     updated_at = datetime(2026, 4, 7, 12, 15, tzinfo=UTC)
@@ -617,7 +698,7 @@ def test_mark_step_execution_manifest_evidence_tracks_latest_and_history() -> No
         "implement",
         updated_at=updated_at,
         increment_attempt=True,
-        status="running",
+        status="executing",
     )
     mark_step_execution_manifest_evidence(
         rows,
@@ -631,7 +712,7 @@ def test_mark_step_execution_manifest_evidence_tracks_latest_and_history() -> No
         "implement",
         updated_at=updated_at,
         increment_attempt=True,
-        status="running",
+        status="executing",
     )
     second = mark_step_execution_manifest_evidence(
         rows,

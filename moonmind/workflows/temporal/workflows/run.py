@@ -505,6 +505,7 @@ RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
 RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
+RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_EMIT_EPHEMERAL_STEP_CHECKPOINTS_PATCH = (
     "run-emit-ephemeral-step-checkpoints-v1"
@@ -1102,10 +1103,10 @@ class MoonMindRunWorkflow:
             "total": 0,
             "pending": 0,
             "ready": 0,
-            "running": 0,
+            "executing": 0,
             "awaitingExternal": 0,
             "reviewing": 0,
-            "succeeded": 0,
+            "completed": 0,
             "failed": 0,
             "skipped": 0,
             "canceled": 0,
@@ -1373,6 +1374,9 @@ class MoonMindRunWorkflow:
         resolved_summary = summary
 
         if phase in {"start", "launch_blocked"}:
+            canonical_step_status_vocab = workflow.patched(
+                RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH
+            )
             compensation_plan = self._orchestrate_reattempt_compensation(
                 logical_step_id,
                 execution_ordinal=attempt,
@@ -1384,7 +1388,13 @@ class MoonMindRunWorkflow:
             launch_blocked = phase == "launch_blocked" or (
                 self._workspace_policy_launch_blocked(workspace)
             )
-            resolved_status = "blocked" if launch_blocked else "running"
+            resolved_status = (
+                "blocked"
+                if launch_blocked
+                else "executing"
+                if canonical_step_status_vocab
+                else "running"
+            )
             if launch_blocked:
                 resolved_terminal_disposition = "blocked"
                 resolved_summary = "Workspace policy rejected before launch."
@@ -2695,7 +2705,9 @@ class MoonMindRunWorkflow:
                     "Recovery source preserved step requires logical step ID."
                 )
             status = self._recovery_source_text(preserved, "status").lower()
-            if status and status not in {"succeeded", "skipped"}:
+            if status == "succeeded":
+                status = "completed"
+            if status and status not in {"completed", "skipped"}:
                 raise ValueError(
                     f"preserved step {logical_step_id} must be completed before Resume"
                 )
@@ -3072,7 +3084,7 @@ class MoonMindRunWorkflow:
         if not self._try_update_step_row(
             logical_step_id,
             updated_at=updated_at,
-            status="running",
+            status="executing",
             summary=summary,
             waiting_reason=None,
             attention_required=False,
@@ -3101,7 +3113,7 @@ class MoonMindRunWorkflow:
             )
         except KeyError:
             return
-        # First time a logical step crosses into "running" is the closest
+        # First time a logical step crosses into executing is the closest
         # existing semantic boundary for "real work began". Stamp the
         # execution-level mm_started_at exactly once here.
         if workflow.patched(RUN_REAL_STARTED_AT_PATCH):
@@ -7594,7 +7606,7 @@ class MoonMindRunWorkflow:
 
             self._mark_step_terminal(
                 node_id,
-                status="succeeded",
+                status="completed",
                 updated_at=workflow.now(),
                 summary=self._get_from_result(execution_result, "summary")
                 or self._summary,
@@ -7609,7 +7621,7 @@ class MoonMindRunWorkflow:
                 phase="terminal",
                 updated_at=workflow.now(),
                 reason=attempt_reason,
-                status="succeeded",
+                status="completed",
                 terminal_disposition="accepted",
                 budget=self._review_gate_budget_metadata(
                     max_review_attempts=max_review_attempts,
@@ -13850,9 +13862,9 @@ class MoonMindRunWorkflow:
             "total",
             "pending",
             "ready",
-            "running",
+            "executing",
             "reviewing",
-            "succeeded",
+            "completed",
             "failed",
             "skipped",
             "canceled",

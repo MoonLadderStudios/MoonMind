@@ -70,7 +70,7 @@ The workflow-owned ledger is authoritative for current step state during executi
 Rules:
 
 - the workflow ledger owns status, attempt, waiting state, check state, and current refs
-- the ledger must be queryable while running and after completion
+- the ledger must be queryable while executing and after completion
 - the ledger must remain compact enough to live safely in workflow state
 
 ### 3.3 Evidence
@@ -113,10 +113,10 @@ Representative shape:
   "total": 6,
   "pending": 2,
   "ready": 0,
-  "running": 1,
+  "executing": 1,
   "awaitingExternal": 0,
   "reviewing": 0,
-  "succeeded": 3,
+  "completed": 3,
   "failed": 0,
   "skipped": 0,
   "canceled": 0,
@@ -150,7 +150,7 @@ Representative response:
       "title": "Run test suite",
       "tool": { "type": "skill", "name": "repo.run_tests", "version": "1" },
       "dependsOn": ["apply-patch"],
-      "status": "running",
+      "status": "executing",
       "waitingReason": null,
       "attentionRequired": false,
       "attempt": 1,
@@ -231,10 +231,10 @@ The canonical v1 step statuses are:
 | --- | --- |
 | `pending` | Planned but not yet ready to run |
 | `ready` | Dependencies satisfied; eligible for dispatch |
-| `running` | The step is actively executing |
+| `executing` | The step is actively executing |
 | `awaiting_external` | Waiting on external provider/runtime progress |
 | `reviewing` | Structured review/check processing is active |
-| `succeeded` | Completed successfully |
+| `completed` | Completed successfully |
 | `failed` | Ended in failure for the current run |
 | `skipped` | Intentionally not executed |
 | `canceled` | Canceled before successful completion |
@@ -244,7 +244,7 @@ Rules:
 - step statuses are more specific than workflow/dashboard rollup statuses
 - `waitingReason` provides the bounded cause for blocked states
 - `attentionRequired` indicates whether the current stall requires operator action
-- a preserved row uses the normal terminal status, usually `succeeded`, plus `preservedFrom`; preservation is provenance, not a separate status
+- a preserved row uses the normal terminal status, usually `completed`, plus `preservedFrom`; preservation is provenance, not a separate status
 
 ## 9. Checks and review results
 
@@ -378,7 +378,7 @@ Representative shape:
     {
       "logicalStepId": "apply-patch",
       "order": 3,
-      "status": "succeeded",
+      "status": "completed",
       "sourceExecutionOrdinal": 1,
       "artifacts": {
         "outputSummary": "art_summary",

@@ -195,7 +195,7 @@ describe('Workflow Detail Entrypoint', () => {
         title: 'Plan work',
         tool: { type: 'skill', name: 'plan.generate', version: '1' },
         dependsOn: [],
-        status: 'succeeded',
+        status: 'completed',
         waitingReason: null,
         attentionRequired: false,
         executionOrdinal: 1,
@@ -221,7 +221,7 @@ describe('Workflow Detail Entrypoint', () => {
         title: 'Apply patch',
         tool: { type: 'agent_runtime', name: 'codex_cli', version: '1' },
         dependsOn: ['plan'],
-        status: 'running',
+        status: 'executing',
         waitingReason: null,
         attentionRequired: false,
         executionOrdinal: 1,
@@ -1562,7 +1562,7 @@ describe('Workflow Detail Entrypoint', () => {
           title: 'Plan work',
           tool: { type: 'skill', name: 'plan.generate', version: '1' },
           dependsOn: [],
-          status: 'succeeded',
+          status: 'completed',
           waitingReason: null,
           attentionRequired: false,
           executionOrdinal: 1,
@@ -1698,7 +1698,7 @@ describe('Workflow Detail Entrypoint', () => {
           title: 'Apply patch',
           tool: { type: 'agent_runtime', name: 'codex_cli', version: '1' },
           dependsOn: [],
-          status: 'succeeded',
+          status: 'completed',
           waitingReason: null,
           attentionRequired: false,
           executionOrdinal: 2,
@@ -1787,7 +1787,7 @@ describe('Workflow Detail Entrypoint', () => {
             relationship: 'recovered_from',
           },
           reason: 'dependency_invalidated',
-          status: 'succeeded',
+          status: 'completed',
           terminalDisposition: 'accepted',
           startedAt: '2026-04-09T00:00:03Z',
           updatedAt: '2026-04-09T00:00:04Z',
@@ -2944,6 +2944,14 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
+    const completedIcon = await screen.findByLabelText('Status: completed');
+    expect(completedIcon.classList.contains('step-tl-icon')).toBe(true);
+    expect(completedIcon.querySelector('svg.lucide-check')).toBeTruthy();
+    expect(screen.getByText('completed')).toBeTruthy();
+    const executingIcon = await screen.findByLabelText('Status: executing');
+    expect(executingIcon.classList.contains('step-tl-icon')).toBe(true);
+    expect(executingIcon.querySelector('svg.lucide-play')).toBeTruthy();
+    expect(screen.getByText('executing')).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-step-1/observability-summary')),
     ).toBe(false);
@@ -3535,7 +3543,7 @@ describe('Workflow Detail Entrypoint', () => {
           logicalStepId: 'plan',
           order: 1,
           title: 'Plan',
-          status: 'succeeded',
+          status: 'completed',
           executionOrdinal: 1,
           updatedAt: '2026-03-28T00:00:01Z',
           refs: {},
@@ -4342,7 +4350,7 @@ describe('Workflow Detail Entrypoint', () => {
           logicalStepId: 'plan',
           order: 1,
           title: 'Plan',
-          status: 'succeeded',
+          status: 'completed',
           executionOrdinal: 1,
           updatedAt: '2026-03-28T00:00:01Z',
           refs: {},

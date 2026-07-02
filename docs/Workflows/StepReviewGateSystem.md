@@ -118,7 +118,7 @@ When `approval_policy` is absent or `enabled` is `false`, behavior is identical 
   "tool": { "type": "skill", "name": "repo.apply_patch" },
   "inputs": { "...original step inputs..." },
   "execution_result": {
-    "status": "SUCCEEDED",
+    "status": "COMPLETED",
     "outputs": { "...step outputs..." },
     "output_artifacts": []
   },

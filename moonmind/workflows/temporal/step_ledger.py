@@ -8,10 +8,18 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
-ACTIVE_STEP_STATUSES = ("running", "reviewing", "awaiting_external")
-TERMINAL_STEP_STATUSES = {"succeeded", "failed", "skipped", "canceled"}
-READY_DEPENDENCY_STATUSES = {"succeeded", "skipped"}
+ACTIVE_STEP_STATUSES = ("executing", "reviewing", "awaiting_external")
+TERMINAL_STEP_STATUSES = {"completed", "failed", "skipped", "canceled"}
+READY_DEPENDENCY_STATUSES = {"completed", "skipped"}
+LEGACY_STEP_STATUS_ALIASES = {
+    "running": "executing",
+    "succeeded": "completed",
+}
 _UNSET = object()
+
+def _normalize_replayed_step_status(status: Any) -> str:
+    value = str(status or "").strip()
+    return LEGACY_STEP_STATUS_ALIASES.get(value, value)
 
 def default_step_refs() -> dict[str, Any]:
     return {
@@ -494,7 +502,9 @@ def materialize_preserved_steps(
             )
         except (TypeError, ValueError):
             source_execution_ordinal = 1
-        row["status"] = str(preserved.get("status") or "succeeded")
+        row["status"] = _normalize_replayed_step_status(
+            preserved.get("status") or "completed"
+        )
         terminal_disposition = str(
             preserved.get("terminalDisposition")
             or preserved.get("terminal_disposition")
@@ -593,8 +603,8 @@ def mark_step_checkpoint_evidence(
             refs["checkpointRefsByBoundary"] = normalized_by_boundary
             row["refs"] = refs
         existing_checkpoint = str(row.get("stateCheckpointRef") or "").strip()
-        status = str(row.get("status") or "").strip()
-        if status not in {"succeeded", "skipped"}:
+        status = _normalize_replayed_step_status(row.get("status"))
+        if status not in {"completed", "skipped"}:
             preservation = _recovery_preservation(
                 eligible=False,
                 reason="not_completed",
@@ -695,23 +705,30 @@ def build_progress_summary(
         "total": len(rows),
         "pending": 0,
         "ready": 0,
-        "running": 0,
+        "executing": 0,
         "awaitingExternal": 0,
         "reviewing": 0,
-        "succeeded": 0,
+        "completed": 0,
         "failed": 0,
         "skipped": 0,
         "canceled": 0,
     }
     current_step_title: str | None = None
     for active_status in ACTIVE_STEP_STATUSES:
-        match = next((row for row in rows if row.get("status") == active_status), None)
+        match = next(
+            (
+                row
+                for row in rows
+                if _normalize_replayed_step_status(row.get("status")) == active_status
+            ),
+            None,
+        )
         if match is not None:
             current_step_title = str(match.get("title") or "").strip() or None
             break
 
     for row in rows:
-        status = str(row.get("status") or "").strip()
+        status = _normalize_replayed_step_status(row.get("status"))
         if status == "awaiting_external":
             counts["awaitingExternal"] += 1
         elif status in counts:
@@ -784,7 +801,7 @@ def update_step_row(
             row["artifacts"] = merged_artifacts
         if workload is not _UNSET:
             row["workload"] = dict(workload) if isinstance(workload, Mapping) else None
-        if status in TERMINAL_STEP_STATUSES:
+        if _normalize_replayed_step_status(status) in TERMINAL_STEP_STATUSES:
             row["waitingReason"] = None
             row["attentionRequired"] = False
         row["updatedAt"] = updated_at.isoformat()
@@ -829,7 +846,9 @@ def upsert_step_check(
 
 def refresh_ready_steps(rows: list[dict[str, Any]], *, updated_at: datetime) -> None:
     statuses = {
-        str(row.get("logicalStepId")): str(row.get("status") or "")
+        str(row.get("logicalStepId")): _normalize_replayed_step_status(
+            row.get("status")
+        )
         for row in rows
     }
     for row in rows:
