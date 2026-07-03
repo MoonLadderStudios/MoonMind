@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -532,5 +533,196 @@ class CheckpointBranchRecordModel(BaseModel):
     runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
         ..., alias="runtimeContextPolicy"
     )
+    current_head_step_execution_id: str | None = Field(
+        None, alias="currentHeadStepExecutionId"
+    )
+    current_head_checkpoint_ref: str | None = Field(
+        None, alias="currentHeadCheckpointRef"
+    )
+    current_head_commit: str | None = Field(None, alias="currentHeadCommit")
+    pull_request_url: str | None = Field(None, alias="pullRequestUrl")
+    promoted_at: datetime | None = Field(None, alias="promotedAt")
+    archived_at: datetime | None = Field(None, alias="archivedAt")
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
+
+
+class CheckpointBranchTurnRecordModel(BaseModel):
+    """Read model for one persisted checkpoint branch turn."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    branch_turn_id: str = Field(..., alias="branchTurnId")
+    branch_id: str = Field(..., alias="branchId")
+    parent_turn_id: str | None = Field(None, alias="parentTurnId")
+    source_checkpoint_ref: str | None = Field(None, alias="sourceCheckpointRef")
+    source_checkpoint_digest: str | None = Field(None, alias="sourceCheckpointDigest")
+    source_state_kind: str | None = Field(None, alias="sourceStateKind")
+    source_state_ref: str | None = Field(None, alias="sourceStateRef")
+    source_state_digest: str | None = Field(None, alias="sourceStateDigest")
+    workspace_policy: CheckpointBranchWorkspacePolicy = Field(
+        ..., alias="workspacePolicy"
+    )
+    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
+        ..., alias="runtimeContextPolicy"
+    )
+    instruction_ref: str = Field(..., alias="instructionRef")
+    instruction_digest: str = Field(..., alias="instructionDigest")
+    context_bundle_ref: str | None = Field(None, alias="contextBundleRef")
+    created_step_execution_id: str | None = Field(
+        None, alias="createdStepExecutionId"
+    )
+    runtime_agent_run_id: str | None = Field(None, alias="runtimeAgentRunId")
+    provider_session_id: str | None = Field(None, alias="providerSessionId")
+    idempotency_key: str = Field(..., alias="idempotencyKey")
+    status: CheckpointBranchTurnStateValue
+    started_at: datetime | None = Field(None, alias="startedAt")
+    completed_at: datetime | None = Field(None, alias="completedAt")
+    created_at: datetime = Field(..., alias="createdAt")
+    updated_at: datetime = Field(..., alias="updatedAt")
+
+
+class CheckpointBranchArtifactRecordModel(BaseModel):
+    """Read model for branch evidence artifacts."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    branch_id: str = Field(..., alias="branchId")
+    branch_turn_id: str | None = Field(None, alias="branchTurnId")
+    artifact_ref: str = Field(..., alias="artifactRef")
+    artifact_kind: str = Field(..., alias="artifactKind")
+    created_at: datetime = Field(..., alias="createdAt")
+
+
+class CheckpointBranchGraphModel(BaseModel):
+    """Branch graph read model with append-only evidence."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    branch: CheckpointBranchRecordModel
+    turns: list[CheckpointBranchTurnRecordModel] = Field(default_factory=list)
+    artifacts: list[CheckpointBranchArtifactRecordModel] = Field(default_factory=list)
+
+
+class CheckpointBranchGraphCreateModel(CheckpointBranchCreateModel):
+    """Product-level branch create request including the first branch turn."""
+
+    branch_turn_id: str | None = Field(None, alias="branchTurnId", min_length=1)
+    instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
+    instruction_digest: str = Field(..., alias="instructionDigest", min_length=1)
+    context_bundle_ref: str | None = Field(
+        None, alias="contextBundleRef", min_length=1
+    )
+    created_step_execution_id: str | None = Field(
+        None, alias="createdStepExecutionId", min_length=1
+    )
+    runtime_agent_run_id: str | None = Field(
+        None, alias="runtimeAgentRunId", min_length=1
+    )
+    provider_session_id: str | None = Field(
+        None, alias="providerSessionId", min_length=1
+    )
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _strip_strings(cls, value: Any) -> Any:
+        if isinstance(value, str) or value is None:
+            return _optional_text(value)
+        return value
+
+
+class CheckpointBranchContinueModel(BaseModel):
+    """Product-level continue request for appending one branch turn."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    branch_turn_id: str | None = Field(None, alias="branchTurnId", min_length=1)
+    workspace_policy: CheckpointBranchWorkspacePolicy | None = Field(
+        None, alias="workspacePolicy"
+    )
+    runtime_context_policy: CheckpointBranchRuntimeContextPolicy | None = Field(
+        None, alias="runtimeContextPolicy"
+    )
+    instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
+    instruction_digest: str = Field(..., alias="instructionDigest", min_length=1)
+    context_bundle_ref: str | None = Field(
+        None, alias="contextBundleRef", min_length=1
+    )
+    created_step_execution_id: str | None = Field(
+        None, alias="createdStepExecutionId", min_length=1
+    )
+    runtime_agent_run_id: str | None = Field(
+        None, alias="runtimeAgentRunId", min_length=1
+    )
+    provider_session_id: str | None = Field(
+        None, alias="providerSessionId", min_length=1
+    )
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _strip_strings(cls, value: Any) -> Any:
+        if isinstance(value, str) or value is None:
+            return _optional_text(value)
+        return value
+
+
+class CheckpointBranchForkModel(BaseModel):
+    """Product-level child fork request."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    branch_id: str = Field(..., alias="branchId", min_length=1)
+    label: str = Field(..., min_length=1)
+    parent_turn_id: str = Field(..., alias="parentTurnId", min_length=1)
+    workspace_policy: CheckpointBranchWorkspacePolicy = Field(
+        ..., alias="workspacePolicy"
+    )
+    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
+        ..., alias="runtimeContextPolicy"
+    )
+    branch_turn_id: str | None = Field(None, alias="branchTurnId", min_length=1)
+    instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
+    instruction_digest: str = Field(..., alias="instructionDigest", min_length=1)
+    context_bundle_ref: str | None = Field(
+        None, alias="contextBundleRef", min_length=1
+    )
+    created_step_execution_id: str | None = Field(
+        None, alias="createdStepExecutionId", min_length=1
+    )
+    runtime_agent_run_id: str | None = Field(
+        None, alias="runtimeAgentRunId", min_length=1
+    )
+    provider_session_id: str | None = Field(
+        None, alias="providerSessionId", min_length=1
+    )
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _strip_strings(cls, value: Any) -> Any:
+        if isinstance(value, str) or value is None:
+            return _optional_text(value)
+        return value
+
+
+class CheckpointBranchStateUpdateModel(BaseModel):
+    """Small response for branch lifecycle transition operations."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    branch_id: str = Field(..., alias="branchId")
+    state: CheckpointBranchStateValue
+    promoted_at: datetime | None = Field(None, alias="promotedAt")
+    archived_at: datetime | None = Field(None, alias="archivedAt")
+
+    @field_validator("promoted_at", "archived_at", mode="after")
+    @classmethod
+    def _ensure_utc(cls, value: datetime | None) -> datetime | None:
+        # Naive values come from DB round trips that drop tzinfo (SQLite);
+        # stored instants are UTC, so tag them for consistent read models.
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
