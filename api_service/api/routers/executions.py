@@ -662,10 +662,6 @@ def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
         if isinstance(raw_known_refs, list | tuple | set)
         else set()
     )
-    if base_branch:
-        known_refs.add(base_branch)
-    if current_ref:
-        known_refs.add(current_ref)
     if not repository or not base_branch:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
