@@ -3742,7 +3742,8 @@ describe('Workflow Detail Entrypoint', () => {
   it('renders loading state initially', () => {
     fetchSpy.mockImplementation(() => new Promise(() => {}));
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
-    expect(screen.getByText(/Loading workflow/i)).toBeTruthy();
+    expect(screen.getByText('Workflow detail summary loading placeholder').closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByTestId('loading-placeholder-detail')).toBeTruthy();
   });
 
   it('builds canonical Temporal task editing routes', () => {
@@ -3832,7 +3833,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(
       await screen.findByText('Rerun was requested and the latest execution view is ready.'),
     ).toBeTruthy();
-    expect(screen.getByRole('status')).toBeTruthy();
+    expect(screen.getByRole('status', { name: '' }).textContent).toContain(
+      'Rerun was requested and the latest execution view is ready.',
+    );
     expect(telemetryEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -4338,7 +4341,11 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     expect(await screen.findByText('Changes were saved to this execution.')).toBeTruthy();
-    expect(screen.getByRole('status')).toBeTruthy();
+    expect(
+      screen
+        .getAllByRole('status')
+        .some((status) => status.textContent?.includes('Changes were saved to this execution.')),
+    ).toBe(true);
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/executions/test-123?source=temporal',

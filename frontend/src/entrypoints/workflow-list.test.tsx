@@ -53,7 +53,9 @@ describe('Workflows Entrypoint', () => {
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    expect(screen.getByText('Loading workflows...')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Workflow list' })).toBeTruthy();
+    expect(screen.getByText('Workflow list results loading placeholder').closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByTestId('loading-placeholder-table')).toBeTruthy();
   });
 
   it('MM-997 keeps /workflows as the full-width list route instead of the workspace shell', async () => {
