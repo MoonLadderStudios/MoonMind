@@ -8584,3 +8584,94 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     flex-direction: column;
   }
 }
+
+.loading-placeholder {
+  --loading-placeholder-row-height: 1rem;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  padding: 1rem;
+  background: rgb(var(--mm-panel));
+}
+
+.loading-placeholder[data-density="compact"] {
+  --loading-placeholder-row-height: 0.75rem;
+  padding: 0.75rem;
+}
+
+.loading-placeholder[data-density="detail-heavy"] {
+  --loading-placeholder-row-height: 1.15rem;
+  padding: 1.25rem;
+}
+
+.loading-placeholder__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  max-width: 100%;
+}
+
+.loading-placeholder__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(8rem, 100%), 1fr));
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.loading-placeholder__block {
+  display: block;
+  width: var(--loading-placeholder-block-width, 70%);
+  max-width: 100%;
+  min-width: 2.5rem;
+  height: var(--loading-placeholder-row-height);
+  border-radius: 6px;
+  background:
+    linear-gradient(90deg, transparent, rgb(var(--mm-border) / 0.5), transparent),
+    rgb(var(--mm-muted) / 0.14);
+  background-size: 220% 100%, 100% 100%;
+  background-position: -120% 50%, 50% 50%;
+  animation: loading-placeholder-sweep 1.4s ease-in-out infinite;
+}
+
+.loading-placeholder[data-variant="compact-controls"] .loading-placeholder__block {
+  border-radius: 999px;
+}
+
+.loading-placeholder[data-variant="form-controls"] .loading-placeholder__block {
+  border-radius: 999px;
+}
+
+.loading-placeholder[data-variant="metric-strip"] .loading-placeholder__row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.loading-placeholder[data-variant="detail"] .loading-placeholder__row:first-child {
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.8fr);
+}
+
+@keyframes loading-placeholder-sweep {
+  to {
+    background-position: 120% 50%, 50% 50%;
+  }
+}
+
+@media (max-width: 720px) {
+  .loading-placeholder {
+    padding: 0.75rem;
+  }
+
+  .loading-placeholder[data-variant="metric-strip"] .loading-placeholder__row,
+  .loading-placeholder[data-variant="detail"] .loading-placeholder__row:first-child {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-placeholder__block {
+    animation: none !important;
+    background-position: 50% 50%, 50% 50%;
+  }
+}

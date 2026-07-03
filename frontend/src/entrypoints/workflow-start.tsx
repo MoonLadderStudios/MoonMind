@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import type { BootPayload } from "../boot/parseBootPayload";
+import { LoadingPlaceholder } from "../components/dashboard/LoadingPlaceholder";
 import { SkillCombobox } from "../components/SkillCombobox";
 import { DashboardErrorDetails } from "../components/dashboard/DashboardErrorDetails";
 import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
@@ -10527,9 +10528,14 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       </section>
 
       {pageMode.mode !== "create" && temporalDraftQuery.isLoading ? (
-        <p className="notice" role="status">
-          Loading Temporal execution draft...
-        </p>
+        <LoadingPlaceholder
+          surface="workflow-start"
+          region="editable draft"
+          variant="form-controls"
+          density="normal"
+          preserveContext
+          className="notice"
+        />
       ) : null}
 
       {modeLoadError ? (

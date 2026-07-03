@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { DataTable } from '../components/tables/DataTable';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 
@@ -1125,7 +1126,15 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
         <DataTable
             data={runs}
             isLoading={runsQuery.isLoading}
-            loadingMessage="Loading schedule runs..."
+            loadingMessage={
+              <LoadingPlaceholder
+                surface="schedules"
+                region="runs"
+                variant="table"
+                density="compact"
+                preserveContext
+              />
+            }
             isError={runsQuery.isError}
             errorMessage={errorMessage(runsQuery.error, 'Failed to fetch schedule runs')}
             columns={[
@@ -1228,29 +1237,49 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
       </header>
 
       <section className="schedules-summary-grid" aria-label="Schedule summary">
-        <div className="schedules-summary-item">
-          <span>Total</span>
-          <strong>{stats.total}</strong>
-        </div>
-        <div className="schedules-summary-item">
-          <span>Active</span>
-          <strong>{stats.active}</strong>
-        </div>
-        <div className="schedules-summary-item">
-          <span>Next 24h</span>
-          <strong>{stats.dueSoon}</strong>
-        </div>
-        <div className="schedules-summary-item">
-          <span>Attention</span>
-          <strong>{stats.attention}</strong>
-        </div>
+        {isLoading ? (
+          <LoadingPlaceholder
+            surface="schedules"
+            region="summary"
+            variant="metric-strip"
+            density="compact"
+            preserveContext
+          />
+        ) : (
+          <>
+            <div className="schedules-summary-item">
+              <span>Total</span>
+              <strong>{stats.total}</strong>
+            </div>
+            <div className="schedules-summary-item">
+              <span>Active</span>
+              <strong>{stats.active}</strong>
+            </div>
+            <div className="schedules-summary-item">
+              <span>Next 24h</span>
+              <strong>{stats.dueSoon}</strong>
+            </div>
+            <div className="schedules-summary-item">
+              <span>Attention</span>
+              <strong>{stats.attention}</strong>
+            </div>
+          </>
+        )}
       </section>
 
       <section className="schedules-table-panel" aria-label="Recurring schedule list">
         <DataTable
             data={schedules}
             isLoading={isLoading}
-            loadingMessage="Loading recurring schedules..."
+            loadingMessage={
+              <LoadingPlaceholder
+                surface="schedules"
+                region="list"
+                variant="table"
+                density="compact"
+                preserveContext
+              />
+            }
             isError={isError}
             errorMessage={errorMessage(error, 'Failed to fetch schedules')}
             columns={[

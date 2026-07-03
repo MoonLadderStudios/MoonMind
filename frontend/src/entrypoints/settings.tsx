@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BootPayload } from '../boot/parseBootPayload';
+import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { SecretManager } from '../components/secrets/SecretManager';
 import { ConfigurationHealthSummary } from '../components/settings/ConfigurationHealthSummary';
 import { GeneratedSettingsSection } from '../components/settings/GeneratedSettingsSection';
@@ -320,9 +321,13 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
           </section>
 
           {areProfilesLoading ? (
-            <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 text-sm text-slate-500 dark:text-slate-400 shadow-sm">
-              Loading provider profiles...
-            </div>
+            <LoadingPlaceholder
+              surface="settings"
+              region="provider profiles"
+              variant="table"
+              density="compact"
+              preserveContext
+            />
           ) : areProfilesErrored ? (
             <div className="rounded-3xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-900/20 p-6 text-sm text-rose-700 dark:text-rose-400 shadow-sm">
               Failed to load provider profiles.
@@ -339,9 +344,13 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
           )}
 
           {areSecretsLoading ? (
-            <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 text-sm text-slate-500 dark:text-slate-400 shadow-sm">
-              Loading managed secrets...
-            </div>
+            <LoadingPlaceholder
+              surface="settings"
+              region="managed secrets"
+              variant="table"
+              density="compact"
+              preserveContext
+            />
           ) : areSecretsErrored ? (
             <div className="rounded-3xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-900/20 p-6 text-sm text-rose-700 dark:text-rose-400 shadow-sm">
               Failed to load managed secrets.
@@ -368,7 +377,13 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
 
           <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
             {isLoading ? (
-              <p className="text-sm text-slate-500 dark:text-slate-400">Loading current user...</p>
+              <LoadingPlaceholder
+                surface="settings"
+                region="current user"
+                variant="settings"
+                density="normal"
+                preserveContext
+              />
             ) : isError ? (
               <p className="text-sm text-rose-700 dark:text-rose-400">Failed to load profile data.</p>
             ) : (

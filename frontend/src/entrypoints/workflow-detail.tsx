@@ -32,6 +32,7 @@ import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { CANONICAL_STEP_STATUSES, StatusIcon } from '../utils/statusIcons';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { LogPanel } from '../components/dashboard/LogPanel';
+import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { formatDurationMs, formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
   readDashboardPreferences,
@@ -7368,7 +7369,13 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       ) : null}
 
       {detailQuery.isLoading ? (
-        <p className="loading">Loading workflow...</p>
+        <LoadingPlaceholder
+          surface="workflow-detail"
+          region="summary"
+          variant="detail"
+          density="detail-heavy"
+          preserveContext
+        />
       ) : detailQuery.isError ? (
         <div className="notice error">{(detailQuery.error as Error).message}</div>
       ) : execution ? (
@@ -7703,7 +7710,13 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 </span>
               </div>
               {stepsQuery.isLoading ? (
-                <p className="loading">Loading steps...</p>
+                <LoadingPlaceholder
+                  surface="workflow-detail"
+                  region="steps"
+                  variant="list"
+                  density="compact"
+                  preserveContext
+                />
               ) : stepsQuery.isError ? (
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (

@@ -100,6 +100,62 @@ describe("buildEditParametersPatch", () => {
   });
 });
 
+describe("WorkflowStartPage loading placeholders", () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/workflows/new?editExecutionId=mm%3Aloading-draft",
+    );
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/executions/mm%3Aloading-draft")) {
+        return new Promise(() => {}) as Promise<Response>;
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("renders a create-flow placeholder while loading an editable execution draft", () => {
+    renderWithClient(
+      <WorkflowStartPage
+        payload={{
+          ...mockPayload,
+          initialData: {
+            dashboardConfig: {
+              ...mockPayload.initialData?.dashboardConfig,
+              features: {
+                temporalDashboard: {
+                  temporalTaskEditing: true,
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    expect(screen.getByRole("status", { name: "Workflow start editable draft loading placeholder" })).toBeTruthy();
+    expect(screen.getByTestId("loading-placeholder-form-controls")).toBeTruthy();
+  });
+});
+
 const mockPayload: BootPayload = {
   page: "workflow-start",
   apiBase: "/api",

@@ -83,6 +83,27 @@ describe('Skills Entrypoint', () => {
     fetchSpy.mockRestore();
   });
 
+  it('renders page-matched loading placeholders for skill catalog and preview regions', () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/workflows/skills?includeContent=true')) {
+        return new Promise(() => {}) as Promise<Response>;
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    expect(screen.getByRole('heading', { name: 'Skills' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Skills catalog loading placeholder' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Skills preview loading placeholder' })).toBeTruthy();
+    expect(screen.getByTestId('loading-placeholder-catalog')).toBeTruthy();
+  });
+
   it('lists skills and previews markdown for the selected item', async () => {
     renderWithClient(<SkillsPage payload={mockPayload} />);
 

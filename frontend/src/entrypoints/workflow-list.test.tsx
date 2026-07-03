@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import { BootPayload } from '../boot/parseBootPayload';
@@ -53,7 +54,20 @@ describe('Workflows Entrypoint', () => {
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    expect(screen.getByText('Loading workflows...')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Workflow list' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Workflow list results loading placeholder' })).toBeTruthy();
+    expect(screen.getByTestId('loading-placeholder-table')).toBeTruthy();
+  });
+
+  it('keeps workflow loading placeholders static for reduced-motion users', () => {
+    const dashboardCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/dashboard.css`,
+      'utf8',
+    );
+
+    expect(dashboardCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.loading-placeholder__block\s*\{[\s\S]*animation:\s*none !important;[\s\S]*background-position:\s*50% 50%, 50% 50%;/m,
+    );
   });
 
   it('MM-997 keeps /workflows as the full-width list route instead of the workspace shell', async () => {

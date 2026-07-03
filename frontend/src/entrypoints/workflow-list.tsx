@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
+import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
 import {
@@ -2386,7 +2387,14 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         </header>
         ) : null}
         {isLoading ? (
-          <p className="loading workflow-list-empty-message">Loading workflows...</p>
+          <LoadingPlaceholder
+            surface="workflow-list"
+            region="results"
+            variant="table"
+            density={density === 'compact' ? 'compact' : 'normal'}
+            preserveContext
+            className="workflow-list-empty-message"
+          />
         ) : isError ? (
           <>
             <div className="notice error workflow-list-empty-message">{(error as Error).message}</div>
