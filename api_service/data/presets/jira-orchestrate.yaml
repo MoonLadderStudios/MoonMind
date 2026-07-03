@@ -46,13 +46,19 @@ annotations:
           assignee:
             type: string
             title: Assignee
+      verify:
+        type: boolean
+        title: Verify
+        description: Run the MoonSpec verification and remediation gates before pull request creation.
+        default: true
   uiSchema:
     jira_issue:
       widget: jira.issue-picker
       dataSource: jira.issues
       searchPlaceholder: Search Jira issues
       allowManualKeyEntry: true
-  defaults: {}
+  defaults:
+    verify: true
   issueInput:
     provider: jira
     objectInput: jira_issue
@@ -74,6 +80,11 @@ inputs:
     type: textarea
     required: false
     default: ""
+  - name: verify
+    label: Verify
+    type: boolean
+    required: false
+    default: true
 steps:
   - title: Move Jira issue to In Progress
     instructions: |-
@@ -195,6 +206,7 @@ steps:
       requiredCapabilities:
         - git
   - title: Verify completion
+    enabled: "{{ inputs.verify }}"
     instructions: |-
       /clear
 
@@ -207,6 +219,7 @@ steps:
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 1 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-remediation
       moonSpecRemediationAttempt: 1
@@ -229,6 +242,7 @@ steps:
       requiredCapabilities:
         - git
   - title: Verify remediation 1 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
       moonSpecRemediationAttempt: 1
@@ -248,6 +262,7 @@ steps:
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 2 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-remediation
       moonSpecRemediationAttempt: 2
@@ -270,6 +285,7 @@ steps:
       requiredCapabilities:
         - git
   - title: Verify remediation 2 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
       moonSpecRemediationAttempt: 2
@@ -289,6 +305,7 @@ steps:
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 3 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-remediation
       moonSpecRemediationAttempt: 3
@@ -311,6 +328,7 @@ steps:
       requiredCapabilities:
         - git
   - title: Verify remediation 3 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
       moonSpecRemediationAttempt: 3
@@ -330,6 +348,7 @@ steps:
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 4 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-remediation
       moonSpecRemediationAttempt: 4
@@ -352,6 +371,7 @@ steps:
       requiredCapabilities:
         - git
   - title: Verify remediation 4 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
       moonSpecRemediationAttempt: 4
@@ -371,6 +391,7 @@ steps:
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 5 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-remediation
       moonSpecRemediationAttempt: 5
@@ -393,6 +414,7 @@ steps:
       requiredCapabilities:
         - git
   - title: Verify remediation 5 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
       moonSpecRemediationAttempt: 5
@@ -412,6 +434,7 @@ steps:
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 6 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-remediation
       moonSpecRemediationAttempt: 6
@@ -434,6 +457,7 @@ steps:
       requiredCapabilities:
         - git
   - title: Verify remediation 6 of 6
+    enabled: "{{ inputs.verify }}"
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
       moonSpecRemediationAttempt: 6
@@ -457,7 +481,7 @@ steps:
     instructions: |-
       /clear
 
-      Run moonspec-doc-reconcile for {{ inputs.jira_issue_key }} only when the controlling post-remediation verdict is FULLY_IMPLEMENTED. If the latest verdict is not FULLY_IMPLEMENTED, make no changes and report that doc reconciliation is skipped because publication is already blocked.
+      Run moonspec-doc-reconcile for {{ inputs.jira_issue_key }} only when verify is disabled or the controlling post-remediation verdict is FULLY_IMPLEMENTED. If verify is enabled and the latest verdict is not FULLY_IMPLEMENTED, make no changes and report that doc reconciliation is skipped because publication is already blocked.
 
       Use the canonical source document recorded in spec.md (Source Document){% if inputs.source_design_path %} or the provided source design path {{ inputs.source_design_path }}{% endif %} as the starting authority candidate. Reconcile by authority scope, not original-source convenience: apply docs/Workflows/MoonSpecDocumentModel.md plus the docs/DocumentationArchitecture.md authority ladder and module-owned contract policy to identify the canonical document that owns each affected claim. The owning canonical doc may be different from the original source doc. If no canonical source candidate under docs/ exists, write the structured no_update_required outcome and continue.
 
@@ -479,7 +503,7 @@ steps:
 
       Create a pull request for the completed work for Jira issue {{ inputs.jira_issue_key }}.
 
-      Before committing, inspect the latest post-remediation moonspec-verify result and confirm the verdict is FULLY_IMPLEMENTED. If the latest verdict is ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, stop without committing, pushing, creating a pull request, or changing Jira. Classify runtime or infrastructure causes as environment failure.
+      Before committing, honor the verify input. When verify is enabled, inspect the latest post-remediation moonspec-verify result and confirm the verdict is FULLY_IMPLEMENTED. If the latest verdict is ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, stop without committing, pushing, creating a pull request, or changing Jira. Classify runtime or infrastructure causes as environment failure. When verify is disabled, do not require a moonspec-verify result; use the implementation step's local test evidence and working tree review as the publication gate.
 
       This Jira Orchestrate handoff step is the explicit PR-publication step for this preset. It intentionally owns pull request creation before the Jira Review transition so the confirmed pull request URL is available to both Jira and MoonMind publish handling. If generic managed-runtime guidance says not to push or create a pull request, treat this step-specific handoff instruction as the controlling instruction for this step only. If the workflow is submitted with PR merge automation enabled, the parent workflow must use the pull request URL produced by this step as the published PR and then run merge automation against that PR. If the runtime instructions, workflow parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Review and report the exact blocker.
 

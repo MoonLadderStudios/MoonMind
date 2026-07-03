@@ -2694,6 +2694,20 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "orchestration_mode" not in {
                 item["name"] for item in template_payload["inputs"]
             }
+            verify_input = next(
+                item for item in template_payload["inputs"] if item["name"] == "verify"
+            )
+            assert verify_input["type"] == "boolean"
+            assert verify_input["default"] is True
+            assert template.annotations["inputSchema"]["properties"]["verify"] == {
+                "type": "boolean",
+                "title": "Verify",
+                "description": (
+                    "Run the MoonSpec verification and remediation gates before "
+                    "pull request creation."
+                ),
+                "default": True,
+            }
             assert [
                 (step.get("skill") or step.get("tool"))["id"]
                 for step in template.steps
@@ -2841,6 +2855,41 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 for step in expanded["steps"]
             )
 
+            expanded_without_verify = await service.expand_template(
+                slug="jira-orchestrate",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "jira_issue_key": "MM-1110",
+                    "source_design_path": "",
+                    "constraints": "",
+                    "verify": False,
+                },
+                context={},
+            )
+
+            assert expanded_without_verify["appliedTemplate"]["inputs"]["verify"] is False
+            assert "Verify completion" not in {
+                step["title"] for step in expanded_without_verify["steps"]
+            }
+            assert not any(
+                (step.get("skill") or {}).get("id") == "moonspec-verify"
+                for step in expanded_without_verify["steps"]
+            )
+            assert not any(
+                step["title"].startswith("Remediate verification gaps")
+                for step in expanded_without_verify["steps"]
+            )
+            assert [step["title"] for step in expanded_without_verify["steps"]][-3:] == [
+                "Reconcile declarative docs",
+                "Create pull request",
+                "Move Jira issue to Review",
+            ]
+            assert (
+                "When verify is disabled, do not require a moonspec-verify result"
+                in expanded_without_verify["steps"][-2]["instructions"]
+            )
+
 async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
     seed_dir = (
         Path(__file__).resolve().parents[3]
@@ -2853,6 +2902,17 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
         async with session_maker() as session:
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template_payload = await service.get_template(
+                slug="jira-implement",
+                scope="global",
+                scope_ref=None,
+            )
+            verify_input = next(
+                item for item in template_payload["inputs"] if item["name"] == "verify"
+            )
+            assert verify_input["type"] == "boolean"
+            assert verify_input["default"] is True
 
             expanded = await service.expand_template(
                 slug="jira-implement",
@@ -2889,11 +2949,43 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
                 },
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_issue_key"] == "MM-742"
+            assert expanded["appliedTemplate"]["inputs"]["verify"] is True
             assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
                 "jira-implement",
                 "issue-implement-assessment",
                 "issue-implement-work-pr",
             ]
+
+            expanded_without_verify = await service.expand_template(
+                slug="jira-implement",
+                scope="global",
+                scope_ref=None,
+                inputs={"jira_issue": {"key": "MM-1110"}, "verify": False},
+                context={},
+            )
+
+            assert expanded_without_verify["appliedTemplate"]["inputs"]["verify"] is False
+            assert not any(
+                (step.get("skill") or {}).get("id") == "moonspec-verify"
+                for step in expanded_without_verify["steps"]
+            )
+            assert not any(
+                step["title"].startswith("Remediate verification gaps")
+                for step in expanded_without_verify["steps"]
+            )
+            assert [step["title"] for step in expanded_without_verify["steps"]] == [
+                "Load Jira preset brief",
+                "Assess existing implementation state",
+                "Check Jira blockers before implementation",
+                "Move Jira issue to In Progress",
+                "Implement the issue",
+                "Create pull request",
+                "Finalize Jira status",
+            ]
+            assert (
+                "When verify is disabled, do not require artifacts/jira-implement-verify.json"
+                in expanded_without_verify["steps"][-1]["instructions"]
+            )
 
 
 @pytest.mark.parametrize(

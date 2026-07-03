@@ -120,6 +120,15 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert annotations["inputSchema"]["properties"]["jira_issue"]["required"] == [
             "key"
         ]
+        assert annotations["inputSchema"]["properties"]["verify"] == {
+            "type": "boolean",
+            "title": "Verify",
+            "description": (
+                "Run the MoonSpec verification and remediation gates before pull "
+                "request creation."
+            ),
+            "default": True,
+        }
         assert (
             annotations["uiSchema"]["jira_issue"]["widget"]
             == "jira.issue-picker"
@@ -221,6 +230,32 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "claim coverage" in pr_step["instructions"]
         assert "reconciliation outcomes" in pr_step["instructions"]
         assert "artifacts/jira-orchestrate-pr.json" in pr_step["instructions"]
+        expanded_orchestrate_without_verify = await PresetCatalogService(
+            session
+        ).expand_template(
+            slug="jira-orchestrate",
+            scope="global",
+            scope_ref=None,
+            inputs={
+                "jira_issue_key": "MM-1110",
+                "source_design_path": "",
+                "constraints": "",
+                "verify": False,
+            },
+            context={"repository": "MoonLadderStudios/MoonMind"},
+        )
+        assert (
+            expanded_orchestrate_without_verify["appliedTemplate"]["inputs"]["verify"]
+            is False
+        )
+        assert not any(
+            (step.get("skill") or {}).get("id") == "moonspec-verify"
+            for step in expanded_orchestrate_without_verify["steps"]
+        )
+        assert not any(
+            step["title"].startswith("Remediate verification gaps")
+            for step in expanded_orchestrate_without_verify["steps"]
+        )
         code_review_step = next(
             step
             for step in jira_orchestrate_template.steps
@@ -251,6 +286,15 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert implement_annotations["inputSchema"]["properties"]["jira_issue"][
             "required"
         ] == ["key"]
+        assert implement_annotations["inputSchema"]["properties"]["verify"] == {
+            "type": "boolean",
+            "title": "Verify",
+            "description": (
+                "Run the MoonSpec verification and remediation gates before pull "
+                "request creation."
+            ),
+            "default": True,
+        }
         assert (
             implement_annotations["uiSchema"]["jira_issue"]["widget"]
             == "jira.issue-picker"
@@ -421,6 +465,40 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert (
             "FULLY_IMPLEMENTED" in implement_finalize_step["instructions"]
         )
+        expanded_implement_without_verify = await PresetCatalogService(
+            session
+        ).expand_template(
+            slug="jira-implement",
+            scope="global",
+            scope_ref=None,
+            inputs={
+                "jira_issue": {"key": "MM-1110"},
+                "constraints": "",
+                "verify": False,
+            },
+            context={"repository": "MoonLadderStudios/MoonMind"},
+        )
+        assert (
+            expanded_implement_without_verify["appliedTemplate"]["inputs"]["verify"]
+            is False
+        )
+        assert not any(
+            (step.get("skill") or {}).get("id") == "moonspec-verify"
+            for step in expanded_implement_without_verify["steps"]
+        )
+        assert not any(
+            step["title"].startswith("Remediate verification gaps")
+            for step in expanded_implement_without_verify["steps"]
+        )
+        assert [step["title"] for step in expanded_implement_without_verify["steps"]] == [
+            "Load Jira preset brief",
+            "Assess existing implementation state",
+            "Check Jira blockers before implementation",
+            "Move Jira issue to In Progress",
+            "Implement the issue",
+            "Create pull request",
+            "Finalize Jira status",
+        ]
 
         result = await session.execute(
             select(Preset)
