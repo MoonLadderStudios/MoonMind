@@ -551,11 +551,21 @@ def _validate_base_commit(
 ) -> None:
     if not base_commit or not resolved_base_commit:
         return
-    if base_commit.lower() != resolved_base_commit.lower():
-        raise CheckpointBranchGitBindingError(
-            "git_base_commit_mismatch",
-            "base commit does not match resolved repository ref",
-        )
+    normalized_base_commit = base_commit.lower()
+    normalized_resolved_base_commit = resolved_base_commit.lower()
+    if normalized_base_commit == normalized_resolved_base_commit:
+        return
+    if _HEX_COMMIT_RE.fullmatch(normalized_base_commit) and _HEX_COMMIT_RE.fullmatch(
+        normalized_resolved_base_commit
+    ):
+        if normalized_resolved_base_commit.startswith(
+            normalized_base_commit
+        ) or normalized_base_commit.startswith(normalized_resolved_base_commit):
+            return
+    raise CheckpointBranchGitBindingError(
+        "git_base_commit_mismatch",
+        "base commit does not match resolved repository ref",
+    )
 
 
 def _validate_work_branch(work_branch: str, *, product_branch_id: str) -> None:
@@ -658,10 +668,15 @@ def _validate_collision(
             existing.get("productBranchId") or existing.get("branch_id") or ""
         ).strip()
         existing_repository = str(existing.get("repository") or "").strip()
+        ownership_metadata = _ownership_metadata(model)
         mismatched_fields = [
             field_name
-            for field_name, expected_value in _ownership_metadata(model).items()
-            if str(existing.get(field_name) or "").strip() != str(expected_value)
+            for field_name in ("baseBranch", "baseCommit")
+            for expected_value in (ownership_metadata[field_name],)
+            if (
+                str(existing.get(field_name) or "").strip()
+                != str(expected_value or "").strip()
+            )
         ]
         if (
             existing_branch_id == model.product_branch_id

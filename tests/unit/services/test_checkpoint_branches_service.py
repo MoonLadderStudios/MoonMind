@@ -318,7 +318,7 @@ async def test_existing_bindings_match_repository_case_insensitively(
     )
 
 
-async def test_prepare_checkpoint_branch_workspace_rejects_mismatched_turn_reuse(
+async def test_prepare_checkpoint_branch_workspace_reuses_requested_work_branch_for_turn(
     session: AsyncSession,
 ) -> None:
     async def write_artifact(
@@ -328,7 +328,7 @@ async def test_prepare_checkpoint_branch_workspace_rejects_mismatched_turn_reuse
     ) -> tuple[str, None]:
         return f"artifact://MM-1090/{artifact_kind}", None
 
-    await prepare_checkpoint_branch_workspace(
+    first = await prepare_checkpoint_branch_workspace(
         session=session,
         binding_input=_binding_input(),
         known_refs={"feature/mm-1087-source"},
@@ -338,18 +338,23 @@ async def test_prepare_checkpoint_branch_workspace_rejects_mismatched_turn_reuse
         artifact_writer=write_artifact,
     )
 
-    with pytest.raises(CheckpointBranchGitBindingError) as exc_info:
-        await prepare_checkpoint_branch_workspace(
-            session=session,
-            binding_input=_binding_input(idempotencyKey="MM-1090:different"),
-            known_refs={"feature/mm-1087-source"},
-            current_ref="feature/mm-1087-source",
-            instruction_ref="artifact://MM-1090/input.branch_turn.instructions.md",
-            instruction_digest="sha256:instructions",
-            artifact_writer=write_artifact,
-        )
+    second = await prepare_checkpoint_branch_workspace(
+        session=session,
+        binding_input=_binding_input(
+            branchTurnId="cbt_2",
+            creationMode="from_checkpoint_worktree",
+            idempotencyKey="MM-1090:continue",
+            requestedWorkBranch=first.git_work_branch,
+            workspacePolicy="continue_from_previous_execution",
+        ),
+        known_refs={"feature/mm-1087-source"},
+        current_ref="feature/mm-1087-source",
+        instruction_ref="artifact://MM-1090/input.branch_turn.instructions.md",
+        instruction_digest="sha256:instructions",
+        artifact_writer=write_artifact,
+    )
 
-    assert exc_info.value.failure_code == "git_branch_collision"
+    assert second.git_work_branch == first.git_work_branch
 
 
 async def test_prepare_checkpoint_branch_workspace_rejects_mismatched_collision(

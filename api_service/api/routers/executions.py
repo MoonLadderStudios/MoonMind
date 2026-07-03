@@ -596,16 +596,24 @@ def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
     search_attributes = getattr(record, "search_attributes", None)
     if not isinstance(search_attributes, Mapping):
         search_attributes = {}
+    workflow_payload = params.get("workflow")
+    if not isinstance(workflow_payload, Mapping):
+        workflow_payload = {}
     task_payload = params.get("task")
     if not isinstance(task_payload, Mapping):
-        task_payload = params
+        task_payload = workflow_payload or params
     git_payload = task_payload.get("git")
+    if not isinstance(git_payload, Mapping):
+        git_payload = workflow_payload.get("git")
+    if not isinstance(git_payload, Mapping):
+        git_payload = params.get("git")
     if not isinstance(git_payload, Mapping):
         git_payload = {}
 
     repository = (
         _coerce_temporal_scalar(git_payload.get("repository"))
         or _coerce_temporal_scalar(task_payload.get("repository"))
+        or _coerce_temporal_scalar(workflow_payload.get("repository"))
         or _coerce_temporal_scalar(params.get("repository"))
         or _coerce_temporal_scalar(params.get("repo"))
         or _coerce_temporal_scalar(search_attributes.get("mm_repository"))
@@ -616,7 +624,9 @@ def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
     base_branch = (
         _coerce_temporal_scalar(git_payload.get("baseBranch"))
         or _coerce_temporal_scalar(git_payload.get("startingBranch"))
+        or _coerce_temporal_scalar(git_payload.get("branch"))
         or _coerce_temporal_scalar(task_payload.get("startingBranch"))
+        or _coerce_temporal_scalar(workflow_payload.get("startingBranch"))
         or _coerce_temporal_scalar(params.get("startingBranch"))
         or _coerce_temporal_scalar(git_payload.get("defaultBranch"))
         or _coerce_temporal_scalar(params.get("defaultBranch"))
@@ -624,22 +634,26 @@ def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
     base_commit = (
         _coerce_temporal_scalar(git_payload.get("baseCommit"))
         or _coerce_temporal_scalar(git_payload.get("startingCommit"))
+        or _coerce_temporal_scalar(workflow_payload.get("baseCommit"))
         or _coerce_temporal_scalar(params.get("baseCommit"))
         or _coerce_temporal_scalar(search_attributes.get("mm_base_commit"))
     )
     resolved_base_commit = (
         _coerce_temporal_scalar(git_payload.get("resolvedBaseCommit"))
+        or _coerce_temporal_scalar(workflow_payload.get("resolvedBaseCommit"))
         or _coerce_temporal_scalar(params.get("resolvedBaseCommit"))
         or base_commit
     )
     current_ref = (
         _coerce_temporal_scalar(git_payload.get("currentRef"))
+        or _coerce_temporal_scalar(workflow_payload.get("currentRef"))
         or _coerce_temporal_scalar(params.get("currentRef"))
         or base_branch
     )
     raw_known_refs = (
         git_payload.get("knownRefs")
         or git_payload.get("known_refs")
+        or workflow_payload.get("knownRefs")
         or params.get("knownRefs")
         or []
     )
@@ -11655,6 +11669,7 @@ async def _record_branch_turn_operation(
         idempotency_key=payload.idempotency_key,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        requested_work_branch=branch.git_work_branch,
         parent_branch_id=branch.parent_branch_id,
         parent_turn_id=parent_turn_id,
         source_run_id=branch.source_run_id,

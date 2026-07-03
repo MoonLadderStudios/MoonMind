@@ -134,6 +134,20 @@ def test_prepare_binding_rejects_base_commit_mismatch() -> None:
     assert exc_info.value.failure_code == "git_base_commit_mismatch"
 
 
+def test_prepare_binding_accepts_short_base_commit_matching_resolved_commit() -> None:
+    result = prepare_checkpoint_branch_git_binding(
+        _binding_input(resolvedBaseCommit="abc1234def5678abc1234def5678abc1234def56"),
+        known_refs={"feature/mm-1087-source"},
+        current_ref="feature/mm-1087-source",
+    )
+
+    assert result.binding.base_commit == "abc1234"
+    assert (
+        result.binding.resolved_base_commit
+        == "abc1234def5678abc1234def5678abc1234def56"
+    )
+
+
 def test_prepare_binding_emits_workspace_restore_and_git_binding_artifacts() -> None:
     result = prepare_checkpoint_branch_git_binding(
         _binding_input(
@@ -315,6 +329,29 @@ def test_prepare_binding_reuses_matching_collision_idempotently() -> None:
     assert result.binding.work_branch == work_branch
 
 
+def test_prepare_binding_reuses_collision_with_empty_optional_metadata() -> None:
+    work_branch = "mm/mm-1087/implement/cp-12345678/cbr-mm-1090"
+
+    result = prepare_checkpoint_branch_git_binding(
+        _binding_input(requestedWorkBranch=work_branch, baseCommit=None),
+        known_refs={"feature/mm-1087-source"},
+        current_ref="feature/mm-1087-source",
+        existing_bindings_by_work_branch={
+            work_branch: {
+                "productBranchId": "cbr_MM-1090",
+                "repository": "moonladderstudios/moonmind",
+                "idempotencyKey": "MM-1090:MM-1087:checkpoint",
+                "baseBranch": "feature/mm-1087-source",
+                "baseCommit": "",
+                "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+                "creationMode": "from_checkpoint_patch",
+            }
+        },
+    )
+
+    assert result.binding.work_branch == work_branch
+
+
 def test_prepare_binding_rejects_work_branch_that_already_exists_as_repo_ref() -> None:
     with pytest.raises(CheckpointBranchGitBindingError) as exc_info:
         prepare_checkpoint_branch_git_binding(
@@ -329,10 +366,8 @@ def test_prepare_binding_rejects_work_branch_that_already_exists_as_repo_ref() -
 @pytest.mark.parametrize(
     ("metadata_override", "field_name"),
     [
-        ({"idempotencyKey": "different"}, "idempotencyKey"),
+        ({"baseBranch": "feature/other-source"}, "baseBranch"),
         ({"baseCommit": "fffffff"}, "baseCommit"),
-        ({"workspacePolicy": "restore_pre_execution"}, "workspacePolicy"),
-        ({"creationMode": "from_checkpoint_worktree"}, "creationMode"),
     ],
 )
 def test_prepare_binding_rejects_collision_with_mismatched_ownership_metadata(

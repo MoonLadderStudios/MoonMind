@@ -15,7 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.api.routers.executions import _get_service, router
+from api_service.api.routers.executions import (
+    _checkpoint_branch_git_context,
+    _get_service,
+    router,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import (
@@ -208,6 +212,35 @@ async def _set_branch_head(
         branch = result.scalar_one()
         branch.current_head_step_execution_id = step_execution_id
         await session.commit()
+
+
+def test_checkpoint_branch_git_context_reads_workflow_shaped_payload() -> None:
+    record = SimpleNamespace(
+        parameters={
+            "workflow": {
+                "git": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "startingBranch": "feature/from-workflow",
+                    "branch": "feature/work-branch",
+                    "baseCommit": "abc1234",
+                    "knownRefs": ["feature/from-workflow"],
+                    "currentRef": "feature/from-workflow",
+                    "resolvedBaseCommit": "abc1234def5678",
+                }
+            }
+        },
+        memo={},
+        search_attributes={},
+    )
+
+    context = _checkpoint_branch_git_context(record)
+
+    assert context["repository"] == "MoonLadderStudios/MoonMind"
+    assert context["baseBranch"] == "feature/from-workflow"
+    assert context["baseCommit"] == "abc1234"
+    assert context["resolvedBaseCommit"] == "abc1234def5678"
+    assert context["currentRef"] == "feature/from-workflow"
+    assert context["knownRefs"] == {"feature/from-workflow"}
 
 
 def _create_payload(idempotency_key: str = "mm-1091:create") -> dict[str, object]:
@@ -614,7 +647,21 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     )
     assert first_continue.status_code == 201
     assert second_continue.status_code == 201
-    assert first_continue.json()["branchTurnId"] == second_continue.json()["branchTurnId"]
+    assert (
+        first_continue.json()["branchTurnId"] == second_continue.json()["branchTurnId"]
+    )
+    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = await session.get(WorkflowCheckpointBranch, branch_id)
+        continued_turn = await session.get(
+            WorkflowCheckpointBranchTurn, first_continue.json()["branchTurnId"]
+        )
+
+    assert branch is not None
+    assert continued_turn is not None
+    assert branch.git_work_branch == created.json()["gitWorkBranch"]
+    assert continued_turn.git_work_branch == created.json()["gitWorkBranch"]
 
     fork_payload = {
         "label": "Forked branch",
