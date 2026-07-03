@@ -146,8 +146,7 @@ function AnimatedRouteNavLink({
   className: ({ isActive }: { isActive: boolean }) => string | undefined;
 }) {
   const Icon = icon;
-  const iconRef = useRef<AnimatedNavIconHandle | null>(null);
-  const ref = iconRef as Ref<AnimatedNavIconHandle>;
+  const iconRef = useRef<AnimatedNavIconHandle>(null);
   const startAnimation = () => {
     iconRef.current?.startAnimation();
   };
@@ -164,7 +163,7 @@ function AnimatedRouteNavLink({
       onFocus={startAnimation}
       onBlur={stopAnimation}
     >
-      <Icon className="route-nav-icon" iconRef={ref} />
+      <Icon className="route-nav-icon" iconRef={iconRef} />
       {children}
     </NavLink>
   );
