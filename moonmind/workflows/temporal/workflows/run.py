@@ -316,6 +316,7 @@ _DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
         "summaryRef",
     }
 )
+RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v1"
 _REPORT_ONLY_PUBLISH_TYPES = frozenset({"security_pentest_report"})
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset(
@@ -8920,7 +8921,11 @@ class MoonMindRunWorkflow:
     def _auto_publish_evidence_sources(self, result: Any) -> list[Mapping[str, Any]]:
         sources: list[Mapping[str, Any]] = []
         outputs = self._effective_result_outputs(result)
-        metadata = self._effective_result_metadata(result)
+        metadata = (
+            self._effective_result_metadata(result)
+            if workflow.patched(RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH)
+            else None
+        )
         for source in (outputs, metadata):
             if isinstance(source, Mapping):
                 sources.append(source)
@@ -10982,6 +10987,7 @@ class MoonMindRunWorkflow:
                     )
                     if isinstance(ref, str) and ref.strip():
                         self._publish_context["evidenceRef"] = ref.strip()
+                        break
             else:
                 break
         if evidence_payload is None:
