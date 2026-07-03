@@ -3704,6 +3704,41 @@ class MoonMindRunWorkflow:
                 return value.strip()
         return None
 
+    def _apply_omnigent_checkpoint_branch_turn_prompt(
+        self,
+        *,
+        parameters: dict[str, Any],
+        instruction_ref: str,
+    ) -> None:
+        """Route Omnigent branch-turn instructions through the adapter prompt block."""
+
+        raw_omnigent = parameters.get("omnigent")
+        if raw_omnigent is None:
+            omnigent_payload: dict[str, Any] = {}
+        elif isinstance(raw_omnigent, Mapping):
+            omnigent_payload = self._json_mapping(
+                raw_omnigent,
+                path="parameters.omnigent",
+            )
+        else:
+            raise ValueError("parameters.omnigent must be an object")
+
+        raw_prompt = omnigent_payload.get("prompt")
+        if raw_prompt is None:
+            prompt_payload: dict[str, Any] = {}
+        elif isinstance(raw_prompt, Mapping):
+            prompt_payload = self._json_mapping(
+                raw_prompt,
+                path="parameters.omnigent.prompt",
+            )
+        else:
+            raise ValueError("parameters.omnigent.prompt must be an object")
+
+        prompt_payload.pop("text", None)
+        prompt_payload["instructionRef"] = instruction_ref
+        omnigent_payload["prompt"] = prompt_payload
+        parameters["omnigent"] = omnigent_payload
+
     def _checkpoint_branch_turn_source_checkpoint(
         self,
         payload: Mapping[str, Any],
@@ -13340,6 +13375,16 @@ class MoonMindRunWorkflow:
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        raw_omnigent_parameters = runtime_block.get("omnigent")
+        if raw_omnigent_parameters is None:
+            raw_omnigent_parameters = node_inputs.get("omnigent")
+        if raw_omnigent_parameters is None and isinstance(workflow_parameters, Mapping):
+            raw_omnigent_parameters = workflow_parameters.get("omnigent")
+        if isinstance(raw_omnigent_parameters, Mapping):
+            parameters["omnigent"] = self._json_mapping(
+                raw_omnigent_parameters,
+                path=f"node[{node_id}].omnigent",
+            )
         profile_selector = self._build_profile_selector(
             agent_id=agent_id,
             runtime_block=runtime_block,
@@ -13908,6 +13953,23 @@ class MoonMindRunWorkflow:
             or node_inputs.get("instructions")
             or node_inputs.get("instructionRef")
         )
+        if (
+            branch_instruction_ref
+            and agent_kind == "external"
+            and _normalize_agent_runtime_id(agent_id) == "omnigent"
+        ):
+            if not branch_id or not branch_turn_id:
+                raise ValueError(
+                    "Omnigent checkpoint branch turn requires branchId and branchTurnId"
+                )
+            self._apply_omnigent_checkpoint_branch_turn_prompt(
+                parameters=parameters,
+                instruction_ref=branch_instruction_ref,
+            )
+            request_instruction_ref = None
+            idempotency_key = (
+                f"{wf_info.workflow_id}:{branch_id}:{branch_turn_id}:omnigent"
+            )
 
         return AgentExecutionRequest(
             agent_kind=agent_kind,
