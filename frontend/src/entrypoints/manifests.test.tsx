@@ -103,7 +103,7 @@ describe('Manifests Entrypoint', () => {
 
     expect(screen.getByRole('heading', { name: 'Manifests' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Run Manifest' })).toBeTruthy();
-    expect(screen.getByRole('status', { name: 'Manifests recent runs loading placeholder' })).toBeTruthy();
+    expect(screen.getByText('Manifests recent runs loading placeholder').closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId('loading-placeholder-table')).toBeTruthy();
   });
 

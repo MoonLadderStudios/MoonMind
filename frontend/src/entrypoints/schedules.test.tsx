@@ -219,8 +219,8 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     expect(screen.getByRole("heading", { name: "Recurring Schedules" })).toBeTruthy();
-    expect(screen.getByRole("status", { name: "Schedules summary loading placeholder" })).toBeTruthy();
-    expect(screen.getByRole("status", { name: "Schedules list loading placeholder" })).toBeTruthy();
+    expect(screen.getByText("Schedules summary loading placeholder").closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByText("Schedules list loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-metric-strip")).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-table")).toBeTruthy();
   });

@@ -76,7 +76,6 @@ export function LoadingPlaceholder({
   return (
     <section
       role="status"
-      aria-label={label}
       aria-busy="true"
       className={classes.join(' ')}
       data-testid={`loading-placeholder-${variant}`}

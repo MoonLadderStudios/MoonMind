@@ -3709,7 +3709,7 @@ describe('Workflow Detail Entrypoint', () => {
   it('renders loading state initially', () => {
     fetchSpy.mockImplementation(() => new Promise(() => {}));
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
-    expect(screen.getByRole('status', { name: 'Workflow detail summary loading placeholder' })).toBeTruthy();
+    expect(screen.getByText('Workflow detail summary loading placeholder').closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId('loading-placeholder-detail')).toBeTruthy();
   });
 

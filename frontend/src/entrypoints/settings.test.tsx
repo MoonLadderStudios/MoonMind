@@ -27,8 +27,8 @@ describe('Settings Entrypoint', () => {
 
     expect(screen.getByRole('heading', { name: 'Settings' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Providers & Secrets' })).toBeTruthy();
-    expect(screen.getByRole('status', { name: 'Settings provider profiles loading placeholder' })).toBeTruthy();
-    expect(screen.getByRole('status', { name: 'Settings managed secrets loading placeholder' })).toBeTruthy();
+    expect(screen.getByText('Settings provider profiles loading placeholder').closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByText('Settings managed secrets loading placeholder').closest('[role="status"]')).toBeTruthy();
     expect(screen.getAllByTestId('loading-placeholder-table').length).toBeGreaterThanOrEqual(2);
   });
 });

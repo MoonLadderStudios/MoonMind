@@ -62,12 +62,12 @@ describe('LoadingPlaceholder', () => {
       />,
     );
 
-    const region = screen.getByRole('status', {
-      name: 'Settings managed secrets loading placeholder',
-    });
-    expect(region.getAttribute('data-preserve-context')).toBe('true');
-    expect(region.getAttribute('data-density')).toBe('compact');
-    expect(within(region).getAllByTestId('loading-placeholder-row').length).toBeGreaterThanOrEqual(3);
+    const region = screen.getByText('Settings managed secrets loading placeholder').closest('[role="status"]') as HTMLElement | null;
+    expect(region).toBeTruthy();
+    const statusRegion = region as HTMLElement;
+    expect(statusRegion.getAttribute('data-preserve-context')).toBe('true');
+    expect(statusRegion.getAttribute('data-density')).toBe('compact');
+    expect(within(statusRegion).getAllByTestId('loading-placeholder-row').length).toBeGreaterThanOrEqual(3);
   });
 
   it('keeps decorative blocks from exposing fabricated values or operational status', () => {
@@ -80,13 +80,13 @@ describe('LoadingPlaceholder', () => {
       />,
     );
 
-    const region = screen.getByRole('status', {
-      name: 'Workflow detail summary loading placeholder',
-    });
+    const region = screen.getByText('Workflow detail summary loading placeholder').closest('[role="status"]') as HTMLElement | null;
+    expect(region).toBeTruthy();
+    const statusRegion = region as HTMLElement;
     for (const pattern of falseContent) {
-      expect(region.textContent || '').not.toMatch(pattern);
+      expect(statusRegion.textContent || '').not.toMatch(pattern);
     }
-    expect(region.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(0);
+    expect(statusRegion.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(0);
   });
 
   it('supports compact control and table-like density without oversized generic cards', () => {

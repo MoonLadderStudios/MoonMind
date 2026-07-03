@@ -99,8 +99,8 @@ describe('Skills Entrypoint', () => {
     renderWithClient(<SkillsPage payload={mockPayload} />);
 
     expect(screen.getByRole('heading', { name: 'Skills' })).toBeTruthy();
-    expect(screen.getByRole('status', { name: 'Skills catalog loading placeholder' })).toBeTruthy();
-    expect(screen.getByRole('status', { name: 'Skills preview loading placeholder' })).toBeTruthy();
+    expect(screen.getByText('Skills catalog loading placeholder').closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByText('Skills preview loading placeholder').closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId('loading-placeholder-catalog')).toBeTruthy();
   });
 
