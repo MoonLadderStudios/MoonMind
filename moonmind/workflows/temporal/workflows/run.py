@@ -525,6 +525,9 @@ RUN_EMIT_EPHEMERAL_STEP_CHECKPOINTS_PATCH = (
 )
 RUN_STEP_EXECUTION_NAMING_PATCH = "run-step-execution-naming-v1"
 RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH = "run-checkpoint-branch-turn-context-v1"
+RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH = (
+    "run-omnigent-checkpoint-branch-turn-request-v1"
+)
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
@@ -3716,10 +3719,7 @@ class MoonMindRunWorkflow:
         if raw_omnigent is None:
             omnigent_payload: dict[str, Any] = {}
         elif isinstance(raw_omnigent, Mapping):
-            omnigent_payload = self._json_mapping(
-                raw_omnigent,
-                path="parameters.omnigent",
-            )
+            omnigent_payload = dict(raw_omnigent)
         else:
             raise ValueError("parameters.omnigent must be an object")
 
@@ -3727,10 +3727,7 @@ class MoonMindRunWorkflow:
         if raw_prompt is None:
             prompt_payload: dict[str, Any] = {}
         elif isinstance(raw_prompt, Mapping):
-            prompt_payload = self._json_mapping(
-                raw_prompt,
-                path="parameters.omnigent.prompt",
-            )
+            prompt_payload = dict(raw_prompt)
         else:
             raise ValueError("parameters.omnigent.prompt must be an object")
 
@@ -13380,7 +13377,9 @@ class MoonMindRunWorkflow:
             raw_omnigent_parameters = node_inputs.get("omnigent")
         if raw_omnigent_parameters is None and isinstance(workflow_parameters, Mapping):
             raw_omnigent_parameters = workflow_parameters.get("omnigent")
-        if isinstance(raw_omnigent_parameters, Mapping):
+        if raw_omnigent_parameters is not None:
+            if not isinstance(raw_omnigent_parameters, Mapping):
+                raise ValueError(f"node[{node_id}].omnigent must be an object")
             parameters["omnigent"] = self._json_mapping(
                 raw_omnigent_parameters,
                 path=f"node[{node_id}].omnigent",
@@ -13659,6 +13658,8 @@ class MoonMindRunWorkflow:
         branch_projection = None
         branch_artifact_manifest = None
         branch_instruction_ref = None
+        branch_id = None
+        branch_turn_id = None
         metadata_payload_for_branch = (
             parameters.get("metadata")
             if isinstance(parameters.get("metadata"), dict)
@@ -13957,6 +13958,9 @@ class MoonMindRunWorkflow:
             branch_instruction_ref
             and agent_kind == "external"
             and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            and self._workflow_patch_enabled(
+                RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH
+            )
         ):
             if not branch_id or not branch_turn_id:
                 raise ValueError(
@@ -13966,6 +13970,11 @@ class MoonMindRunWorkflow:
                 parameters=parameters,
                 instruction_ref=branch_instruction_ref,
             )
+            if isinstance(branch_projection, Mapping):
+                git_work_branch = branch_projection.get("gitWorkBranch")
+                if isinstance(git_work_branch, str) and git_work_branch.strip():
+                    workspace_spec["branch"] = git_work_branch.strip()
+                    workspace_spec["startingBranch"] = git_work_branch.strip()
             request_instruction_ref = None
             idempotency_key = (
                 f"{wf_info.workflow_id}:{branch_id}:{branch_turn_id}:omnigent"
