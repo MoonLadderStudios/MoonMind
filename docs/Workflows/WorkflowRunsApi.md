@@ -2,15 +2,16 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-04-04
+Last Updated: 2026-07-02
 
 ## 1. Purpose
 
-Define the REST API surfaces used to create, monitor, and observe MoonMind Workflow runs in the Temporal-first architecture.
+Define the REST API surfaces used to create, monitor, steer, and observe MoonMind Workflow runs in the Temporal-first architecture.
 
 MoonMind now splits this responsibility across:
 
 - **`/api/executions`** for Temporal-backed execution lifecycle operations
+- **`/api/executions/{workflowId}/chat-instructions`** for chat-based workflow steering, active-Step addenda, plan-revision requests, and terminal follow-up starts
 - **`/api/agent-runs`** for managed-run observability (logs, diagnostics, live follow)
 
 The dashboard still presents these executions as **Workflows** in the product UI, but the active lifecycle API is execution-oriented.
@@ -19,9 +20,10 @@ The public `/api/agent-runs` path comes from the `agent_runs` router's `prefix="
 
 ## 2. API Surface
 
-Workflow runs are served by two active router families:
+Workflow runs are served by three active router families:
 
 - **`/api/executions`** — Execution lifecycle for Temporal-backed work.
+- **`/api/executions/{workflowId}/chat-instructions`** — Chat instruction steering for running or terminal executions.
 - **`/api/agent-runs`** — Artifact-backed managed-run observability.
 
 ### 2.1 Execution Lifecycle (`/api/executions`)
@@ -31,7 +33,7 @@ Workflow runs are served by two active router families:
 | `POST` | `/api/executions` | Create/start a Temporal-backed execution |
 | `GET`  | `/api/executions` | List executions visible to the caller |
 | `GET`  | `/api/executions/{workflowId}` | Get execution detail |
-| `POST` | `/api/executions/{workflowId}/update` | Apply an in-place workflow update such as `UpdateInputs`, `SetTitle`, or `RequestRerun` (Continue-As-New on the same logical execution) |
+| `POST` | `/api/executions/{workflowId}/update` | Apply an in-place workflow update such as `UpdateInputs`, `SetTitle`, `RequestRerun`, or the compatibility form of `SubmitChatInstruction` |
 | `POST` | `/api/executions/{workflowId}/signal` | Send an asynchronous workflow signal such as pause, resume, or approve |
 | `POST` | `/api/executions/{workflowId}/cancel` | Cancel or terminate an execution |
 
@@ -44,6 +46,7 @@ These routes extend the main lifecycle surface for specific execution types:
 | `GET` | `/api/executions/{workflowId}/manifest-status` | Fetch manifest-run status summary |
 | `GET` | `/api/executions/{workflowId}/manifest-nodes` | Page manifest node state |
 | `GET` | `/api/executions/{workflowId}/steps` | Fetch the latest/current run step ledger |
+| `POST` | `/api/executions/{workflowId}/chat-instructions` | Submit a typed chat instruction; running executions receive a `SubmitChatInstruction` Update, terminal executions may create a linked follow-up execution |
 | `POST` | `/api/executions/{workflowId}/integration` | Register/update integration monitoring state |
 | `POST` | `/api/executions/{workflowId}/integration/poll` | Record integration poll results |
 | `POST` | `/api/executions/{workflowId}/reschedule` | Change the scheduled time of a scheduled execution |
@@ -77,8 +80,9 @@ The normal control-plane flow is:
 1. Create or list work through `/api/executions`
 2. Use `workflowId` for lifecycle actions and detail fetches
 3. Read the step ledger from `/api/executions/{workflowId}/steps`
-4. Resolve the relevant step's `agentRunId` when managed-run observability is available
-5. Use `/api/agent-runs/{agentRunId}` for logs, diagnostics, and live follow
+4. Submit user chat steering through `/api/executions/{workflowId}/chat-instructions` when the user wants to affect running or completed work
+5. Resolve the relevant step's `agentRunId` when managed-run observability is available
+6. Use `/api/agent-runs/{agentRunId}` for logs, diagnostics, and live follow
 
 ## 4. Observability Behavior
 
@@ -98,6 +102,15 @@ Failed `MoonMind.Run` executions may expose failed-step recovery when the source
 The default `recover-from-failed-step` route preserves the original task input and starts new execution at the recorded failed step. The `recover-from-selected-step` route is for intentional earlier recovery: the request must include the source `workflowId`, source `runId`, and `selectedStartStepId`. The service validates those values against the canonical source execution and checkpoint payload before creating the follow-up execution. Steps before the selected start step are preserved from checkpoint evidence; the selected step and downstream steps execute again.
 
 Recovery routes do not accept edited task instructions, attachments, runtime/model settings, dependency changes, or publish changes. Operators must use edit/rerun flows for those behaviors.
+
+## 4.2 Chat Instruction Behavior
+
+Chat instructions are not recovery and are not ordinary projection-side edits. The chat instruction route stores the chat text as an artifact, then either:
+
+- sends a typed `SubmitChatInstruction` Update to a running `MoonMind.UserWorkflow`, or
+- creates a linked `chat_followup` execution when the source execution is terminal and policy permits follow-up creation.
+
+Running-workflow decisions are returned as `ChatInstructionDecision` values such as `attached_to_active_step`, `queued_for_safe_point`, `plan_revision_requested`, `future_steps_superseded`, `created_followup_execution`, or a typed rejection. Terminal source executions remain immutable.
 
 ## 5. Request Model Posture
 
@@ -122,6 +135,7 @@ The legacy `/api/queue/jobs` lifecycle routes and `/api/queue` worker callback r
 
 ## 7. Related Documentation
 
+- [ChatInstructionIntervention.md](ChatInstructionIntervention.md) — Chat instruction steering, active-Step addendum, plan revision, and terminal follow-up design
 - [../Api/ExecutionsApiContract.md](../Api/ExecutionsApiContract.md) — Direct execution lifecycle contract
 - [WorkflowArchitecture.md](WorkflowArchitecture.md) — Overall Workflow system design
 - [../UI/WorkflowConsoleArchitecture.md](../UI/WorkflowConsoleArchitecture.md) — Workflow-oriented UI over execution APIs
