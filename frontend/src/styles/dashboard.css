@@ -2624,14 +2624,38 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @media (max-width: 767px) {
+  .workflow-list-results-header {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+    padding: 0 0 0.75rem;
+    border-bottom: 0;
+    background: transparent;
+  }
+
   .workflow-list-filter-bar {
-    align-items: stretch;
-    width: 100%;
+    flex: 0 1 auto;
+    align-items: center;
+    width: auto;
   }
 
   .workflow-list-filter-trigger {
     justify-content: center;
-    width: 100%;
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .workflow-list-view-options {
+    flex: 0 0 auto;
+    margin-left: 0;
+  }
+
+  .workflow-list-view-options-popover {
+    right: auto;
+    left: 0;
+    max-width: calc(100vw - 2rem);
   }
 
   .queue-results-toolbar,
@@ -2668,13 +2692,6 @@ tr[data-proposal-id].proposal-consuming td {
     background: transparent;
     box-shadow: none;
     padding: 0;
-  }
-
-  .workflow-list-results-header {
-    display: flex;
-    padding: 0 0 0.75rem;
-    border-bottom: 0;
-    background: transparent;
   }
 
   .workflow-list-data-slab .workflow-list-results-footer {

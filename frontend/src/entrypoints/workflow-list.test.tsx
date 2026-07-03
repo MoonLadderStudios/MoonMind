@@ -2435,6 +2435,90 @@ describe('Workflows Entrypoint', () => {
     }
   });
 
+  it('keeps filter and view controls reachable on desktop filtered empty states', async () => {
+    const actionsPayload: BootPayload = {
+      page: 'workflow-list',
+      apiBase: '/api',
+      initialData: {
+        dashboardConfig: {
+          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+        },
+      },
+    };
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], count: 0 }),
+    } as Response);
+    window.history.pushState({}, 'Filtered workflows', '/workflows?stateIn=completed');
+
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    );
+
+    try {
+      renderWithClient(<WorkflowListPage payload={actionsPayload} />);
+      expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
+
+      expect(document.querySelector('.workflow-list-results-header')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'View options' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Advanced filters' })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps desktop header controls when actions are disabled', async () => {
+    const actionsDisabledPayload: BootPayload = {
+      page: 'workflow-list',
+      apiBase: '/api',
+      initialData: {
+        dashboardConfig: {
+          features: { temporalDashboard: { listEnabled: true, actionsEnabled: false } },
+        },
+      },
+    };
+
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    );
+
+    try {
+      renderWithClient(<WorkflowListPage payload={actionsDisabledPayload} />);
+      await screen.findAllByText('Example task');
+
+      expect(screen.queryByRole('columnheader', { name: 'Actions' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
+      const viewOptions = screen.getByRole('button', { name: 'View options' });
+      expect(viewOptions.closest('th')).toBeNull();
+
+      fireEvent.click(viewOptions);
+      expect(screen.getByRole('radio', { name: 'Compact' })).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps a desktop entry point to the advanced filters drawer after dropping the Filters row', async () => {
     const actionsPayload: BootPayload = {
       page: 'workflow-list',
