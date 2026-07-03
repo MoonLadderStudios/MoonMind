@@ -636,6 +636,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         batch_steps = batch_template.steps
         assert len(batch_steps) == 1
         assert batch_steps[0]["skill"]["id"] == "batch-workflows"
+        assert batch_steps[0]["publish"] == {"mode": "none"}
         assert batch_steps[0]["batchOrchestration"]["runtime"]["inherit"] == "caller"
         assert batch_steps[0]["batchOrchestration"]["source"]["kind"] == "jira_status"
         assert (

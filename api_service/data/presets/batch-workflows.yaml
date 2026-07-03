@@ -214,3 +214,5 @@ steps:
     - git
     - gh
     args: {}
+  publish:
+    mode: none

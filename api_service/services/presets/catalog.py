@@ -51,7 +51,6 @@ _FORBIDDEN_STEP_KEYS = frozenset(
         "repository",
         "repo",
         "git",
-        "publish",
         "container",
         "command",
         "cmd",
@@ -132,6 +131,7 @@ _STEP_RESERVED_KEYS = frozenset(
         "skill",
         "skills",
         "preset",
+        "publish",
         "annotations",
     }
 )
@@ -1744,6 +1744,13 @@ class PresetCatalogService:
                         f"Step {index} annotations must be an object when provided."
                     )
                 step_payload["annotations"] = dict(annotations)
+            publish = raw_step.get("publish")
+            if publish is not None:
+                if not isinstance(publish, dict):
+                    raise PresetValidationError(
+                        f"Step {index} publish must be an object when provided."
+                    )
+                step_payload["publish"] = dict(publish)
             step_payload.update(
                 {
                     str(key).strip(): value
@@ -2013,6 +2020,14 @@ class PresetCatalogService:
                         f"{_format_include_path(path)}."
                     )
                 step_payload["annotations"] = dict(annotations)
+            publish = rendered.get("publish")
+            if publish is not None:
+                if not isinstance(publish, dict):
+                    raise PresetValidationError(
+                        f"Expanded step publish must be an object at "
+                        f"{_format_include_path(path)}."
+                    )
+                step_payload["publish"] = dict(publish)
             if step_type == _STEP_TYPE_TOOL:
                 if rendered.get("skill") is not None:
                     raise PresetValidationError(
