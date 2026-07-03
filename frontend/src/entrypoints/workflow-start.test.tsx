@@ -7678,6 +7678,33 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
+  it("submits manually selected publish mode auto", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run the publish-capable workflow." },
+    });
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "auto" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.publish).toMatchObject({
+      mode: "auto",
+    });
+  });
+
   it("shows merge automation as a publish mode choice only for ordinary pr-publishing tasks", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 

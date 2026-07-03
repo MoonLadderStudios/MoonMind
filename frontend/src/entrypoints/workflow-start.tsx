@@ -9151,8 +9151,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     }
 
     const normalizedPublishMode = normalizePublishModeForSubmit(publishMode);
-    if (!["none", "branch", "pr"].includes(normalizedPublishMode)) {
-      setSubmitMessage("Publish mode must be one of: none, branch, pr.");
+    if (!["auto", "none", "branch", "pr"].includes(normalizedPublishMode)) {
+      setSubmitMessage("Publish mode must be one of: auto, none, branch, pr.");
       clearSubmitBusy();
       return;
     }
