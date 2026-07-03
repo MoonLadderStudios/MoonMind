@@ -6579,6 +6579,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const mergeAutomationAvailable =
     !isSelfManagedPublishSkill(effectiveSkillId) &&
     !isPublishDisabledSkill(effectiveSkillId);
+  const autoPublishAvailable = isSelfManagedPublishSkill(effectiveSkillId);
 
   useEffect(() => {
     if (!mergeAutomationAvailable) {
@@ -6588,8 +6589,15 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       if (publishMode !== forcedPublishMode) {
         setPublishMode(forcedPublishMode);
       }
+    } else if (publishMode === "auto" && !autoPublishAvailable) {
+      setPublishMode("pr");
     }
-  }, [effectiveSkillId, mergeAutomationAvailable, publishMode]);
+  }, [
+    autoPublishAvailable,
+    effectiveSkillId,
+    mergeAutomationAvailable,
+    publishMode,
+  ]);
 
   const availableDependencyOptions = useMemo(
     () =>
@@ -9231,6 +9239,16 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       primarySkillId,
       activeSubmissionAppliedTemplates,
     );
+    if (
+      normalizedPublishMode === "auto" &&
+      !isSelfManagedPublishSkill(effectivePublishSkillId)
+    ) {
+      setSubmitMessage(
+        "Publish mode Auto requires an auto-publish-capable skill.",
+      );
+      clearSubmitBusy();
+      return;
+    }
     const effectivePublishMode =
       isSelfManagedPublishSkill(effectivePublishSkillId)
         ? "auto"
@@ -12624,7 +12642,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 onChange={(event) => setPublishMode(event.target.value)}
                 disabled={!mergeAutomationAvailable}
               >
-                <option value="auto">Auto</option>
+                <option value="auto" disabled={!autoPublishAvailable}>
+                  Auto
+                </option>
                 <option value="none">None</option>
                 <option value="branch">Branch</option>
                 <option value="pr">PR</option>

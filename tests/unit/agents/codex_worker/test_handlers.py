@@ -83,6 +83,26 @@ async def test_codex_skill_payload_defaults_and_validation() -> None:
             }
         )
 
+    with pytest.raises(CodexWorkerHandlerError, match="codex_skill publishMode"):
+        CodexSkillPayload.from_payload(
+            {
+                "skillId": "speckit",
+                "inputs": {
+                    "repo": "MoonLadderStudios/MoonMind",
+                    "publishMode": "auto",
+                },
+            }
+        )
+
+    with pytest.raises(CodexWorkerHandlerError, match="publish.mode"):
+        CodexExecPayload.from_payload(
+            {
+                "repository": "MoonLadderStudios/MoonMind",
+                "instruction": "run",
+                "publish": {"mode": "auto"},
+            }
+        )
+
 async def test_codex_skill_payload_parses_codex_overrides() -> None:
     """codex_skill should support top-level codex overrides."""
 

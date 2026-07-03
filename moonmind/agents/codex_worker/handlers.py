@@ -38,7 +38,7 @@ _REPEATED_HUNK_MIN_CHARS = 48
 _REPEATED_HUNK_TRIGGER_COUNT = 4
 _REPEATED_HUNK_MAX_SUPPRESSED_CHUNKS = 4096
 _SENSITIVE_COMMAND_FLAGS = frozenset({"--title", "--body", "--message", "-m"})
-_SUPPORTED_PUBLISH_MODES = {"auto", "none", "branch", "pr"}
+_SUPPORTED_PUBLISH_MODES = {"none", "branch", "pr"}
 
 class CodexWorkerHandlerError(RuntimeError):
     """Raised when handler payloads or command execution are invalid."""
@@ -129,7 +129,7 @@ class CodexExecPayload:
         publish_mode = str(publish_payload.get("mode", "none")).strip() or "none"
         if publish_mode not in _SUPPORTED_PUBLISH_MODES:
             raise CodexWorkerHandlerError(
-                "publish.mode must be one of: auto, none, branch, pr"
+                "publish.mode must be one of: none, branch, pr"
             )
 
         publish_base_raw = publish_payload.get("baseBranch")
@@ -226,7 +226,7 @@ class CodexSkillPayload:
             )
         if publish_mode not in _SUPPORTED_PUBLISH_MODES:
             raise CodexWorkerHandlerError(
-                "codex_skill publishMode must be one of: auto, none, branch, pr"
+                "codex_skill publishMode must be one of: none, branch, pr"
             )
 
         return cls(

@@ -759,7 +759,6 @@ class WorkflowSettings(BaseSettings):
                 "apply_mode": "next_workflow",
                 "title": "Default Publish Mode",
                 "options": [
-                    ("auto", "Auto"),
                     ("none", "None"),
                     ("branch", "Branch"),
                     ("pr", "Pull Request"),
@@ -1276,7 +1275,7 @@ class WorkflowSettings(BaseSettings):
         """Normalize default publish mode and reject unsupported values."""
 
         normalized = str(value or "").strip().lower() or "pr"
-        allowed = {"auto", "none", "branch", "pr"}
+        allowed = {"none", "branch", "pr"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"default_publish_mode must be one of: {supported}")
