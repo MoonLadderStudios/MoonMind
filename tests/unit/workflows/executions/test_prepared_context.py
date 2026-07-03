@@ -575,6 +575,54 @@ def test_mm_1089_branch_turn_context_records_immutable_launch_evidence() -> None
     }
 
 
+def test_branch_turn_manifest_projection_includes_prepared_workspace_baseline() -> None:
+    workspace_baseline = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "baseBranch": "feature/mm-1101-source",
+        "baseCommit": "abc1234",
+        "resolvedBaseCommit": "abc1234",
+        "workBranch": "mm/workflow-1/implement-story/cbr-01",
+        "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+        "creationMode": "from_checkpoint_patch",
+        "sourceCheckpointRef": "artifact://checkpoints/after-execution",
+        "productBranchId": "cbr_01",
+        "branchTurnId": "cbt_01",
+        "idempotencyKey": "mm-1101:create",
+    }
+    bundle = build_branch_turn_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-branch-turn-1",
+        logical_step_id="implement-story",
+        execution_ordinal=3,
+        branch_id="cbr_01",
+        branch_turn_id="cbt_01",
+        source_checkpoint={
+            "workflowId": "workflow-1",
+            "runId": "run-source",
+            "checkpointBoundary": "after_execution",
+            "checkpointRef": "artifact://checkpoints/after-execution",
+        },
+        instruction_artifact_ref="artifact://branch-turn/instructions",
+        instruction_digest="sha256:turn",
+        runtime_context_policy="fresh_agent_run",
+        workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+        workspace_baseline=workspace_baseline,
+        git_work_branch="mm/workflow-1/implement-story/cbr-01",
+    )
+
+    projection = branch_turn_step_execution_manifest_projection(bundle)
+
+    assert projection["branch"]["workspacePolicy"] == (
+        "apply_previous_execution_diff_to_clean_baseline"
+    )
+    assert projection["branch"]["creationMode"] == "from_checkpoint_patch"
+    assert projection["branch"]["repository"] == "MoonLadderStudios/MoonMind"
+    assert projection["branch"]["baseBranch"] == "feature/mm-1101-source"
+    assert projection["branch"]["baseCommit"] == "abc1234"
+    assert projection["branch"]["resolvedBaseCommit"] == "abc1234"
+    assert projection["branch"]["workspaceBaseline"] == workspace_baseline
+
+
 def test_mm_1089_branch_turn_artifact_manifest_names_minimum_evidence() -> None:
     bundle = build_branch_turn_context_bundle(
         workflow_id="workflow-1",

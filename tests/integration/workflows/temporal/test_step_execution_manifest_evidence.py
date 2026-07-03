@@ -8,6 +8,10 @@ import pytest
 
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.executions.prepared_context import (
+    branch_turn_step_execution_manifest_projection,
+    build_branch_turn_context_bundle,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -654,3 +658,50 @@ async def test_repo_memory_write_projects_privileged_candidate_when_approved(
     memory = writes[-1]["payload"]["sideEffects"]["memory"][0]
     assert memory["state"] == "applied_to_repo"
     assert memory["privilegedAction"]["action"] == "memory.apply_repo"
+
+
+async def test_branch_turn_manifest_projection_carries_prepared_git_baseline() -> None:
+    workspace_baseline = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "baseBranch": "feature/mm-1101-source",
+        "baseCommit": "abc1234",
+        "resolvedBaseCommit": "abc1234",
+        "workBranch": "mm/wf-boundary/implement/cbr-1101",
+        "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+        "creationMode": "from_checkpoint_patch",
+        "sourceCheckpointRef": "artifact://checkpoints/after-implement",
+        "sourceCheckpointDigest": "sha256:checkpoint",
+        "productBranchId": "cbr_1101",
+        "branchTurnId": "cbt_1101",
+        "idempotencyKey": "mm-1101:create",
+    }
+    bundle = build_branch_turn_context_bundle(
+        workflow_id="wf-boundary",
+        run_id="run-boundary",
+        logical_step_id="implement",
+        execution_ordinal=2,
+        branch_id="cbr_1101",
+        branch_turn_id="cbt_1101",
+        source_checkpoint={
+            "workflowId": "wf-boundary",
+            "runId": "run-boundary",
+            "checkpointBoundary": "after_execution",
+            "checkpointRef": "artifact://checkpoints/after-implement",
+            "checkpointDigest": "sha256:checkpoint",
+        },
+        instruction_artifact_ref="artifact://instructions/mm-1101",
+        instruction_digest="sha256:instructions",
+        runtime_context_policy="fresh_agent_run",
+        workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+        workspace_baseline=workspace_baseline,
+        git_work_branch="mm/wf-boundary/implement/cbr-1101",
+    )
+
+    projection = branch_turn_step_execution_manifest_projection(bundle)
+
+    assert projection["branch"]["workspacePolicy"] == (
+        "apply_previous_execution_diff_to_clean_baseline"
+    )
+    assert projection["branch"]["creationMode"] == "from_checkpoint_patch"
+    assert projection["branch"]["repository"] == "MoonLadderStudios/MoonMind"
+    assert projection["branch"]["workspaceBaseline"] == workspace_baseline

@@ -48,6 +48,7 @@ from api_service.db.models import (
     WorkflowCheckpointBranchOperation,
     WorkflowCheckpointBranchTurn,
 )
+from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
 from moonmind.config.settings import settings
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
@@ -126,6 +127,7 @@ from moonmind.schemas.checkpoint_branch_models import (
     CheckpointListResponse,
     CheckpointSummaryModel,
 )
+from moonmind.workflows.checkpoint_branches import CheckpointBranchGitBindingError
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
@@ -563,6 +565,183 @@ def _checkpoint_branch_head_identity(branch: WorkflowCheckpointBranch) -> str:
         or branch.current_head_checkpoint_ref
         or branch.source_checkpoint_ref
     )
+
+
+def _checkpoint_branch_creation_mode(workspace_policy: str) -> str:
+    if workspace_policy == "apply_previous_execution_diff_to_clean_baseline":
+        return "from_checkpoint_patch"
+    if workspace_policy == "start_from_last_passed_commit":
+        return "from_last_accepted_commit"
+    if workspace_policy == "fresh_branch_from_source":
+        return "fresh_from_source_branch"
+    return "from_checkpoint_worktree"
+
+
+def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
+    params = getattr(record, "parameters", None)
+    if not isinstance(params, Mapping):
+        params = {}
+    memo = getattr(record, "memo", None)
+    if not isinstance(memo, Mapping):
+        memo = {}
+    search_attributes = getattr(record, "search_attributes", None)
+    if not isinstance(search_attributes, Mapping):
+        search_attributes = {}
+    task_payload = params.get("task")
+    if not isinstance(task_payload, Mapping):
+        task_payload = params
+    git_payload = task_payload.get("git")
+    if not isinstance(git_payload, Mapping):
+        git_payload = {}
+
+    repository = (
+        _coerce_temporal_scalar(git_payload.get("repository"))
+        or _coerce_temporal_scalar(task_payload.get("repository"))
+        or _coerce_temporal_scalar(params.get("repository"))
+        or _coerce_temporal_scalar(params.get("repo"))
+        or _coerce_temporal_scalar(search_attributes.get("mm_repository"))
+        or _coerce_temporal_scalar(search_attributes.get("mm_repo"))
+        or _coerce_temporal_scalar(search_attributes.get("repository"))
+        or _coerce_temporal_scalar(memo.get("repository"))
+    )
+    base_branch = (
+        _coerce_temporal_scalar(git_payload.get("baseBranch"))
+        or _coerce_temporal_scalar(git_payload.get("startingBranch"))
+        or _coerce_temporal_scalar(task_payload.get("startingBranch"))
+        or _coerce_temporal_scalar(params.get("startingBranch"))
+        or _coerce_temporal_scalar(git_payload.get("defaultBranch"))
+        or _coerce_temporal_scalar(params.get("defaultBranch"))
+    )
+    base_commit = (
+        _coerce_temporal_scalar(git_payload.get("baseCommit"))
+        or _coerce_temporal_scalar(git_payload.get("startingCommit"))
+        or _coerce_temporal_scalar(params.get("baseCommit"))
+        or _coerce_temporal_scalar(search_attributes.get("mm_base_commit"))
+    )
+    resolved_base_commit = (
+        _coerce_temporal_scalar(git_payload.get("resolvedBaseCommit"))
+        or _coerce_temporal_scalar(params.get("resolvedBaseCommit"))
+        or base_commit
+    )
+    current_ref = (
+        _coerce_temporal_scalar(git_payload.get("currentRef"))
+        or _coerce_temporal_scalar(params.get("currentRef"))
+        or base_branch
+    )
+    raw_known_refs = (
+        git_payload.get("knownRefs")
+        or git_payload.get("known_refs")
+        or params.get("knownRefs")
+        or []
+    )
+    known_refs = (
+        {str(ref).strip() for ref in raw_known_refs if str(ref or "").strip()}
+        if isinstance(raw_known_refs, list | tuple | set)
+        else set()
+    )
+    if base_branch:
+        known_refs.add(base_branch)
+    if current_ref:
+        known_refs.add(current_ref)
+    if not repository or not base_branch:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "invalid_binding",
+                "reason": "repository_git_context_missing",
+            },
+        )
+    return {
+        "repository": repository,
+        "baseBranch": base_branch,
+        "baseCommit": base_commit,
+        "resolvedBaseCommit": resolved_base_commit,
+        "knownRefs": known_refs,
+        "currentRef": current_ref,
+    }
+
+
+async def _write_checkpoint_branch_preparation_artifact(
+    artifact_kind: str,
+    payload: Mapping[str, Any],
+    content_type: str,
+) -> tuple[str, str]:
+    digest = _operation_digest(
+        {
+            "artifactKind": artifact_kind,
+            "contentType": content_type,
+            "payload": payload,
+        }
+    )
+    artifact_ref = (
+        "artifact://checkpoint-branch-preparation/"
+        f"{digest.removeprefix('sha256:')}/{artifact_kind}"
+    )
+    return artifact_ref, digest
+
+
+async def _prepare_checkpoint_branch_launch(
+    *,
+    session: AsyncSession,
+    record: Any,
+    workflow_id: str,
+    branch_id: str,
+    branch_turn_id: str,
+    source_checkpoint_ref: str,
+    source_checkpoint_digest: str | None,
+    logical_step_id: str | None,
+    label: str | None,
+    workspace_policy: str,
+    runtime_context_policy: str | None,
+    idempotency_key: str,
+    instruction_ref: str,
+    instruction_digest: str,
+    requested_work_branch: str | None = None,
+    parent_branch_id: str | None = None,
+    parent_turn_id: str | None = None,
+    source_run_id: str | None = None,
+    source_execution_ordinal: int | None = None,
+    source_checkpoint_boundary: str = "after_execution",
+) -> None:
+    git_context = _checkpoint_branch_git_context(record)
+    try:
+        await prepare_checkpoint_branch_workspace(
+            session=session,
+            binding_input={
+                "workflowId": workflow_id,
+                "productBranchId": branch_id,
+                "branchTurnId": branch_turn_id,
+                "sourceCheckpointRef": source_checkpoint_ref,
+                "sourceCheckpointDigest": source_checkpoint_digest,
+                "logicalStepId": logical_step_id,
+                "label": label,
+                "repository": git_context["repository"],
+                "baseBranch": git_context["baseBranch"],
+                "baseCommit": git_context["baseCommit"],
+                "resolvedBaseCommit": git_context["resolvedBaseCommit"],
+                "workspacePolicy": workspace_policy,
+                "creationMode": _checkpoint_branch_creation_mode(workspace_policy),
+                "idempotencyKey": idempotency_key,
+                "requestedWorkBranch": requested_work_branch,
+            },
+            known_refs=git_context["knownRefs"],
+            current_ref=git_context["currentRef"],
+            instruction_ref=instruction_ref,
+            instruction_digest=instruction_digest,
+            artifact_writer=_write_checkpoint_branch_preparation_artifact,
+            source_checkpoint_boundary=source_checkpoint_boundary,
+            root_workflow_id=workflow_id,
+            source_run_id=source_run_id,
+            source_execution_ordinal=source_execution_ordinal,
+            parent_branch_id=parent_branch_id,
+            parent_turn_id=parent_turn_id,
+            runtime_context_policy=runtime_context_policy,
+        )
+    except CheckpointBranchGitBindingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.failure_code, "reason": exc.failure_code},
+        ) from exc
 
 
 def _branch_comparison_record(
@@ -11034,53 +11213,52 @@ async def create_checkpoint_branch(
         )
         return _branch_to_model(branch)
 
-    branch = WorkflowCheckpointBranch(
-        branch_id=_new_checkpoint_branch_id(),
+    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
+    branch_id = _new_checkpoint_branch_id()
+    branch_turn_id = _new_checkpoint_branch_turn_id()
+    await _prepare_checkpoint_branch_launch(
+        session=session,
+        record=record,
         workflow_id=workflow_id,
-        root_workflow_id=workflow_id,
-        source_run_id=payload.source.run_id,
-        logical_step_id=payload.source.logical_step_id,
-        source_execution_ordinal=payload.source.execution_ordinal,
-        source_checkpoint_boundary=payload.source.checkpoint_boundary,
+        branch_id=branch_id,
+        branch_turn_id=branch_turn_id,
         source_checkpoint_ref=payload.source.checkpoint_ref,
         source_checkpoint_digest=payload.source.checkpoint_digest,
+        logical_step_id=payload.source.logical_step_id,
         label=payload.label,
-        state="created",
-        branch_kind="root",
         workspace_policy=payload.workspace_policy,
         runtime_context_policy=payload.runtime_context_policy,
-        git_work_branch=payload.git_work_branch,
-        current_head_checkpoint_ref=payload.source.checkpoint_ref,
-        publish_status="unpublished",
         idempotency_key=payload.idempotency_key,
-        created_by=getattr(user, "email", None) or _owner_id(user),
-    )
-    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
-    turn = WorkflowCheckpointBranchTurn(
-        branch_turn_id=_new_checkpoint_branch_turn_id(),
-        branch_id=branch.branch_id,
-        source_checkpoint_ref=payload.source.checkpoint_ref,
-        source_checkpoint_digest=payload.source.checkpoint_digest,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
-        workspace_policy=payload.workspace_policy,
-        runtime_context_policy=payload.runtime_context_policy,
-        idempotency_key=payload.idempotency_key,
-        status="created",
+        requested_work_branch=payload.git_work_branch,
+        source_run_id=payload.source.run_id,
+        source_execution_ordinal=payload.source.execution_ordinal,
+        source_checkpoint_boundary=payload.source.checkpoint_boundary,
     )
-    session.add(branch)
-    session.add(turn)
+    branch = await session.get(WorkflowCheckpointBranch, branch_id)
+    if branch is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_binding", "reason": "branch_prepare_failed"},
+        )
+    branch.state = "created"
+    branch.branch_kind = "root"
+    branch.current_head_checkpoint_ref = payload.source.checkpoint_ref
+    branch.publish_status = "unpublished"
+    branch.idempotency_key = payload.idempotency_key
+    branch.created_by = getattr(user, "email", None) or _owner_id(user)
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,
-            branch_id=branch.branch_id,
-            branch_turn_id=turn.branch_turn_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
             operation="checkpoint_branch.create",
             idempotency_key=payload.idempotency_key,
             request_digest=request_digest,
             response_payload={
-                "branchId": branch.branch_id,
-                "branchTurnId": turn.branch_turn_id,
+                "branchId": branch_id,
+                "branchTurnId": branch_turn_id,
             },
         )
     )
@@ -11134,6 +11312,7 @@ async def list_checkpoint_branch_turns(
 async def _record_branch_turn_operation(
     *,
     workflow_id: str,
+    record: Any,
     branch: WorkflowCheckpointBranch,
     payload: CheckpointBranchContinueRequest,
     operation_name: str,
@@ -11180,36 +11359,52 @@ async def _record_branch_turn_operation(
         return _turn_to_model(turn)
 
     instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
-    turn = WorkflowCheckpointBranchTurn(
-        branch_turn_id=_new_checkpoint_branch_turn_id(),
+    branch_turn_id = _new_checkpoint_branch_turn_id()
+    source_checkpoint_ref = (
+        branch.current_head_checkpoint_ref or branch.source_checkpoint_ref
+    )
+    await _prepare_checkpoint_branch_launch(
+        session=session,
+        record=record,
+        workflow_id=workflow_id,
         branch_id=branch.branch_id,
-        parent_turn_id=parent_turn_id,
-        source_checkpoint_ref=branch.current_head_checkpoint_ref
-        or branch.source_checkpoint_ref,
+        branch_turn_id=branch_turn_id,
+        source_checkpoint_ref=source_checkpoint_ref,
         source_checkpoint_digest=branch.source_checkpoint_digest,
-        instruction_ref=instruction_ref,
-        instruction_digest=instruction_digest,
+        logical_step_id=branch.logical_step_id,
+        label=payload.label or branch.label,
         workspace_policy=payload.workspace_policy,
         runtime_context_policy=payload.runtime_context_policy,
         idempotency_key=payload.idempotency_key,
-        status="created",
+        instruction_ref=instruction_ref,
+        instruction_digest=instruction_digest,
+        parent_branch_id=branch.parent_branch_id,
+        parent_turn_id=parent_turn_id,
+        source_run_id=branch.source_run_id,
+        source_execution_ordinal=branch.source_execution_ordinal,
+        source_checkpoint_boundary=branch.source_checkpoint_boundary,
     )
+    turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+    if turn is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_binding", "reason": "branch_turn_prepare_failed"},
+        )
     branch.state = "active"
     branch.label = payload.label or branch.label
     branch.workspace_policy = payload.workspace_policy
     branch.runtime_context_policy = payload.runtime_context_policy
-    session.add(turn)
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,
             branch_id=branch.branch_id,
-            branch_turn_id=turn.branch_turn_id,
+            branch_turn_id=branch_turn_id,
             operation=operation_name,
             idempotency_key=payload.idempotency_key,
             request_digest=request_digest,
             response_payload={
                 "branchId": branch.branch_id,
-                "branchTurnId": turn.branch_turn_id,
+                "branchTurnId": branch_turn_id,
             },
         )
     )
@@ -11231,12 +11426,15 @@ async def continue_checkpoint_branch(
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> CheckpointBranchTurnModel:
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    record = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
     branch = await _load_checkpoint_branch(
         session, workflow_id=workflow_id, branch_id=branch_id
     )
     return await _record_branch_turn_operation(
         workflow_id=workflow_id,
+        record=record,
         branch=branch,
         payload=payload,
         operation_name="checkpoint_branch.continue",
@@ -11257,7 +11455,9 @@ async def fork_checkpoint_branch(
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> CheckpointBranchModel:
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    record = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
     parent = await _load_checkpoint_branch(
         session, workflow_id=workflow_id, branch_id=branch_id
     )
@@ -11321,55 +11521,54 @@ async def fork_checkpoint_branch(
         )
         return _branch_to_model(branch)
 
-    forked = WorkflowCheckpointBranch(
-        branch_id=_new_checkpoint_branch_id(),
+    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
+    forked_branch_id = _new_checkpoint_branch_id()
+    branch_turn_id = _new_checkpoint_branch_turn_id()
+    await _prepare_checkpoint_branch_launch(
+        session=session,
+        record=record,
         workflow_id=workflow_id,
-        root_workflow_id=parent.root_workflow_id,
-        source_run_id=parent.source_run_id,
-        logical_step_id=parent.logical_step_id,
-        source_execution_ordinal=parent.source_execution_ordinal,
-        source_checkpoint_boundary=parent.source_checkpoint_boundary,
+        branch_id=forked_branch_id,
+        branch_turn_id=branch_turn_id,
         source_checkpoint_ref=fork_source_ref,
         source_checkpoint_digest=fork_source_digest,
-        parent_branch_id=parent.branch_id,
-        parent_turn_id=payload.parent_turn_id,
+        logical_step_id=parent.logical_step_id,
         label=payload.label or f"Fork of {parent.label}",
-        state="created",
-        branch_kind="child_fork",
         workspace_policy=payload.workspace_policy,
         runtime_context_policy=payload.runtime_context_policy,
-        current_head_checkpoint_ref=fork_source_ref,
-        publish_status="unpublished",
         idempotency_key=payload.idempotency_key,
-        created_by=getattr(user, "email", None) or _owner_id(user),
-    )
-    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
-    turn = WorkflowCheckpointBranchTurn(
-        branch_turn_id=_new_checkpoint_branch_turn_id(),
-        branch_id=forked.branch_id,
-        parent_turn_id=payload.parent_turn_id,
-        source_checkpoint_ref=forked.source_checkpoint_ref,
-        source_checkpoint_digest=forked.source_checkpoint_digest,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
-        workspace_policy=payload.workspace_policy,
-        runtime_context_policy=payload.runtime_context_policy,
-        idempotency_key=payload.idempotency_key,
-        status="created",
+        parent_branch_id=parent.branch_id,
+        parent_turn_id=payload.parent_turn_id,
+        source_run_id=parent.source_run_id,
+        source_execution_ordinal=parent.source_execution_ordinal,
+        source_checkpoint_boundary=parent.source_checkpoint_boundary,
     )
-    session.add(forked)
-    session.add(turn)
+    forked = await session.get(WorkflowCheckpointBranch, forked_branch_id)
+    if forked is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_binding", "reason": "fork_prepare_failed"},
+        )
+    forked.state = "created"
+    forked.root_workflow_id = parent.root_workflow_id
+    forked.branch_kind = "child_fork"
+    forked.current_head_checkpoint_ref = fork_source_ref
+    forked.publish_status = "unpublished"
+    forked.idempotency_key = payload.idempotency_key
+    forked.created_by = getattr(user, "email", None) or _owner_id(user)
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,
-            branch_id=forked.branch_id,
-            branch_turn_id=turn.branch_turn_id,
+            branch_id=forked_branch_id,
+            branch_turn_id=branch_turn_id,
             operation="checkpoint_branch.fork",
             idempotency_key=payload.idempotency_key,
             request_digest=request_digest,
             response_payload={
-                "branchId": forked.branch_id,
-                "branchTurnId": turn.branch_turn_id,
+                "branchId": forked_branch_id,
+                "branchTurnId": branch_turn_id,
             },
         )
     )

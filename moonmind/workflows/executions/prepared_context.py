@@ -745,6 +745,7 @@ def branch_turn_step_execution_manifest_projection(
     """Return branch metadata for a Step Execution manifest extension."""
 
     branch = dict(bundle.branch or {})
+    workspace_baseline = _compact_mapping(bundle.workspace_baseline)
     branch_metadata = {
         "branchId": branch.get("branchId"),
         "branchTurnId": branch.get("branchTurnId"),
@@ -756,6 +757,22 @@ def branch_turn_step_execution_manifest_projection(
         "parentTurnId": branch.get("parentTurnId"),
         "gitWorkBranch": branch.get("gitWorkBranch"),
     }
+    if workspace_baseline.get("repository") or workspace_baseline.get("creationMode"):
+        branch_metadata.update(
+            {
+                "workspacePolicy": bundle.workspace_policy,
+                "creationMode": workspace_baseline.get("creationMode"),
+                "repository": workspace_baseline.get("repository"),
+                "baseBranch": workspace_baseline.get("baseBranch"),
+                "baseCommit": workspace_baseline.get("baseCommit"),
+                "resolvedBaseCommit": workspace_baseline.get("resolvedBaseCommit"),
+                "worktreeRef": workspace_baseline.get("worktreeRef"),
+                "providerWorkspaceRef": workspace_baseline.get(
+                    "providerWorkspaceRef"
+                ),
+                "workspaceBaseline": workspace_baseline,
+            }
+        )
     return {
         "branch": {
             key: value for key, value in branch_metadata.items() if value is not None
