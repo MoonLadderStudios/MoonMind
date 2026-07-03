@@ -220,6 +220,7 @@ async def test_managed_fetch_result_marks_pr_resolver_from_task_tool_contract(
     activity_input = run._build_managed_fetch_result_activity_input(request)
 
     assert isinstance(activity_input, AgentRuntimeFetchResultInput)
+    assert activity_input.publish_mode == "auto"
     assert activity_input.pr_resolver_expected is True
     assert activity_input.pr_resolver_merge_gate_owned is True
     assert activity_input.head_branch == "feature/pr-1671"

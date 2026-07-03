@@ -99,6 +99,99 @@ def _normalize_payload(payload: Any) -> dict[str, Any]:
     dump_method = getattr(payload, 'model_dump', getattr(payload, 'dict', None))
     return dump_method() if dump_method else payload
 
+
+def _auto_publish_evidence(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schemaVersion": "moonmind.publish.auto.v1",
+        "mode": "auto",
+        "owner": "agent",
+        "skillId": "fix-ci",
+        "status": "verified",
+        "action": "push",
+        "repository": "MoonLadderStudios/MoonMind",
+        "branch": "feature/example",
+        "localHead": "abc123",
+        "remoteBranchHead": "abc123",
+        "remoteVerified": True,
+        "pushed": True,
+        "merged": False,
+        "prUrl": None,
+        "blockedReason": None,
+        "verificationCommands": [
+            "git rev-parse HEAD",
+            "git ls-remote origin refs/heads/feature/example",
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def _finalize_and_capture_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    workflow: MoonMindRunWorkflow,
+    *,
+    parameters: dict[str, Any],
+    status: str = "success",
+    error: str | None = None,
+) -> dict[str, Any]:
+    async def noop_terminate_sessions(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.create":
+            return ({"artifact_id": "artifact://summary"}, {"upload_url": "unused"})
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.write_complete"
+        return {"ok": True}
+
+    workflow._state = "publish"
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-auto-publish",
+            "run_id": "run-auto-publish",
+            "search_attributes": {},
+            "start_time": datetime(2026, 7, 3, tzinfo=timezone.utc),
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_terminate_workflow_scoped_sessions",
+        noop_terminate_sessions,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    await workflow._run_finalizing_stage(
+        parameters=parameters,
+        status=status,
+        error=error,
+    )
+
+    return workflow._finish_summary
+
 async def _immediate_wait_condition(
     predicate: Callable[[], bool],
     **_kwargs: Any,
@@ -1822,6 +1915,175 @@ def test_record_publish_result_preserves_validated_pr_metadata_for_downstream(
         "moonSpecPath": "specs/674-pr-metadata",
         "source": "pr_metadata.json",
     }
+
+
+@pytest.mark.asyncio
+async def test_auto_publish_verified_push_maps_to_published_branch_finish_outcome(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto publish finish mapping source: docs/Workflows/WorkflowPublishing.md."""
+
+    parameters = {"publishMode": "auto"}
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result={"outputs": {"publishResult": _auto_publish_evidence()}},
+    )
+
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        mock_run_workflow,
+        parameters=parameters,
+    )
+
+    assert summary["finishOutcome"]["code"] == "PUBLISHED_BRANCH"
+    assert summary["publish"] == {
+        "mode": "auto",
+        "status": "published",
+        "reason": "auto publish verified push",
+        "owner": "agent",
+        "evidenceRequired": True,
+    }
+    assert summary["publishContext"]["pushed"] is True
+    assert summary["publishContext"]["merged"] is False
+
+
+@pytest.mark.asyncio
+async def test_auto_publish_verified_merge_maps_to_published_pr_finish_outcome(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parameters = {"publishMode": "auto"}
+    evidence = _auto_publish_evidence(
+        action="merge",
+        pushed=False,
+        merged=True,
+        remoteVerified=False,
+        remoteBranchHead=None,
+        prUrl="https://github.com/MoonLadderStudios/MoonMind/pull/1086",
+    )
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result={"outputs": {"publishResult": evidence}},
+    )
+
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        mock_run_workflow,
+        parameters=parameters,
+    )
+
+    assert summary["finishOutcome"]["code"] == "PUBLISHED_PR"
+    assert summary["publish"]["mode"] == "auto"
+    assert summary["publish"]["status"] == "published"
+    assert summary["publish"]["reason"] == "auto publish verified merge"
+    assert summary["publish"]["owner"] == "agent"
+    assert summary["publishContext"]["merged"] is True
+    assert summary["publishContext"]["prUrl"] == (
+        "https://github.com/MoonLadderStudios/MoonMind/pull/1086"
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_publish_no_op_maps_to_no_commit_not_publish_disabled(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parameters = {"publishMode": "auto"}
+    evidence = _auto_publish_evidence(
+        status="no_op_verified",
+        action="none",
+        pushed=False,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result={"outputs": {"publishResult": evidence}},
+    )
+
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        mock_run_workflow,
+        parameters=parameters,
+    )
+
+    assert summary["finishOutcome"]["code"] == "NO_COMMIT"
+    assert summary["publish"]["mode"] == "auto"
+    assert summary["publish"]["status"] == "skipped"
+    assert summary["publish"]["reason"] == "auto publish no-op verified"
+    assert summary["publish"]["reasonCode"] == "no_commit"
+    assert summary["publish"]["owner"] == "agent"
+
+
+@pytest.mark.asyncio
+async def test_auto_publish_missing_evidence_maps_to_publish_stage_failure(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parameters = {"publishMode": "auto"}
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result={"outputs": {}},
+    )
+
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        mock_run_workflow,
+        parameters=parameters,
+        status="failed",
+        error=mock_run_workflow._publish_reason,
+    )
+
+    assert summary["finishOutcome"] == {
+        "code": "FAILED",
+        "stage": "publish",
+        "reason": "auto_publish_evidence_missing",
+    }
+    assert summary["publish"]["mode"] == "auto"
+    assert summary["publish"]["status"] == "failed"
+    assert summary["publish"]["reason"] == "auto_publish_evidence_missing"
+    assert summary["publish"]["owner"] == "agent"
+
+
+@pytest.mark.asyncio
+async def test_auto_publish_evidence_ref_is_loaded_before_recording(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    captured: list[tuple[str, Any]] = []
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> bytes:
+        captured.append((activity_type, payload))
+        assert activity_type == "artifact.read"
+        assert getattr(payload, "artifact_ref", None) == "artifact://publish-result"
+        return json.dumps(_auto_publish_evidence()).encode()
+
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    await mock_run_workflow._record_publish_result_from_execution(
+        parameters={"publishMode": "auto"},
+        execution_result={
+            "outputs": {
+                "outputRefs": {"publish_result.json": "artifact://publish-result"}
+            }
+        },
+    )
+
+    assert captured
+    assert mock_run_workflow._publish_status == "published"
+    assert mock_run_workflow._publish_reason == "auto publish verified push"
+    assert mock_run_workflow._publish_context["evidenceRef"] == (
+        "artifact://publish-result"
+    )
 
 
 def test_record_execution_context_preserves_provider_native_pr_record(

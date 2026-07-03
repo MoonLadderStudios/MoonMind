@@ -1,0 +1,66 @@
+{
+  "provider": "github",
+  "boundary": "creation",
+  "mode": "recorded_trusted_tool",
+  "tool": "story.create_github_issues",
+  "input": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "storyOutput": {
+      "mode": "github",
+      "github": {
+        "repository": "MoonLadderStudios/MoonMind",
+        "sourceIssueKey": "MM-1063"
+      },
+      "dependencyMode": "none"
+    },
+    "stories": [
+      {
+        "id": "STORY-001",
+        "summary": "Harden GitHub Issue handoff",
+        "sourceReference": {
+          "sourceIssueKey": "MM-1063"
+        },
+        "issueCreation": {
+          "action": "create_issue"
+        }
+      },
+      {
+        "id": "STORY-002",
+        "summary": "Already complete",
+        "sourceReference": {
+          "sourceIssueKey": "MM-1063"
+        },
+        "issueCreation": {
+          "action": "skip",
+          "reason": "Already implemented"
+        }
+      }
+    ]
+  },
+  "output": {
+    "status": "COMPLETED",
+    "storyOutput": {
+      "status": "github_created",
+      "createdCount": 1,
+      "dependencyMode": "none",
+      "dependencyCount": 0,
+      "skippedStories": [
+        {
+          "storyId": "STORY-002",
+          "issueCreationAction": "skip"
+        }
+      ]
+    },
+    "github": {
+      "issueMappings": [
+        {
+          "storyId": "STORY-001",
+          "repository": "MoonLadderStudios/MoonMind",
+          "issueNumber": "1101",
+          "issueUrl": "https://github.com/MoonLadderStudios/MoonMind/issues/1101",
+          "sourceIssueKey": "MM-1063"
+        }
+      ]
+    }
+  }
+}

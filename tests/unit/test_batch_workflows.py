@@ -442,9 +442,9 @@ def test_normalize_publish_mode_falls_back_to_pr():
 
 def test_batch_workflows_parent_is_self_managed_publish():
     # The parent orchestration queues children and performs no repo publish, so
-    # its own publish mode is forced to "none" (parity with batch-pr-resolver).
+    # its own publish mode is resolved to agent-owned auto publishing.
     assert is_self_managed_publish_skill("batch-workflows") is True
-    assert resolve_publish_mode_for_skill("batch-workflows", None) == "none"
-    assert resolve_publish_mode_for_skill("batch-workflows", "none") == "none"
+    assert resolve_publish_mode_for_skill("batch-workflows", None) == "auto"
+    assert resolve_publish_mode_for_skill("batch-workflows", "auto") == "auto"
     with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill("batch-workflows", "pr")

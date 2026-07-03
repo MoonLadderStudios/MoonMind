@@ -1,0 +1,48 @@
+{
+  "provider": "github",
+  "boundary": "handoff",
+  "mode": "recorded_trusted_tool",
+  "tool": "story.create_github_issue_implement_workflows",
+  "input": {
+    "github": {
+      "issueMappings": [
+        {
+          "storyId": "STORY-001",
+          "storyIndex": 1,
+          "summary": "Harden GitHub Issue handoff",
+          "repository": "MoonLadderStudios/MoonMind",
+          "issueNumber": "1101"
+        }
+      ]
+    },
+    "githubOrchestration": {
+      "traceability": {
+        "sourceIssueKey": "MM-1063"
+      },
+      "task": {
+        "runtime": {
+          "mode": "codex"
+        },
+        "publish": {
+          "mode": "pr"
+        }
+      }
+    }
+  },
+  "output": {
+    "status": "COMPLETED",
+    "githubWorkflowOrchestration": {
+      "status": "completed",
+      "createdWorkflowCount": 1,
+      "dependencyMode": "workflow_linear_chain",
+      "dependencyCount": 0,
+      "workflows": [
+        {
+          "workflowId": "mm:github-issue-implement:MM-1063:STORY-001",
+          "githubIssueNumber": "1101",
+          "instructions": "Continue from the current breakdown workflow run. Do not run implementation inline inside the breakdown workflow."
+        }
+      ]
+    }
+  }
+}

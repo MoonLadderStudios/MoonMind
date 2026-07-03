@@ -6106,6 +6106,85 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('renders auto publish mode and evidence with Auto labels', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-auto-publish?source=temporal');
+    const mockExecution = {
+      taskId: 'test-auto-publish',
+      workflowId: 'test-auto-publish',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      entry: 'user_workflow',
+      title: 'Auto publish task',
+      summary: 'Auto publish verified',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      closeStatus: 'COMPLETED',
+      summaryArtifactRef: 'art-summary-auto',
+      publishMode: 'auto',
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: '2026-03-28T00:00:03Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-summary-auto/download')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              finishOutcome: {
+                code: 'PUBLISHED_BRANCH',
+                stage: 'publish',
+              },
+              publish: {
+                mode: 'auto',
+                owner: 'agent',
+                status: 'verified',
+                reason: 'Auto publish verified.',
+              },
+              publishContext: {
+                branch: 'feature/auto-publish',
+                baseRef: 'origin/main',
+                commitCount: 1,
+              },
+            }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Auto publish task')).toBeTruthy();
+      expect(screen.getByText('Run Summary')).toBeTruthy();
+      expect(screen.getAllByText('Auto').length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText('Auto publish verified.')).toBeTruthy();
+      expect(screen.getByText('feature/auto-publish')).toBeTruthy();
+    });
+    expect(screen.queryByText('auto')).toBeNull();
+  });
+
   it('does not render a PR link for unsafe execution or run-summary URLs', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {
