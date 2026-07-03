@@ -9516,7 +9516,7 @@ class MoonMindRunWorkflow:
         if not isinstance(value, str):
             return ""
         normalized = value.strip().lower()
-        return normalized if normalized in {"none", "branch", "pr"} else ""
+        return normalized if normalized in {"auto", "none", "branch", "pr"} else ""
 
     def _managed_session_runtime_id(
         self, request: AgentExecutionRequest
