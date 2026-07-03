@@ -45,6 +45,7 @@ from api_service.db.models import (
     TemporalArtifactRetentionClass,
     User,
     WorkflowCheckpointBranch,
+    WorkflowCheckpointBranchArtifact,
     WorkflowCheckpointBranchOperation,
     WorkflowCheckpointBranchTurn,
 )
@@ -703,6 +704,60 @@ async def _write_checkpoint_branch_preparation_artifact(
     return artifact_ref, digest
 
 
+def _checkpoint_branch_operation_artifact_ref(
+    *,
+    operation: str,
+    workflow_id: str,
+    branch_id: str,
+    artifact_kind: str,
+    digest: str,
+) -> str:
+    operation_slug = {
+        "checkpoint_branch.compare": "comparisons",
+        "checkpoint_branch.promote": "promotions",
+    }.get(
+        operation,
+        operation.removeprefix("checkpoint_branch.").replace(".", "-") + "s",
+    )
+    return (
+        f"artifact://checkpoint-branch-{operation_slug}/"
+        f"{workflow_id}/{branch_id}/{digest.removeprefix('sha256:')}/"
+        f"{artifact_kind}"
+    )
+
+
+async def _record_checkpoint_branch_artifact_ref(
+    *,
+    session: AsyncSession,
+    branch_id: str,
+    artifact_kind: str,
+    artifact_ref: str,
+    digest: str | None = None,
+    branch_turn_id: str | None = None,
+) -> None:
+    result = await session.execute(
+        select(WorkflowCheckpointBranchArtifact).where(
+            WorkflowCheckpointBranchArtifact.branch_id == branch_id,
+            WorkflowCheckpointBranchArtifact.branch_turn_id == branch_turn_id,
+            WorkflowCheckpointBranchArtifact.artifact_kind == artifact_kind,
+        )
+    )
+    existing = result.scalar_one_or_none()
+    if existing is not None:
+        existing.artifact_ref = artifact_ref
+        existing.digest = digest
+        return
+    session.add(
+        WorkflowCheckpointBranchArtifact(
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            artifact_kind=artifact_kind,
+            artifact_ref=artifact_ref,
+            digest=digest,
+        )
+    )
+
+
 async def _prepare_checkpoint_branch_launch(
     *,
     session: AsyncSession,
@@ -773,9 +828,23 @@ def _branch_comparison_record(
     branch: WorkflowCheckpointBranch,
     other: WorkflowCheckpointBranch,
 ) -> dict[str, Any]:
+    branch_gate_evidence = (branch.promotion_evidence or {}).get("gateEvidence") or {}
+    other_gate_evidence = (other.promotion_evidence or {}).get("gateEvidence") or {}
+    branch_gate_verdict = str(
+        branch_gate_evidence.get("verdict")
+        or branch_gate_evidence.get("status")
+        or "unknown"
+    )
+    other_gate_verdict = str(
+        other_gate_evidence.get("verdict")
+        or other_gate_evidence.get("status")
+        or "unknown"
+    )
     summary_text = (
         f"Branch {branch.branch_id} is {branch.state}; "
-        f"comparison branch {other.branch_id} is {other.state}."
+        f"comparison branch {other.branch_id} is {other.state}. "
+        f"Quality verdicts: {branch.branch_id}={branch_gate_verdict}, "
+        f"{other.branch_id}={other_gate_verdict}."
     )
     summary = {
         "text": summary_text,
@@ -788,13 +857,69 @@ def _branch_comparison_record(
         "branchHeadCommit": branch.current_head_commit,
         "againstHeadCommit": other.current_head_commit,
     }
+    quality = {
+        "branchGateVerdict": branch_gate_verdict,
+        "againstGateVerdict": other_gate_verdict,
+    }
+    base_checkpoint_ref: str | dict[str, str | None]
+    if branch.source_checkpoint_ref == other.source_checkpoint_ref:
+        base_checkpoint_ref = branch.source_checkpoint_ref
+    else:
+        base_checkpoint_ref = {
+            "branch": branch.source_checkpoint_ref,
+            "against": other.source_checkpoint_ref,
+        }
+    branch_diff_ref = _checkpoint_branch_operation_artifact_ref(
+        operation="checkpoint_branch.compare",
+        workflow_id=workflow_id,
+        branch_id=branch.branch_id,
+        artifact_kind=f"output.branch_comparison.{other.branch_id}.left_diff.patch",
+        digest=_operation_digest(
+            {
+                "branchId": branch.branch_id,
+                "baseCommit": branch.git_base_commit,
+                "headCommit": branch.current_head_commit,
+            }
+        ),
+    )
+    against_diff_ref = _checkpoint_branch_operation_artifact_ref(
+        operation="checkpoint_branch.compare",
+        workflow_id=workflow_id,
+        branch_id=branch.branch_id,
+        artifact_kind=f"output.branch_comparison.{other.branch_id}.right_diff.patch",
+        digest=_operation_digest(
+            {
+                "branchId": other.branch_id,
+                "baseCommit": other.git_base_commit,
+                "headCommit": other.current_head_commit,
+            }
+        ),
+    )
+    range_diff_ref = _checkpoint_branch_operation_artifact_ref(
+        operation="checkpoint_branch.compare",
+        workflow_id=workflow_id,
+        branch_id=branch.branch_id,
+        artifact_kind=f"output.branch_comparison.{other.branch_id}.range_diff.patch",
+        digest=_operation_digest(
+            {
+                "branchId": branch.branch_id,
+                "againstBranchId": other.branch_id,
+                "branchHeadCommit": branch.current_head_commit,
+                "againstHeadCommit": other.current_head_commit,
+            }
+        ),
+    )
     evidence_refs = {
         key: value
         for key, value in {
+            "baseCheckpointRef": base_checkpoint_ref,
             "branchCheckpointRef": branch.current_head_checkpoint_ref
             or branch.source_checkpoint_ref,
             "againstCheckpointRef": other.current_head_checkpoint_ref
             or other.source_checkpoint_ref,
+            "branchDiffRef": branch_diff_ref,
+            "againstDiffRef": against_diff_ref,
+            "rangeDiffRef": range_diff_ref,
             "branchGitRange": {
                 "base": branch.git_base_commit,
                 "head": branch.current_head_commit,
@@ -820,17 +945,41 @@ def _branch_comparison_record(
         "againstBranchId": other.branch_id,
         "summaryText": summary_text,
         "summary": summary,
+        "quality": quality,
+        "git": {
+            "leftDiffRef": branch_diff_ref,
+            "rightDiffRef": against_diff_ref,
+            "rangeDiffRef": range_diff_ref,
+        },
         "evidenceRefs": evidence_refs,
         "diagnosticsRefs": [],
         "createdAt": datetime.now(UTC).isoformat(),
     }
     record_digest = _operation_digest(record_payload)
     summary_ref = (
-        "artifact://checkpoint-branch-comparisons/"
-        f"{workflow_id}/{branch.branch_id}/against/{other.branch_id}/"
-        f"{record_digest.removeprefix('sha256:')}.json"
+        _checkpoint_branch_operation_artifact_ref(
+            operation="checkpoint_branch.compare",
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            artifact_kind=f"output.branch_comparison.{other.branch_id}.summary.json",
+            digest=record_digest,
+        )
+    )
+    metadata_ref = (
+        _checkpoint_branch_operation_artifact_ref(
+            operation="checkpoint_branch.compare",
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            artifact_kind=f"output.branch_comparison.{other.branch_id}.metadata.json",
+            digest=record_digest,
+        )
     )
     record_payload["summaryRef"] = summary_ref
+    record_payload["artifactRefs"] = {
+        "output.branch_comparison.summary.json": summary_ref,
+        "output.branch_comparison.metadata.json": metadata_ref,
+        "output.branch_comparison.range_diff.patch": range_diff_ref,
+    }
     record_payload["digest"] = record_digest
     return record_payload
 
@@ -839,6 +988,83 @@ def _checkpoint_ref_artifact_value(ref: object) -> str:
     if isinstance(ref, Mapping):
         ref = ref.get("artifactRef") or ref.get("checkpointRef") or ref.get("ref")
     return str(ref or "").strip()
+
+
+async def _latest_branch_turn_for_step_execution(
+    *,
+    session: AsyncSession,
+    branch_id: str,
+    step_execution_id: str,
+) -> WorkflowCheckpointBranchTurn | None:
+    result = await session.execute(
+        select(WorkflowCheckpointBranchTurn)
+        .where(
+            WorkflowCheckpointBranchTurn.branch_id == branch_id,
+            WorkflowCheckpointBranchTurn.created_step_execution_id == step_execution_id,
+        )
+        .order_by(WorkflowCheckpointBranchTurn.created_at.desc())
+    )
+    return result.scalars().first()
+
+
+def _promotion_record_payload(
+    *,
+    workflow_id: str,
+    branch: WorkflowCheckpointBranch,
+    turn: WorkflowCheckpointBranchTurn | None,
+    payload: CheckpointBranchPromoteRequest,
+    promoted_at: datetime,
+) -> dict[str, Any]:
+    accepted_output_refs = dict(payload.accepted_output_refs or {})
+    accepted_output_refs.setdefault(
+        "headStepExecutionId", payload.expected_head_step_execution_id
+    )
+    if branch.current_head_checkpoint_ref:
+        accepted_output_refs.setdefault(
+            "headCheckpointRef", branch.current_head_checkpoint_ref
+        )
+    if turn and turn.step_execution_manifest_ref:
+        accepted_output_refs.setdefault(
+            "stepExecutionManifestRef", turn.step_execution_manifest_ref
+        )
+    downstream_invalidation = dict(payload.downstream_invalidation or {})
+    downstream_invalidation.setdefault("status", "not_required")
+    downstream_invalidation.setdefault("supersededBranchIds", [])
+    git_evidence = {
+        key: value
+        for key, value in {
+            "repository": branch.git_repository,
+            "baseBranch": branch.git_base_branch,
+            "workBranch": branch.git_work_branch,
+            "baseCommit": branch.git_base_commit,
+            "headCommit": payload.expected_head_commit or branch.current_head_commit,
+            "pullRequestUrl": branch.pull_request_url,
+            "publishStatus": branch.publish_status,
+        }.items()
+        if value
+    }
+    policy_evidence = dict(payload.policy_evidence or {})
+    policy_evidence.setdefault(
+        "policyRequiresApproval", payload.policy_requires_approval
+    )
+    policy_evidence.setdefault("freshHeadValidated", True)
+    policy_evidence.setdefault("passedGatesRequired", True)
+    return {
+        "schemaVersion": 1,
+        "recordType": "checkpoint_branch_promotion",
+        "workflowId": workflow_id,
+        "branchId": branch.branch_id,
+        "branchTurnId": turn.branch_turn_id if turn else None,
+        "stepExecutionId": payload.expected_head_step_execution_id,
+        "acceptedOutputRefs": accepted_output_refs,
+        "gitEvidence": git_evidence,
+        "gateEvidence": payload.gate_evidence,
+        "sideEffectDisposition": payload.side_effect_disposition,
+        "downstreamInvalidation": downstream_invalidation,
+        "approvalEvidence": payload.approval_evidence,
+        "policyEvidence": policy_evidence,
+        "promotedAt": promoted_at.isoformat(),
+    }
 
 
 def _branch_to_model(branch: WorkflowCheckpointBranch) -> CheckpointBranchModel:
@@ -11912,6 +12138,15 @@ async def compare_checkpoint_branches(
     )
     operation = existing_op.scalar_one_or_none()
     if operation is None:
+        comparison_artifact_refs = comparison_record.get("artifactRefs") or {}
+        for artifact_kind, artifact_ref in comparison_artifact_refs.items():
+            await _record_checkpoint_branch_artifact_ref(
+                session=session,
+                branch_id=branch.branch_id,
+                artifact_kind=f"{artifact_kind}:{other.branch_id}",
+                artifact_ref=str(artifact_ref),
+                digest=str(comparison_record.get("digest") or ""),
+            )
         session.add(
             WorkflowCheckpointBranchOperation(
                 workflow_id=workflow_id,
@@ -12058,25 +12293,85 @@ async def promote_checkpoint_branch(
             },
         )
     now = datetime.now(UTC)
+    promoted_turn = await _latest_branch_turn_for_step_execution(
+        session=session,
+        branch_id=branch.branch_id,
+        step_execution_id=payload.expected_head_step_execution_id,
+    )
+    promotion_record = _promotion_record_payload(
+        workflow_id=workflow_id,
+        branch=branch,
+        turn=promoted_turn,
+        payload=payload,
+        promoted_at=now,
+    )
+    promotion_digest = _operation_digest(promotion_record)
+    promotion_record_ref = _checkpoint_branch_operation_artifact_ref(
+        operation="checkpoint_branch.promote",
+        workflow_id=workflow_id,
+        branch_id=branch.branch_id,
+        artifact_kind="output.branch_promotion.record.json",
+        digest=promotion_digest,
+    )
+    downstream_invalidation_ref = _checkpoint_branch_operation_artifact_ref(
+        operation="checkpoint_branch.promote",
+        workflow_id=workflow_id,
+        branch_id=branch.branch_id,
+        artifact_kind="output.branch_promotion.downstream_invalidation.json",
+        digest=promotion_digest,
+    )
+    promotion_record["artifactRefs"] = {
+        "output.branch_promotion.record.json": promotion_record_ref,
+        "output.branch_promotion.downstream_invalidation.json": (
+            downstream_invalidation_ref
+        ),
+    }
+    promotion_record["promotionRecordRef"] = promotion_record_ref
+    promotion_record["downstreamInvalidationRef"] = downstream_invalidation_ref
+    promotion_record["digest"] = promotion_digest
     branch.state = "promoted"
     branch.current_head_step_execution_id = payload.expected_head_step_execution_id
     branch.current_head_commit = (
         payload.expected_head_commit or branch.current_head_commit
     )
     branch.promotion_evidence = {
+        "promotionRecordRef": promotion_record_ref,
+        "downstreamInvalidationRef": downstream_invalidation_ref,
+        "acceptedOutputRefs": promotion_record["acceptedOutputRefs"],
+        "gitEvidence": promotion_record["gitEvidence"],
         "gateEvidence": payload.gate_evidence,
         "sideEffectDisposition": payload.side_effect_disposition,
+        "downstreamInvalidation": promotion_record["downstreamInvalidation"],
         "approvalEvidence": payload.approval_evidence,
+        "policyEvidence": promotion_record["policyEvidence"],
+        "artifactRefs": promotion_record["artifactRefs"],
     }
     branch.promoted_at = now
+    await _record_checkpoint_branch_artifact_ref(
+        session=session,
+        branch_id=branch.branch_id,
+        branch_turn_id=promoted_turn.branch_turn_id if promoted_turn else None,
+        artifact_kind="output.branch_promotion.record.json",
+        artifact_ref=promotion_record_ref,
+        digest=promotion_digest,
+    )
+    await _record_checkpoint_branch_artifact_ref(
+        session=session,
+        branch_id=branch.branch_id,
+        branch_turn_id=promoted_turn.branch_turn_id if promoted_turn else None,
+        artifact_kind="output.branch_promotion.downstream_invalidation.json",
+        artifact_ref=downstream_invalidation_ref,
+        digest=promotion_digest,
+    )
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,
             branch_id=branch.branch_id,
+            branch_turn_id=promoted_turn.branch_turn_id if promoted_turn else None,
             operation="checkpoint_branch.promote",
             idempotency_key=payload.idempotency_key,
             request_digest=request_digest,
-            response_payload={"branchId": branch.branch_id, "state": "promoted"},
+            response_payload=promotion_record,
         )
     )
     await session.commit()

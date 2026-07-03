@@ -700,6 +700,13 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     assert comparison["summaryRef"].startswith("artifact://checkpoint-branch-comparisons/")
     assert comparison["summaryRef"] == second_compare.json()["summaryRef"]
     assert comparison["comparisonRecord"]["recordType"] == "checkpoint_branch_comparison"
+    assert comparison["comparisonRecord"]["quality"] == {
+        "branchGateVerdict": "unknown",
+        "againstGateVerdict": "unknown",
+    }
+    assert comparison["comparisonRecord"]["artifactRefs"][
+        "output.branch_comparison.metadata.json"
+    ].startswith("artifact://checkpoint-branch-comparisons/")
     assert comparison["comparisonRecord"]["evidenceRefs"]["branchCheckpointRef"] == (
         "artifact://checkpoints/after-implement"
     )
@@ -745,6 +752,60 @@ async def test_checkpoint_branch_promotion_requires_head_gate_side_effects_and_a
     assert promoted.json()["currentHeadStepExecutionId"] == (
         "mm:wf-branch:run:implement:execution:2"
     )
+    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = (
+            await session.execute(
+                select(WorkflowCheckpointBranch).where(
+                    WorkflowCheckpointBranch.branch_id == branch_id
+                )
+            )
+        ).scalar_one()
+        operation = (
+            await session.execute(
+                select(WorkflowCheckpointBranchOperation).where(
+                    WorkflowCheckpointBranchOperation.operation
+                    == "checkpoint_branch.promote"
+                )
+            )
+        ).scalar_one()
+        promotion_artifacts = (
+            await session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == branch_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind.in_(
+                        {
+                            "output.branch_promotion.record.json",
+                            "output.branch_promotion.downstream_invalidation.json",
+                        }
+                    ),
+                )
+            )
+        ).scalars().all()
+
+    assert branch.promotion_evidence["acceptedOutputRefs"][
+        "headStepExecutionId"
+    ] == "mm:wf-branch:run:implement:execution:2"
+    assert branch.promotion_evidence["gitEvidence"]["repository"] == (
+        "MoonLadderStudios/MoonMind"
+    )
+    assert branch.promotion_evidence["downstreamInvalidation"]["status"] == (
+        "not_required"
+    )
+    assert branch.promotion_evidence["policyEvidence"][
+        "policyRequiresApproval"
+    ] is True
+    assert operation.response_payload["recordType"] == "checkpoint_branch_promotion"
+    assert operation.response_payload["artifactRefs"][
+        "output.branch_promotion.record.json"
+    ].startswith("artifact://checkpoint-branch-promotions/")
+    assert {
+        artifact.artifact_kind for artifact in promotion_artifacts
+    } == {
+        "output.branch_promotion.record.json",
+        "output.branch_promotion.downstream_invalidation.json",
+    }
 
     head_mismatch = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
@@ -961,6 +1022,13 @@ async def test_checkpoint_branch_compare_records_operation_payload(
         operation = result.scalar_one()
     assert operation is not None
     assert operation.response_payload["summaryRef"] == compared.json()["summaryRef"]
+    assert operation.response_payload["quality"] == {
+        "branchGateVerdict": "unknown",
+        "againstGateVerdict": "unknown",
+    }
+    assert operation.response_payload["artifactRefs"][
+        "output.branch_comparison.range_diff.patch"
+    ].startswith("artifact://checkpoint-branch-comparisons/")
 
 
 @pytest.mark.asyncio
