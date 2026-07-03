@@ -1,11 +1,1 @@
-# Generated from moonspec/bundle/commands/gemini/moonspec.orchestrate.toml; edit MoonSpec repo instead.
-description = "Run the MoonSpec lifecycle end to end for one story."
-
-prompt = """
-Use the `moonspec-orchestrate` skill to coordinate the full MoonSpec lifecycle for one preselected story.
-
-User input:
-{{args}}
-
-Use MoonSpec skill IDs and command IDs only: `moonspec-*` and `/moonspec.*`.
-"""
+../../moonspec/bundle/commands/gemini/moonspec.orchestrate.toml

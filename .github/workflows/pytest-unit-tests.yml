@@ -163,7 +163,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip PyYAML
           test -f moonspec/bundle/moonspec.bundle.yaml
-          python3 tools/sync_moonspec_submodule.py --check
+          python3 tools/link_moonspec_submodule.py --check --prune
 
   api-component:
     needs: select-test-suites
