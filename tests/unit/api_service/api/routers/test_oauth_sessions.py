@@ -1843,23 +1843,23 @@ async def test_finalize_success_stamps_oauth_home_overrides_and_readiness(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """OAuth-after-setup profiles persist documented home_path_overrides."""
-    session_id = "oas_gemini_homeoverrides1"
-    profile_id = "gemini-cli-home-overrides"
+    session_id = "oas_claude_homeoverrides1"
+    profile_id = "claude-code-home-overrides"
 
     async with db_base.async_session_maker() as session:
         session.add(
             ManagedAgentOAuthSession(
                 session_id=session_id,
-                runtime_id="gemini_cli",
+                runtime_id="claude_code",
                 profile_id=profile_id,
-                volume_ref="gemini_auth_volume",
-                volume_mount_path="/var/lib/gemini-auth",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
                 status=OAuthSessionStatus.AWAITING_USER,
                 requested_by_user_id="None",
-                account_label="gemini account",
+                account_label="claude account",
                 metadata_json={
-                    "provider_id": "google",
-                    "provider_label": "Google",
+                    "provider_id": "anthropic",
+                    "provider_label": "Anthropic",
                 },
             )
         )
@@ -1904,10 +1904,9 @@ async def test_finalize_success_stamps_oauth_home_overrides_and_readiness(
         assert profile is not None
         assert profile.auth_state == ProviderProfileAuthState.CONNECTED
         assert profile.home_path_overrides == {
-            "GEMINI_HOME": "/var/lib/gemini-auth",
-            "GEMINI_CLI_HOME": "/var/lib/gemini-auth",
+            "CLAUDE_HOME": "/home/app/.claude",
         }
         behavior = profile.command_behavior or {}
-        assert behavior.get("auth_strategy") == "gemini_credential_methods"
-        assert behavior.get("auth_status_label") == "Gemini OAuth ready"
+        assert behavior.get("auth_strategy") == "claude_credential_methods"
+        assert behavior.get("auth_status_label") == "Claude OAuth ready"
         assert behavior.get("auth_readiness", {}).get("connected") is True

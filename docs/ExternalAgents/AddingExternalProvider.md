@@ -34,7 +34,7 @@ This document is for providers that MoonMind does **not** run locally, such as:
 
 This document does **not** cover:
 
-- managed runtimes like Gemini CLI, Claude Code, or Codex CLI
+- managed runtimes like Claude Code or Codex CLI
 - agent skill source-precedence resolution
 - provider-profile management for managed runtimes
 - generic tool/skill execution through `mm.skill.execute`

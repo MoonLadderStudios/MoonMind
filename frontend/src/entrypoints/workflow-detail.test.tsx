@@ -4521,7 +4521,7 @@ describe('Workflow Detail Entrypoint', () => {
       source: 'temporal',
       workflowType: 'MoonMind.UserWorkflow',
       entry: 'user_workflow',
-      targetRuntime: 'gemini_cli',
+      targetRuntime: 'claude_code',
       targetSkill: 'jira-pr-verify',
       taskSkills: ['jira-pr-verify', 'fix-comments'],
       skillRuntime: {
@@ -4550,9 +4550,9 @@ describe('Workflow Detail Entrypoint', () => {
             'Execution reuses the resolved skill snapshot unless explicit re-resolution is requested.',
         },
       },
-      profileId: 'profile:gemini-default',
-      providerId: 'google',
-      providerLabel: 'Google',
+      profileId: 'profile:claude-default',
+      providerId: 'anthropic',
+      providerLabel: 'Anthropic',
       priority: 4,
       title: 'Example task',
       summary: 'Did work',
@@ -4599,7 +4599,7 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('Example task')).toBeTruthy();
       expect(screen.getByText('Did work')).toBeTruthy();
-      expect(screen.getByText('Gemini CLI')).toBeTruthy();
+      expect(screen.getByText('Claude Code')).toBeTruthy();
       expect(screen.getByText('Explicit Selection').closest('div')?.textContent).toContain(
         'jira-pr-verify, fix-comments',
       );
@@ -4622,8 +4622,8 @@ describe('Workflow Detail Entrypoint', () => {
       );
       expect(screen.getByText('Lifecycle Intent').closest('div')?.textContent).toContain('snapshot-reuse');
       expect(screen.queryByText('FULL SKILL BODY SHOULD NOT LEAK')).toBeNull();
-      expect(screen.getByText('Google')).toBeTruthy();
-      expect(screen.getByText('profile:gemini-default')).toBeTruthy();
+      expect(screen.getByText('Anthropic')).toBeTruthy();
+      expect(screen.getByText('profile:claude-default')).toBeTruthy();
       expect(screen.getByText('Priority').closest('div')?.textContent).toContain('4');
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
       expect(screen.getByText(/Created by schedule/)).toBeTruthy();
@@ -6775,8 +6775,8 @@ describe('Workflow Detail Entrypoint', () => {
           runId: '02-run',
           relationship: 'Comparison source',
           status: 'failed',
-          targetRuntime: 'gemini_cli',
-          model: 'gemini-2.5-pro',
+          targetRuntime: 'claude_code',
+          model: 'claude-sonnet-test',
           effort: 'high',
           href: '/workflows/test-456?source=temporal',
         },
@@ -6821,8 +6821,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('current').length).toBeGreaterThan(0);
       expect(screen.getAllByText('test-456').length).toBeGreaterThan(0);
       expect(screen.getAllByText('gpt-5').length).toBeGreaterThan(0);
-      expect(screen.getByText('Gemini CLI')).toBeTruthy();
-      expect(screen.getByText('gemini-2.5-pro')).toBeTruthy();
+      expect(screen.getByText('Claude Code')).toBeTruthy();
+      expect(screen.getByText('claude-sonnet-test')).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'Workflow actions' }));
       expect(screen.getByRole('menuitem', { name: 'Compare run' }).getAttribute('href')).toBe(
         taskCompareHref('test-123'),
@@ -8039,7 +8039,7 @@ describe('LiveLogsPanel', () => {
   };
   const geminiExecution = {
     ...activeExecution,
-    targetRuntime: 'gemini_cli',
+    targetRuntime: 'claude_code',
   };
   const sessionTimelinePayload: BootPayload = {
     page: 'workflow-detail',

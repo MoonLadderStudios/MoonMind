@@ -192,8 +192,8 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
               id: "step-cheap",
               instructions: "Run this step cheaply.",
               runtime: {
-                mode: "gemini_cli",
-                model: "gemini-2.5-flash",
+                mode: "claude_code",
+                model: "claude-haiku-test",
                 effort: "low",
               },
             },
@@ -203,8 +203,8 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     });
 
     expect(draft.steps[0]?.runtime).toEqual({
-      mode: "gemini_cli",
-      model: "gemini-2.5-flash",
+      mode: "claude_code",
+      model: "claude-haiku-test",
       effort: "low",
     });
   });

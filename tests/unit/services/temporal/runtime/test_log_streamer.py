@@ -8,7 +8,6 @@ from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.workflows.temporal.runtime import log_streamer as log_streamer_module
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.output_parser import (
-    GeminiCliOutputParser,
     NdjsonOutputParser,
     ParsedOutput,
     PlainTextOutputParser,
@@ -232,10 +231,9 @@ async def test_stream_and_parse_detects_rate_limit(streamer):
 @pytest.mark.asyncio
 async def test_stream_and_parse_invokes_event_callback(streamer):
     log_streamer, _ = streamer
+    event = {"type": "rate_limit", "status_code": 429, "message": "Too many requests"}
     stdout_reader = asyncio.StreamReader()
-    stdout_reader.feed_data(
-        b"Attempt 6 failed with status 429. Retrying with backoff...\n"
-    )
+    stdout_reader.feed_data((json.dumps(event) + "\n").encode())
     stdout_reader.feed_eof()
     stderr_reader = asyncio.StreamReader()
     stderr_reader.feed_eof()
@@ -247,8 +245,8 @@ async def test_stream_and_parse_invokes_event_callback(streamer):
     _, _, _, parsed, events = await log_streamer.stream_and_parse(
         stdout_reader,
         stderr_reader,
-        run_id="run-parse-gemini-callback",
-        parser=GeminiCliOutputParser(),
+        run_id="run-parse-ndjson-callback",
+        parser=NdjsonOutputParser(),
         event_callback=_callback,
     )
 

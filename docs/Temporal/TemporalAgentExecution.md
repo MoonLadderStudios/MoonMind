@@ -144,7 +144,7 @@ _run_execution_stage()
   │   ▼
   │ workflow.execute_child_workflow("MoonMind.AgentRun", AgentExecutionRequest {
   │     agent_kind:    "managed" | "external",
-  │     agent_id:      "gemini_cli" | "codex_cli" | "jules" | ...,
+  │     agent_id:      "claude_code" | "codex_cli" | "jules" | ...,
   │     instruction_ref, input_refs, workspace_spec, parameters, ...
   │ })
   │   │
@@ -164,7 +164,7 @@ _run_execution_stage()
 For **generic LLM text instructions** (no specific tool), planning produces
 `tool = { type: "agent_runtime", name: "auto" }` and the workflow dispatches it
 as a `MoonMind.AgentRun` child workflow. The `runtime.mode` field (e.g. `codex`,
-`gemini_cli`, `jules`) determines which `AgentAdapter` implementation handles
+`claude_code`, `jules`) determines which `AgentAdapter` implementation handles
 the run.
 
 For the full agent execution model including managed runtime supervision, external
@@ -315,7 +315,7 @@ canonical open backlog is maintained in
 │   │                      │                                          │    │
 │   │                      ▼                                          │    │
 │   │               MoonMind.AgentRun                                 │    │
-│   │               ├─ ManagedAgentAdapter → Gemini CLI / Codex CLI   │    │
+│   │               ├─ ManagedAgentAdapter → Claude Code / Codex CLI   │    │
 │   │               └─ ExternalAgentAdapter → Jules / BYOA            │    │
 │   └──────────────────────────────────────────────────────────────────┘    │
 │                                                                           │

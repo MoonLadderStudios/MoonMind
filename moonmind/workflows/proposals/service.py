@@ -46,7 +46,7 @@ from moonmind.workflows.executions.execution_contract import (
 logger = logging.getLogger(__name__)
 _PROPOSALS_WRITE_CAPABILITY = "proposals_write"
 _LEGACY_TASK_WORKER_RUNTIME_CAPABILITIES = frozenset(
-    {"codex", "gemini_cli", "claude", "jules"}
+    {"codex", "claude", "jules"}
 )
 _PRESET_SOURCE_KINDS = frozenset({"preset-derived", "preset-include", "detached"})
 _NOTIFICATION_CATEGORIES = {"security", "tests"}

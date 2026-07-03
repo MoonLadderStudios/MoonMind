@@ -5806,8 +5806,8 @@ async def test_run_once_rejects_runtime_not_supported_by_worker_mode(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        worker_runtime="gemini_cli",
-        worker_capabilities=("gemini_cli", "git"),
+        worker_runtime="claude",
+        worker_capabilities=("claude", "git"),
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
@@ -6287,7 +6287,7 @@ async def test_run_once_fails_resolve_pr_when_ci_is_running_or_failing(
     assert "reports/pr_resolution_validation.json" in queue.uploaded
     assert handler.calls == ["codex_skill:pr-resolver:True"]
 
-async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) -> None:
+async def test_run_once_universal_worker_executes_claude_task(tmp_path: Path) -> None:
     """Universal worker mode should execute non-codex runtime tasks."""
 
     job = ClaimedJob(
@@ -6295,11 +6295,11 @@ async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) ->
         type="task",
         payload={
             "repository": "MoonLadderStudios/MoonMind",
-            "targetRuntime": "gemini_cli",
+            "targetRuntime": "claude_code",
             "workflow": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
                 "git": {"startingBranch": None, "targetBranch": None},
                 "publish": {"mode": "none"},
             },
@@ -6317,7 +6317,7 @@ async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) ->
         lease_seconds=120,
         workdir=tmp_path,
         worker_runtime="universal",
-        worker_capabilities=("codex", "gemini_cli", "claude", "git"),
+        worker_capabilities=("codex", "claude", "git"),
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
@@ -7228,7 +7228,7 @@ async def test_config_from_env_runtime_mode_controls_default_capabilities(
     config = CodexWorkerConfig.from_env()
 
     assert config.worker_runtime == "universal"
-    assert config.worker_capabilities == ("codex", "gemini_cli", "claude", "git", "gh")
+    assert config.worker_capabilities == ("codex", "claude", "git", "gh")
 
 async def test_config_from_env_rejects_jules_runtime_when_disabled(
     monkeypatch,
@@ -7336,8 +7336,8 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
         lease_seconds=120,
         workdir=tmp_path,
         worker_runtime="universal",
-        default_gemini_model="gemini-default",
-        default_gemini_effort="medium",
+        default_claude_model="claude-default",
+        default_claude_effort="medium",
         default_jules_model="jules-default",
         default_jules_effort="low",
     )
@@ -7351,30 +7351,30 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
         canonical_payload={
             "workflow": {
                 "runtime": {
-                    "mode": "gemini_cli",
+                    "mode": "claude_code",
                     "model": None,
                     "effort": None,
                 }
             }
         },
-        runtime_mode="gemini_cli",
+        runtime_mode="claude_code",
     )
-    assert model == "gemini-default"
+    assert model == "claude-default"
     assert effort == "medium"
 
     model_override, effort_override = worker._resolve_runtime_overrides(
         canonical_payload={
             "workflow": {
                 "runtime": {
-                    "mode": "gemini_cli",
-                    "model": "gemini-2.5-pro",
+                    "mode": "claude_code",
+                    "model": "claude-sonnet-test",
                     "effort": "high",
                 }
             }
         },
-        runtime_mode="gemini_cli",
+        runtime_mode="claude_code",
     )
-    assert model_override == "gemini-2.5-pro"
+    assert model_override == "claude-sonnet-test"
     assert effort_override == "high"
 
     jules_model, jules_effort = worker._resolve_runtime_overrides(
@@ -8566,14 +8566,14 @@ async def test_derive_default_pr_body_contains_required_correlation_footer() -> 
     job_id = uuid4()
     body = CodexWorker._derive_default_pr_body(
         job_id=job_id,
-        runtime_mode="gemini_cli",
+        runtime_mode="claude_code",
         base_branch="main",
         head_branch="task/20260219/abcd1234",
     )
 
     assert "<!-- moonmind:begin -->" in body
     assert f"MoonMind Job: {job_id}" in body
-    assert "Runtime: gemini" in body
+    assert "Runtime: claude" in body
     assert "Base: main" in body
     assert "Head: task/20260219/abcd1234" in body
     assert "<!-- moonmind:end -->" in body
@@ -9103,7 +9103,7 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
     canonical_payload = {
         "workflow": {
             "instructions": "unused",
-            "runtime": {"mode": "gemini_cli"},
+            "runtime": {"mode": "claude_code"},
             "publish": {
                 "mode": "pr",
                 "commitMessage": commit_override,
@@ -10452,85 +10452,6 @@ async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None
 
     assert config.default_codex_model == "gpt-5.3-codex"
     assert config.default_codex_effort == "xhigh"
-
-async def test_config_from_env_defaults_gemini_model(monkeypatch) -> None:
-    """Gemini worker config should default to the supported production model."""
-
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
-    monkeypatch.delenv("MOONMIND_GEMINI_MODEL", raising=False)
-    monkeypatch.delenv("GEMINI_MODEL", raising=False)
-
-    config = CodexWorkerConfig.from_env()
-
-    assert config.default_gemini_model == "gemini-3.1-pro"
-
-async def test_config_from_env_parses_gemini_allowed_tools(monkeypatch) -> None:
-    """Gemini allowed tools should parse from a comma-separated env override."""
-
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
-    monkeypatch.setenv(
-        "MOONMIND_GEMINI_ALLOWED_TOOLS",
-        "run_shell_command, activate_skill,run_shell_command,write_file",
-    )
-
-    config = CodexWorkerConfig.from_env()
-
-    assert config.gemini_allowed_tools == (
-        "run_shell_command",
-        "activate_skill",
-        "write_file",
-    )
-
-async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
-    tmp_path: Path,
-) -> None:
-    """Gemini runtime commands should allow worker-required tools in non-interactive mode."""
-
-    config = CodexWorkerConfig(
-        moonmind_url="http://localhost:8000",
-        worker_id="worker-1",
-        worker_token=None,
-        poll_interval_ms=1500,
-        lease_seconds=120,
-        workdir=tmp_path,
-        worker_runtime="gemini_cli",
-        gemini_allowed_tools=(
-            "activate_skill",
-            "run_shell_command",
-            "replace",
-            "write_file",
-        ),
-    )
-    queue = FakeQueueClient(jobs=[])
-    handler = FakeHandler(
-        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
-    )
-    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
-
-    from unittest.mock import Mock
-
-    prepared_mock = Mock()
-    prepared_mock.job_root = tmp_path
-
-    command = worker._build_non_codex_runtime_command(
-        runtime_mode="gemini_cli",
-        instruction="resolve the task",
-        model="gemini-2.5-pro",
-        effort="high",
-        prepared=prepared_mock,
-    )
-
-    assert command[:3] == ["gemini_cli", "--prompt", "resolve the task"]
-    assert "--include-directories" in command
-    include_directories_index = command.index("--include-directories")
-    assert command[include_directories_index + 1] == str(tmp_path / "skills_active")
-    assert "--allowed-tools" in command
-    allowed_tools_index = command.index("--allowed-tools")
-    assert command[allowed_tools_index + 1] == (
-        "activate_skill,run_shell_command,replace,write_file"
-    )
-    assert command[-2:] == ["--model", "gemini-2.5-pro"]
-
 
 async def test_build_non_codex_runtime_command_routes_claude_code_alias(
     tmp_path: Path,

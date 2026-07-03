@@ -111,7 +111,7 @@ Supported desired step types include:
 | `Script` | Invoke a hardcoded script/executable capability. |
 | `Preset` | Insert a reusable step composition that may expand into one or more steps. |
 | `External Agent` | Delegate work to an external provider/integration such as a cloud coding agent. |
-| `Managed Agent` | Run a managed local/session runtime such as Codex CLI, Claude Code, or Gemini CLI. |
+| `Managed Agent` | Run a managed local/session runtime such as Codex CLI or Claude Code. |
 
 The exact labels may evolve, but the page should preserve the concept that a step's type controls the capability selector and input schema.
 

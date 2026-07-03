@@ -40,7 +40,7 @@ At the system level:
 - **Authentication** is owned by Provider Profiles plus OAuth and secret-resolution subsystems.
 - **Secrets** are provided through references and launch-time materialization, never as raw durable payloads.
 
-Current maturity is **Codex CLI first-class for managed sessions, with Claude Code first-class for managed runs**. Codex CLI is the live workflow-scoped managed-session runtime behind the shared `MoonMind.AgentSession` control plane. Claude Code has a live managed-run path and Claude-specific session design models, but it does not yet enter the live managed-session controller. Gemini CLI remains a managed-runtime strategy and can adopt the session plane by implementing the same shared contracts rather than inventing a new top-level managed-agent abstraction.
+Current maturity is **Codex CLI first-class for managed sessions, with Claude Code first-class for managed runs**. Codex CLI is the live workflow-scoped managed-session runtime behind the shared `MoonMind.AgentSession` control plane. Claude Code has a live managed-run path and Claude-specific session design models, but it does not yet enter the live managed-session controller. Future managed runtimes can adopt the session plane by implementing the same shared contracts rather than inventing a new top-level managed-agent abstraction.
 
 ---
 
@@ -672,7 +672,7 @@ The live workflow-scoped session plane is designed for shared workflow/activity 
 
 ### 11.2 Additional runtimes should extend the same model
 
-Gemini CLI and future managed runtimes should be added by implementing new session bindings against the same shared model.
+Future managed runtimes should be added by implementing new session bindings against the same shared model.
 
 They should not add new top-level abstractions such as:
 

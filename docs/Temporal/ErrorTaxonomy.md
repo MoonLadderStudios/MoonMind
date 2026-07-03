@@ -191,7 +191,7 @@ Use when:
 
 Examples:
 
-- no enabled `gemini_cli` profiles
+- no enabled `claude_code` profiles
 - selector requests provider `minimax` but none is configured for the chosen runtime
 - profile resolution logic determines the request cannot ever succeed as submitted
 

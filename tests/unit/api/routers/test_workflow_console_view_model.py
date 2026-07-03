@@ -131,13 +131,13 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert "defaultRepository" in config["system"]
     assert "buildId" in config["system"]
-    assert config["system"]["defaultRuntime"] in ("codex_cli", "gemini_cli", "claude_code")
+    assert config["system"]["defaultRuntime"] in ("codex_cli", "claude_code")
     assert "defaultModel" in config["system"]
     assert "defaultEffort" in config["system"]
     assert "defaultModelByRuntime" in config["system"]
     assert "defaultEffortByRuntime" in config["system"]
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["supportedRuntimes"] == ["codex_cli", "claude_code", "codex_cloud"]
     assert "runtimeCommandPreview" in config["system"]
     assert "claude_code" in config["system"]["supportedWorkerRuntimes"]
     assert "presetCatalog" in config["system"]
@@ -354,17 +354,17 @@ def test_build_runtime_config_normalizes_attachment_policy_settings(
     ]
 
 def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> None:
-    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "gemini_cli")
-    monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "claude_code")
+    monkeypatch.setenv("MOONMIND_CLAUDE_MODEL", "claude-test-model")
     config = dashboard_view_model.build_runtime_config("/workflows")
-    assert config["system"]["defaultRuntime"] == "gemini_cli"
-    assert config["system"]["defaultModel"] == "gemini-2.5-flash"
+    assert config["system"]["defaultRuntime"] == "claude_code"
+    assert config["system"]["defaultModel"] == "claude-test-model"
     assert config["system"]["defaultEffort"] == ""
-    assert config["system"]["defaultModelByRuntime"]["gemini_cli"] == (
-        "gemini-2.5-flash"
+    assert config["system"]["defaultModelByRuntime"]["claude_code"] == (
+        "claude-test-model"
     )
     monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
-    monkeypatch.delenv("MOONMIND_GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("MOONMIND_CLAUDE_MODEL", raising=False)
 
 def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
     # The alias 'claude' is normalized to 'claude_code' internally, but since
@@ -378,7 +378,7 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
-    assert config["system"]["supportedRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["supportedRuntimes"] == ["codex_cli", "claude_code", "codex_cloud"]
     assert config["system"]["defaultRuntime"] == "claude_code"
     assert config["system"]["defaultModel"] == "claude-opus-4-8"
 
@@ -389,7 +389,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.workflow, "codex_model", "gpt-test-codex")
     monkeypatch.setattr(settings.workflow, "codex_effort", "medium")
     monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
-    monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
+    monkeypatch.setenv("MOONMIND_CLAUDE_MODEL", "claude-test-model")
     monkeypatch.setattr(settings.workflow, "default_publish_mode", "branch")
 
     config = dashboard_view_model.build_runtime_config("/workflows")
@@ -402,7 +402,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     assert config["system"]["defaultModel"] == "gpt-test-codex"
     assert config["system"]["defaultEffort"] == "medium"
     assert config["system"]["defaultModelByRuntime"]["codex_cli"] == "gpt-test-codex"
-    assert config["system"]["defaultModelByRuntime"]["gemini_cli"] == "gemini-2.5-pro"
+    assert config["system"]["defaultModelByRuntime"]["claude_code"] == "claude-test-model"
     assert config["system"]["defaultEffortByRuntime"]["codex_cli"] == "medium"
     assert config["system"]["defaultPublishMode"] == "branch"
     assert config["system"]["defaultProposeWorkflows"] is False
@@ -706,8 +706,6 @@ def test_build_repository_branch_options_sanitizes_errors(monkeypatch) -> None:
 def test_build_runtime_config_uses_repo_runtime_model_defaults(monkeypatch) -> None:
     monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
     monkeypatch.delenv("CODEX_MODEL", raising=False)
-    monkeypatch.delenv("MOONMIND_GEMINI_MODEL", raising=False)
-    monkeypatch.delenv("GEMINI_MODEL", raising=False)
     monkeypatch.delenv("MOONMIND_CLAUDE_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
     monkeypatch.setattr(settings.workflow, "codex_model", None)
@@ -716,7 +714,6 @@ def test_build_runtime_config_uses_repo_runtime_model_defaults(monkeypatch) -> N
     config = dashboard_view_model.build_runtime_config("/workflows")
 
     assert config["system"]["defaultModelByRuntime"]["codex_cli"] == "gpt-5.5"
-    assert config["system"]["defaultModelByRuntime"]["gemini_cli"] == "gemini-3.1-pro"
     assert config["system"]["defaultModelByRuntime"]["claude_code"] == "claude-opus-4-8"
 
 def test_normalize_status_maps_temporal_waits_to_awaiting_action() -> None:
@@ -730,7 +727,7 @@ def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> No
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
-    assert config["system"]["supportedRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["supportedRuntimes"] == ["codex_cli", "claude_code", "codex_cloud"]
 
 def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "enabled", False)
@@ -791,7 +788,6 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
 
     assert config["system"]["supportedRuntimes"] == [
         "codex_cli",
-        "gemini_cli",
         "claude_code",
         "codex_cloud",
         "jules",

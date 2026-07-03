@@ -536,7 +536,6 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
             ("codex", "Codex"),
             ("codex_cli", "Codex CLI"),
             ("claude_code", "Claude Code"),
-            ("gemini_cli", "Gemini CLI"),
             ("jules", "Jules"),
         ),
         applies_to=("workflow_creation", "workflow_runtime"),

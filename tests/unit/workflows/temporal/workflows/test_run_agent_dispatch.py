@@ -43,7 +43,7 @@ class TestAgentKindForId(unittest.TestCase):
 
     def test_managed_agent_ids(self) -> None:
         wf = MoonMindRunWorkflow()
-        for agent_id in ("gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"):
+        for agent_id in ("claude", "claude_code", "codex", "codex_cli"):
             self.assertEqual(wf._agent_kind_for_id(agent_id), "managed", f"{agent_id} should be managed")
 
     def test_external_agent_ids(self) -> None:
@@ -53,12 +53,12 @@ class TestAgentKindForId(unittest.TestCase):
 
     def test_case_insensitive(self) -> None:
         wf = MoonMindRunWorkflow()
-        self.assertEqual(wf._agent_kind_for_id("Gemini_cli"), "managed")
+        self.assertEqual(wf._agent_kind_for_id("Codex_CLI"), "managed")
         self.assertEqual(wf._agent_kind_for_id("CLAUDE_CODE"), "managed")
 
     def test_hyphenated_managed_agent_ids(self) -> None:
         wf = MoonMindRunWorkflow()
-        for agent_id in ("gemini-cli", "claude-code", "codex-cli"):
+        for agent_id in ("claude-code", "codex-cli"):
             self.assertEqual(
                 wf._agent_kind_for_id(agent_id),
                 "managed",
@@ -168,8 +168,8 @@ class TestSlotContinuityMetadata(unittest.TestCase):
                 "inputs": {"runtime": {"mode": "codex_cli"}},
             },
             {
-                "tool": {"type": "agent_runtime", "name": "gemini_cli"},
-                "inputs": {"runtime": {"mode": "gemini_cli"}},
+                "tool": {"type": "agent_runtime", "name": "claude_code"},
+                "inputs": {"runtime": {"mode": "claude_code"}},
             },
         ]
 
@@ -2006,7 +2006,7 @@ class TestFetchProfileSnapshots(unittest.TestCase):
                                 },
                             ]
                         }
-                    elif runtime_id == "gemini_cli":
+                    elif runtime_id == "claude_code":
                         return {"profiles": []}
                 return {}
 
@@ -2059,7 +2059,7 @@ class TestFetchProfileSnapshots(unittest.TestCase):
                                 },
                             ]
                         }
-                    elif runtime_id == "gemini_cli":
+                    elif runtime_id == "claude_code":
                         return {"profiles": []}
                 return {}
 

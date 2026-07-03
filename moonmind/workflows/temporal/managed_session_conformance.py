@@ -93,7 +93,6 @@ KNOWN_MANAGED_SESSION_RUNTIMES: tuple[str, ...] = (
     "codex_cli",
     "claude",
     "claude_code",
-    "gemini_cli",
 )
 
 ManagedSessionBehaviorDecision = Literal["conforms", "capability_gap"]

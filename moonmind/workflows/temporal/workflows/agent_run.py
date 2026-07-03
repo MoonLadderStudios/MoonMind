@@ -612,7 +612,6 @@ class MoonMindAgentRun:
     @staticmethod
     def _managed_runtime_id(agent_id: str) -> str:
         runtime_mapping = {
-            "gemini_cli": "gemini_cli",
             "claude": "claude_code",
             "claude_code": "claude_code",
             "codex": "codex_cli",
@@ -4075,7 +4074,7 @@ class MoonMindAgentRun:
             self.run_status = RunStatus.timed_out
             if request.agent_kind == "managed" and hasattr(request, "execution_profile_ref") and request.execution_profile_ref:
                 try:
-                    runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+                    runtime_mapping = {"claude": "claude_code", "codex": "codex_cli"}
                     runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                     manager_id = self._manager_workflow_id(runtime_id)
                     manager_handle = workflow.get_external_workflow_handle(manager_id)
@@ -4104,7 +4103,7 @@ class MoonMindAgentRun:
             tasks = []
 
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
-                runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+                runtime_mapping = {"claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                 manager_id = self._manager_workflow_id(runtime_id)
                 
@@ -4157,7 +4156,7 @@ class MoonMindAgentRun:
             
         except Exception:
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
-                runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+                runtime_mapping = {"claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                 manager_id = self._manager_workflow_id(runtime_id)
                 try:

@@ -757,7 +757,7 @@ async def validate_claude_oauth_profile(
 ) -> dict[str, Any]:
     """Validate an OAuth-backed provider profile against its auth volume.
 
-    Generalized across the first-party Claude, Codex, and Gemini runtimes; the
+    Generalized across the first-party Claude and Codex runtimes; the
     handler name is retained for OpenAPI operation-id stability.
     """
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -841,7 +841,7 @@ async def disconnect_claude_oauth_profile(
 ) -> dict[str, Any]:
     """Disconnect an OAuth-backed provider profile and clear its volume fields.
 
-    Generalized across the first-party Claude, Codex, and Gemini runtimes; the
+    Generalized across the first-party Claude and Codex runtimes; the
     handler name is retained for OpenAPI operation-id stability.
     """
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -975,7 +975,7 @@ def _require_first_party_oauth_profile(
             status_code=422,
             detail=(
                 "OAuth lifecycle actions are only supported for first-party "
-                "Claude, Codex, and Gemini provider profiles."
+                "Claude and Codex provider profiles."
             ),
         )
     return mapping
@@ -1009,15 +1009,6 @@ _API_KEY_MAPPINGS: dict[tuple[str, str], _ApiKeyMapping] = {
         auth_strategy="api_key_env",
         ready_label="OpenAI API key ready",
     ),
-    ("gemini_cli", "google"): _ApiKeyMapping(
-        runtime_id="gemini_cli",
-        provider_id="google",
-        secret_role="google_api_key",
-        env_key="GEMINI_API_KEY",
-        clear_env_keys=("GOOGLE_APPLICATION_CREDENTIALS",),
-        auth_strategy="api_key_env",
-        ready_label="Google API key ready",
-    ),
 }
 
 def _api_key_mapping_for_profile(row: ManagedAgentProviderProfile) -> _ApiKeyMapping:
@@ -1027,7 +1018,7 @@ def _api_key_mapping_for_profile(row: ManagedAgentProviderProfile) -> _ApiKeyMap
             status_code=422,
             detail=(
                 "API-key setup is only supported for first-party Anthropic, "
-                "OpenAI, and Google profiles."
+                "and OpenAI profiles."
             ),
         )
     return mapping
@@ -1059,8 +1050,6 @@ def _looks_like_provider_api_key(mapping: _ApiKeyMapping, api_key: str) -> bool:
         return api_key.startswith("sk-ant-") and len(api_key) >= 12
     if mapping.provider_id == "openai":
         return api_key.startswith("sk-") and len(api_key) >= 12
-    if mapping.provider_id == "google":
-        return len(api_key) >= 12
     return False
 
 def _apply_api_key_setup_to_profile(
@@ -1210,9 +1199,6 @@ async def validate_provider_api_key(provider_id: str, api_key: str) -> None:
     if provider_id == "openai":
         await _validate_openai_api_key(api_key)
         return
-    if provider_id == "google":
-        await _validate_google_api_key(api_key)
-        return
     raise HTTPException(
         status_code=422,
         detail="Unsupported provider API-key setup.",
@@ -1228,20 +1214,6 @@ async def _validate_openai_api_key(api_key: str) -> None:
         logger.warning("openai_api_key_validation_failed")
         raise HTTPException(status_code=502, detail="API key validation failed.") from exc
     if response.status_code in {401, 403}:
-        raise HTTPException(status_code=401, detail="API key validation failed.")
-    if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail="API key validation failed.")
-
-async def _validate_google_api_key(api_key: str) -> None:
-    try:
-        response = await _get_claude_manual_validation_client().get(
-            "https://generativelanguage.googleapis.com/v1beta/models",
-            params={"key": api_key},
-        )
-    except httpx.HTTPError as exc:
-        logger.warning("google_api_key_validation_failed")
-        raise HTTPException(status_code=502, detail="API key validation failed.") from exc
-    if response.status_code in {400, 401, 403}:
         raise HTTPException(status_code=401, detail="API key validation failed.")
     if response.status_code >= 400:
         raise HTTPException(status_code=502, detail="API key validation failed.")

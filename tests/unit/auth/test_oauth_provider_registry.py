@@ -15,15 +15,6 @@ from moonmind.workflows.temporal.runtime.providers.registry import (
 class TestOAuthProviderRegistry:
     """Verify provider registry entries and lookup."""
 
-    def test_gemini_provider_exists(self) -> None:
-        spec = get_provider("gemini_cli")
-        assert spec is not None
-        assert spec["runtime_id"] == "gemini_cli"
-        assert spec["auth_mode"] == "oauth"
-        assert spec["session_transport"] == "none"
-        assert spec["default_volume_name"] == "gemini_auth_volume"
-        assert spec["default_mount_path"] == "/var/lib/gemini-auth"
-
     def test_codex_provider_exists(self) -> None:
         spec = get_provider("codex_cli")
         assert spec is not None
@@ -53,10 +44,9 @@ class TestOAuthProviderRegistry:
 
     def test_supported_runtime_ids(self) -> None:
         ids = supported_runtime_ids()
-        assert "gemini_cli" in ids
         assert "codex_cli" in ids
         assert "claude_code" in ids
-        assert len(ids) == 3
+        assert len(ids) == 2
 
     def test_all_providers_have_required_keys(self) -> None:
         required_keys = {
@@ -76,14 +66,6 @@ class TestOAuthProviderRegistry:
         for runtime_id, spec in OAUTH_PROVIDERS.items():
             for key in required_keys:
                 assert key in spec, f"Missing key '{key}' in provider '{runtime_id}'"
-
-    def test_gemini_provider_uses_none_transport(self) -> None:
-        for runtime_id, spec in OAUTH_PROVIDERS.items():
-            if runtime_id != "gemini_cli":
-                continue
-            assert spec["session_transport"] == "none", (
-                f"Provider '{runtime_id}' should use none transport until a replacement exists"
-            )
 
     def test_session_transport_default_is_exposed_for_runtime_boundaries(self) -> None:
         assert get_provider_default("codex_cli", "session_transport") == "moonmind_pty_ws"

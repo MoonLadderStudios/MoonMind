@@ -1,12 +1,12 @@
 """Singleton per-runtime-family provider profile manager workflow.
 
-Each managed agent runtime family (gemini_cli, claude_code, codex_cli) gets its
+Each managed agent runtime family (claude_code, codex_cli) gets its
 own long-lived ProviderProfileManager workflow instance. The manager owns the truth
 about slot leases — which profiles have available capacity and which are in
 cooldown — and assigns slots to AgentRun workflows via Temporal Signals.
 
 Workflow ID convention: ``provider-profile-manager:<runtime_id>``
-  e.g. ``provider-profile-manager:gemini_cli``
+  e.g. ``provider-profile-manager:codex_cli``
 
 Design references:
   - docs/ManagedAgents/ManagedAgentsAuthentication.md (Section 5)

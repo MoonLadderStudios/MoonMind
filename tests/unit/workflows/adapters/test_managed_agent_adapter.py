@@ -202,7 +202,7 @@ async def test_launch_context_reserved_execution_profile_keys_cannot_be_overridd
             "credential_source": "oauth_volume",
             "runtime_env_overrides": {
                 "MOONMIND_EXECUTION_PROFILE_REF": "wrong-profile",
-                "MOONMIND_EXECUTION_PROFILE_RUNTIME": "gemini_cli",
+                "MOONMIND_EXECUTION_PROFILE_RUNTIME": "claude_code",
                 "SAFE_RUNTIME_FLAG": "enabled",
             },
         },
@@ -247,7 +247,7 @@ async def test_resolve_profile_by_id():
 
     request = AgentExecutionRequest(
         agentKind="managed",
-        agentId="gemini_cli",
+        agentId="claude_code",
         executionProfileRef="prof-B",
         correlationId="corr-1",
         idempotencyKey="idem-1",
@@ -258,7 +258,7 @@ async def test_resolve_profile_by_id():
     assert handle.metadata["credential_source"] == "oauth_volume"
     # Slot acquisition is now handled by AgentRun before adapter.start(),
     # so the adapter should NOT send a redundant slot request.
-    assert ("slot_request", "wf-123", "gemini_cli") not in calls
+    assert ("slot_request", "wf-123", "claude_code") not in calls
 
 async def test_resolve_profile_by_id_rejects_not_launch_ready():
     profiles = [
@@ -282,7 +282,7 @@ async def test_resolve_profile_by_id_rejects_not_launch_ready():
 
     request = AgentExecutionRequest(
         agentKind="managed",
-        agentId="gemini_cli",
+        agentId="claude_code",
         executionProfileRef="prof-disabled",
         correlationId="corr-not-ready",
         idempotencyKey="idem-not-ready",
@@ -418,7 +418,7 @@ async def test_resolve_profile_selector_filters():
     # 1. Match by exact providerId and runtimeMaterializationMode
     req1 = AgentExecutionRequest(
         agentKind="managed",
-        agentId="gemini_cli",
+        agentId="claude_code",
         correlationId="corr",
         idempotencyKey="idem",
         profileSelector=ProfileSelector(
@@ -431,7 +431,7 @@ async def test_resolve_profile_selector_filters():
     # 2. Match by tagsAny
     req2 = AgentExecutionRequest(
         agentKind="managed",
-        agentId="gemini_cli",
+        agentId="claude_code",
         correlationId="corr",
         idempotencyKey="idem",
         profileSelector=ProfileSelector(tagsAny=["premium"]),
@@ -442,7 +442,7 @@ async def test_resolve_profile_selector_filters():
     # 3. Match by tagsAll
     req3 = AgentExecutionRequest(
         agentKind="managed",
-        agentId="gemini_cli",
+        agentId="claude_code",
         correlationId="corr",
         idempotencyKey="idem",
         profileSelector=ProfileSelector(tagsAll=["premium", "fast"]),
@@ -453,7 +453,7 @@ async def test_resolve_profile_selector_filters():
     # 4. Tie-breaking by available slots when priority is equal
     req4 = AgentExecutionRequest(
         agentKind="managed",
-        agentId="gemini_cli",
+        agentId="claude_code",
         correlationId="corr",
         idempotencyKey="idem",
         profileSelector=ProfileSelector(providerId="openai"),
@@ -464,7 +464,7 @@ async def test_resolve_profile_selector_filters():
     # 5. Invalid selector causing error
     req5 = AgentExecutionRequest(
         agentKind="managed",
-        agentId="gemini_cli",
+        agentId="claude_code",
         correlationId="corr",
         idempotencyKey="idem",
         profileSelector=ProfileSelector(tagsAll=["nonexistent"]),
@@ -509,7 +509,7 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
 
     request = AgentExecutionRequest(
         agentKind="managed",
-        agentId="gemini_cli",
+        agentId="claude_code",
         executionProfileRef="oauth-prof",
         correlationId="corr-gh",
         idempotencyKey="idem-gh",
@@ -834,7 +834,7 @@ async def test_resolve_profile_raises_when_not_found():
 
     request = AgentExecutionRequest(
         agentKind="managed",
-        agentId="gemini_cli",
+        agentId="claude_code",
         executionProfileRef="does-not-exist",
         correlationId="corr-x",
         idempotencyKey="idem-x",
@@ -910,7 +910,7 @@ async def test_release_slot_signals_manager():
     await adapter.start(
         AgentExecutionRequest(
             agentKind="managed",
-            agentId="gemini_cli",
+            agentId="claude_code",
             executionProfileRef="prof-release",
             correlationId="corr-rel",
             idempotencyKey="idem-rel",
@@ -944,7 +944,7 @@ async def test_report_429_cooldown_uses_active_profile():
     await adapter.start(
         AgentExecutionRequest(
             agentKind="managed",
-            agentId="gemini_cli",
+            agentId="claude_code",
             executionProfileRef="prof-429",
             correlationId="corr-429",
             idempotencyKey="idem-429",
@@ -987,10 +987,10 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
             session.add(
                 ManagedAgentProviderProfile(
                     profile_id="gprofile-1",
-                    runtime_id="gemini_cli",
+                    runtime_id="claude_code",
                     credential_source=ProviderCredentialSource.OAUTH_VOLUME,
                     runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-                    volume_ref="oauth-volume://gemini",
+                    volume_ref="oauth-volume://claude",
                     volume_mount_path="/mnt/auth",
                     account_label="primary",
                     max_parallel_runs=2,
@@ -1004,7 +1004,7 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
             session.add(
                 ManagedAgentProviderProfile(
                     profile_id="gprofile-disabled",
-                    runtime_id="gemini_cli",
+                    runtime_id="claude_code",
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
                     max_parallel_runs=1,
@@ -1026,7 +1026,7 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
         orig = _db_base_mod.get_async_session_context
         _db_base_mod.get_async_session_context = lambda: _patched_session_context(session_factory)
         try:
-            result = await activities.provider_profile_list(runtime_id="gemini_cli")
+            result = await activities.provider_profile_list(runtime_id="claude_code")
         finally:
             _db_base_mod.get_async_session_context = orig
 
@@ -1061,7 +1061,7 @@ async def test_provider_profile_list_returns_empty_for_unknown_runtime(tmp_path:
 async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
         async with session_factory() as session:
-            for runtime, pid in [("gemini_cli", "g1"), ("claude_code", "c1")]:
+            for runtime, pid in [("codex_cli", "g1"), ("claude_code", "c1")]:
                 session.add(
                     ManagedAgentProviderProfile(
                         profile_id=pid,
@@ -1348,8 +1348,8 @@ async def test_status_reads_from_store(tmp_path: Path):
     store.save(
         ManagedRunRecord(
             run_id="run-status-1",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
         )
@@ -1366,7 +1366,7 @@ async def test_status_reads_from_store(tmp_path: Path):
 
     status = await adapter.status("run-status-1")
     assert status.status == "completed"
-    assert status.agent_id == "gemini_cli"
+    assert status.agent_id == "claude_code"
 
 async def test_status_falls_back_to_stub_without_store():
     adapter = ManagedAgentAdapter(
@@ -1390,8 +1390,8 @@ async def test_fetch_result_reads_from_store(tmp_path: Path):
     store.save(
         ManagedRunRecord(
             run_id="run-result-1",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             log_artifact_ref="artifact://logs/stdout",
@@ -1439,8 +1439,8 @@ async def test_fetch_result_marks_failed_pr_resolver_artifact_as_failure(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-failure",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -1491,8 +1491,8 @@ async def test_fetch_result_treats_pr_resolver_reenter_gate_as_continuation(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-blocked",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -1542,8 +1542,8 @@ async def test_fetch_result_derives_pr_resolver_reenter_gate_from_next_step(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-ci-wait",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -1594,8 +1594,8 @@ async def test_fetch_result_reports_standalone_pr_resolver_next_step_as_failure(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-standalone-ci",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -1650,8 +1650,8 @@ async def test_fetch_result_normalizes_pr_resolver_reenter_values(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-mixed-case",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="failed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -1704,8 +1704,8 @@ async def test_fetch_result_prefers_terminal_status_over_skipped_merge_outcome(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-blocked-skipped",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -1755,8 +1755,8 @@ async def test_fetch_result_upgrades_generic_failed_exit_with_pr_result(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-generic-failed",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="failed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -1809,8 +1809,8 @@ async def test_fetch_result_clears_generic_failed_exit_for_reenter_gate(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-generic-reenter",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="failed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -1876,8 +1876,8 @@ async def test_fetch_result_prefers_newer_pr_resolver_attempt_over_stale_result(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-latest-attempt",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -1940,8 +1940,8 @@ async def test_fetch_result_ignores_stale_failure_when_newer_attempt_is_merged(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-merged-attempt",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -1982,8 +1982,8 @@ async def test_fetch_result_ignores_merged_pr_resolver_artifact(tmp_path: Path):
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-merged",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -2336,8 +2336,8 @@ async def test_fetch_result_maps_final_state_merged_pr_resolver_artifact_metadat
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-final-merged",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -2448,8 +2448,8 @@ async def test_fetch_result_maps_final_latest_head_sha_metadata(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-final-latest-head-sha",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -2502,8 +2502,8 @@ async def test_fetch_result_maps_outcome_merged_pr_resolver_artifact_metadata(
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-outcome-merged",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -2614,8 +2614,8 @@ async def test_fetch_result_maps_already_merged_pr_resolver_artifact_metadata(tm
     store.save(
         ManagedRunRecord(
             run_id="run-result-pr-already-merged",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="completed",
             started_at=datetime.now(tz=UTC),
             workspace_path=str(workspace_path),
@@ -2649,8 +2649,8 @@ async def test_fetch_result_returns_empty_for_non_terminal(tmp_path: Path):
     store.save(
         ManagedRunRecord(
             run_id="run-running",
-            agent_id="gemini_cli",
-            runtime_id="gemini_cli",
+            agent_id="claude_code",
+            runtime_id="claude_code",
             status="running",
             started_at=datetime.now(tz=UTC),
         )

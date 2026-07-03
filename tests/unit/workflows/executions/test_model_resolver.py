@@ -26,9 +26,6 @@ class TestNormalizeRuntimeId:
     def test_codex_cli_passthrough(self):
         assert normalize_runtime_id("codex_cli") == "codex_cli"
 
-    def test_gemini_cli_passthrough(self):
-        assert normalize_runtime_id("gemini_cli") == "gemini_cli"
-
     def test_claude_code_passthrough(self):
         assert normalize_runtime_id("claude_code") == "claude_code"
 
@@ -42,7 +39,7 @@ class TestNormalizeRuntimeId:
 
     def test_uppercase_normalized(self):
         assert normalize_runtime_id("CODEX") == "codex_cli"
-        assert normalize_runtime_id("Gemini_CLI") == "gemini_cli"
+        assert normalize_runtime_id("CLAUDE_CODE") == "claude_code"
 
     def test_unknown_runtime_passthrough(self):
         assert normalize_runtime_id("some_future_runtime") == "some_future_runtime"
@@ -132,7 +129,6 @@ class TestResolveEffectiveModelRuntimeDefault:
         "runtime_id,expected_model",
         [
             ("codex_cli", "gpt-5.5"),
-            ("gemini_cli", "gemini-3.1-pro"),
             ("claude_code", "claude-opus-4-8"),
         ],
     )

@@ -7,20 +7,6 @@ import os
 from moonmind.workflows.temporal.runtime.providers.base import OAuthProviderSpec
 
 OAUTH_PROVIDERS: dict[str, OAuthProviderSpec] = {
-    "gemini_cli": OAuthProviderSpec(
-        runtime_id="gemini_cli",
-        auth_mode="oauth",
-        session_transport="none",
-        default_volume_name="gemini_auth_volume",
-        default_mount_path="/var/lib/gemini-auth",
-        default_volume_name_env="GEMINI_VOLUME_NAME",
-        default_mount_path_env="GEMINI_VOLUME_PATH",
-        provider_id="google",
-        provider_label="Google",
-        bootstrap_command=["true"],
-        success_check="gemini_config_exists",
-        account_label_prefix="Gemini",
-    ),
     "codex_cli": OAuthProviderSpec(
         runtime_id="codex_cli",
         auth_mode="oauth",

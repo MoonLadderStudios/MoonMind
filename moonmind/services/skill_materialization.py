@@ -294,7 +294,7 @@ class AgentSkillMaterializer:
     @staticmethod
     def _runtime_needs_gemini_projection(runtime_id: str) -> bool:
         normalized = str(runtime_id or "").strip().lower()
-        return normalized in {"gemini", "gemini_cli"}
+        return normalized == "gemini"
 
     @staticmethod
     def _verify_payload_digest(entry: Any, payload: bytes) -> None:

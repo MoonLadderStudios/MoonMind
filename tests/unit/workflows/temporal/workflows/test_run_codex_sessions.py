@@ -239,7 +239,7 @@ async def test_run_skips_workflow_scoped_session_for_non_session_managed_runtime
     )
 
     request = await workflow._maybe_bind_workflow_scoped_session(
-        _managed_request("gemini_cli")
+        _managed_request("claude_code")
     )
 
     assert request.managed_session is None

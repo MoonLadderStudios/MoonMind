@@ -83,7 +83,7 @@ def test_codex_descriptor_declares_every_required_behavior_with_evidence() -> No
         assert support.evidence
 
 
-@pytest.mark.parametrize("runtime_id", ["claude", "claude_code", "gemini_cli"])
+@pytest.mark.parametrize("runtime_id", ["claude", "claude_code"])
 def test_unsupported_runtimes_report_capability_gaps_not_partial(runtime_id: str) -> None:
     capabilities = managed_session_capabilities_for_runtime(runtime_id)
 
@@ -158,8 +158,8 @@ def test_non_canonical_runtime_cannot_be_session_capable_even_if_fully_declared(
     # Defense in depth: a runtime with no canonical managed-session id must never
     # be determined session-capable even if it declares every behavior.
     capabilities = ManagedSessionRuntimeCapabilities(
-        runtimeId="gemini_cli",
-        runtimeFamily="gemini",
+        runtimeId="future_runtime",
+        runtimeFamily="future",
         sessionCapableClaim=True,
         behaviors=_fully_supported_behaviors(),
     )
@@ -189,7 +189,7 @@ def test_summary_only_surfaces_codex_as_session_capable() -> None:
 
 def test_summary_fails_when_a_runtime_misrepresents_session_capability() -> None:
     truthful_codex = codex_managed_session_capabilities()
-    misrepresented = unsupported_runtime_managed_session_capabilities("gemini_cli").model_copy(
+    misrepresented = unsupported_runtime_managed_session_capabilities("future_runtime").model_copy(
         update={"session_capable_claim": True}
     )
 
@@ -198,7 +198,7 @@ def test_summary_fails_when_a_runtime_misrepresents_session_capability() -> None
     )
 
     assert summary["overallResult"] == "failed"
-    assert "gemini_cli" in summary["failedRuntimes"]
+    assert "future_runtime" in summary["failedRuntimes"]
     assert summary["sessionCapableRuntimes"] == ["codex_cli"]
 
 
@@ -210,7 +210,7 @@ def test_run_managed_session_conformance_compact_result() -> None:
     assert result["sessionCapableRuntimes"] == ["codex_cli"]
     assert result["failedRuntimes"] == []
     # Non-session-capable runtimes report their gaps for operator action.
-    assert set(result["capabilityGaps"]) == {"claude", "claude_code", "gemini_cli"}
+    assert set(result["capabilityGaps"]) == {"claude", "claude_code"}
 
 
 def test_behavior_support_requires_invocation_and_evidence_when_supported() -> None:

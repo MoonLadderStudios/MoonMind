@@ -1,13 +1,11 @@
 # syntax=docker/dockerfile:1.4
 ARG CODEX_CLI_VERSION=latest
 ARG CLAUDE_CLI_VERSION=latest
-# Build the shared runtime image with Codex/Gemini/Claude CLIs
-# by default so the API and Temporal workers can run from the
-# same image tag. Disable selectively in test-only or constrained builds.
+# Build the shared runtime image with Codex/Claude CLIs by default so the API
+# and Temporal workers can run from the same image tag. Disable selectively in
+# test-only or constrained builds.
 ARG INSTALL_CODEX_CLI=true
-ARG INSTALL_GEMINI_CLI=true
 ARG INSTALL_CLAUDE_CLI=true
-ARG GEMINI_CLI_VERSION=latest
 
 FROM node:22-bookworm AS tooling-builder
 
@@ -20,8 +18,6 @@ SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 ARG CODEX_CLI_VERSION
 ARG INSTALL_CODEX_CLI=true
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
-ARG GEMINI_CLI_VERSION
-ARG INSTALL_GEMINI_CLI
 ARG CLAUDE_CLI_VERSION
 ARG INSTALL_CLAUDE_CLI
 # Install build prerequisites required for global npm CLI installs so future
@@ -37,25 +33,20 @@ RUN npm config set fund false \
     && npm config set update-notifier false
 
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
-ARG GEMINI_CLI_VERSION
-ARG INSTALL_GEMINI_CLI
 ARG CLAUDE_CLI_VERSION
 ARG INSTALL_CLAUDE_CLI
 ARG GITHUB_TOKEN
 ARG NPM_TOKEN
 
-# Install Codex, Gemini, and Claude CLIs globally so binaries can be copied to the
+# Install Codex and Claude CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack. Keep the
 # installer in a normal script file instead of a Dockerfile heredoc so legacy
 # Docker builders without buildx execute it consistently.
 COPY api_service/docker/install_cli_tooling.sh /tmp/install_cli_tooling.sh
 RUN /bin/bash /tmp/install_cli_tooling.sh && rm -f /tmp/install_cli_tooling.sh
 
-# Fail the build early if the bundled CLIs are missing or broken. Pre-create
-# ~/.gemini so `gemini --version` can persist registry state.
-RUN mkdir -p "${HOME}/.gemini" \
-    && codex --version \
-    && gemini --version \
+# Fail the build early if the bundled CLIs are missing or broken.
+RUN codex --version \
     && claude --version
 
 # ---------------------------------------------------------------------------
@@ -115,12 +106,10 @@ ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
 
 WORKDIR /app
 
-# Copy Codex and Gemini/Claude artifacts from the tooling builder so the runtime
-# image retains only the compiled CLIs and minimal Node runtime needed to
-# execute them.
+# Copy Codex and Claude artifacts from the tooling builder so the runtime image
+# retains only the compiled CLIs and minimal Node runtime needed to execute them.
 COPY --from=tooling-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
-COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 
@@ -137,10 +126,9 @@ RUN printf '%s\n' \
     >/usr/local/bin/npx
 RUN chmod 0755 /usr/local/bin/npm /usr/local/bin/npx
 
-RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/gemini-cli /usr/share/licenses/claude-cli
+RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/claude-cli
 
 COPY --from=tooling-builder /usr/local/lib/node_modules/@openai/codex/LICENSE /usr/share/licenses/codex-cli/LICENSE
-COPY --from=tooling-builder /usr/local/lib/node_modules/@google/gemini-cli/LICENSE /usr/share/licenses/gemini-cli/LICENSE
 COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE /usr/share/licenses/claude-cli/LICENSE
 
 # Install system packages required by the Python service along with the
@@ -179,12 +167,10 @@ RUN chmod 0755 /usr/bin/docker /usr/libexec/moonmind/docker-real
 
 # Ensure the non-root ``app`` user exists for Temporal workers and the bundled
 # CLIs remain executable from its PATH.
-# Pre-create ~/.gemini so gemini --version doesn't crash writing projects.json.
 # Pre-create ~/.npm as a managed cache so repeated managed-agent runs do not
 # pay the full install cost every time.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
-    chmod 0755 /usr/local/bin/codex /usr/local/bin/gemini /usr/local/bin/claude /usr/local/bin/npm /usr/local/bin/npx && \
-    mkdir -p /home/app/.gemini && chown app:app /home/app/.gemini && \
+    chmod 0755 /usr/local/bin/codex /usr/local/bin/claude /usr/local/bin/npm /usr/local/bin/npx && \
     mkdir -p /home/app/.npm && chown app:app /home/app/.npm
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs and
@@ -192,7 +178,7 @@ RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
 RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
     HOME=/home/app \
     PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/bin" \
-    sh -c 'codex --version && gemini --version && claude --version && npm --version && rg --version'
+    sh -c 'codex --version && claude --version && npm --version && rg --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals and managed sandbox defaults. The template is merged into the

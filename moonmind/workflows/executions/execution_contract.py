@@ -34,7 +34,6 @@ SUPPORTED_RUNTIME_MODES = {
     "codex",
     "codex_cli",
     "codex_cloud",
-    "gemini_cli",
     "claude",
     "claude_code",
     "jules",
@@ -43,7 +42,6 @@ SUPPORTED_RUNTIME_MODES = {
 SUPPORTED_EXECUTION_RUNTIMES = {
     "codex",
     "codex_cli",
-    "gemini_cli",
     "claude",
     "claude_code",
     "jules",
@@ -74,7 +72,7 @@ _REPOSITORY_PUBLISH_COMPATIBLE_SIDE_EFFECT_SKILLS = frozenset({"jira-issue-updat
 _JIRA_ORCHESTRATE_PRESET_SLUGS = frozenset({"jira-orchestrate"})
 _RUNTIME_COMMAND_HINT_CATALOG_VERSION = "2026-05-13"
 _SLASH_COMMAND_PASSTHROUGH_RUNTIMES = frozenset(
-    {"codex", "codex_cli", "claude", "claude_code", "gemini_cli", "universal"}
+    {"codex", "codex_cli", "claude", "claude_code", "universal"}
 )
 _KNOWN_RUNTIME_COMMAND_HINTS = frozenset({"review", "simplify"})
 _RUNTIME_COMMAND_HINT_DETAILS: dict[str, dict[str, Any]] = {

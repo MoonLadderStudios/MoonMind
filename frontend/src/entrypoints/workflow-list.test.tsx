@@ -972,7 +972,6 @@ describe('Workflows Entrypoint', () => {
     ).toEqual([
       'codex_cli',
       'claude_code',
-      'gemini_cli',
       'jules',
       'codex_cloud',
     ]);

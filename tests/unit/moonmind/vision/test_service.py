@@ -15,7 +15,7 @@ from moonmind.vision.settings import VisionConfig
 def base_config():
     return VisionConfig(
         enabled=True,
-        provider="gemini_cli",
+        provider="gemini",
         model="gemini-1.5-flash",
         max_tokens=4000,
         ocr_enabled=True,
@@ -46,7 +46,7 @@ def test_render_context_no_attachments(base_config):
 def test_render_context_disabled_flag(base_config, sample_attachment):
     disabled_config = VisionConfig(
         enabled=False,
-        provider="gemini_cli",
+        provider="gemini",
         model="gemini-1.5-flash",
         max_tokens=4000,
         ocr_enabled=True,
@@ -84,7 +84,7 @@ def test_render_context_provider_unavailable(mock_settings, sample_attachment):
     mock_settings.openai.openai_api_key = ""
     mock_settings.anthropic.anthropic_api_key = ""
 
-    for provider in ["gemini_cli", "openai", "anthropic", "unknown"]:
+    for provider in ["gemini", "openai", "anthropic", "unknown"]:
         config = VisionConfig(
             enabled=True,
             provider=provider,
@@ -108,7 +108,7 @@ def test_render_context_provider_unavailable(mock_settings, sample_attachment):
 def test_render_context_ok_gemini(mock_settings, sample_attachment):
     mock_settings.google.google_api_key = "fake_key"
     config = VisionConfig(
-        enabled=True, provider="gemini_cli", model="any", max_tokens=1000, ocr_enabled=True
+        enabled=True, provider="gemini", model="any", max_tokens=1000, ocr_enabled=True
     )
     service = VisionService(config=config)
     context = service.render_context([sample_attachment])
@@ -212,7 +212,7 @@ def test_render_context_attachment_parsing_and_markdown(
 def test_render_context_ocr_disabled(mock_settings, sample_attachment):
     mock_settings.google.google_api_key = "fake_key"
     no_ocr_config = VisionConfig(
-        enabled=True, provider="gemini_cli", model="any", max_tokens=1000, ocr_enabled=False
+        enabled=True, provider="gemini", model="any", max_tokens=1000, ocr_enabled=False
     )
     service = VisionService(config=no_ocr_config)
     context = service.render_context([sample_attachment])
@@ -297,7 +297,7 @@ def test_render_target_contexts_disabled_records_status_and_traceability(
 ):
     disabled_config = VisionConfig(
         enabled=False,
-        provider="gemini_cli",
+        provider="gemini",
         model="gemini-1.5-flash",
         max_tokens=4000,
         ocr_enabled=True,

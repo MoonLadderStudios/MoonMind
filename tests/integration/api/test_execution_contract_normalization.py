@@ -286,8 +286,8 @@ def test_mm786_flat_steps_preserve_per_step_runtime_selection() -> None:
                         "id": "low-cost-step",
                         "instructions": "Run this step with a lower-cost runtime.",
                         "runtime": {
-                            "mode": "gemini_cli",
-                            "model": "gemini-2.5-flash",
+                            "mode": "claude_code",
+                            "model": "claude-sonnet-4-5",
                             "effort": "low",
                         },
                     }
@@ -298,7 +298,7 @@ def test_mm786_flat_steps_preserve_per_step_runtime_selection() -> None:
 
     runtime = result["workflow"]["steps"][0]["runtime"]
     assert {key: runtime[key] for key in ("mode", "model", "effort")} == {
-        "mode": "gemini_cli",
-        "model": "gemini-2.5-flash",
+        "mode": "claude_code",
+        "model": "claude-sonnet-4-5",
         "effort": "low",
     }

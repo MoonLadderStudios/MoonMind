@@ -144,8 +144,8 @@ class WorkflowProposalPromoteRequest(BaseModel):
         None,
         alias="runtimeMode",
         description=(
-            "Shortcut to override only the agent runtime mode (e.g. gemini_cli, "
-            "jules, codex) while preserving the reviewed proposal payload."
+            "Shortcut to override only the agent runtime mode (e.g. jules, codex) "
+            "while preserving the reviewed proposal payload."
         ),
     )
 

@@ -271,7 +271,7 @@ async def test_subscriber_failure_does_not_change_http_response(
         response = await client.patch(
             "/api/v1/settings/workspace",
             json={
-                "changes": {"workflow.default_runtime": "gemini_cli"},
+                "changes": {"workflow.default_runtime": "claude_code"},
                 "expected_versions": {"workflow.default_runtime": 1},
             },
         )

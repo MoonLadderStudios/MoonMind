@@ -35,46 +35,18 @@ DISABLED_REASONS = (
 AUTH_METHODS = ("oauth_volume", "secret_ref", "manual")
 FIRST_PARTY_SETUP_STUBS = (
     {
-        "profile_id": "claude_anthropic_default",
+        "profile_id": "claude_anthropic_oauth",
         "runtime_id": "claude_code",
         "provider_id": "anthropic",
         "provider_label": "Anthropic",
-        "account_label": "Claude Code (setup required)",
+        "account_label": "Claude Anthropic OAuth",
     },
     {
-        "profile_id": "claude_anthropic",
-        "runtime_id": "claude_code",
-        "provider_id": "anthropic",
-        "provider_label": "Anthropic",
-        "account_label": "Claude Code (setup required)",
-    },
-    {
-        "profile_id": "codex_openai_default",
+        "profile_id": "codex_openai_oauth",
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "provider_label": "OpenAI",
-        "account_label": "Codex CLI (setup required)",
-    },
-    {
-        "profile_id": "codex_default",
-        "runtime_id": "codex_cli",
-        "provider_id": "openai",
-        "provider_label": "OpenAI",
-        "account_label": "Codex CLI (setup required)",
-    },
-    {
-        "profile_id": "gemini_google_default",
-        "runtime_id": "gemini_cli",
-        "provider_id": "google",
-        "provider_label": "Google",
-        "account_label": "Gemini CLI (setup required)",
-    },
-    {
-        "profile_id": "gemini_default",
-        "runtime_id": "gemini_cli",
-        "provider_id": "google",
-        "provider_label": "Google",
-        "account_label": "Gemini CLI (setup required)",
+        "account_label": "Codex OpenAI OAuth",
     },
 )
 
@@ -299,12 +271,8 @@ def _backfill_activation_state(
         WHERE enabled = false
           AND disabled_reason IS NULL
           AND profile_id NOT IN (
-              'claude_anthropic_default',
-              'claude_anthropic',
-              'codex_openai_default',
-              'codex_default',
-              'gemini_google_default',
-              'gemini_default'
+              'claude_anthropic_oauth',
+              'codex_openai_oauth'
           )
         """
     )
@@ -317,12 +285,8 @@ def _backfill_activation_state(
             disabled_reason = 'missing_credentials',
             last_auth_method = NULL
         WHERE profile_id IN (
-              'claude_anthropic_default',
-              'claude_anthropic',
-              'codex_openai_default',
-              'codex_default',
-              'gemini_google_default',
-              'gemini_default'
+              'claude_anthropic_oauth',
+              'codex_openai_oauth'
           )
           AND auth_state <> 'connected'
         """

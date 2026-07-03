@@ -27,7 +27,7 @@ Last Updated: 2026-06-23
 
 ## 1. Summary
 
-MoonMind-managed runtimes such as Gemini CLI, Claude Code, and Codex CLI do not map one-to-one to a single upstream company or a single authentication method.
+MoonMind-managed runtimes such as Claude Code and Codex CLI do not map one-to-one to a single upstream company or a single authentication method.
 
 Examples:
 
@@ -40,9 +40,6 @@ Examples:
   - OpenAI via OAuth
   - OpenAI via API key
   - MiniMax via config + environment materialization
-- `gemini_cli` may run against:
-  - Google via OAuth
-  - Google via API key, where supported by the runtime and policy
 
 The old question, “which auth method does this runtime use?”, is too narrow.
 
@@ -54,7 +51,7 @@ The Provider Profile system is the durable execution contract that answers that 
 
 The Settings experience has one additional product rule:
 
-> Claude, Codex, and Gemini provider profiles should be easy to find and configure in Settings, but they must default to not launchable until the user successfully authenticates OAuth or adds a validated API key. A successful user-initiated OAuth or API-key setup should enable the profile by default.
+> Claude and Codex provider profiles should be easy to find and configure in Settings. OAuth profiles must default to not launchable until the user successfully authenticates OAuth. API-key profiles seeded from configured environment secrets are connected and enabled by default.
 
 This means “disabled by default” is a safety state for unconfigured providers. It is not an extra manual step after setup succeeds.
 
@@ -113,7 +110,6 @@ Settings should expose first-party provider cards for:
 
 - Claude Code / Anthropic
 - Codex CLI / OpenAI
-- Gemini CLI / Google
 
 Those cards may be backed by disabled setup-stub Provider Profiles or by a separate provider-offerings catalog, but the user experience must be the same:
 
@@ -163,7 +159,7 @@ The Provider Profile system must support all of the following:
    - OAuth session rows store terminal/session transport metadata.
 
 10. **Safe Settings-first activation**
-    - The big three first-party providers are discoverable in Settings.
+    - First-party Claude and Codex providers are discoverable in Settings.
     - They are not launchable until first successful OAuth or API-key setup.
     - A successful Settings setup action enables the profile by default.
     - Manual user/admin disables are not silently undone by passive background validation.
@@ -177,7 +173,7 @@ This design does **not** attempt to:
 - normalize every provider into an identical logical API,
 - store raw access tokens, API keys, or refresh tokens in the profile row,
 - replace runtime-specific strategy code entirely,
-- eliminate the need for per-runtime launch shaping such as Claude, Gemini, or Codex command construction,
+- eliminate the need for per-runtime launch shaping such as Claude or Codex command construction,
 - define the browser-terminal OAuth UX,
 - redefine secret backends, encryption, or rotation semantics,
 - solve pricing or billing attribution by itself,
@@ -195,7 +191,6 @@ A **runtime** is the executable MoonMind launches.
 
 Examples:
 
-- `gemini_cli`
 - `claude_code`
 - `codex_cli`
 
@@ -203,7 +198,6 @@ A **provider** is the upstream service the runtime talks to.
 
 Examples:
 
-- `google`
 - `anthropic`
 - `openai`
 - `minimax`
@@ -280,7 +274,6 @@ Examples:
 
 - Claude Code + MiniMax defaulting to `MiniMax-M2.7`
 - Codex CLI + MiniMax defaulting to profile `m27`
-- Gemini CLI + Google defaulting to a chosen Gemini model family
 
 How that model intent gets translated into environment variables, config files, or CLI flags is runtime-specific launch shaping.
 
@@ -331,8 +324,8 @@ into one reusable execution target.
 ```yaml
 ManagedAgentProviderProfile:
   profile_id:                    str
-  runtime_id:                    str            # gemini_cli | claude_code | codex_cli | ...
-  provider_id:                   str            # google | anthropic | openai | minimax | zai | ...
+  runtime_id:                    str            # claude_code | codex_cli | ...
+  provider_id:                   str            # anthropic | openai | minimax | zai | ...
   provider_label:                str | null
 
   credential_source:             str            # oauth_volume | secret_ref | none
@@ -394,16 +387,15 @@ Stable identifier referenced by workflows, APIs, and UI.
 
 Examples:
 
-- `gemini_google_oauth_nsticco`
 - `claude_anthropic_oauth_nsticco`
 - `claude_anthropic_api_team`
 - `claude_minimax_m27`
 - `claude_zai_default`
 - `codex_openai_oauth_team`
+- `codex_openai_api_team`
 - `codex_minimax_m27`
-- `claude_anthropic_default`
-- `codex_openai_default`
-- `gemini_google_default`
+- `claude_anthropic_oauth`
+- `codex_openai_oauth`
 
 #### `provider_id`
 
@@ -417,7 +409,7 @@ Defines the credential source class:
 - `secret_ref`: credentials resolve from the Secrets System at launch time
 - `none`: no provider secret is required
 
-First-party setup stubs for Claude, Codex, and Gemini should use `credential_source = none` until the user successfully completes OAuth or adds a validated API key.
+First-party setup stubs for Claude and Codex should use `credential_source = none` until the user successfully completes OAuth or adds a validated API key.
 
 #### `runtime_materialization_mode`
 
@@ -433,7 +425,7 @@ Defines how the runtime is prepared:
 
 `enabled` means “eligible for launch selection if readiness checks pass.”
 
-For first-party Claude, Codex, and Gemini setup stubs, the default must be:
+For first-party Claude and Codex setup stubs, the default must be:
 
 ```yaml
 enabled: false
@@ -551,11 +543,10 @@ Recommended convention:
 
 ### 7.1 Principle
 
-The Settings page should make the big three providers easy to configure:
+The Settings page should make first-party Claude and Codex providers easy to configure:
 
 - Claude Code / Anthropic
 - Codex CLI / OpenAI
-- Gemini CLI / Google
 
 These providers should be visible even before credentials exist. They should not be launchable until credentials are verified.
 
@@ -563,29 +554,35 @@ The expected user experience is:
 
 | User action in Settings | Result |
 | --- | --- |
-| Fresh install / no credentials | Big-three provider cards are visible, disabled, and marked setup required. |
+| Fresh install / no credentials | Claude and Codex OAuth provider cards are visible, disabled, and marked setup required. |
 | User completes OAuth | Profile becomes connected and enabled by default. |
 | User adds a valid API key | Profile becomes connected and enabled by default. |
 | User manually disables a connected profile | Profile stays disabled until the user explicitly enables it again. |
 | OAuth or API-key validation fails | Profile stays disabled with a clear readiness error. |
 | Workspace policy blocks the provider | Profile may be connected, but launch remains blocked by policy. |
 
-### 7.2 First-party setup stubs
+### 7.2 First-party seeded profiles
 
-MoonMind may seed disabled setup-stub Provider Profiles for the big three. These stubs are Settings affordances, not launch targets.
+MoonMind seeds disabled OAuth Provider Profiles for first-party Claude and Codex. These OAuth profiles are Settings affordances, not launch targets until OAuth setup succeeds.
 
-Recommended stubs:
+Always-seeded OAuth profiles:
 
 | Profile ID | Runtime | Provider | Initial state |
 | --- | --- | --- | --- |
-| `claude_anthropic_default` | `claude_code` | `anthropic` | disabled, setup required |
-| `codex_openai_default` | `codex_cli` | `openai` | disabled, setup required |
-| `gemini_google_default` | `gemini_cli` | `google` | disabled, setup required |
+| `claude_anthropic_oauth` | `claude_code` | `anthropic` | disabled, setup required |
+| `codex_openai_oauth` | `codex_cli` | `openai` | disabled, setup required |
 
-A setup stub should look like:
+When `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is configured at startup, MoonMind also seeds a corresponding API-key profile and enables it by default:
+
+| Profile ID | Runtime | Provider | Initial state |
+| --- | --- | --- | --- |
+| `claude_anthropic_api` | `claude_code` | `anthropic` | enabled, connected |
+| `codex_openai_api` | `codex_cli` | `openai` | enabled, connected |
+
+An OAuth setup profile should look like:
 
 ```yaml
-profile_id: claude_anthropic_default
+profile_id: claude_anthropic_oauth
 runtime_id: claude_code
 provider_id: anthropic
 provider_label: Anthropic
@@ -597,7 +594,7 @@ enabled: false
 is_default: false
 auth_state: not_configured
 disabled_reason: missing_credentials
-tags: ["setup-required", "first-party"]
+tags: ["oauth", "first-party"]
 priority: 100
 
 secret_refs: {}
@@ -947,14 +944,6 @@ codex_cli + openai:
       from_secret_ref: openai_api_key
   clear_env_keys:
     - MINIMAX_API_KEY
-
-gemini_cli + google:
-  secret_role: google_api_key
-  env_template:
-    GEMINI_API_KEY:
-      from_secret_ref: google_api_key
-  clear_env_keys:
-    - GOOGLE_APPLICATION_CREDENTIALS
 ```
 
 Runtime-specific strategies may adjust these defaults when a CLI requires a different key name, config file, or home directory behavior.
@@ -1047,7 +1036,6 @@ The singleton workflow responsible for profile-capacity coordination is:
 
 Each runtime family gets one singleton manager workflow:
 
-- `provider-profile-manager:gemini_cli`
 - `provider-profile-manager:claude_code`
 - `provider-profile-manager:codex_cli`
 
@@ -1165,7 +1153,6 @@ Examples:
 
 - Claude strategy may suppress `--model` when model env variables are already present.
 - Codex strategy may select a generated named profile from config.
-- Gemini strategy may clear conflicting keys in OAuth mode.
 - A proxy-first runtime strategy may shape provider URLs toward MoonMind-owned proxy endpoints instead of direct upstream credentials.
 
 ---
@@ -1340,7 +1327,6 @@ Examples:
 - Anthropic OAuth profile clears competing Anthropic API-key env vars where needed.
 - MiniMax Claude profile clears `ANTHROPIC_API_KEY`.
 - Codex MiniMax profile clears `OPENAI_API_KEY`.
-- Gemini API-key profiles clear conflicting Google credential env vars when required by runtime behavior.
 
 ### 14.7 Proxy-first preference
 
@@ -1373,10 +1359,10 @@ These events must not auto-enable a user-disabled profile:
 > [!NOTE]
 > The `SecretRef` objects below are illustrative. The exact serialized shape is owned by [SecretsSystem.md](./SecretsSystem.md).
 
-### 15.1 Claude Code + Anthropic setup stub
+### 15.1 Claude Code + Anthropic OAuth setup profile
 
 ```yaml
-profile_id: claude_anthropic_default
+profile_id: claude_anthropic_oauth
 runtime_id: claude_code
 provider_id: anthropic
 provider_label: "Anthropic"
@@ -1389,7 +1375,7 @@ enabled: false
 is_default: false
 auth_state: not_configured
 disabled_reason: missing_credentials
-tags: ["setup-required", "first-party"]
+tags: ["oauth", "first-party"]
 priority: 100
 
 secret_refs: {}
@@ -1406,8 +1392,8 @@ file_templates: []
 home_path_overrides: {}
 
 command_behavior:
-  supported_auth_methods: ["oauth_volume", "secret_ref"]
-  auth_actions: ["connect_oauth", "use_api_key"]
+  supported_auth_methods: ["oauth_volume"]
+  auth_actions: ["connect_oauth"]
   auth_status_label: "Not connected"
   auth_readiness:
     connected: false
@@ -1419,7 +1405,7 @@ command_behavior:
 This profile is created or updated by the OAuth session workflow after terminal-based login verification succeeds.
 
 ```yaml
-profile_id: claude_anthropic_default
+profile_id: claude_anthropic_oauth
 runtime_id: claude_code
 provider_id: anthropic
 provider_label: "Anthropic"
@@ -1459,7 +1445,7 @@ command_behavior:
 ### 15.3 Claude Code + Anthropic API key after setup
 
 ```yaml
-profile_id: claude_anthropic_default
+profile_id: claude_anthropic_api
 runtime_id: claude_code
 provider_id: anthropic
 provider_label: "Anthropic"
@@ -1499,51 +1485,10 @@ command_behavior:
     launch_ready: true
 ```
 
-### 15.4 Gemini CLI + Google OAuth after setup
+### 15.4 Codex CLI + OpenAI OAuth after setup
 
 ```yaml
-profile_id: gemini_google_default
-runtime_id: gemini_cli
-provider_id: google
-provider_label: "Google"
-
-credential_source: oauth_volume
-runtime_materialization_mode: oauth_home
-
-account_label: "nsticco@gmail.com (Ultra)"
-enabled: true
-is_default: true
-auth_state: connected
-disabled_reason: null
-last_auth_method: oauth_volume
-tags: ["default", "oauth", "first-party"]
-priority: 100
-
-volume_ref: gemini_auth_vol_nsticco
-volume_mount_path: /var/lib/gemini-auth
-secret_refs: {}
-
-clear_env_keys:
-  - GEMINI_API_KEY
-  - GOOGLE_API_KEY
-
-env_template: {}
-file_templates: []
-home_path_overrides:
-  GEMINI_HOME: /var/lib/gemini-auth
-  GEMINI_CLI_HOME: /var/lib/gemini-auth
-
-command_behavior:
-  auth_status_label: "Gemini OAuth ready"
-  auth_readiness:
-    connected: true
-    launch_ready: true
-```
-
-### 15.5 Codex CLI + OpenAI OAuth after setup
-
-```yaml
-profile_id: codex_openai_default
+profile_id: codex_openai_oauth
 runtime_id: codex_cli
 provider_id: openai
 provider_label: "OpenAI"
@@ -1575,6 +1520,50 @@ home_path_overrides:
 
 command_behavior:
   auth_status_label: "Codex OAuth ready"
+  auth_readiness:
+    connected: true
+    launch_ready: true
+```
+
+### 15.5 Codex CLI + OpenAI API key after setup
+
+```yaml
+profile_id: codex_openai_api
+runtime_id: codex_cli
+provider_id: openai
+provider_label: "OpenAI"
+
+credential_source: secret_ref
+runtime_materialization_mode: api_key_env
+
+account_label: "team-default"
+enabled: true
+is_default: true
+auth_state: connected
+disabled_reason: null
+last_auth_method: secret_ref
+tags: ["default", "api-key", "first-party"]
+priority: 100
+
+secret_refs:
+  openai_api_key:
+    secret_id: sec_openai_team_default
+    backend_type: db_encrypted
+
+clear_env_keys:
+  - OPENAI_BASE_URL
+  - OPENAI_ORG_ID
+  - OPENAI_PROJECT
+  - MINIMAX_API_KEY
+
+env_template:
+  OPENAI_API_KEY:
+    from_secret_ref: openai_api_key
+file_templates: []
+home_path_overrides: {}
+
+command_behavior:
+  auth_status_label: "OpenAI API key ready"
   auth_readiness:
     connected: true
     launch_ready: true
@@ -1722,10 +1711,11 @@ command_behavior:
    - `enabled` defaults to `false` for new profiles unless creation occurs inside a verified setup flow.
    - first-party setup stubs default to `auth_state=not_configured` and `disabled_reason=missing_credentials`.
 
-3. Seed or backfill setup stubs for:
-   - `claude_anthropic_default`
-   - `codex_openai_default`
-   - `gemini_google_default`
+3. Seed or backfill first-party profiles for:
+   - `claude_anthropic_oauth`
+   - `codex_openai_oauth`
+   - `claude_anthropic_api` when `ANTHROPIC_API_KEY` is configured
+   - `codex_openai_api` when `OPENAI_API_KEY` is configured
 
 4. Backfill existing launch-ready OAuth profiles:
    - `auth_state=connected`
@@ -1765,7 +1755,7 @@ command_behavior:
 The implementation should include tests for the following behavior:
 
 ```text
-New Claude/Codex/Gemini provider setup stubs are disabled by default.
+New Claude/Codex provider setup stubs are disabled by default.
 ProviderProfileCreate does not default first-party managed providers to enabled.
 PATCH enabled=true fails when OAuth/API-key readiness is missing.
 Settings Connect OAuth finalizes only after volume verification succeeds.
@@ -1778,7 +1768,7 @@ Direct user-initiated reconnect or add-key may clear user_disabled and enable th
 ProviderProfileManager sync excludes disabled and not-ready profiles.
 Default provider selection does not choose disabled setup stubs.
 workflow.default_provider_profile_ref rejects disabled or not-ready profiles.
-Settings provider cards show setup actions for Claude, Codex, and Gemini.
+Settings provider cards show setup actions for Claude and Codex.
 ```
 
 ---
@@ -1820,12 +1810,10 @@ This model is required for MoonMind to correctly support modern runtime/provider
 - Claude Code with Z.AI
 - Codex CLI with OpenAI
 - Codex CLI with MiniMax
-- Gemini CLI with Google OAuth
-- Gemini CLI with Google API key
 
 The Settings activation rule is intentionally simple:
 
-> Big-three provider profiles are visible but not launchable until first OAuth or API-key setup. Successful user-initiated setup enables the profile by default. Manual disables and policy blocks are respected.
+> First-party OAuth provider profiles are visible but not launchable until OAuth setup. API-key profiles are seeded and enabled when their configured environment secret exists. Successful user-initiated setup enables the profile by default. Manual disables and policy blocks are respected.
 
 The result is a system that is explicit, secure by default, easy to configure, and aligned with how real managed runtimes work in practice.
 

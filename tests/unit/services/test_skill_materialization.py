@@ -501,7 +501,7 @@ async def test_materializer_creates_gemini_projection_only_for_gemini_runtime(
 
     gemini_result = await materializer.materialize(
         resolved_skillset=skillset,
-        runtime_id="gemini_cli",
+        runtime_id="gemini",
         mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
     )
 

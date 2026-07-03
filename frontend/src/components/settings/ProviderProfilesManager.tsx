@@ -468,7 +468,7 @@ function extractErrorMessage(payload: unknown): string {
 
 function isFirstPartyOAuthProfile(profile: ProviderProfile): boolean {
   return (
-    (profile.runtime_id === 'codex_cli' || profile.runtime_id === 'gemini_cli') &&
+    profile.runtime_id === 'codex_cli' &&
     (profile.credential_source === 'oauth_volume' ||
       profile.runtime_materialization_mode === 'oauth_home' ||
       Boolean(profile.volume_ref || profile.volume_mount_path))

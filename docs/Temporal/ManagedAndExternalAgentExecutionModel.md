@@ -78,7 +78,7 @@ Parent/child ownership rule:
 Workflow Execution (root user workflow)
  └─ Plan (generated or provided)
  ├─ Step 1: sandbox.run_command (activity)
- ├─ Step 2: MoonMind.AgentRun (child workflow) → e.g. Gemini CLI
+ ├─ Step 2: MoonMind.AgentRun (child workflow) → e.g. Claude Code
  ├─ Step 3: MoonMind.AgentRun (child workflow) → e.g. Jules
  └─ Step 4: sandbox.run_tests (activity)
 ````
@@ -340,7 +340,7 @@ Metadata may include values such as:
 ```json
 {
  "awaitingReason": "provider_profile_slot",
- "profileManager": "provider-profile-manager:gemini_cli"
+ "profileManager": "provider-profile-manager:claude_code"
 }
 ```
 
@@ -463,7 +463,6 @@ Used for MoonMind-managed runtimes.
 
 Examples:
 
-* `gemini_cli`
 * `claude_code`
 * `codex_cli`
 
@@ -544,7 +543,6 @@ MoonMind-managed agents are true runtimes launched and supervised by MoonMind, b
 
 Examples:
 
-* Gemini CLI
 * Claude Code
 * Codex CLI
 
@@ -558,7 +556,7 @@ The session-capable managed runtime set is:
 * `codex_cli`
 * `claude_code`
 
-`gemini_cli` remains a managed runtime strategy and can use the same session plane once its adapter exposes a session-capable binding.
+Future managed runtimes can use the same session plane once their adapters expose session-capable bindings.
 
 ## 8.1 Key rule
 
@@ -719,7 +717,7 @@ Concurrency and cooldown are enforced **per provider profile**, not merely per r
 
 Examples:
 
-* `gemini_oauth_user_a` may allow only one parallel run
+* `codex_openai_oauth_user_a` may allow only one parallel run
 * `claude_code_team_profile` may allow two parallel runs
 * one profile may enter cooldown after repeated `429` responses while another remains usable
 

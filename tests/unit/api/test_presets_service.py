@@ -2491,7 +2491,7 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 },
                 context={
                     "repository": "ExampleOrg/Game",
-                    "targetRuntime": "gemini_cli",
+                    "targetRuntime": "claude_code",
                 },
             )
 
@@ -2515,7 +2515,7 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 "ExampleOrg/Game"
             )
             assert downstream_step["jiraOrchestration"]["task"]["runtime"] == {
-                "mode": "gemini_cli"
+                "mode": "claude_code"
             }
             assert downstream_step["jiraOrchestration"]["task"]["publish"] == {
                 "mode": "pr",

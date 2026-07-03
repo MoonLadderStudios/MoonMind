@@ -11,6 +11,7 @@ from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
+    ProviderProfileAuthMethod,
     ProviderCredentialSource,
     ProviderProfileAuthState,
     ProviderProfileDisabledReason,
@@ -18,12 +19,13 @@ from api_service.db.models import (
 )
 
 FIRST_PARTY_SETUP_PROFILE_IDS = {
-    "gemini_google_default",
-    "gemini_default",
-    "codex_openai_default",
-    "codex_default",
-    "claude_anthropic_default",
-    "claude_anthropic",
+    "codex_openai_oauth",
+    "claude_anthropic_oauth",
+}
+
+FIRST_PARTY_API_PROFILE_IDS = {
+    "codex_openai_api",
+    "claude_anthropic_api",
 }
 
 @pytest.fixture()
@@ -52,16 +54,25 @@ def _module_db(tmp_path):
     db_base.DATABASE_URL, db_base.engine, db_base.async_session_maker = _orig
     asyncio.run(_teardown(engine))
 
+
+@pytest.fixture(autouse=True)
+def _clear_seed_env(monkeypatch):
+    for env_name in (
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "MINIMAX_API_KEY",
+        "OPENROUTER_API_KEY",
+        "MOONMIND_SKIP_PROVIDER_PROFILE_SEED",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
 @pytest.mark.asyncio
 async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
-    """When the table is empty, auto-seeding should create setup stubs."""
+    """When the table is empty, auto-seeding should create disabled OAuth profiles."""
     from api_service.main import _auto_seed_provider_profiles
 
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-
     seeded = await _auto_seed_provider_profiles()
-    assert set(seeded) == {"gemini_cli", "codex_cli", "claude_code"}
+    assert set(seeded) == {"codex_cli", "claude_code"}
 
     # Verify they exist in the DB with correct profile_id values.
     async with db_base.async_session_maker() as session:
@@ -71,9 +82,8 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert len(profiles) == len(FIRST_PARTY_SETUP_PROFILE_IDS)
     profile_ids = {p.profile_id for p in profiles}
     assert profile_ids == FIRST_PARTY_SETUP_PROFILE_IDS
-    # Standard profiles are seeded with default_model=None so they inherit
-    # the runtime default (codex_cli→gpt-5.5, gemini_cli→gemini-3.1-pro,
-    # claude_code→claude-opus-4-8) rather than storing a duplicate value.
+    # OAuth profiles are seeded with default_model=None so they inherit the
+    # runtime default rather than storing a duplicate value.
     defaults = {p.profile_id: p.default_model for p in profiles}
     assert all(
         defaults[profile_id] is None
@@ -85,17 +95,13 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
         for profile_id in FIRST_PARTY_SETUP_PROFILE_IDS
     )
     provider_ids = {p.profile_id: p.provider_id for p in profiles}
-    assert provider_ids["codex_openai_default"] == "openai"
-    assert provider_ids["codex_default"] == "openai"
-    assert provider_ids["claude_anthropic_default"] == "anthropic"
-    assert provider_ids["claude_anthropic"] == "anthropic"
+    assert provider_ids["codex_openai_oauth"] == "openai"
+    assert provider_ids["claude_anthropic_oauth"] == "anthropic"
     provider_labels = {p.profile_id: p.provider_label for p in profiles}
-    assert provider_labels["codex_openai_default"] == "OpenAI"
-    assert provider_labels["codex_default"] == "OpenAI"
-    assert provider_labels["claude_anthropic_default"] == "Anthropic"
-    assert provider_labels["claude_anthropic"] == "Anthropic"
+    assert provider_labels["codex_openai_oauth"] == "OpenAI"
+    assert provider_labels["claude_anthropic_oauth"] == "Anthropic"
     claude_profile = next(
-        p for p in profiles if p.profile_id == "claude_anthropic_default"
+        p for p in profiles if p.profile_id == "claude_anthropic_oauth"
     )
     assert claude_profile.enabled is False
     assert claude_profile.auth_state == ProviderProfileAuthState.NOT_CONFIGURED
@@ -110,31 +116,71 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     )
     assert claude_profile.volume_ref is None
     assert claude_profile.volume_mount_path is None
-    assert claude_profile.clear_env_keys == [
-        "ANTHROPIC_API_KEY",
-        "CLAUDE_API_KEY",
-        "OPENAI_API_KEY",
-    ]
-    first_party_clear_keys = {p.profile_id: p.clear_env_keys for p in profiles}
-    assert first_party_clear_keys["claude_anthropic"] == [
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_BASE_URL",
-        "CLAUDE_API_KEY",
-        "OPENAI_API_KEY",
-    ]
-    assert first_party_clear_keys["gemini_default"] == [
-        "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-    ]
-    assert first_party_clear_keys["codex_default"] == [
-        "OPENAI_API_KEY",
+    assert claude_profile.clear_env_keys is None
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_includes_first_party_api_profiles_when_env_set(
+    _module_db, monkeypatch
+):
+    """OpenAI and Anthropic env keys create enabled API-backed profiles."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+
+    seeded = await _auto_seed_provider_profiles()
+    assert seeded.count("codex_cli") == 2
+    assert seeded.count("claude_code") == 2
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(select(ManagedAgentProviderProfile))
+        profiles = {p.profile_id: p for p in result.scalars().all()}
+
+    assert set(profiles) == FIRST_PARTY_SETUP_PROFILE_IDS | FIRST_PARTY_API_PROFILE_IDS
+
+    codex_api = profiles["codex_openai_api"]
+    assert codex_api.runtime_id == "codex_cli"
+    assert codex_api.provider_id == "openai"
+    assert codex_api.account_label == "Codex OpenAI API"
+    assert codex_api.enabled is True
+    assert codex_api.auth_state == ProviderProfileAuthState.CONNECTED
+    assert codex_api.disabled_reason is None
+    assert codex_api.credential_source == ProviderCredentialSource.SECRET_REF
+    assert codex_api.last_auth_method == ProviderProfileAuthMethod.SECRET_REF
+    assert codex_api.secret_refs == {"openai_api_key": "env://OPENAI_API_KEY"}
+    assert codex_api.env_template == {
+        "OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"}
+    }
+    assert codex_api.clear_env_keys == [
         "OPENAI_BASE_URL",
         "OPENAI_ORG_ID",
         "OPENAI_PROJECT",
         "MINIMAX_API_KEY",
     ]
+
+    claude_api = profiles["claude_anthropic_api"]
+    assert claude_api.runtime_id == "claude_code"
+    assert claude_api.provider_id == "anthropic"
+    assert claude_api.account_label == "Claude Anthropic API"
+    assert claude_api.enabled is True
+    assert claude_api.auth_state == ProviderProfileAuthState.CONNECTED
+    assert claude_api.disabled_reason is None
+    assert claude_api.credential_source == ProviderCredentialSource.SECRET_REF
+    assert claude_api.last_auth_method == ProviderProfileAuthMethod.SECRET_REF
+    assert claude_api.secret_refs == {"anthropic_api_key": "env://ANTHROPIC_API_KEY"}
+    assert claude_api.env_template == {
+        "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}
+    }
+    assert claude_api.clear_env_keys == [
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_API_KEY",
+        "OPENAI_API_KEY",
+    ]
+
+    for profile_id in FIRST_PARTY_SETUP_PROFILE_IDS:
+        assert profiles[profile_id].enabled is False
 
 @pytest.mark.asyncio
 async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
@@ -188,7 +234,7 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
 
     assert len(profiles) == len(FIRST_PARTY_SETUP_PROFILE_IDS) + 2
     profile_ids = {p.profile_id for p in profiles}
-    assert "claude_anthropic" in profile_ids
+    assert "claude_anthropic_oauth" in profile_ids
     assert "claude_minimax" in profile_ids
     assert "codex_minimax_m27" in profile_ids
 
@@ -217,7 +263,9 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     assert mm_profile.auth_state == ProviderProfileAuthState.CONNECTED
     assert mm_profile.disabled_reason is None
 
-    anthropic_profile = next(p for p in profiles if p.profile_id == "claude_anthropic")
+    anthropic_profile = next(
+        p for p in profiles if p.profile_id == "claude_anthropic_oauth"
+    )
     assert anthropic_profile.is_default is False
 
     codex_mm_profile = next(p for p in profiles if p.profile_id == "codex_minimax_m27")
@@ -263,22 +311,22 @@ async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch
 
     assert len(profiles) == len(FIRST_PARTY_SETUP_PROFILE_IDS) + 2
     profile_ids = {p.profile_id for p in profiles}
-    assert "claude_anthropic" in profile_ids
+    assert "claude_anthropic_oauth" in profile_ids
     assert "claude_minimax" in profile_ids
     assert "codex_minimax_m27" in profile_ids
 
 @pytest.mark.asyncio
-async def test_auto_seed_reconcile_does_not_overwrite_user_default_model(_module_db, monkeypatch):
+async def test_auto_seed_preserves_user_default_model_on_oauth_profile(
+    _module_db, monkeypatch
+):
     """The reconciliation loop must not clear user-set default_model values."""
     from api_service.main import _auto_seed_provider_profiles
 
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     await _auto_seed_provider_profiles()
 
     # Simulate a user setting an explicit model on the seeded profile.
     async with db_base.async_session_maker() as session:
-        profile = await session.get(ManagedAgentProviderProfile, "codex_default")
+        profile = await session.get(ManagedAgentProviderProfile, "codex_openai_oauth")
         assert profile is not None
         profile.default_model = "gpt-user-custom"
         await session.commit()
@@ -288,147 +336,53 @@ async def test_auto_seed_reconcile_does_not_overwrite_user_default_model(_module
     assert seeded == []
 
     async with db_base.async_session_maker() as session:
-        profile = await session.get(ManagedAgentProviderProfile, "codex_default")
+        profile = await session.get(ManagedAgentProviderProfile, "codex_openai_oauth")
         assert profile is not None
-        # User-set value must be preserved; reconciliation loop is a no-op
-        # because desired_default_model is None for the standard profiles.
         assert profile.default_model == "gpt-user-custom"
 
 @pytest.mark.asyncio
-async def test_auto_seed_reconciles_claude_display_default_model(
+async def test_auto_seed_deletes_deprecated_gemini_cli_profiles(
     _module_db, monkeypatch
 ):
-    """Known stale Claude display labels should be rewritten to CLI model IDs."""
+    """Old Gemini CLI profile rows are removed during startup seeding."""
     from api_service.main import _auto_seed_provider_profiles
 
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    await _auto_seed_provider_profiles()
-
     async with db_base.async_session_maker() as session:
-        profile = await session.get(ManagedAgentProviderProfile, "claude_anthropic")
-        assert profile is not None
-        profile.default_model = "Sonnet 4.6"
+        for profile_id in ("gemini_google_default", "gemini_default"):
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="gemini_cli",
+                    provider_id="google",
+                    provider_label="Google",
+                    credential_source=ProviderCredentialSource.NONE,
+                    runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    enabled=False,
+                    is_default=False,
+                    auth_state=ProviderProfileAuthState.NOT_CONFIGURED,
+                    disabled_reason=ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+                )
+            )
         await session.commit()
 
     seeded = await _auto_seed_provider_profiles()
-    assert seeded == []
+    assert set(seeded) == {"codex_cli", "claude_code"}
 
     async with db_base.async_session_maker() as session:
-        profile = await session.get(ManagedAgentProviderProfile, "claude_anthropic")
-        assert profile is not None
-        assert profile.default_model == "claude-sonnet-4-6"
+        rows = (
+            await session.execute(select(ManagedAgentProviderProfile.profile_id))
+        ).scalars().all()
 
-@pytest.mark.asyncio
-async def test_auto_seed_reconciles_legacy_codex_default_provider(
-    _module_db, monkeypatch
-):
-    """Legacy codex_default rows should be corrected from MoonLadder to OpenAI."""
-    from api_service.main import _auto_seed_provider_profiles
-
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    await _auto_seed_provider_profiles()
-
-    async with db_base.async_session_maker() as session:
-        profile = await session.get(ManagedAgentProviderProfile, "codex_default")
-        assert profile is not None
-        profile.provider_id = "moonladder"
-        profile.provider_label = "MoonLadder"
-        await session.commit()
-
-    seeded = await _auto_seed_provider_profiles()
-    assert seeded == []
-
-    async with db_base.async_session_maker() as session:
-        profile = await session.get(ManagedAgentProviderProfile, "codex_default")
-        assert profile is not None
-        assert profile.provider_id == "openai"
-        assert profile.provider_label == "OpenAI"
-
-@pytest.mark.asyncio
-async def test_auto_seed_backfills_claude_api_key_clear_env_for_existing_profile(
-    _module_db, monkeypatch
-):
-    """Existing Claude OAuth profiles should clear the newer Claude API key alias."""
-    from api_service.main import _auto_seed_provider_profiles
-
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    await _auto_seed_provider_profiles()
-
-    async with db_base.async_session_maker() as session:
-        profile = await session.get(ManagedAgentProviderProfile, "claude_anthropic")
-        assert profile is not None
-        profile.clear_env_keys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CUSTOM_ENV"]
-        await session.commit()
-
-    seeded = await _auto_seed_provider_profiles()
-    assert seeded == []
-
-    async with db_base.async_session_maker() as session:
-        profile = await session.get(ManagedAgentProviderProfile, "claude_anthropic")
-        assert profile is not None
-        assert profile.clear_env_keys == [
-            "ANTHROPIC_API_KEY",
-            "OPENAI_API_KEY",
-            "CUSTOM_ENV",
-            "ANTHROPIC_AUTH_TOKEN",
-            "ANTHROPIC_BASE_URL",
-            "CLAUDE_API_KEY",
-        ]
-
-@pytest.mark.asyncio
-async def test_auto_seed_backfills_first_party_clear_env_for_existing_profiles(
-    _module_db, monkeypatch
-):
-    from api_service.main import _auto_seed_provider_profiles
-
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    await _auto_seed_provider_profiles()
-
-    async with db_base.async_session_maker() as session:
-        codex_profile = await session.get(ManagedAgentProviderProfile, "codex_default")
-        gemini_profile = await session.get(ManagedAgentProviderProfile, "gemini_default")
-        assert codex_profile is not None
-        assert gemini_profile is not None
-        codex_profile.clear_env_keys = ["OPENAI_API_KEY", "CUSTOM_CODEX_ENV"]
-        gemini_profile.clear_env_keys = ["GEMINI_API_KEY", "CUSTOM_GEMINI_ENV"]
-        await session.commit()
-
-    seeded = await _auto_seed_provider_profiles()
-    assert seeded == []
-
-    async with db_base.async_session_maker() as session:
-        codex_profile = await session.get(ManagedAgentProviderProfile, "codex_default")
-        gemini_profile = await session.get(ManagedAgentProviderProfile, "gemini_default")
-
-    assert codex_profile.clear_env_keys == [
-        "OPENAI_API_KEY",
-        "CUSTOM_CODEX_ENV",
-        "OPENAI_BASE_URL",
-        "OPENAI_ORG_ID",
-        "OPENAI_PROJECT",
-        "MINIMAX_API_KEY",
-    ]
-    assert gemini_profile.clear_env_keys == [
-        "GEMINI_API_KEY",
-        "CUSTOM_GEMINI_ENV",
-        "GOOGLE_API_KEY",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-    ]
+    assert "gemini_google_default" not in rows
+    assert "gemini_default" not in rows
 
 @pytest.mark.asyncio
 async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch):
     """When MINIMAX_API_KEY is absent, only first-party setup stubs are seeded."""
     from api_service.main import _auto_seed_provider_profiles
 
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-
     seeded = await _auto_seed_provider_profiles()
-    assert set(seeded) == {"gemini_cli", "codex_cli", "claude_code"}
+    assert set(seeded) == {"codex_cli", "claude_code"}
 
     async with db_base.async_session_maker() as session:
         result = await session.execute(select(ManagedAgentProviderProfile))
@@ -437,7 +391,7 @@ async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch
     profile_ids = {p.profile_id for p in profiles}
     assert "claude_minimax" not in profile_ids
     assert "codex_minimax_m27" not in profile_ids
-    assert "claude_anthropic" in profile_ids
+    assert "claude_anthropic_oauth" in profile_ids
     assert len(profiles) == len(FIRST_PARTY_SETUP_PROFILE_IDS)
 
 @pytest.mark.asyncio
@@ -505,8 +459,8 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
     assert profile.max_parallel_runs == 4
     assert profile.cooldown_after_429_seconds == 300
 
-    codex_default = next(p for p in profiles if p.profile_id == "codex_default")
-    assert codex_default.is_default is False
+    codex_oauth = next(p for p in profiles if p.profile_id == "codex_openai_oauth")
+    assert codex_oauth.is_default is False
 
 @pytest.mark.asyncio
 async def test_auto_seed_reconciles_openrouter_codex_config_template_for_existing_profile(
@@ -651,8 +605,8 @@ async def test_auto_seed_first_party_stubs_have_default_readiness_labels(
     await _auto_seed_provider_profiles()
 
     expected_command_behavior = {
-        "supported_auth_methods": ["oauth_volume", "secret_ref"],
-        "auth_actions": ["connect_oauth", "use_api_key"],
+        "supported_auth_methods": ["oauth_volume"],
+        "auth_actions": ["connect_oauth"],
         "auth_status_label": "Not connected",
         "auth_readiness": {
             "connected": False,

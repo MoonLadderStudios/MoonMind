@@ -97,27 +97,6 @@ def test_build_command_codex_cli():
     assert "--prompt" not in cmd
     assert "Fix the bug" in cmd
 
-def test_build_command_gemini_cli():
-    """Gemini CLI uses `gemini --yolo --prompt PROMPT --model MODEL`."""
-    store = ManagedRunStore("/tmp/test-store")
-    launcher = ManagedRuntimeLauncher(store)
-    profile = _make_profile(
-        runtime_id="gemini_cli",
-        command_template=["gemini"],
-        default_model="gemini-2.5-pro",
-        default_effort="high",
-    )
-    request = _make_request(instruction_ref="Fix the bug")
-
-    cmd = launcher.build_command(profile, request)
-    assert cmd[0] == "gemini"
-    assert "--model" in cmd
-    assert "--yolo" in cmd
-    assert "--prompt" in cmd
-    # Gemini CLI does not support --effort
-    assert "--effort" not in cmd
-    assert "Fix the bug" in cmd
-
 def test_normalize_clone_branch_strips_remote_tracking_refs():
     assert ManagedRuntimeLauncher._normalize_clone_branch("origin/main") == "main"
     assert (

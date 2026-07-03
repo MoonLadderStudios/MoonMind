@@ -2742,7 +2742,6 @@ const RUNTIME_DISPLAY_LABELS: Record<string, string> = {
   claude_code: "Claude Code",
   codex_cli: "Codex CLI",
   codex_cloud: "Codex Cloud",
-  gemini_cli: "Gemini CLI",
 };
 
 function formatRuntimeLabel(runtimeId: string): string {
@@ -5563,7 +5562,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.defaultTaskEffortByRuntime ||
     {};
   const supportedAgentRuntimes = dashboardConfig.system
-    ?.supportedAgentRuntimes || ["codex_cli", "gemini_cli", "claude_code"];
+    ?.supportedAgentRuntimes || ["codex_cli", "claude_code"];
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const stepsRef = useRef<StepState[]>(steps);

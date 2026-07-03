@@ -461,7 +461,7 @@ async def test_child_run_goal_scheduled_breakdown_uses_default_runtime_context(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
-        worker_runtime.settings.workflow, "default_runtime", "gemini_cli"
+        worker_runtime.settings.workflow, "default_runtime", "claude_code"
     )
     async with _template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -482,7 +482,7 @@ async def test_child_run_goal_scheduled_breakdown_uses_default_runtime_context(
         "task"
     ]
     assert downstream_task["repository"] == "MoonLadderStudios/MoonMind"
-    assert downstream_task["runtime"] == {"mode": "gemini_cli"}
+    assert downstream_task["runtime"] == {"mode": "claude_code"}
 
 
 @pytest.mark.asyncio
@@ -1338,7 +1338,7 @@ def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
                     "version": "1.0.0",
                     "inputs": {"pr": "123", "repo": "MoonLadderStudios/MoonMind"},
                 },
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -2780,7 +2780,7 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
                     "name": "pr-resolver",
                 },
                 "git": {"startingBranch": "fix/my-feature-branch"},
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -2810,7 +2810,7 @@ def test_runtime_planner_pr_resolver_uses_non_default_git_branch_as_selector():
                     "name": "pr-resolver",
                 },
                 "git": {"branch": "feature/current-pr"},
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -2838,7 +2838,7 @@ def test_runtime_planner_pr_resolver_includes_git_branch_selector_with_explicit_
                     "name": "pr-resolver",
                 },
                 "git": {"branch": "feature/current-pr"},
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -2867,7 +2867,7 @@ def test_runtime_planner_pr_resolver_title_uses_case_insensitive_tool_inputs():
                     "name": "PR-Resolver",
                     "inputs": {"branch": "fix/from-tool-inputs"},
                 },
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -2898,7 +2898,7 @@ def test_runtime_planner_pr_resolver_reads_skill_args_when_tool_is_present():
                     "id": "pr-resolver",
                     "args": {"pr": 2733, "branch": "codex/pr-resolver-selector-guard"},
                 },
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -2932,7 +2932,7 @@ def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions(
                         "type": "skill",
                         "name": "pr-resolver",
                     },
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                 }
             },
             parameters={},
@@ -3051,7 +3051,7 @@ def test_mm786_runtime_planner_uses_per_step_runtime_selection():
                         "id": "s2",
                         "instructions": "Use lower-cost runtime.",
                         "runtime": {
-                            "mode": "gemini_cli",
+                            "mode": "claude_code",
                             "model": "gemini-2.5-flash",
                             "effort": "low",
                         },
@@ -3067,9 +3067,9 @@ def test_mm786_runtime_planner_uses_per_step_runtime_selection():
     nodes = plan["nodes"]
     assert nodes[0]["tool"]["name"] == "codex_cli"
     assert nodes[0]["inputs"]["runtime"]["mode"] == "codex_cli"
-    assert nodes[1]["tool"]["name"] == "gemini_cli"
+    assert nodes[1]["tool"]["name"] == "claude_code"
     assert nodes[1]["inputs"]["runtime"] == {
-        "mode": "gemini_cli",
+        "mode": "claude_code",
         "model": "gemini-2.5-flash",
         "effort": "low",
     }
@@ -3216,7 +3216,7 @@ def test_runtime_planner_publish_pr_appends_gh_suffix_for_cli_runtimes():
         inputs={
             "task": {
                 "instructions": "Do work",
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
                 "publish": {"mode": "pr"},
             }
         },
@@ -3461,7 +3461,7 @@ def test_runtime_planner_publish_pr_uses_task_title_for_target_branch_prefix():
             "task": {
                 "instructions": "Refine redirect handling.",
                 "title": "Fix login redirect",
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
                 "publish": {"mode": "pr"},
             }
         },
@@ -3599,7 +3599,7 @@ def test_runtime_planner_rejects_pr_resolver_with_only_jira_instructions_and_bas
                         "name": "pr-resolver",
                     },
                     "git": {"branch": "main"},
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                 }
             },
             parameters={},
@@ -3683,7 +3683,7 @@ def test_runtime_planner_publish_pr_uses_step_title_for_target_branch_prefix():
     plan = planner(
         inputs={
             "task": {
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
                 "tool": {"name": "auto", "type": "agent_runtime"},
                 "steps": [
                     {"title": "Create PR-friendly branch", "instructions": "Plan step"},
@@ -3707,7 +3707,7 @@ def test_runtime_planner_publish_pr_propagates_commit_message_override():
         inputs={
             "task": {
                 "instructions": "Do work",
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
                 "publish": {
                     "mode": "pr",
                     "commitMessage": "Use producer commit text",
@@ -3731,7 +3731,7 @@ def test_runtime_planner_publish_pr_falls_back_to_top_level_commit_message():
         inputs={
             "task": {
                 "instructions": "Do work",
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
                 "publish": {"mode": "pr"},
             }
         },

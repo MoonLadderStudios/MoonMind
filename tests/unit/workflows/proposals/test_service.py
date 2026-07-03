@@ -584,10 +584,10 @@ async def test_promote_proposal_applies_runtime_override() -> None:
         workflow_create_request={
             "payload": {
                 "repository": "Moon/Repo",
-                "targetRuntime": "gemini_cli",
+                "targetRuntime": "claude_code",
                 "workflow": {
                     "instructions": "Refactor logic",
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                     "authoredPresets": [
                         {
                             "presetId": "runtime-quality-followup",
@@ -633,9 +633,9 @@ async def test_promote_proposal_applies_runtime_override() -> None:
     }
     assert (
         updated_proposal.workflow_create_request["payload"]["workflow"]["runtime"]["mode"]
-        == "gemini_cli"
+        == "claude_code"
     )
-    assert updated_proposal.workflow_create_request["payload"]["targetRuntime"] == "gemini_cli"
+    assert updated_proposal.workflow_create_request["payload"]["targetRuntime"] == "claude_code"
 
 
 @pytest.mark.asyncio
@@ -654,7 +654,7 @@ async def test_promote_rejects_unsupported_runtime_after_failure_event_commit() 
                 "repository": "Moon/Repo",
                 "workflow": {
                     "instructions": "Refactor logic",
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                 },
             }
         },
@@ -1963,10 +1963,10 @@ async def test_promote_proposal_allows_provider_accepted_snapshot_with_runtime_c
         workflow_create_request={
             "payload": {
                 "repository": "Moon/Repo",
-                "targetRuntime": "gemini_cli",
+                "targetRuntime": "claude_code",
                 "workflow": {
                     "instructions": "Implement MM-599",
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                     "authoredPresets": [{"presetId": "runtime-quality-followup"}],
                     "steps": [
                         {
@@ -2215,10 +2215,10 @@ async def test_promotion_uses_stored_snapshot_and_ignores_injected_overrides() -
         workflow_create_request={
             "payload": {
                 "repository": "Moon/Repo",
-                "targetRuntime": "gemini_cli",
+                "targetRuntime": "claude_code",
                 "workflow": {
                     "instructions": "Implement the stored snapshot task",
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                 },
             }
         },

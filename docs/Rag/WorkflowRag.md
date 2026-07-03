@@ -531,7 +531,7 @@ Codex CLI and Claude Code are the current live managed-session reference impleme
 
 ### 15.2 Additional runtimes should implement the same shared model
 
-Gemini CLI and future runtimes should support the same retrieval contract:
+Future managed runtimes should support the same retrieval contract:
 
 - MoonMind-owned initial context resolution,
 - artifact/ref-backed retrieval publication,

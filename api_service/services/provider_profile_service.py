@@ -260,10 +260,10 @@ async def _managed_secret_statuses_for_profiles(
 # First-party OAuth lifecycle helpers
 #
 # OAuth finalization, validation, and disconnect are generalized across the
-# big-three first-party runtimes (Claude, Codex, Gemini). These helpers hold
-# the per-runtime metadata and the canonical command_behavior shaping so the
-# OAuth session finalize path and the provider-profile lifecycle endpoints
-# produce identical, transport-neutral profile state.
+# first-party Claude and Codex runtimes. These helpers hold the per-runtime
+# metadata and the canonical command_behavior shaping so the OAuth session
+# finalize path and the provider-profile lifecycle endpoints produce identical,
+# transport-neutral profile state.
 # ---------------------------------------------------------------------------
 
 
@@ -292,13 +292,6 @@ FIRST_PARTY_OAUTH_PROFILES: dict[tuple[str, str], FirstPartyOAuthProfile] = {
         label_prefix="Codex",
         auth_strategy="codex_credential_methods",
         home_path_keys=("CODEX_HOME",),
-    ),
-    ("gemini_cli", "google"): FirstPartyOAuthProfile(
-        runtime_id="gemini_cli",
-        provider_id="google",
-        label_prefix="Gemini",
-        auth_strategy="gemini_credential_methods",
-        home_path_keys=("GEMINI_HOME", "GEMINI_CLI_HOME"),
     ),
 }
 

@@ -1,6 +1,6 @@
 """Abstract base class for managed runtime strategies.
 
-Each managed CLI runtime (Gemini CLI, Codex CLI, Claude Code)
+Each managed CLI runtime (Codex CLI, Claude Code)
 implements this interface to encapsulate its runtime-specific behavior.
 The launcher and adapter delegate to registered strategies instead of
 using if/elif branching on ``runtime_id``.
@@ -47,12 +47,12 @@ class ManagedRuntimeStrategy(ABC):
     @property
     @abstractmethod
     def runtime_id(self) -> str:
-        """The canonical runtime identifier (e.g. ``'gemini_cli'``)."""
+        """The canonical runtime identifier (for example, ``'codex_cli'``)."""
 
     @property
     @abstractmethod
     def default_command_template(self) -> list[str]:
-        """Default CLI argv prefix (e.g. ``['gemini']``).
+        """Default CLI argv prefix (for example, ``['codex']``).
 
         Used by the adapter when no explicit ``command_template`` is set
         on the profile.
@@ -64,8 +64,7 @@ class ManagedRuntimeStrategy(ABC):
 
         Must align with the ``OAuthProviderSpec`` entries defined in
         ``docs/ManagedAgents/UniversalTmateOAuth.md``.  Both registries
-        share the ``runtime_id`` namespace (``codex_cli``, ``gemini_cli``,
-        ``claude_code``).
+        share the ``runtime_id`` namespace (``codex_cli``, ``claude_code``).
         """
         return "api_key"
 

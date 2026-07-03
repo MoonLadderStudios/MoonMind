@@ -305,7 +305,7 @@ async def test_run_proposals_stage_ignores_flattened_legacy_policy_fields(
             "proposeTasks": True,
             "proposalMaxItems": 8,
             "proposalTargets": "moonmind",
-            "proposalDefaultRuntime": "gemini_cli",
+            "proposalDefaultRuntime": "claude_code",
         }
     )
 

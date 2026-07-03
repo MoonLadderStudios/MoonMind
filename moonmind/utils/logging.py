@@ -33,7 +33,6 @@ _AUTH_PATH_MARKERS = (
     ".claude",
     "codex-auth",
     "claude-auth",
-    "gemini-auth",
     "auth-volume",
 )
 _NON_SECRET_SENTINEL_VALUES = frozenset(

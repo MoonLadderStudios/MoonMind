@@ -113,10 +113,10 @@ def _delivered_record() -> SimpleNamespace:
     record.workflow_create_request = {
         "payload": {
             "repository": "Moon/Repo",
-            "targetRuntime": "gemini_cli",
+            "targetRuntime": "claude_code",
             "workflow": {
                 "instructions": "Implement from stored snapshot",
-                "runtime": {"mode": "gemini_cli"},
+                "runtime": {"mode": "claude_code"},
                 "authoredPresets": [{"presetId": "runtime-quality-followup"}],
                 "steps": [
                     {

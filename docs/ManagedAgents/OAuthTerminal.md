@@ -19,7 +19,7 @@ runtimes and then target the resulting credential volume into managed runtime
 containers. This document defines the desired auth-terminal and volume-targeting
 contract.
 
-The current concrete managed-session targets are **Codex CLI** and **Claude Code**. Gemini CLI can still have auth volumes and provider profiles, but it is not yet a first-class workflow-scoped managed-session target.
+The current concrete managed-session targets are **Codex CLI** and **Claude Code**.
 
 For Codex CLI and Claude Code, the important boundary is:
 

@@ -52,7 +52,7 @@ Recent main-branch changes since the prior roadmap snapshot:
 **Framing:** This milestone owns **one shared, runtime-neutral managed-session plane**. Codex CLI is the live binding today. Claude Code reaches parity by entering the same `MoonMind.AgentSession` controller through adapter seams, never by creating a parallel session architecture. Runtime parity must consume Milestone 12 safety contracts, emit Milestone 14 observability evidence, and preserve Milestone 13-compatible checkpoint/resume evidence.
 
 ### What's shipped
-- Codex, Gemini, and Claude Temporal activity workers (`codex-worker`, `gemini-worker`, `claude-worker`).
+- Codex and Claude Temporal activity workers (`codex-worker`, `claude-worker`).
 - Runtime adapter pattern (`moonmind/agents/`, `moonmind/workflows/temporal/runtime/`).
 - Codex CLI workflow-scoped managed sessions with per-session sidecar Docker daemon.
 - Provider profile management UI in the dashboard; auto-seeding of default provider profiles on startup.

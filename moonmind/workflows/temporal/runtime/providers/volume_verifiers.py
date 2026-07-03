@@ -22,11 +22,6 @@ logger = logging.getLogger(__name__)
 # Per-provider credential paths (relative to mount root)
 # ---------------------------------------------------------------------------
 
-_GEMINI_CREDENTIAL_PATHS = (
-    ".config/gemini/credentials.json",
-    ".config/google-cloud-sdk/application_default_credentials.json",
-)
-
 _CODEX_CREDENTIAL_PATHS = (
     "auth.json",
     "config.toml",
@@ -39,7 +34,6 @@ _CLAUDE_CREDENTIAL_PATHS = (
 )
 
 PROVIDER_CREDENTIAL_PATHS: dict[str, tuple[str, ...]] = {
-    "gemini_cli": _GEMINI_CREDENTIAL_PATHS,
     "codex_cli": _CODEX_CREDENTIAL_PATHS,
     "claude_code": _CLAUDE_CREDENTIAL_PATHS,
 }

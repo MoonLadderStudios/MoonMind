@@ -50,11 +50,11 @@ def resolve_volume_mount_env(
 
     (DOC-REQ-003, DOC-REQ-009) For a given managed runtime, it expects its
     authentication configuration to live in a specific directory defined by an
-    environment variable (e.g., GEMINI_HOME).
+    environment variable (for example, CLAUDE_HOME or CODEX_HOME).
 
     Args:
         base_env: The starting environment dictionary.
-        runtime_id: The ID of the runtime family (e.g., 'gemini_cli').
+        runtime_id: The ID of the runtime family.
         volume_mount_path: The absolute path where the provider profile is mounted.
         
     Returns:
@@ -65,10 +65,7 @@ def resolve_volume_mount_env(
         
     shaped_env = dict(base_env)
     
-    if runtime_id == "gemini_cli":
-        shaped_env["GEMINI_HOME"] = volume_mount_path
-        shaped_env["GEMINI_CLI_HOME"] = volume_mount_path
-    elif runtime_id == "claude_code":
+    if runtime_id == "claude_code":
         shaped_env["CLAUDE_HOME"] = volume_mount_path
     elif runtime_id == "codex_cli":
         shaped_env["CODEX_HOME"] = volume_mount_path

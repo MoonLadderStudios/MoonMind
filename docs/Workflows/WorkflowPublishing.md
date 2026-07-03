@@ -267,7 +267,7 @@ Jules is an external agent provider with its own PR creation mechanism. Unlike m
 
 ### How Jules Publishing Differs
 
-| Aspect | Managed Agents (Codex, Claude, Gemini CLI) | Jules |
+| Aspect | Managed Agents (Codex, Claude) | Jules |
 |--------|---------------------------------------------|-------|
 | Branch creation | Launcher creates head branch locally | Jules API manages branches internally |
 | Commit & push | Infrastructure pushes after agent completes | Jules handles internally |

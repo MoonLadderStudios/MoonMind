@@ -23,7 +23,7 @@ It freezes the smallest supported session-plane shape before broader implementat
 - no cross-workflow session reuse
 - artifact-first logs and continuity
 - no Kubernetes orchestration
-- no Claude Code or Gemini binding details
+- no Claude Code binding details
 - no generic runtime marketplace
 
 This document defines the target contract only. Rollout sequencing and implementation backlog belong in specs or `local-only handoffs`.
@@ -263,5 +263,5 @@ This contract does not define:
 - cross-workflow session reuse
 - session UIs beyond continuity-aware artifact presentation
 - generalized multi-runtime certification
-- Claude Code/Gemini binding behavior
+- Claude Code binding behavior
 - PTY attach or interactive terminal embedding

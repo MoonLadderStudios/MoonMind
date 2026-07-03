@@ -14,14 +14,14 @@ from moonmind.schemas.agent_runtime_models import RuntimeCommandInvocation
 from moonmind.workflows.temporal.runtime.strategies import (
     RUNTIME_STRATEGIES,
 )
+from moonmind.workflows.temporal.runtime.strategies.base import (
+    ManagedRuntimeStrategy,
+)
 from moonmind.workflows.temporal.runtime.strategies.claude_code import (
     ClaudeCodeStrategy,
 )
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     CodexCliStrategy,
-)
-from moonmind.workflows.temporal.runtime.strategies.gemini_cli import (
-    GeminiCliStrategy,
 )
 
 # ---------------------------------------------------------------------------
@@ -55,6 +55,19 @@ def _make_request(
         parameters=parameters or {},
         runtime_command=runtime_command,
     )
+
+
+class _DummyRuntimeStrategy(ManagedRuntimeStrategy):
+    @property
+    def runtime_id(self) -> str:
+        return "dummy_runtime"
+
+    @property
+    def default_command_template(self) -> list[str]:
+        return ["dummy"]
+
+    def build_command(self, profile: Any, request: Any) -> list[str]:
+        return ["dummy"]
 
 
 def _runtime_command(
@@ -96,11 +109,11 @@ def _runtime_command(
 # ---------------------------------------------------------------------------
 
 class TestAllStrategiesRegistered:
-    def test_three_strategies_registered(self) -> None:
-        assert len(RUNTIME_STRATEGIES) == 3
+    def test_two_strategies_registered(self) -> None:
+        assert len(RUNTIME_STRATEGIES) == 2
 
     def test_all_ids_present(self) -> None:
-        expected = {"gemini_cli", "claude_code", "codex_cli"}
+        expected = {"claude_code", "codex_cli"}
         assert set(RUNTIME_STRATEGIES.keys()) == expected
 
 # ---------------------------------------------------------------------------
@@ -495,7 +508,7 @@ class TestRuntimeCommandRendering:
         assert result.failure_reason == "runtime_command_render_failed"
 
     def test_unsupported_runtime_falls_back_without_materializing_command(self) -> None:
-        strategy = GeminiCliStrategy()
+        strategy = _DummyRuntimeStrategy()
         request = _make_request(
             instruction_ref="/review\nCheck this branch.\n\nPrepared context.",
             runtime_command=_runtime_command(),
@@ -528,11 +541,11 @@ class TestRuntimeCommandRendering:
         }
 
     def test_native_command_strategy_returns_structured_payload(self) -> None:
-        class NativeGeminiStrategy(GeminiCliStrategy):
+        class NativeCommandStrategy(_DummyRuntimeStrategy):
             def supports_native_command_transport(self) -> bool:
                 return True
 
-        strategy = NativeGeminiStrategy()
+        strategy = NativeCommandStrategy()
         request = _make_request(
             instruction_ref="Inspect changes.\n\nPrepared context.",
             runtime_command=_runtime_command(

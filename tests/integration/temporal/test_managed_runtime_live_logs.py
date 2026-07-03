@@ -280,7 +280,7 @@ async def test_supervisor_streams_concurrently_with_process(tmp_path: Path):
     record = ManagedRunRecord(
         run_id=run_id,
         agent_id="test-agent",
-        runtime_id="gemini_cli",
+        runtime_id="claude_code",
         status="launching",
         pid=0,
         started_at=datetime.now(tz=UTC),
@@ -332,7 +332,7 @@ async def test_supervisor_with_none_stdout_stderr_completes(tmp_path: Path):
     record = ManagedRunRecord(
         run_id=run_id,
         agent_id="test-agent",
-        runtime_id="gemini_cli",
+        runtime_id="claude_code",
         status="launching",
         pid=0,
         started_at=datetime.now(tz=UTC),

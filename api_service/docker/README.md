@@ -7,7 +7,6 @@ The `api_service/Dockerfile` uses a dedicated Node.js builder stage named `tooli
 Relevant build args include:
 
 - `CODEX_CLI_VERSION`
-- `GEMINI_CLI_VERSION`
 - `CLAUDE_CLI_VERSION`
 
 During the build the stage:
@@ -15,7 +14,7 @@ During the build the stage:
 1. Installs minimal Debian packages required for global npm installs.
 2. Disables npm analytics prompts for deterministic builds.
 3. Runs `npm install -g` for the requested CLI packages.
-4. Replaces the npm-created `codex` and `gemini` launcher symlinks with stable wrapper scripts so multi-stage `COPY` keeps those CLIs anchored in the copied `node_modules` tree.
+4. Replaces the npm-created `codex` launcher symlink with a stable wrapper script so multi-stage `COPY` keeps that CLI anchored in the copied `node_modules` tree.
 5. Cleans the npm cache before handing control back to the Python runtime stage.
 
 The final runtime image copies the produced launchers, the Node runtime, supporting `node_modules`, and license files from the builder. It intentionally relies on the platform-specific optional dependency already installed under `@openai/codex` rather than copying an extra Codex vendor tree into the image.
@@ -29,7 +28,6 @@ Override the defaults when building an image:
 ```bash
 docker build \
   --build-arg CODEX_CLI_VERSION=0.104.0 \
-  --build-arg GEMINI_CLI_VERSION=latest \
   --build-arg CLAUDE_CLI_VERSION=latest \
   -f api_service/Dockerfile .
 ```
