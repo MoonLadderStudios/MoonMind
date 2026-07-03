@@ -166,6 +166,9 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
     assert "artifacts/github-issue-orchestrate-assessment.json" in steps[1][
         "instructions"
     ]
+    assert "artifacts/github-issue-orchestrate-brief.json" in steps[1][
+        "instructions"
+    ]
     assert "FULLY_IMPLEMENTED" in steps[1]["instructions"]
     assert steps[2]["tool"]["id"] == "github.check_issue_blockers"
     assert "deterministic trusted GitHub blocker preflight" in steps[2][
