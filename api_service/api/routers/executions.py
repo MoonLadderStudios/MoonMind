@@ -1002,7 +1002,10 @@ async def _latest_branch_turn_for_step_execution(
             WorkflowCheckpointBranchTurn.branch_id == branch_id,
             WorkflowCheckpointBranchTurn.created_step_execution_id == step_execution_id,
         )
-        .order_by(WorkflowCheckpointBranchTurn.created_at.desc())
+        .order_by(
+            WorkflowCheckpointBranchTurn.created_at.desc(),
+            WorkflowCheckpointBranchTurn.branch_turn_id.desc(),
+        )
     )
     return result.scalars().first()
 
@@ -1016,13 +1019,9 @@ def _promotion_record_payload(
     promoted_at: datetime,
 ) -> dict[str, Any]:
     accepted_output_refs = dict(payload.accepted_output_refs or {})
-    accepted_output_refs.setdefault(
-        "headStepExecutionId", payload.expected_head_step_execution_id
-    )
+    accepted_output_refs["headStepExecutionId"] = payload.expected_head_step_execution_id
     if branch.current_head_checkpoint_ref:
-        accepted_output_refs.setdefault(
-            "headCheckpointRef", branch.current_head_checkpoint_ref
-        )
+        accepted_output_refs["headCheckpointRef"] = branch.current_head_checkpoint_ref
     if turn and turn.step_execution_manifest_ref:
         accepted_output_refs.setdefault(
             "stepExecutionManifestRef", turn.step_execution_manifest_ref
@@ -12126,9 +12125,13 @@ async def compare_checkpoint_branches(
     )
     branch_head = _checkpoint_branch_head_identity(branch)
     other_head = _checkpoint_branch_head_identity(other)
+    branch_promotion_evidence_digest = _operation_digest(branch.promotion_evidence or {})
+    other_promotion_evidence_digest = _operation_digest(other.promotion_evidence or {})
     idempotency_key = (
         f"checkpoint_branch.compare:{branch.branch_id}:{branch_head}:"
-        f"against:{other.branch_id}:{other_head}"
+        f"promotion:{branch_promotion_evidence_digest}:"
+        f"against:{other.branch_id}:{other_head}:"
+        f"promotion:{other_promotion_evidence_digest}"
     )
     existing_op = await session.execute(
         select(WorkflowCheckpointBranchOperation).where(
@@ -12143,7 +12146,10 @@ async def compare_checkpoint_branches(
             await _record_checkpoint_branch_artifact_ref(
                 session=session,
                 branch_id=branch.branch_id,
-                artifact_kind=f"{artifact_kind}:{other.branch_id}",
+                artifact_kind=(
+                    f"{artifact_kind}:{other.branch_id}:"
+                    f"{comparison_record.get('digest') or ''}"
+                ),
                 artifact_ref=str(artifact_ref),
                 digest=str(comparison_record.get("digest") or ""),
             )
@@ -12243,6 +12249,33 @@ async def promote_checkpoint_branch(
             detail={
                 "code": "git_base_commit_mismatch",
                 "reason": "git_base_commit_mismatch",
+            },
+        )
+    accepted_head_step_execution_id = payload.accepted_output_refs.get(
+        "headStepExecutionId"
+    )
+    if (
+        accepted_head_step_execution_id
+        and accepted_head_step_execution_id != branch.current_head_step_execution_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "accepted_output_refs_mismatch",
+                "reason": "head_step_execution_id_mismatch",
+            },
+        )
+    accepted_head_checkpoint_ref = payload.accepted_output_refs.get("headCheckpointRef")
+    if (
+        accepted_head_checkpoint_ref
+        and branch.current_head_checkpoint_ref
+        and accepted_head_checkpoint_ref != branch.current_head_checkpoint_ref
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "accepted_output_refs_mismatch",
+                "reason": "head_checkpoint_ref_mismatch",
             },
         )
     gate_verdict = str(
