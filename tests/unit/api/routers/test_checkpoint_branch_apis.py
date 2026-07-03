@@ -15,7 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.api.routers.executions import _get_service, router
+from api_service.api.routers.executions import (
+    _checkpoint_branch_git_context,
+    _get_service,
+    router,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import (
@@ -26,6 +30,7 @@ from api_service.db.models import (
     TemporalWorkflowType,
     WorkflowCheckpointBranch,
     WorkflowCheckpointBranchArtifact,
+    WorkflowCheckpointBranchGitBinding,
     WorkflowCheckpointBranchOperation,
     WorkflowCheckpointBranchTurn,
 )
@@ -75,8 +80,17 @@ async def checkpoint_branch_client(tmp_path):
         memo={
             "stepCheckpointRef": "artifact://checkpoints/after-implement",
             "latest_temporal_run_id": "run-branch",
+            "repository": "MoonLadderStudios/MoonMind",
         },
         parameters={
+            "git": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "startingBranch": "feature/mm-1101-source",
+                "baseCommit": "abc1234",
+                "knownRefs": ["feature/mm-1101-source"],
+                "currentRef": "feature/mm-1101-source",
+                "resolvedBaseCommit": "abc1234",
+            },
             "steps": [
                 {
                     "logicalStepId": "implement",
@@ -200,6 +214,35 @@ async def _set_branch_head(
         await session.commit()
 
 
+def test_checkpoint_branch_git_context_reads_workflow_shaped_payload() -> None:
+    record = SimpleNamespace(
+        parameters={
+            "workflow": {
+                "git": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "startingBranch": "feature/from-workflow",
+                    "branch": "feature/work-branch",
+                    "baseCommit": "abc1234",
+                    "knownRefs": ["feature/from-workflow"],
+                    "currentRef": "feature/from-workflow",
+                    "resolvedBaseCommit": "abc1234def5678",
+                }
+            }
+        },
+        memo={},
+        search_attributes={},
+    )
+
+    context = _checkpoint_branch_git_context(record)
+
+    assert context["repository"] == "MoonLadderStudios/MoonMind"
+    assert context["baseBranch"] == "feature/from-workflow"
+    assert context["baseCommit"] == "abc1234"
+    assert context["resolvedBaseCommit"] == "abc1234def5678"
+    assert context["currentRef"] == "feature/from-workflow"
+    assert context["knownRefs"] == {"feature/from-workflow"}
+
+
 def _create_payload(idempotency_key: str = "mm-1091:create") -> dict[str, object]:
     return {
         "source": {
@@ -217,6 +260,48 @@ def _create_payload(idempotency_key: str = "mm-1091:create") -> dict[str, object
         "publishMode": "none",
         "idempotencyKey": idempotency_key,
     }
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_create_prepares_git_binding_before_launch(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    response = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1101:create-prepared-binding"),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["gitWorkBranch"].startswith("mm/mm-wf-branch/implement/cp-")
+    assert body["gitWorkBranch"] != body["branchId"]
+
+    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        binding = await session.get(WorkflowCheckpointBranchGitBinding, body["branchId"])
+        turn = (
+            await session.execute(
+                select(WorkflowCheckpointBranchTurn).where(
+                    WorkflowCheckpointBranchTurn.branch_id == body["branchId"]
+                )
+            )
+        ).scalar_one()
+
+    assert binding is not None
+    assert binding.repository == "MoonLadderStudios/MoonMind"
+    assert binding.base_branch == "feature/mm-1101-source"
+    assert binding.base_commit == "abc1234"
+    assert binding.work_branch == body["gitWorkBranch"]
+    assert binding.binding_metadata["ownership"]["idempotencyKey"] == (
+        "mm-1101:create-prepared-binding"
+    )
+    assert binding.binding_metadata["workspaceBaseline"]["workBranch"] == (
+        body["gitWorkBranch"]
+    )
+    assert turn.status == "preparing"
+    assert turn.git_work_branch == body["gitWorkBranch"]
+    assert turn.git_binding_ref
 
 
 @pytest.mark.asyncio
@@ -343,10 +428,12 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
             )
         ).scalars().all()
 
-    assert len(artifact_rows) == 5
+    assert len(artifact_rows) == 7
     assert {
         artifact.artifact_kind for artifact in artifact_rows
     } == {
+        "runtime.branch.workspace_restore.json",
+        "runtime.branch.git_binding.json",
         "runtime.branch_turn.context_bundle.json",
         "runtime.branch_turn.agent_request.json",
         "runtime.branch_turn.agent_result.json",
@@ -560,7 +647,21 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     )
     assert first_continue.status_code == 201
     assert second_continue.status_code == 201
-    assert first_continue.json()["branchTurnId"] == second_continue.json()["branchTurnId"]
+    assert (
+        first_continue.json()["branchTurnId"] == second_continue.json()["branchTurnId"]
+    )
+    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = await session.get(WorkflowCheckpointBranch, branch_id)
+        continued_turn = await session.get(
+            WorkflowCheckpointBranchTurn, first_continue.json()["branchTurnId"]
+        )
+
+    assert branch is not None
+    assert continued_turn is not None
+    assert branch.git_work_branch == created.json()["gitWorkBranch"]
+    assert continued_turn.git_work_branch == created.json()["gitWorkBranch"]
 
     fork_payload = {
         "label": "Forked branch",
