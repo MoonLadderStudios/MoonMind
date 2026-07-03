@@ -5727,7 +5727,7 @@ function SessionContinuityPanel({
       </div> : null}
 
       <div className="stack">
-        {!compact && optimisticMessages.length > 0 ? (
+        {optimisticMessages.length > 0 ? (
           <div className="chat-session-message-list" aria-label="Pending session messages">
             {optimisticMessages.map((message) => (
               <div

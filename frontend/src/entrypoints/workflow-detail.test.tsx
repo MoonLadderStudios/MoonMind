@@ -6107,7 +6107,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders auto publish mode and evidence with Auto labels', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-auto-publish?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-auto-publish/overview?source=temporal');
     const mockExecution = {
       taskId: 'test-auto-publish',
       workflowId: 'test-auto-publish',
@@ -9694,8 +9694,7 @@ describe('LiveLogsPanel', () => {
       expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
       expect(screen.getByText('Please inspect the run.')).toBeTruthy();
       expect(screen.getByText('I will inspect the run.')).toBeTruthy();
-      expect(screen.getByText((content) => content.includes('exec_command'))).toBeTruthy();
-      expect(screen.getByText((content) => content.includes('exec_command'))).toBeTruthy();
+      expect(screen.getAllByText((content) => content.includes('exec_command')).length).toBeGreaterThanOrEqual(2);
       expect(screen.getByText('Approval requested for command execution.')).toBeTruthy();
       expect(screen.getByText('Approval resolved by operator.')).toBeTruthy();
       expect(screen.getByText('Session cleared before the next turn.')).toBeTruthy();
@@ -9998,8 +9997,7 @@ describe('LiveLogsPanel', () => {
       expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
       expect(screen.getByText('Operator asks the managed session to inspect MM-1032.')).toBeTruthy();
       expect(screen.getByText('Inspecting the durable chat workflow.')).toBeTruthy();
-      expect(screen.getByText((content) => content.includes('exec_command'))).toBeTruthy();
-      expect(screen.getByText((content) => content.includes('exec_command'))).toBeTruthy();
+      expect(screen.getAllByText((content) => content.includes('exec_command')).length).toBeGreaterThanOrEqual(2);
       expect(screen.getByText('Approval requested for validation command.')).toBeTruthy();
       expect(screen.getByText('Approval resolved for validation command.')).toBeTruthy();
       expect(screen.getByText('Managed session turn completed.')).toBeTruthy();
