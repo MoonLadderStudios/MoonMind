@@ -19,6 +19,7 @@ from moonmind.workflows.temporal.step_ledger import (
     build_progress_summary,
     mark_step_execution_manifest_evidence,
     mark_step_checkpoint_evidence,
+    materialize_preserved_steps,
     refresh_ready_steps,
     upsert_step_check,
     update_step_row,
@@ -171,6 +172,15 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
             "executionOrdinal": 0,
             "startedAt": None,
             "updatedAt": updated_at.isoformat(),
+            "timing": {
+                "startedAt": None,
+                "endedAt": None,
+                "durationMs": None,
+                "elapsedMs": None,
+                "serverNow": updated_at.isoformat(),
+                "precision": "unavailable",
+                "preserved": False,
+            },
             "summary": None,
             "checks": [],
             "refs": {
@@ -199,6 +209,109 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
             "lastError": None,
         }
     ]
+
+def test_update_step_row_adds_live_and_terminal_timing() -> None:
+    started_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    completed_at = datetime(2026, 4, 7, 12, 1, 42, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "run-tests",
+                "tool": {"type": "skill", "name": "repo.test"},
+                "inputs": {"title": "Run tests"},
+            }
+        ],
+        dependency_map={"run-tests": []},
+        updated_at=started_at,
+    )
+
+    active = update_step_row(
+        rows,
+        "run-tests",
+        updated_at=started_at,
+        status="executing",
+        increment_attempt=True,
+        set_started_at=True,
+    )
+
+    assert active["timing"] == {
+        "startedAt": started_at.isoformat(),
+        "endedAt": None,
+        "durationMs": None,
+        "elapsedMs": 0,
+        "serverNow": started_at.isoformat(),
+        "precision": "live",
+        "preserved": False,
+    }
+
+    completed = update_step_row(
+        rows,
+        "run-tests",
+        updated_at=completed_at,
+        status="completed",
+    )
+
+    assert completed["timing"] == {
+        "startedAt": started_at.isoformat(),
+        "endedAt": completed_at.isoformat(),
+        "durationMs": 102000,
+        "elapsedMs": 102000,
+        "serverNow": completed_at.isoformat(),
+        "precision": "fallback",
+        "preserved": False,
+    }
+
+
+def test_materialize_preserved_steps_keeps_original_timing() -> None:
+    created_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    resumed_at = datetime(2026, 4, 7, 13, 0, tzinfo=UTC)
+    source_started = datetime(2026, 4, 7, 11, 58, tzinfo=UTC)
+    source_ended = datetime(2026, 4, 7, 12, 0, 14, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "plan",
+                "tool": {"type": "skill", "name": "moonspec-plan"},
+                "inputs": {"title": "Plan"},
+            }
+        ],
+        dependency_map={"plan": []},
+        updated_at=created_at,
+    )
+
+    materialize_preserved_steps(
+        rows,
+        source_workflow_id="wf-source",
+        source_run_id="run-source",
+        preserved_steps=[
+            {
+                "logicalStepId": "plan",
+                "status": "completed",
+                "stateCheckpointRef": "artifact://checkpoint/plan",
+                "sourceExecutionOrdinal": 1,
+                "artifacts": {"outputPrimary": "artifact://output/plan"},
+                "startedAt": source_started.isoformat(),
+                "updatedAt": source_ended.isoformat(),
+            }
+        ],
+        updated_at=resumed_at,
+    )
+
+    assert rows[0]["preservedFrom"] == {
+        "workflowId": "wf-source",
+        "runId": "run-source",
+        "logicalStepId": "plan",
+        "executionOrdinal": 1,
+    }
+    assert rows[0]["timing"] == {
+        "startedAt": source_started.isoformat(),
+        "endedAt": source_ended.isoformat(),
+        "durationMs": 134000,
+        "elapsedMs": 134000,
+        "serverNow": resumed_at.isoformat(),
+        "precision": "fallback",
+        "preserved": True,
+    }
 
 def test_progress_summary_prefers_active_step_title_and_counts_statuses() -> None:
     updated_at = datetime(2026, 4, 7, 12, 5, tzinfo=UTC)

@@ -1598,8 +1598,49 @@ describe('Workflow Detail Entrypoint', () => {
           lastError: null,
         },
         {
-          logicalStepId: 'apply',
+          logicalStepId: 'review',
           order: 2,
+          title: 'Review plan',
+          tool: { type: 'skill', name: 'plan.review', version: '1' },
+          dependsOn: ['plan'],
+          status: 'completed',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 1,
+          startedAt: null,
+          updatedAt: null,
+          timing: {
+            startedAt: null,
+            endedAt: null,
+            durationMs: null,
+            elapsedMs: null,
+            serverNow: '2026-04-09T00:00:04Z',
+            precision: 'unavailable',
+            preserved: true,
+          },
+          summary: 'Review preserved from the prior run',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {
+            outputSummary: null,
+            outputPrimary: 'art-review-output',
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+          },
+          preservedFrom: {
+            workflowId: 'test-123',
+            runId: '01-run',
+            logicalStepId: 'review',
+            executionOrdinal: 1,
+          },
+          lastError: null,
+        },
+        {
+          logicalStepId: 'apply',
+          order: 3,
           title: 'Apply patch',
           tool: { type: 'agent_runtime', name: 'codex_cli', version: '1' },
           dependsOn: ['plan'],
@@ -1659,6 +1700,12 @@ describe('Workflow Detail Entrypoint', () => {
 
     // Latest attempt count is surfaced on the re-run row.
     expect(screen.getByText('Execution 2')).toBeTruthy();
+    expect(screen.getByText('Original duration: 1.0 s')).toBeTruthy();
+    expect(screen.getByText('Original timing unavailable')).toBeTruthy();
+    expect(screen.getByText('1.0 s')).toBeTruthy();
+    expect(screen.getByLabelText('Step timing overview').textContent).toContain(
+      'Longest step Plan work · 1.0 s',
+    );
 
     // Latest evidence refs are surfaced ref-only in the collapsed rows.
     expect(screen.getAllByLabelText('Latest evidence refs').length).toBeGreaterThan(0);
@@ -1746,6 +1793,14 @@ describe('Workflow Detail Entrypoint', () => {
           terminalDisposition: 'retryable',
           startedAt: '2026-04-09T00:00:01Z',
           updatedAt: '2026-04-09T00:00:02Z',
+          timing: {
+            startedAt: '2026-04-09T00:00:01Z',
+            endedAt: '2026-04-09T00:04:03Z',
+            durationMs: 242000,
+            elapsedMs: 242000,
+            serverNow: '2026-04-09T00:05:21Z',
+            precision: 'exact',
+          },
           summary: 'First attempt failed the gate',
           runtimeChildRefs: { childWorkflowId: 'child-wf-apply-1' },
           workspacePolicy: 'workspace_required',
@@ -1797,6 +1852,14 @@ describe('Workflow Detail Entrypoint', () => {
           terminalDisposition: 'accepted',
           startedAt: '2026-04-09T00:00:03Z',
           updatedAt: '2026-04-09T00:00:04Z',
+          timing: {
+            startedAt: '2026-04-09T00:00:03Z',
+            endedAt: '2026-04-09T00:01:21Z',
+            durationMs: 78000,
+            elapsedMs: 78000,
+            serverNow: '2026-04-09T00:05:21Z',
+            precision: 'exact',
+          },
           summary: 'Re-ran after the upstream contract changed',
           runtimeChildRefs: { childWorkflowId: 'child-wf-apply-2' },
           workspacePolicy: 'workspace_required',
@@ -1863,13 +1926,19 @@ describe('Workflow Detail Entrypoint', () => {
 
     const history = await screen.findByLabelText('Step Execution history');
     expect(screen.getByRole('heading', { name: 'Step Execution history' })).toBeTruthy();
-    expect(screen.getByText('2 step executions')).toBeTruthy();
+    expect(history.parentElement?.textContent).toContain('2 step executions');
+    expect(history.parentElement?.textContent).toContain('Total across executions: 5m 20s');
 
     // Newest execution renders first.
-    const ordinals = Array.from(
-      (history as HTMLElement).querySelectorAll('.step-execution-pill'),
-    ).map((node) => node.textContent);
+    const historyItems = Array.from(
+      (history as HTMLElement).querySelectorAll('.step-execution-history-item'),
+    );
+    const ordinals = historyItems.map(
+      (node) => node.querySelector('.step-execution-pill')?.textContent,
+    );
     expect(ordinals).toEqual(['Execution 2', 'Execution 1']);
+    expect(historyItems[0]?.textContent).toContain('1m 18s');
+    expect(historyItems[1]?.textContent).toContain('4m 2s');
 
     // Downstream invalidation status is surfaced in the compact history rows.
     expect(within(history).getByText('Downstream invalidation')).toBeTruthy();
@@ -1894,6 +1963,259 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(history).getByText('art-exec-2-sideeffect')).toBeTruthy();
     expect(within(history).getByText('child-wf-apply-2')).toBeTruthy();
     expect(within(history).getByText('wf-source')).toBeTruthy();
+  });
+
+  it('MM-1034 shows step duration states and keeps the wall-clock timeline behind a secondary toggle', async () => {
+    window.history.pushState({}, 'Step Timing Test', '/workflows/test-123/steps?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Timing task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:05:00Z',
+      actions: {},
+    };
+    const timingSnapshot = {
+      workflowId: 'test-123',
+      runId: '02-run',
+      runScope: 'latest',
+      steps: [
+        {
+          logicalStepId: 'gather',
+          order: 1,
+          title: 'Gather context',
+          tool: { type: 'skill', name: 'context.gather', version: '1' },
+          dependsOn: [],
+          status: 'completed',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 1,
+          startedAt: '2026-04-09T00:00:00Z',
+          updatedAt: '2026-04-09T00:01:42Z',
+          timing: {
+            startedAt: '2026-04-09T00:00:00Z',
+            endedAt: '2026-04-09T00:01:42Z',
+            durationMs: 102000,
+            elapsedMs: 102000,
+            serverNow: '2026-04-09T00:05:00Z',
+            precision: 'exact',
+            preserved: false,
+          },
+          summary: 'Gathered context',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {
+            outputSummary: null,
+            outputPrimary: null,
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+          },
+          workload: { durationSeconds: 999 },
+          lastError: null,
+        },
+        {
+          logicalStepId: 'test',
+          order: 2,
+          title: 'Run tests',
+          tool: { type: 'agent_runtime', name: 'codex_cli', version: '1' },
+          dependsOn: ['gather'],
+          status: 'executing',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 2,
+          startedAt: '2026-04-09T00:02:00Z',
+          updatedAt: '2026-04-09T00:05:11Z',
+          timing: {
+            startedAt: '2026-04-09T00:02:00Z',
+            endedAt: null,
+            durationMs: null,
+            elapsedMs: 191000,
+            serverNow: '2026-04-09T00:05:11Z',
+            precision: 'live',
+            preserved: false,
+          },
+          summary: 'Running tests',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {
+            outputSummary: null,
+            outputPrimary: null,
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+          },
+          workload: null,
+          lastError: null,
+        },
+        {
+          logicalStepId: 'publish',
+          order: 3,
+          title: 'Publish results',
+          tool: { type: 'skill', name: 'publish.results', version: '1' },
+          dependsOn: ['test'],
+          status: 'pending',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 0,
+          startedAt: null,
+          updatedAt: '2026-04-09T00:05:11Z',
+          timing: {
+            startedAt: null,
+            endedAt: null,
+            durationMs: null,
+            elapsedMs: null,
+            serverNow: '2026-04-09T00:05:11Z',
+            precision: 'unavailable',
+            preserved: false,
+          },
+          summary: 'Waiting for tests',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {
+            outputSummary: null,
+            outputPrimary: null,
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+          },
+          workload: null,
+          lastError: null,
+        },
+        {
+          logicalStepId: 'ready',
+          order: 4,
+          title: 'Ready follow-up',
+          tool: { type: 'skill', name: 'follow.up', version: '1' },
+          dependsOn: [],
+          status: 'ready',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 0,
+          startedAt: null,
+          updatedAt: '2026-04-09T00:05:11Z',
+          summary: 'Ready',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {
+            outputSummary: null,
+            outputPrimary: null,
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+          },
+          workload: null,
+          lastError: null,
+        },
+        {
+          logicalStepId: 'unknown',
+          order: 5,
+          title: 'Unknown timing',
+          tool: { type: 'skill', name: 'unknown.timing', version: '1' },
+          dependsOn: [],
+          status: 'completed',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 1,
+          startedAt: null,
+          updatedAt: '2026-04-09T00:05:11Z',
+          timing: {
+            startedAt: null,
+            endedAt: null,
+            durationMs: null,
+            elapsedMs: null,
+            serverNow: '2026-04-09T00:05:11Z',
+            precision: 'unavailable',
+            preserved: false,
+          },
+          summary: 'No timing',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {
+            outputSummary: null,
+            outputPrimary: null,
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+          },
+          workload: null,
+          lastError: null,
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => timingSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+    });
+
+    expect(screen.getByText('1m 42s')).toBeTruthy();
+    expect(screen.getByText('3m 11s so far')).toBeTruthy();
+    expect(screen.getByText('Not started')).toBeTruthy();
+    expect(screen.getAllByText('Ready').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Timing unavailable')).toBeTruthy();
+    expect(screen.getByLabelText('Step duration 1m 42s')).toBeTruthy();
+    expect(screen.getByLabelText('Step duration 3m 11s')).toBeTruthy();
+    expect(screen.getByLabelText('Step timing overview').textContent).toContain(
+      'Current step Run tests · 3m 11s so far',
+    );
+    expect(screen.getByLabelText('Step timing overview').textContent).toContain(
+      'Longest step Run tests · 3m 11s',
+    );
+    expect(screen.getByLabelText('Step timing overview').textContent).toContain(
+      'Completed steps 2 of 5',
+    );
+    expect(screen.queryByRole('region', { name: 'Step duration timeline' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Gather context' }));
+    const timingHeading = screen.getByRole('heading', { name: 'Timing' });
+    const logsHeading = screen.getByRole('heading', { name: 'Logs & Diagnostics' });
+    expect(timingHeading.compareDocumentPosition(logsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const timingSection = timingHeading.closest('section') as HTMLElement;
+    expect(within(timingSection).getByText('Started:')).toBeTruthy();
+    expect(within(timingSection).getByText('Ended:')).toBeTruthy();
+    expect(within(timingSection).getByText('Elapsed:')).toBeTruthy();
+    expect(within(timingSection).getByText('Last update:')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show step duration timeline' }));
+    const timeline = screen.getByRole('region', { name: 'Step duration timeline' });
+    expect(within(timeline).getByText('Gather context')).toBeTruthy();
+    expect(within(timeline).getByText('Run tests')).toBeTruthy();
+    expect(within(timeline).getByText('3m 11s so far')).toBeTruthy();
+    expect(screen.getByText('Hide step duration timeline')).toBeTruthy();
   });
 
   it('MM-801 renders Artifacts as the focused report and artifact route', async () => {

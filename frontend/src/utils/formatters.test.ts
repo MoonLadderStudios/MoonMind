@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatStatusLabel } from './formatters';
+import { formatDurationMs, formatStatusLabel } from './formatters';
 
 describe('formatStatusLabel', () => {
   it('replaces underscores with spaces without applying domain-specific mappings', () => {
@@ -12,5 +12,12 @@ describe('formatStatusLabel', () => {
     expect(formatStatusLabel('failed_step_execution')).toBe('Failed step execution');
     expect(formatStatusLabel('constructor')).toBe('constructor');
     expect(formatStatusLabel(null)).toBe('—');
+  });
+});
+
+describe('formatDurationMs', () => {
+  it('formats long durations as hours and minutes', () => {
+    expect(formatDurationMs(64 * 60 * 1000)).toBe('1h 04m');
+    expect(formatDurationMs(null)).toBe('—');
   });
 });
