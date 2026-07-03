@@ -64,6 +64,56 @@ def _workflow_step_payload(*steps: dict) -> dict:
     )
 
 
+def test_auto_publish_capable_skill_omitted_mode_resolves_to_auto() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload=_workflow_payload(
+            {
+                "skill": {"name": "pr-resolver"},
+                "inputs": {"pr": "123"},
+            }
+        ),
+    )
+
+    assert result["workflow"]["publish"]["mode"] == "auto"
+
+
+def test_auto_publish_capable_skill_explicit_auto_is_preserved() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload=_workflow_payload(
+            {
+                "skill": {"name": "fix-ci"},
+                "publish": {"mode": "auto"},
+            }
+        ),
+    )
+
+    assert result["workflow"]["publish"]["mode"] == "auto"
+
+
+def test_auto_publish_capable_skill_legacy_none_normalizes_to_auto() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload=_workflow_payload(
+            {
+                "skill": {"name": "fix-comments"},
+                "publish": {"mode": "none"},
+            }
+        ),
+    )
+
+    assert result["workflow"]["publish"]["mode"] == "auto"
+
+
+def test_non_capable_skill_rejects_auto_publish_mode() -> None:
+    with pytest.raises(WorkflowContractError, match="auto-publish-capable"):
+        build_canonical_workflow_view(
+            job_type="task",
+            payload=_workflow_payload({"publish": {"mode": "auto"}}),
+        )
+
+
 # T017 — SC-001
 def test_sc001_well_formed_recover_from_failed_step_accepted() -> None:
     """MM-638 SC-001: Complete recover_from_failed_step payload is accepted;

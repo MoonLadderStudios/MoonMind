@@ -180,9 +180,9 @@ def test_end_to_end_mixed_pr_set(monkeypatch: Any, tmp_path: Path) -> None:
     )
     assert accounted == summary["requested"]
 
-    # Each child carries publish.mode=none and a stable idempotency key.
+    # Each child carries publish.mode=auto and a stable idempotency key.
     for body in _FakeAsyncClient.submissions:
-        assert body["payload"]["task"]["publish"]["mode"] == "none"
+        assert body["payload"]["task"]["publish"]["mode"] == "auto"
         assert body["payload"]["task"]["skill"]["name"] == "pr-resolver"
         assert "version" not in body["payload"]["task"]["skill"]
         assert body["payload"]["idempotencyKey"].startswith(

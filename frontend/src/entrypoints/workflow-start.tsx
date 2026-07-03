@@ -38,9 +38,13 @@ const JIRA_BREAKDOWN_IMPLEMENT_PRESET_SLUG = "jira-breakdown-implement";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
 const SELF_MANAGED_PUBLISH_SKILLS = new Set([
   ...PR_RESOLVER_SKILLS,
+  "batch-dependabot-resolver",
+  "batch-workflows",
   "fix-comments",
   "fix-ci",
   "fix-merge-conflicts",
+]);
+const PUBLISH_DISABLED_SKILLS = new Set([
   JIRA_BREAKDOWN_PRESET_SLUG,
   JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG,
   JIRA_BREAKDOWN_IMPLEMENT_PRESET_SLUG,
@@ -1987,13 +1991,17 @@ function isSelfManagedPublishSkill(skillId: string): boolean {
   return SELF_MANAGED_PUBLISH_SKILLS.has(skillId.trim().toLowerCase());
 }
 
+function isPublishDisabledSkill(skillId: string): boolean {
+  return PUBLISH_DISABLED_SKILLS.has(skillId.trim().toLowerCase());
+}
+
 function resolveEffectivePublishSkillId(
   primarySkillId: string,
   appliedTemplates: AppliedTemplateState[],
 ): string {
   for (const template of [...appliedTemplates].reverse()) {
     const slug = String(template.slug || "").trim();
-    if (slug && isSelfManagedPublishSkill(slug)) {
+    if (slug && (isSelfManagedPublishSkill(slug) || isPublishDisabledSkill(slug))) {
       return slug;
     }
   }
@@ -5996,6 +6004,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       .trim()
       .toLowerCase();
     if (isSelfManagedPublishSkill(primarySkill)) {
+      setPublishMode("auto");
+    } else if (isPublishDisabledSkill(primarySkill)) {
       setPublishMode("none");
     }
   }, [steps[0]?.skillId]);
@@ -6556,17 +6566,38 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       selectedPreset &&
       isSelfManagedPublishSkill(selectedPreset.slug)
     ) {
+      setPublishMode("auto");
+    } else if (
+      pageMode.mode === "create" &&
+      selectedPreset &&
+      isPublishDisabledSkill(selectedPreset.slug)
+    ) {
       setPublishMode("none");
     }
   }, [pageMode.mode, selectedPreset?.slug]);
 
-  const mergeAutomationAvailable = !isSelfManagedPublishSkill(effectiveSkillId);
+  const mergeAutomationAvailable =
+    !isSelfManagedPublishSkill(effectiveSkillId) &&
+    !isPublishDisabledSkill(effectiveSkillId);
+  const autoPublishAvailable = isSelfManagedPublishSkill(effectiveSkillId);
 
   useEffect(() => {
-    if (!mergeAutomationAvailable && publishMode !== "none") {
-      setPublishMode("none");
+    if (!mergeAutomationAvailable) {
+      const forcedPublishMode = isSelfManagedPublishSkill(effectiveSkillId)
+        ? "auto"
+        : "none";
+      if (publishMode !== forcedPublishMode) {
+        setPublishMode(forcedPublishMode);
+      }
+    } else if (publishMode === "auto" && !autoPublishAvailable) {
+      setPublishMode("pr");
     }
-  }, [mergeAutomationAvailable, publishMode]);
+  }, [
+    autoPublishAvailable,
+    effectiveSkillId,
+    mergeAutomationAvailable,
+    publishMode,
+  ]);
 
   const availableDependencyOptions = useMemo(
     () =>
@@ -7482,6 +7513,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     if (
       pageMode.mode === "create" &&
       isSelfManagedPublishSkill(preset.slug)
+    ) {
+      setPublishMode("auto");
+    } else if (
+      pageMode.mode === "create" &&
+      isPublishDisabledSkill(preset.slug)
     ) {
       setPublishMode("none");
     }
@@ -8441,7 +8477,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const publishConstraintSuffix = isSelfManagedPublishSkill(
       String(expansion.appliedTemplate?.slug || preset.slug),
     )
-      ? ` ${preset.title} manages its own PR/publish flow, so Publish Mode is forced to None and merge automation is unavailable.`
+      ? ` ${preset.title} manages its own PR/publish flow, so Publish Mode is Auto and merge automation is unavailable.`
       : "";
     setMessage(
       `Applied preset '${preset.title}' (${expandedSteps.length} steps).${autoFillSuffix}${warningSuffix}${publishConstraintSuffix}`,
@@ -9123,8 +9159,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     }
 
     const normalizedPublishMode = normalizePublishModeForSubmit(publishMode);
-    if (!["none", "branch", "pr"].includes(normalizedPublishMode)) {
-      setSubmitMessage("Publish mode must be one of: none, branch, pr.");
+    if (!["auto", "none", "branch", "pr"].includes(normalizedPublishMode)) {
+      setSubmitMessage("Publish mode must be one of: auto, none, branch, pr.");
       clearSubmitBusy();
       return;
     }
@@ -9203,9 +9239,21 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       primarySkillId,
       activeSubmissionAppliedTemplates,
     );
+    if (
+      normalizedPublishMode === "auto" &&
+      !isSelfManagedPublishSkill(effectivePublishSkillId)
+    ) {
+      setSubmitMessage(
+        "Publish mode Auto requires an auto-publish-capable skill.",
+      );
+      clearSubmitBusy();
+      return;
+    }
     const effectivePublishMode =
       isSelfManagedPublishSkill(effectivePublishSkillId)
-        ? "none"
+        ? "auto"
+        : isPublishDisabledSkill(effectivePublishSkillId)
+          ? "none"
         : normalizedPublishMode;
     if (effectivePublishMode === "branch" && !effectiveBranch) {
       setSubmitMessage(
@@ -10045,7 +10093,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const shouldSubmitMergeAutomation =
       isMergeAutomationPublishMode(publishMode) &&
       effectivePublishMode === "pr" &&
-      !isSelfManagedPublishSkill(effectivePublishSkillId);
+      !isSelfManagedPublishSkill(effectivePublishSkillId) &&
+      !isPublishDisabledSkill(effectivePublishSkillId);
     // Never resolve a provider profile from placeholder data: during a runtime
     // switch refetch `data` still holds the previous runtime's profiles, which
     // must not be submitted under the newly selected runtime.
@@ -10455,7 +10504,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         "Choose a valid GitHub repository before selecting a branch"
       : "Select the branch to check out before the workflow starts";
   const publishModeTooltip = !mergeAutomationAvailable
-    ? "Publishing is forced to None because the selected preset or resolver manages its own publish flow"
+    ? isSelfManagedPublishSkill(effectiveSkillId)
+      ? "Publishing is Auto because the selected preset or resolver manages its own publish flow"
+      : "Publishing is disabled for the selected preset or skill"
     : "Select how MoonMind publishes workflow changes";
   const expandStepPresetTooltip =
     "Expand the selected preset into editable steps at this position";
@@ -12591,6 +12642,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 onChange={(event) => setPublishMode(event.target.value)}
                 disabled={!mergeAutomationAvailable}
               >
+                <option value="auto" disabled={!autoPublishAvailable}>
+                  Auto
+                </option>
                 <option value="none">None</option>
                 <option value="branch">Branch</option>
                 <option value="pr">PR</option>

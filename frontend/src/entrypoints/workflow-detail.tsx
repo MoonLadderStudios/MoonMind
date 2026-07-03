@@ -700,6 +700,7 @@ function detailStringValue(...values: unknown[]): string {
 }
 
 const PUBLISH_MODE_LABELS: Record<string, string> = {
+  auto: 'Auto',
   pr_with_merge_automation: 'PR with Merge Automation',
   pr: 'PR',
   branch: 'Branch',
@@ -7563,7 +7564,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 {runSummary.publish ? (
                   <>
                     <Fact label="Publish Status">{formatStatusLabel(runSummary.publish.status)}</Fact>
-                    <Fact label="Publish Mode">{runSummary.publish.mode || '—'}</Fact>
+                    <Fact label="Publish Mode">{formatPublishModeLabel(runSummary.publish.mode) || '—'}</Fact>
                   </>
                 ) : null}
               </FlatFactGrid>

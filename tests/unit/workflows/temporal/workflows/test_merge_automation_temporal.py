@@ -291,8 +291,8 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         f"{second_resolver_id}:2",
     ]
     assert child_payloads[0]["workflow_type"] == "MoonMind.UserWorkflow"
-    assert child_payloads[0]["initial_parameters"]["publishMode"] == "none"
-    assert child_payloads[0]["initial_parameters"]["task"]["publish"]["mode"] == "none"
+    assert child_payloads[0]["initial_parameters"]["publishMode"] == "auto"
+    assert child_payloads[0]["initial_parameters"]["task"]["publish"]["mode"] == "auto"
     assert child_payloads[0]["initial_parameters"]["task"]["skill"]["id"] == "pr-resolver"
     assert child_payloads[0]["initial_parameters"]["task"]["tool"] == {
         "type": "skill",

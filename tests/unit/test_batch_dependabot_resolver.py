@@ -256,7 +256,7 @@ def test_build_queue_request_child_payload_shape() -> None:
     }
     assert task["git"]["startingBranch"] == "dependabot/pip/anthropic-0.107.1"
     assert task["git"]["targetBranch"] == "dependabot/pip/anthropic-0.107.1"
-    assert task["publish"]["mode"] == "none"
+    assert task["publish"]["mode"] == "auto"
     assert task["runtime"]["mode"] == "codex"
     assert payload["targetRuntime"] == "codex"
     assert (

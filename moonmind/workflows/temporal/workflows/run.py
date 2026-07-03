@@ -160,6 +160,10 @@ from moonmind.workflows.temporal.bounded_story_loop import (
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
+from moonmind.workflows.temporal.publish_auto_evidence import (
+    AutoPublishEvidenceError,
+    parse_auto_publish_evidence,
+)
 from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.scheduled_start import temporal_scheduled_start_time
 from moonmind.workflows.temporal.activity_catalog import (
@@ -8254,7 +8258,7 @@ class MoonMindRunWorkflow:
                 boundary="before_publication",
                 updated_at=workflow.now(),
             )
-            self._record_publish_result(
+            await self._record_publish_result_from_execution(
                 parameters=parameters,
                 execution_result=execution_result,
             )
@@ -8441,7 +8445,7 @@ class MoonMindRunWorkflow:
                         node_id="publish-repair",
                         execution_result=execution_result,
                     )
-                    self._record_publish_result(
+                    await self._record_publish_result_from_execution(
                         parameters=parameters,
                         execution_result=execution_result,
                     )
@@ -9635,7 +9639,7 @@ class MoonMindRunWorkflow:
         if not isinstance(value, str):
             return ""
         normalized = value.strip().lower()
-        return normalized if normalized in {"none", "branch", "pr"} else ""
+        return normalized if normalized in {"auto", "none", "branch", "pr"} else ""
 
     def _managed_session_runtime_id(
         self, request: AgentExecutionRequest
@@ -10521,6 +10525,9 @@ class MoonMindRunWorkflow:
             return
 
         publish_mode = self._publish_mode(parameters)
+        if publish_mode == "auto":
+            self._record_auto_publish_result(execution_result)
+            return
         if publish_mode not in {"pr", "branch"}:
             return
 
@@ -10620,6 +10627,148 @@ class MoonMindRunWorkflow:
         if push_status == "pushed" and publish_mode == "branch":
             self._publish_status = "published"
             self._publish_reason = "published branch"
+
+    async def _record_publish_result_from_execution(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+        execution_result: Any,
+    ) -> None:
+        if self._publish_mode(parameters) == "auto":
+            await self._resolve_auto_publish_evidence_ref(execution_result)
+            if (
+                self._publish_status == "failed"
+                and str(self._publish_reason or "").startswith(
+                    "auto_publish_evidence_read_failed:"
+                )
+            ):
+                return
+        self._record_publish_result(
+            parameters=parameters,
+            execution_result=execution_result,
+        )
+
+    async def _resolve_auto_publish_evidence_ref(self, execution_result: Any) -> None:
+        outputs = self._effective_result_outputs(execution_result)
+        if not isinstance(outputs, Mapping):
+            return
+        for key in (
+            "publishResult",
+            "publish_result",
+            "publishEvidence",
+            "publish_evidence",
+            "autoPublishEvidence",
+            "auto_publish_evidence",
+        ):
+            if key in outputs:
+                return
+
+        output_refs = outputs.get("outputRefs") or outputs.get("output_refs")
+        if not isinstance(output_refs, Mapping):
+            return
+        ref = (
+            output_refs.get("publish_result.json")
+            or output_refs.get("publishResult")
+            or output_refs.get("publish_result")
+        )
+        if not isinstance(ref, str) or not ref.strip():
+            return
+
+        evidence_ref = ref.strip()
+        self._publish_context["evidenceRef"] = evidence_ref
+        artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
+        try:
+            evidence_payload = await execute_typed_activity(
+                "artifact.read",
+                ArtifactReadInput(
+                    principal=self._principal(),
+                    artifact_ref=evidence_ref,
+                ),
+                **self._execute_kwargs_for_route(artifact_read_route),
+            )
+        except Exception as exc:
+            self._publish_status = "failed"
+            self._publish_reason = f"auto_publish_evidence_read_failed: {exc}"
+            return
+        self._publish_context["autoPublishEvidence"] = evidence_payload
+
+    def _record_auto_publish_result(self, execution_result: Any) -> None:
+        outputs = self._effective_result_outputs(execution_result)
+        evidence_payload: Any = None
+        if isinstance(outputs, Mapping):
+            for key in (
+                "publishResult",
+                "publish_result",
+                "publishEvidence",
+                "publish_evidence",
+                "autoPublishEvidence",
+                "auto_publish_evidence",
+            ):
+                if key in outputs:
+                    evidence_payload = outputs.get(key)
+                    break
+            if evidence_payload is None:
+                output_refs = outputs.get("outputRefs") or outputs.get("output_refs")
+                if isinstance(output_refs, Mapping):
+                    ref = (
+                        output_refs.get("publish_result.json")
+                        or output_refs.get("publishResult")
+                        or output_refs.get("publish_result")
+                    )
+                    if isinstance(ref, str) and ref.strip():
+                        self._publish_context["evidenceRef"] = ref.strip()
+        if evidence_payload is None:
+            evidence_payload = self._publish_context.get("autoPublishEvidence")
+
+        if evidence_payload is None:
+            self._publish_status = "failed"
+            self._publish_reason = "auto_publish_evidence_missing"
+            return
+
+        try:
+            evidence = parse_auto_publish_evidence(evidence_payload)
+        except AutoPublishEvidenceError as exc:
+            self._publish_status = "failed"
+            self._publish_reason = str(exc)
+            return
+
+        self._publish_context.update(
+            {
+                "mode": "auto",
+                "owner": "agent",
+                "status": evidence.status,
+                "action": evidence.action,
+                "skillId": evidence.skill_id,
+                "repository": evidence.repository,
+                "branch": evidence.branch,
+                "localHead": evidence.local_head,
+                "remoteBranchHead": evidence.remote_branch_head,
+                "remoteVerified": evidence.remote_verified,
+                "pushed": evidence.pushed,
+                "merged": evidence.merged,
+                "prUrl": evidence.pr_url,
+                "blockedReason": evidence.blocked_reason,
+                "verificationCommands": list(evidence.verification_commands),
+            }
+        )
+        if evidence.status == "blocked":
+            self._publish_status = "failed"
+            self._publish_reason = evidence.blocked_reason or "auto_publish_blocked"
+        elif evidence.status == "failed":
+            self._publish_status = "failed"
+            self._publish_reason = evidence.blocked_reason or "auto_publish_failed"
+        elif evidence.status == "no_op_verified":
+            self._publish_status = "not_required"
+            self._publish_reason = "auto publish no-op verified"
+        else:
+            self._publish_status = "published"
+            self._publish_reason = (
+                "auto publish verified merge"
+                if evidence.merged
+                else "auto publish verified push"
+            )
+            if evidence.pr_url:
+                self._pull_request_url = evidence.pr_url
 
     def _report_only_publish_not_required_reason(
         self,
@@ -11732,6 +11881,11 @@ class MoonMindRunWorkflow:
             self._publish_status = "failed"
             self._publish_reason = missing_outcome
             return ("failed", missing_outcome, True)
+
+        if publish_mode == "auto" and self._publish_status is None:
+            self._publish_status = "failed"
+            self._publish_reason = "auto_publish_evidence_missing"
+            return ("failed", self._publish_reason, True)
 
         if publish_mode == "none":
             return (
@@ -14971,6 +15125,24 @@ class MoonMindRunWorkflow:
                         code = "PUBLISH_DISABLED"
                         publish_status = "skipped"
                         publish_reason = "publishing disabled"
+                    elif publish_mode == "auto" and self._publish_status == "published":
+                        if self._publish_context.get("merged") is True:
+                            code = "PUBLISHED_PR"
+                            publish_reason = (
+                                self._publish_reason or "auto publish verified merge"
+                            )
+                        else:
+                            code = "PUBLISHED_BRANCH"
+                            publish_reason = (
+                                self._publish_reason or "auto publish verified push"
+                            )
+                        publish_status = "published"
+                    elif publish_mode == "auto" and self._publish_status == "not_required":
+                        code = "NO_COMMIT"
+                        publish_status = "skipped"
+                        publish_reason = (
+                            self._publish_reason or "auto publish no-op verified"
+                        )
                     elif self._publish_status == "skipped":
                         code = "NO_COMMIT"
                         publish_status = "skipped"
@@ -14979,7 +15151,7 @@ class MoonMindRunWorkflow:
                             or "No repository changes were available to commit or publish."
                         )
                     elif self._publish_status == "not_required":
-                        code = "PUBLISH_DISABLED"
+                        code = "NO_COMMIT" if publish_mode == "auto" else "PUBLISH_DISABLED"
                         publish_status = "skipped"
                         publish_reason = (
                             self._publish_reason or "publish output not required"
@@ -15081,6 +15253,13 @@ class MoonMindRunWorkflow:
                 finish_summary["publish"]["commitCreated"] = False
                 finish_summary["publish"]["branchPushed"] = False
                 finish_summary["publish"]["prUrl"] = None
+            if publish_mode == "auto":
+                finish_summary["publish"]["owner"] = "agent"
+                finish_summary["publish"]["evidenceRequired"] = True
+                if self._publish_context.get("blockedReason"):
+                    finish_summary["publish"]["blockedReason"] = (
+                        self._publish_context.get("blockedReason")
+                    )
             if self._publish_context:
                 finish_summary["publishContext"] = dict(self._publish_context)
                 merge_automation_summary = self._merge_automation_summary_from_context()

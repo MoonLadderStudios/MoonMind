@@ -104,7 +104,7 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["runtime"]["executionProfileRef"] == "test-profile"
     assert "providerProfile" not in task["runtime"]
     assert task["title"] == "feature/example"
-    assert task["publish"]["mode"] == "none"
+    assert task["publish"]["mode"] == "auto"
     assert git["startingBranch"] == "feature/example"
     assert git["targetBranch"] == "feature/example"
 
@@ -192,7 +192,7 @@ def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
     # uses the legacy queue-worker contract (skill.id) and will fail on the new
     # skill.name shape.  Publish and skill identity assertions are covered by the
     # dedicated contract tests below.
-    assert request["payload"]["task"]["publish"]["mode"] == "none"
+    assert request["payload"]["task"]["publish"]["mode"] == "auto"
 
 def test_resolve_artifacts_dir_prefers_managed_session_spool(
     monkeypatch: Any,

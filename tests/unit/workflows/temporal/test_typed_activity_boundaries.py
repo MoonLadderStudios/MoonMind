@@ -48,6 +48,11 @@ def test_agent_runtime_fetch_result_input_rejects_unsupported_publish_mode() -> 
             {"runId": "managed-1", "publishMode": "side-channel"}
         )
 
+    request = AgentRuntimeFetchResultInput.model_validate(
+        {"runId": "managed-1", "publishMode": "auto"}
+    )
+    assert request.publish_mode == "auto"
+
 def test_agent_runtime_fetch_result_input_normalizes_parent_and_fetch_fields() -> None:
     request = AgentRuntimeFetchResultInput.model_validate(
         {

@@ -758,7 +758,11 @@ class WorkflowSettings(BaseSettings):
                 "requires_reload": False,
                 "apply_mode": "next_workflow",
                 "title": "Default Publish Mode",
-                "options": [("none", "None"), ("branch", "Branch"), ("pr", "Pull Request")],
+                "options": [
+                    ("none", "None"),
+                    ("branch", "Branch"),
+                    ("pr", "Pull Request"),
+                ],
                 "applies_to": ["workflow_creation", "publishing"],
                 "order": 20,
             }
