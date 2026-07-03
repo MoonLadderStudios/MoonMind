@@ -1,5 +1,6 @@
 // MM-1013 / source MM-977: MoonMind managed-session observability to chat projection.
 export type RunObservabilityEventRow = {
+  id?: string | null;
   runId?: string | null;
   agentRunId?: string | null;
   sequence?: number | null;
@@ -234,11 +235,21 @@ export function projectChatSessionBlocks(
   fallbackAgentRunId = '',
   optimisticMessages: OptimisticUserMessage[] = [],
 ): ChatSessionState {
-  const seeded = seedOptimisticUserMessages(createChatSessionState(), optimisticMessages);
-  return reduceChatSessionEvents(
-    seeded,
+  const projected = reduceChatSessionEvents(
+    createChatSessionState(),
     rows.map((row) => mapObservabilityEventToChatSessionEvent(row, fallbackAgentRunId)),
   );
+  const pendingOptimisticMessages = optimisticMessages.filter((message) => (
+    !projected.blocks.some((block) => (
+      block.kind === 'user' &&
+      (
+        block.metadata?.optimisticKey === message.key ||
+        block.metadata?.clientMessageId === message.key ||
+        block.metadata?.client_message_id === message.key
+      )
+    ))
+  ));
+  return seedOptimisticUserMessages(projected, pendingOptimisticMessages);
 }
 
 export function reduceChatSessionEvent(
@@ -471,6 +482,8 @@ function eventId({
 }): string {
   const explicit = firstString(metadata.eventId, metadata.event_id, metadata.id);
   if (explicit) return `${agentRunId}:${sourceKind}:${explicit}`;
+  const rowId = firstString(row.id);
+  if (rowId) return `${agentRunId}:${sourceKind}:${rowId}`;
   const sequence = firstNumber(row.sequence);
   if (sequence !== undefined) return `${agentRunId}:seq:${sequence}:${sourceKind}`;
   return [

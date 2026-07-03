@@ -4,10 +4,12 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type Dispatch,
   type KeyboardEvent,
   type ReactNode,
   type Ref,
   type RefObject,
+  type SetStateAction,
 } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Anser from 'anser';
@@ -2854,6 +2856,7 @@ function timelineRowsToObservabilityRows(rows: TimelineRow[]): RunObservabilityE
   return rows
     .filter((row) => row.rowType !== 'fallback' && row.rowType !== 'output' && row.rowType !== 'system')
     .map((row) => ({
+      id: row.id,
       runId: null,
       agentRunId: null,
       sequence: row.sequence,
@@ -3548,14 +3551,17 @@ function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase:
           <span className={`chat-session-status-chip chat-session-status-${chatBlockStatus(block)}`}>
             {chatBlockStatus(block)}
           </span>
-          {displayKindLabel ? <span className="chat-session-kind-chip">{displayKindLabel}</span> : null}
+          {block.toolName ? <span className="chat-session-kind-chip">{block.toolName}</span> : null}
+          {displayKindLabel && displayKindLabel !== block.toolName ? (
+            <span className="chat-session-kind-chip">{displayKindLabel}</span>
+          ) : null}
         </div>
         <div
           className="chat-session-block-text"
           data-kind={chatBlockSourceKind(block) ?? undefined}
           data-row-type="tool"
         >
-          {block.toolName || block.text || 'Tool call'}
+          {block.text || block.toolName || 'Tool call'}
         </div>
         <TimelineArtifactLinks links={artifactLinks} />
       </div>
@@ -3617,21 +3623,39 @@ function ChatSessionView({
   const hasFallbackRows = rows.some((row) => row.rowType === 'fallback' || row.rowType === 'output');
   const blockListRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
+  const scrollFrameRef = useRef<number | null>(null);
   const lastBlockSignature = chatBlocks.length > 0
     ? `${chatBlocks.at(-1)?.id}:${chatBlocks.at(-1)?.text}`
     : 'empty';
 
   const updateStickToBottom = () => {
+    if (scrollFrameRef.current !== null) return;
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const element = blockListRef.current;
+      if (!element) return;
+      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+      shouldStickToBottomRef.current = distanceFromBottom <= 48;
+    });
+  };
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current);
+    }
+  }, []);
+
+  const scrollToBottom = () => {
     const element = blockListRef.current;
     if (!element) return;
-    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    shouldStickToBottomRef.current = distanceFromBottom <= 48;
+    window.requestAnimationFrame(() => {
+      element.scrollTop = element.scrollHeight;
+    });
   };
 
   useEffect(() => {
-    const element = blockListRef.current;
-    if (!element || !shouldStickToBottomRef.current) return;
-    element.scrollTop = element.scrollHeight;
+    if (!shouldStickToBottomRef.current) return;
+    scrollToBottom();
   }, [lastBlockSignature]);
 
   return (
@@ -5320,7 +5344,8 @@ function SessionContinuityPanel({
   isTerminal,
   invalidateWorkflowDetail,
   routes,
-  onOptimisticMessagesChange,
+  optimisticMessages,
+  setOptimisticMessages,
   compact = false,
 }: {
   apiBase: string;
@@ -5329,7 +5354,8 @@ function SessionContinuityPanel({
   isTerminal: boolean;
   invalidateWorkflowDetail: () => void;
   routes: AgentRunRouteTemplates;
-  onOptimisticMessagesChange?: (messages: OptimisticChatSessionMessage[]) => void;
+  optimisticMessages: OptimisticChatSessionMessage[];
+  setOptimisticMessages: Dispatch<SetStateAction<OptimisticChatSessionMessage[]>>;
   compact?: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -5359,12 +5385,7 @@ function SessionContinuityPanel({
   const sessionId = sessionSnapshot?.sessionId ?? null;
   const [followUpMessage, setFollowUpMessage] = useState('');
   const [panelError, setPanelError] = useState<string | null>(null);
-  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticChatSessionMessage[]>([]);
   const optimisticMessageSequenceRef = useRef(0);
-
-  useEffect(() => {
-    onOptimisticMessagesChange?.(optimisticMessages);
-  }, [onOptimisticMessagesChange, optimisticMessages]);
 
   const projectionQuery = useQuery({
     queryKey: ['agent-run-session-projection', agentRunId, sessionId],
@@ -7413,22 +7434,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                       autoExpand
                       disclosure={false}
                       routes={agentRunRoutes}
-                      sessionTimelineEnabled
+                      sessionTimelineEnabled={sessionTimelineEnabled}
                       structuredHistoryEnabled={structuredHistoryEnabled}
                       optimisticMessages={chatOptimisticMessages}
                     />
-                    {actionsOn ? (
-                      <SessionContinuityPanel
-                        apiBase={payload.apiBase}
-                        agentRunId={resolvedAgentRunId}
-                        targetRuntime={execution.targetRuntime}
-                        isTerminal={isTerminalExecution}
-                        invalidateWorkflowDetail={invalidate}
-                        routes={agentRunRoutes}
-                        onOptimisticMessagesChange={setChatOptimisticMessages}
-                        compact
-                      />
-                    ) : null}
                   </>
                 ) : (
                   <p className="small">{missingAgentRunState ? renderMissingAgentRunCopy(missingAgentRunState) : 'Waiting for managed runtime launch to create live logs.'}</p>
@@ -7436,6 +7445,19 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               ) : (
                 <p className="small">Live log streaming is disabled for this dashboard.</p>
               )}
+              {resolvedAgentRunId && actionsOn ? (
+                <SessionContinuityPanel
+                  apiBase={payload.apiBase}
+                  agentRunId={resolvedAgentRunId}
+                  targetRuntime={execution.targetRuntime}
+                  isTerminal={isTerminalExecution}
+                  invalidateWorkflowDetail={invalidate}
+                  routes={agentRunRoutes}
+                  optimisticMessages={chatOptimisticMessages}
+                  setOptimisticMessages={setChatOptimisticMessages}
+                  compact
+                />
+              ) : null}
             </section>
           ) : null}
 
@@ -8058,6 +8080,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               isTerminal={isTerminalExecution}
               invalidateWorkflowDetail={invalidate}
               routes={agentRunRoutes}
+              optimisticMessages={[]}
+              setOptimisticMessages={() => undefined}
             />
           ) : null}
 
