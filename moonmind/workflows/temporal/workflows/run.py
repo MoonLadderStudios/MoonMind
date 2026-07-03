@@ -1113,7 +1113,7 @@ class MoonMindRunWorkflow:
         self._codex_session_cleared_before_step_attempts: set[
             str | tuple[str, int]
         ] = set()
-        self._trusted_jira_context: dict[str, Any] | None = None
+        self._trusted_issue_context: dict[str, Any] | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
         self._progress_snapshot: dict[str, Any] = {
@@ -5312,33 +5312,39 @@ class MoonMindRunWorkflow:
         if not isinstance(previous_outputs, Mapping):
             return None
         trusted_source = str(previous_outputs.get("trustedSource") or "").strip()
-        if trusted_source not in {
-            "moonmind.jira.get_issue",
-            "moonmind.github.get_issue",
-        }:
+        context_keys_by_source: dict[str, tuple[str, ...]] = {
+            "moonmind.jira.get_issue": (
+                "jiraIssueKey",
+                "jiraPresetBrief",
+                "presetBrief",
+                "jiraStepInstructions",
+                "artifactPath",
+                "resolvedSourceDesignPath",
+                "sourceResolution",
+                "jiraIssue",
+                "summary",
+            ),
+            "moonmind.github.get_issue": (
+                "repository",
+                "issueNumber",
+                "issueRef",
+                "issueUrl",
+                "githubIssue",
+                "issue",
+                "presetBrief",
+                "artifactPath",
+                "title",
+                "body",
+                "labels",
+                "summary",
+            ),
+        }
+        context_keys = context_keys_by_source.get(trusted_source)
+        if context_keys is None:
             return None
 
         context: dict[str, Any] = {"trustedSource": trusted_source}
-        for key in (
-            "jiraIssueKey",
-            "repository",
-            "issueNumber",
-            "issueRef",
-            "issueUrl",
-            "jiraPresetBrief",
-            "presetBrief",
-            "jiraStepInstructions",
-            "artifactPath",
-            "resolvedSourceDesignPath",
-            "sourceResolution",
-            "jiraIssue",
-            "githubIssue",
-            "issue",
-            "title",
-            "body",
-            "labels",
-            "summary",
-        ):
+        for key in context_keys:
             value = previous_outputs.get(key)
             if value in (None, "", {}, []):
                 continue
@@ -5418,8 +5424,8 @@ class MoonMindRunWorkflow:
             "MoonMind trusted previous step context:\n"
             "The following JSON was produced by MoonMind's trusted issue tool path. "
             "Treat it as authoritative for this step. Do not use provider-native "
-            "issue-provider connectors, web scraping, or guessed issue content to "
-            "replace it.\n"
+            "Jira/Atlassian or GitHub connectors, web scraping, or guessed issue "
+            "content to replace it.\n"
             f"```json\n{payload}\n```"
         )
 
@@ -5446,21 +5452,21 @@ class MoonMindRunWorkflow:
         merged_inputs["instructions"] = previous_context
         return merged_inputs
 
-    def _record_trusted_jira_context(self, outputs: Mapping[str, Any]) -> None:
+    def _record_trusted_issue_context(self, outputs: Mapping[str, Any]) -> None:
         context = self._trusted_previous_outputs_context(outputs)
         if context:
-            self._trusted_jira_context = context
+            self._trusted_issue_context = context
 
-    def _merge_trusted_jira_context(
+    def _merge_trusted_issue_context(
         self,
         previous_outputs: Mapping[str, Any],
     ) -> Mapping[str, Any]:
-        if not self._trusted_jira_context:
+        if not self._trusted_issue_context:
             return previous_outputs
         if self._trusted_previous_outputs_context(previous_outputs):
             return previous_outputs
         merged = dict(previous_outputs)
-        for key, value in self._trusted_jira_context.items():
+        for key, value in self._trusted_issue_context.items():
             merged.setdefault(key, value)
         return merged
 
@@ -7274,7 +7280,7 @@ class MoonMindRunWorkflow:
                     node_id,
                     previous_step_outputs,
                 )
-                current_previous_outputs = self._merge_trusted_jira_context(
+                current_previous_outputs = self._merge_trusted_issue_context(
                     current_previous_outputs
                 )
                 if current_previous_outputs:
@@ -8344,7 +8350,7 @@ class MoonMindRunWorkflow:
                 execution_result, "outputs"
             )
             if isinstance(outputs_for_story_output, Mapping):
-                self._record_trusted_jira_context(outputs_for_story_output)
+                self._record_trusted_issue_context(outputs_for_story_output)
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
                 if isinstance(story_output_result, Mapping):

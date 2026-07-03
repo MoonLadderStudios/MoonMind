@@ -728,6 +728,10 @@ describe('Dashboard shared entry', () => {
       dashboardCss,
       isMobileWorkflowRule('.workflow-list-data-slab .workflow-list-results-footer'),
     );
+    const mobileViewOptionsPopoverBlock = cssRuleBlockMatching(
+      dashboardCss,
+      isMobileWorkflowRule('.workflow-list-view-options-popover'),
+    );
 
     expect(mobileSlabBlock).toContain('border: 0');
     expect(mobileSlabBlock).toContain('border-radius: 0');
@@ -741,6 +745,10 @@ describe('Dashboard shared entry', () => {
     expect(mobileFooterBlock).toContain('border-top: 0');
     expect(mobileFooterBlock).toContain('padding-left: 0');
     expect(mobileFooterBlock).toContain('padding-right: 0');
+
+    expect(mobileViewOptionsPopoverBlock).toContain('right: auto');
+    expect(mobileViewOptionsPopoverBlock).toContain('left: 0');
+    expect(mobileViewOptionsPopoverBlock).toContain('max-width: calc(100vw - 2rem)');
 
     // Individual cards must keep their standalone card styling.
     const cardBlock = cssRuleBlock(dashboardCss, '.queue-card');

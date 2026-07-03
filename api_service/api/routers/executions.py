@@ -7074,6 +7074,13 @@ async def _expand_goal_preset_for_workflow_submission(
     task_payload.setdefault("instructions", schedule.goal)
     task_payload["inputs"] = template_inputs
     task_payload["steps"] = list(expanded_steps)
+    expanded_publish = (
+        expanded.get("publish") if isinstance(expanded, Mapping) else None
+    )
+    if isinstance(expanded_publish, Mapping) and not isinstance(
+        task_payload.get("publish"), Mapping
+    ):
+        task_payload["publish"] = dict(expanded_publish)
     _apply_goal_schedule_metadata(
         task_payload=task_payload,
         schedule=schedule,

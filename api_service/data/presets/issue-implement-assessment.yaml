@@ -34,49 +34,87 @@ inputs:
   label: Assessment Artifact Path
   type: text
   required: true
+- name: constraints
+  label: Constraints
+  type: textarea
+  required: false
+  default: ''
 steps:
 - title: Assess existing implementation state
   annotations:
     issueImplementRole: initial-assessment
-  instructions: "Before changing Jira or writing any code, assess whether {{ inputs.issue_provider\
-    \ }} issue {{ inputs.issue_ref }} is already implemented against the current state\
-    \ of the repository checkout.\n\nUse the existing issue-verification approach\
-    \ as the model: pick branch mode when a feature branch is checked out with commits\
-    \ ahead of its base ref, otherwise use main/trunk mode. Compare the loaded issue\
-    \ preset brief and acceptance criteria against the actual repository contents\
-    \ (and, in branch mode, against the diff between the current branch and its base\
-    \ ref). In main/trunk mode also search recent merge history for the issue reference.\n\
-    \nDo not edit any code, do not run long verification suites, and do not mutate\
-    \ Jira during this step. Read-only inspection only.\n\nClassify the result into\
-    \ exactly one verdict:\n\n- FULLY_IMPLEMENTED: every in-scope requirement in the\
-    \ issue preset brief is already satisfied by the current repository state (or\
-    \ by an identified merged change on the default branch). No new code work is needed.\n\
-    - PARTIALLY_IMPLEMENTED: some in-scope requirements are met but at least one is\
-    \ missing or only partially satisfied. New code work is required to complete the\
-    \ issue.\n- NOT_IMPLEMENTED: none of the in-scope requirements are reflected in\
-    \ the current repository state. A full implementation pass is required.\n- BLOCKED:\
-    \ the requirements are too ambiguous to assess, or required Jira/repo evidence\
-    \ is unavailable. Do not guess; report BLOCKED with the exact missing evidence\
-    \ and stop the preset.\n\nBefore writing the assessment result, also materialize\
-    \ the loaded issue brief as a local JSON handoff artifact at {{ inputs.brief_artifact_path\
-    \ }}. Build it from the trusted previous step output, not from provider-native\
-    \ connectors or guessed issue text. Include only these issue-brief keys when\
-    \ available: issue_provider, issue_ref, issue_url, title, description, acceptance_criteria,\
-    \ labels, preset_brief, sourceResolution, and trustedSource. Map provider summary/title\
-    \ fields to title and provider body/description fields to description; do not\
-    \ write summary or body aliases. This artifact is the authoritative issue-brief\
-    \ input for later moonspec-verify steps; stop with BLOCKED if the loaded issue\
-    \ brief is unavailable and the artifact cannot be written.\n\nRecord the verdict and a\
-    \ concise list of met/partially-met/unmet requirements in the step result AND\
-    \ in a local handoff artifact at {{ inputs.assessment_artifact_path }} with keys\
-    \ issue_provider, issue_ref, issue_url, verdict, branch, base_ref, mode, summary,\
-    \ and requirements (list of objects with description and status of met, partially_met,\
-    \ not_met, or unverifiable).\n\nThe verdict written here\
-    \ is the controlling input for every later step in this preset: the blocker preflight,\
-    \ the In Progress transition, the implementation step, the verification step,\
-    \ the pull request step, and the final Jira transition all gate on this verdict.\
-    \ Be conservative \u2014 only choose FULLY_IMPLEMENTED when the evidence clearly\
-    \ supports it."
+  instructions: 'Before changing Jira or writing any code, assess whether {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }} is already implemented against the current state
+    of the repository checkout.
+
+
+    Use the existing issue-verification approach as the model: pick branch mode when
+    a feature branch is checked out with commits ahead of its base ref, otherwise
+    use main/trunk mode. Compare the loaded issue preset brief and acceptance criteria
+    against the actual repository contents (and, in branch mode, against the diff
+    between the current branch and its base ref). In main/trunk mode also search recent
+    merge history for the issue reference.
+
+
+    Do not edit any code, do not run long verification suites, and do not mutate
+    Jira during this step. Read-only inspection only, except for the two local handoff
+    artifacts described below.
+
+
+    First persist the loaded issue preset brief as a local handoff artifact at {{
+    inputs.brief_artifact_path }} with keys issue_provider, issue_ref, issue_url,
+    title, description, acceptance_criteria, labels, preset_brief, constraints,
+    source_resolution, trusted_source, and truncated. Copy the brief content exactly
+    from the trusted brief-loading tool step context for {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }}; do not re-fetch, paraphrase, or invent requirements.
+    Map provider summary/title fields to title and provider body/description fields
+    to description; do not write summary or body aliases. Set truncated to true when
+    any copied field contains the literal marker ...[truncated], and record that
+    truncation as a risk in the assessment summary; otherwise set truncated to false.
+    Later moonspec-verify steps in this preset require this artifact as the authoritative
+    issue brief for verification target issue_brief. If no trusted loaded brief is
+    available to persist, report BLOCKED with that missing evidence instead of writing
+    a fabricated brief.
+
+
+    Record the following workflow constraints verbatim under the constraints key
+    in the brief artifact and treat them as binding scope for the assessment (an
+    empty value means no additional constraints):
+
+    {{ inputs.constraints }}
+
+
+    Classify the result into exactly one verdict:
+
+
+    - FULLY_IMPLEMENTED: every in-scope requirement in the issue preset brief is already
+    satisfied by the current repository state (or by an identified merged change on
+    the default branch). No new code work is needed.
+
+    - PARTIALLY_IMPLEMENTED: some in-scope requirements are met but at least one is
+    missing or only partially satisfied. New code work is required to complete the
+    issue.
+
+    - NOT_IMPLEMENTED: none of the in-scope requirements are reflected in the current
+    repository state. A full implementation pass is required.
+
+    - BLOCKED: the requirements are too ambiguous to assess, or required Jira/repo
+    evidence is unavailable. Do not guess; report BLOCKED with the exact missing evidence
+    and stop the preset.
+
+
+    Record the verdict and a concise list of met/partially-met/unmet requirements
+    in the step result AND in a local handoff artifact at {{ inputs.assessment_artifact_path
+    }} with keys issue_provider, issue_ref, issue_url, verdict, branch, base_ref,
+    mode, summary, and requirements (list of objects with description and status of
+    met, partially_met, not_met, or unverifiable).
+
+
+    The verdict written here is the controlling input for every later step in this
+    preset: the blocker preflight, the In Progress transition, the implementation
+    step, the verification step, the pull request step, and the final Jira transition
+    all gate on this verdict. Be conservative — only choose FULLY_IMPLEMENTED when
+    the evidence clearly supports it.'
   skill:
     id: auto
     args: {}

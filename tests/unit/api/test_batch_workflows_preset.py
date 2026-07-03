@@ -158,8 +158,9 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
                 == "{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}"
             )
 
-            # Runtime inheritance directive.
+            # Workflow-level directives.
             assert annotations["runtimeInheritance"] == "caller"
+            assert annotations["workflowPublish"] == {"mode": "none"}
 
             exposed_inputs = {item["name"] for item in template.inputs_schema}
             assert exposed_inputs == set(schema["properties"])
@@ -204,6 +205,8 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             assert len(steps) == 1
             step = steps[0]
             assert step["skill"]["id"] == "batch-workflows"
+            assert "publish" not in step
+            assert expanded["publish"] == {"mode": "none"}
 
             orchestration = step["batchOrchestration"]
             assert orchestration["source"]["kind"] == "jira_status"

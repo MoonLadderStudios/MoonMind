@@ -2871,6 +2871,14 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
             assert (
                 expanded["steps"][1]["title"] == "Assess existing implementation state"
             )
+            assert (
+                "artifacts/jira-implement-brief.json"
+                in expanded["steps"][1]["instructions"]
+            )
+            assert (
+                "artifacts/jira-implement-assessment.json"
+                in expanded["steps"][1]["instructions"]
+            )
             assert "MM-742" in expanded["steps"][2]["instructions"]
             assert expanded["steps"][2]["tool"]["id"] == "jira.check_blockers"
             assert expanded["steps"][2]["tool"]["inputs"] == {
@@ -2977,6 +2985,10 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert expanded["steps"][0]["tool"]["id"] == "github.load_issue_preset_brief"
     assert expanded["steps"][0]["tool"]["inputs"]["artifactPath"] == (
         "artifacts/github-issue-implement-brief.json"
+    )
+    assert (
+        "artifacts/github-issue-implement-brief.json"
+        in expanded["steps"][1]["instructions"]
     )
     assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
     assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
