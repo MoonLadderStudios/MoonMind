@@ -2182,7 +2182,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
 
-    expect(screen.getByText('1m 42s')).toBeTruthy();
+    expect(await screen.findByText('1m 42s')).toBeTruthy();
     expect(screen.getByText('3m 11s so far')).toBeTruthy();
     expect(screen.getByText('Not started')).toBeTruthy();
     expect(screen.getAllByText('Ready').length).toBeGreaterThanOrEqual(1);
