@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -625,6 +625,13 @@ class CheckpointBranchGraphCreateModel(CheckpointBranchCreateModel):
     )
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
 
+    @field_validator("*", mode="before")
+    @classmethod
+    def _strip_strings(cls, value: Any) -> Any:
+        if isinstance(value, str) or value is None:
+            return _optional_text(value)
+        return value
+
 
 class CheckpointBranchContinueModel(BaseModel):
     """Product-level continue request for appending one branch turn."""
@@ -632,6 +639,12 @@ class CheckpointBranchContinueModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     branch_turn_id: str | None = Field(None, alias="branchTurnId", min_length=1)
+    workspace_policy: CheckpointBranchWorkspacePolicy | None = Field(
+        None, alias="workspacePolicy"
+    )
+    runtime_context_policy: CheckpointBranchRuntimeContextPolicy | None = Field(
+        None, alias="runtimeContextPolicy"
+    )
     instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
     instruction_digest: str = Field(..., alias="instructionDigest", min_length=1)
     context_bundle_ref: str | None = Field(
@@ -679,6 +692,12 @@ class CheckpointBranchForkModel(BaseModel):
     created_step_execution_id: str | None = Field(
         None, alias="createdStepExecutionId", min_length=1
     )
+    runtime_agent_run_id: str | None = Field(
+        None, alias="runtimeAgentRunId", min_length=1
+    )
+    provider_session_id: str | None = Field(
+        None, alias="providerSessionId", min_length=1
+    )
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
 
     @field_validator("*", mode="before")
@@ -698,3 +717,12 @@ class CheckpointBranchStateUpdateModel(BaseModel):
     state: CheckpointBranchStateValue
     promoted_at: datetime | None = Field(None, alias="promotedAt")
     archived_at: datetime | None = Field(None, alias="archivedAt")
+
+    @field_validator("promoted_at", "archived_at", mode="after")
+    @classmethod
+    def _ensure_utc(cls, value: datetime | None) -> datetime | None:
+        # Naive values come from DB round trips that drop tzinfo (SQLite);
+        # stored instants are UTC, so tag them for consistent read models.
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value

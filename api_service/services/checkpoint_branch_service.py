@@ -91,10 +91,15 @@ class CheckpointBranchService:
         self,
         branch_id: str,
     ) -> WorkflowCheckpointBranchTurn | None:
+        # branch_turn_id breaks created_at ties so same-transaction turns
+        # resolve to a deterministic parent.
         result = await self._session.execute(
             select(WorkflowCheckpointBranchTurn)
             .where(WorkflowCheckpointBranchTurn.branch_id == branch_id)
-            .order_by(WorkflowCheckpointBranchTurn.created_at.desc())
+            .order_by(
+                WorkflowCheckpointBranchTurn.created_at.desc(),
+                WorkflowCheckpointBranchTurn.branch_turn_id.desc(),
+            )
             .limit(1)
         )
         return result.scalar_one_or_none()
@@ -126,17 +131,16 @@ class CheckpointBranchService:
                 "idempotencyKey is already bound to a turn with different instructions"
             )
 
-    async def _operation_artifact(
+    async def _operation_artifact_by_key(
         self,
         *,
         branch_id: str,
         idempotency_key: str,
-        artifact_kind: str,
     ) -> WorkflowCheckpointBranchArtifact | None:
         result = await self._session.execute(
             select(WorkflowCheckpointBranchArtifact).where(
                 WorkflowCheckpointBranchArtifact.branch_id == branch_id,
-                WorkflowCheckpointBranchArtifact.artifact_kind == artifact_kind,
+                WorkflowCheckpointBranchArtifact.artifact_kind.like("operation_%"),
                 WorkflowCheckpointBranchArtifact.artifact_ref
                 == self._operation_artifact_ref(idempotency_key),
             )
@@ -146,31 +150,29 @@ class CheckpointBranchService:
     def _operation_artifact_ref(self, idempotency_key: str) -> str:
         return f"idempotency://{idempotency_key.strip()}"
 
-    async def _record_operation_artifact_once(
+    async def _replayed_operation(
         self,
         *,
-        branch_id: str,
+        branch: WorkflowCheckpointBranch,
         idempotency_key: str,
         artifact_kind: str,
-    ) -> WorkflowCheckpointBranchArtifact:
-        existing = await self._operation_artifact(
-            branch_id=branch_id,
+    ) -> CheckpointBranchStateUpdateModel | None:
+        existing = await self._operation_artifact_by_key(
+            branch_id=branch.branch_id,
             idempotency_key=idempotency_key,
-            artifact_kind=artifact_kind,
         )
-        if existing is not None:
-            return existing
-        return await self.record_artifact(
-            branch_id=branch_id,
-            artifact_ref=self._operation_artifact_ref(idempotency_key),
-            artifact_kind=artifact_kind,
-        )
+        if existing is None:
+            return None
+        if existing.artifact_kind != artifact_kind:
+            raise ValueError(
+                "idempotencyKey is already bound to a different branch operation"
+            )
+        return CheckpointBranchStateUpdateModel.model_validate(branch)
 
     async def _branch_graph(
         self,
         branch: WorkflowCheckpointBranch,
     ) -> CheckpointBranchGraphModel:
-        await self._session.refresh(branch)
         turns = (
             await self._session.execute(
                 select(WorkflowCheckpointBranchTurn)
@@ -313,6 +315,7 @@ class CheckpointBranchService:
         branch.current_head_step_execution_id = turn.created_step_execution_id
         branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
         await self._session.flush()
+        await self._session.refresh(branch)
         return await self._branch_graph(branch)
 
     async def continue_branch(
@@ -336,6 +339,14 @@ class CheckpointBranchService:
                 instruction_digest=model.instruction_digest,
             )
             return existing_turn
+        if branch.state in {
+            CheckpointBranchState.ARCHIVED.value,
+            CheckpointBranchState.PROMOTED.value,
+            CheckpointBranchState.SUPERSEDED.value,
+        }:
+            raise ValueError(
+                f"cannot continue checkpoint branch in state '{branch.state}'"
+            )
         latest_turn = await self._latest_turn(branch_id)
         source_checkpoint_ref = (
             branch.current_head_checkpoint_ref or branch.source_checkpoint_ref
@@ -344,6 +355,10 @@ class CheckpointBranchService:
             branch.source_checkpoint_digest
             if source_checkpoint_ref == branch.source_checkpoint_ref
             else None
+        )
+        workspace_policy = model.workspace_policy or branch.workspace_policy
+        runtime_context_policy = (
+            model.runtime_context_policy or branch.runtime_context_policy
         )
         turn = await self.create_turn(
             {
@@ -356,8 +371,8 @@ class CheckpointBranchService:
                 "sourceStateKind": branch.source_state_kind,
                 "sourceStateRef": branch.source_state_ref,
                 "sourceStateDigest": branch.source_state_digest,
-                "workspacePolicy": branch.workspace_policy,
-                "runtimeContextPolicy": branch.runtime_context_policy,
+                "workspacePolicy": workspace_policy,
+                "runtimeContextPolicy": runtime_context_policy,
                 "instructionRef": model.instruction_ref,
                 "instructionDigest": model.instruction_digest,
                 "contextBundleRef": model.context_bundle_ref,
@@ -369,6 +384,8 @@ class CheckpointBranchService:
             }
         )
         branch.state = CheckpointBranchState.ACTIVE.value
+        branch.workspace_policy = workspace_policy
+        branch.runtime_context_policy = runtime_context_policy
         branch.current_head_step_execution_id = turn.created_step_execution_id
         branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
         await self._session.flush()
@@ -399,6 +416,13 @@ class CheckpointBranchService:
                 branch_id=existing_turn.branch_id,
             )
             return await self._branch_graph(existing_child)
+        if parent.state in {
+            CheckpointBranchState.ARCHIVED.value,
+            CheckpointBranchState.SUPERSEDED.value,
+        }:
+            raise ValueError(
+                f"cannot fork checkpoint branch in state '{parent.state}'"
+            )
         parent_turn = await self._require_turn_on_branch(
             branch_id=parent.branch_id,
             branch_turn_id=model.parent_turn_id,
@@ -428,7 +452,7 @@ class CheckpointBranchService:
                 "parentTurnId": model.parent_turn_id,
             }
         )
-        await self.create_turn(
+        turn = await self.create_turn(
             {
                 "branchTurnId": model.branch_turn_id
                 or self._next_turn_id(model.branch_id, 0),
@@ -445,11 +469,16 @@ class CheckpointBranchService:
                 "instructionDigest": model.instruction_digest,
                 "contextBundleRef": model.context_bundle_ref,
                 "createdStepExecutionId": model.created_step_execution_id,
+                "runtimeAgentRunId": model.runtime_agent_run_id,
+                "providerSessionId": model.provider_session_id,
                 "idempotencyKey": model.idempotency_key,
                 "status": "created",
             }
         )
+        child.current_head_step_execution_id = turn.created_step_execution_id
+        child.current_head_checkpoint_ref = turn.source_checkpoint_ref
         await self._session.flush()
+        await self._session.refresh(child)
         return await self._branch_graph(child)
 
     async def archive_branch(
@@ -460,22 +489,23 @@ class CheckpointBranchService:
         idempotency_key: str | None = None,
     ) -> CheckpointBranchStateUpdateModel:
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
-        if idempotency_key and await self._operation_artifact(
-            branch_id=branch.branch_id,
-            idempotency_key=idempotency_key,
-            artifact_kind="operation_archive",
-        ):
-            return CheckpointBranchStateUpdateModel.model_validate(branch)
-        branch.state = CheckpointBranchState.ARCHIVED.value
-        branch.archived_at = branch.archived_at or datetime.now(UTC)
         if idempotency_key:
-            await self._record_operation_artifact_once(
-                branch_id=branch.branch_id,
+            replayed = await self._replayed_operation(
+                branch=branch,
                 idempotency_key=idempotency_key,
                 artifact_kind="operation_archive",
             )
+            if replayed is not None:
+                return replayed
+        branch.state = CheckpointBranchState.ARCHIVED.value
+        branch.archived_at = branch.archived_at or datetime.now(UTC)
+        if idempotency_key:
+            await self.record_artifact(
+                branch_id=branch.branch_id,
+                artifact_ref=self._operation_artifact_ref(idempotency_key),
+                artifact_kind="operation_archive",
+            )
         await self._session.flush()
-        await self._session.refresh(branch)
         return CheckpointBranchStateUpdateModel.model_validate(branch)
 
     async def mark_failed(
@@ -518,21 +548,22 @@ class CheckpointBranchService:
         artifact_kind: str,
     ) -> CheckpointBranchStateUpdateModel:
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
-        if idempotency_key and await self._operation_artifact(
-            branch_id=branch.branch_id,
-            idempotency_key=idempotency_key,
-            artifact_kind=artifact_kind,
-        ):
-            return CheckpointBranchStateUpdateModel.model_validate(branch)
-        branch.state = state.value
         if idempotency_key:
-            await self._record_operation_artifact_once(
-                branch_id=branch.branch_id,
+            replayed = await self._replayed_operation(
+                branch=branch,
                 idempotency_key=idempotency_key,
                 artifact_kind=artifact_kind,
             )
+            if replayed is not None:
+                return replayed
+        branch.state = state.value
+        if idempotency_key:
+            await self.record_artifact(
+                branch_id=branch.branch_id,
+                artifact_ref=self._operation_artifact_ref(idempotency_key),
+                artifact_kind=artifact_kind,
+            )
         await self._session.flush()
-        await self._session.refresh(branch)
         return CheckpointBranchStateUpdateModel.model_validate(branch)
 
     async def mark_promotable(
@@ -544,12 +575,13 @@ class CheckpointBranchService:
         candidate_artifact_ref: str | None = None,
     ) -> CheckpointBranchStateUpdateModel:
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
-        if await self._operation_artifact(
-            branch_id=branch.branch_id,
+        replayed = await self._replayed_operation(
+            branch=branch,
             idempotency_key=idempotency_key,
             artifact_kind="operation_promotable",
-        ):
-            return CheckpointBranchStateUpdateModel.model_validate(branch)
+        )
+        if replayed is not None:
+            return replayed
         branch.state = CheckpointBranchState.PROMOTABLE.value
         if candidate_artifact_ref:
             existing_candidate = (
@@ -569,13 +601,12 @@ class CheckpointBranchService:
                     artifact_ref=candidate_artifact_ref,
                     artifact_kind="candidate_result",
                 )
-        await self._record_operation_artifact_once(
+        await self.record_artifact(
             branch_id=branch.branch_id,
-            idempotency_key=idempotency_key,
+            artifact_ref=self._operation_artifact_ref(idempotency_key),
             artifact_kind="operation_promotable",
         )
         await self._session.flush()
-        await self._session.refresh(branch)
         return CheckpointBranchStateUpdateModel.model_validate(branch)
 
     async def list_branch_graphs(
