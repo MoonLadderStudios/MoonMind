@@ -609,6 +609,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert batch_template is not None
         batch_annotations = batch_template.annotations or {}
         assert batch_annotations["runtimeInheritance"] == "caller"
+        assert batch_annotations["workflowPublish"] == {"mode": "none"}
         batch_schema = batch_annotations["inputSchema"]
         assert batch_schema["required"] == [
             "jira_project_key",
@@ -636,7 +637,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         batch_steps = batch_template.steps
         assert len(batch_steps) == 1
         assert batch_steps[0]["skill"]["id"] == "batch-workflows"
-        assert batch_steps[0]["publish"] == {"mode": "none"}
+        assert "publish" not in batch_steps[0]
         assert batch_steps[0]["batchOrchestration"]["runtime"]["inherit"] == "caller"
         assert batch_steps[0]["batchOrchestration"]["source"]["kind"] == "jira_status"
         assert (

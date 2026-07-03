@@ -51,6 +51,7 @@ _FORBIDDEN_STEP_KEYS = frozenset(
         "repository",
         "repo",
         "git",
+        "publish",
         "container",
         "command",
         "cmd",
@@ -131,7 +132,6 @@ _STEP_RESERVED_KEYS = frozenset(
         "skill",
         "skills",
         "preset",
-        "publish",
         "annotations",
     }
 )
@@ -1744,13 +1744,6 @@ class PresetCatalogService:
                         f"Step {index} annotations must be an object when provided."
                     )
                 step_payload["annotations"] = dict(annotations)
-            publish = raw_step.get("publish")
-            if publish is not None:
-                if not isinstance(publish, dict):
-                    raise PresetValidationError(
-                        f"Step {index} publish must be an object when provided."
-                    )
-                step_payload["publish"] = dict(publish)
             step_payload.update(
                 {
                     str(key).strip(): value
@@ -2020,14 +2013,6 @@ class PresetCatalogService:
                         f"{_format_include_path(path)}."
                     )
                 step_payload["annotations"] = dict(annotations)
-            publish = rendered.get("publish")
-            if publish is not None:
-                if not isinstance(publish, dict):
-                    raise PresetValidationError(
-                        f"Expanded step publish must be an object at "
-                        f"{_format_include_path(path)}."
-                    )
-                step_payload["publish"] = dict(publish)
             if step_type == _STEP_TYPE_TOOL:
                 if rendered.get("skill") is not None:
                     raise PresetValidationError(
@@ -2180,6 +2165,12 @@ class PresetCatalogService:
                 for cap in _extract_step_capabilities(step)
             ]
         )
+        workflow_publish = (template.annotations or {}).get("workflowPublish")
+        if workflow_publish is not None and not isinstance(workflow_publish, Mapping):
+            raise PresetValidationError(
+                "Template workflowPublish annotation must be an object."
+            )
+
         if template.release_status is PresetReleaseStatus.INACTIVE:
             warnings.append("Template is marked inactive.")
 
@@ -2199,7 +2190,7 @@ class PresetCatalogService:
             },
         )
         _METRICS.increment("expand")
-        return {
+        expanded_payload = {
             "steps": resolved_steps,
             "composition": composition,
             "authoredPresets": authored_presets,
@@ -2215,6 +2206,9 @@ class PresetCatalogService:
             "capabilities": template_caps,
             "warnings": warnings,
         }
+        if isinstance(workflow_publish, Mapping):
+            expanded_payload["publish"] = dict(workflow_publish)
+        return expanded_payload
 
     def _resolve_inputs(
         self,
