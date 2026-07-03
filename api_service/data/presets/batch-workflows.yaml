@@ -16,6 +16,8 @@ annotations:
   sourceSkill: batch-workflows
   output: child-workflows
   runtimeInheritance: caller
+  workflowPublish:
+    mode: none
   orchestration:
     kind: batch-workflows
     runtimeInheritance: caller
