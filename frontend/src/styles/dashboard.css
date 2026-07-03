@@ -2625,10 +2625,14 @@ tr[data-proposal-id].proposal-consuming td {
 
 @media (max-width: 767px) {
   .workflow-list-results-header {
+    display: flex;
     align-items: center;
     justify-content: flex-start;
     flex-wrap: nowrap;
     gap: 0.5rem;
+    padding: 0 0 0.75rem;
+    border-bottom: 0;
+    background: transparent;
   }
 
   .workflow-list-filter-bar {
@@ -2646,6 +2650,12 @@ tr[data-proposal-id].proposal-consuming td {
   .workflow-list-view-options {
     flex: 0 0 auto;
     margin-left: 0;
+  }
+
+  .workflow-list-view-options-popover {
+    right: auto;
+    left: 0;
+    max-width: calc(100vw - 2rem);
   }
 
   .queue-results-toolbar,
@@ -2682,13 +2692,6 @@ tr[data-proposal-id].proposal-consuming td {
     background: transparent;
     box-shadow: none;
     padding: 0;
-  }
-
-  .workflow-list-results-header {
-    display: flex;
-    padding: 0 0 0.75rem;
-    border-bottom: 0;
-    background: transparent;
   }
 
   .workflow-list-data-slab .workflow-list-results-footer {
