@@ -1,6 +1,6 @@
 ---
 name: story-reconcile-implementation
-description: Compare MoonSpec story breakdown output against the current repository implementation, preserve fully implemented stories as skipped, narrow partially implemented stories to remaining work, and rewrite the story breakdown handoff before Jira issue creation.
+description: Compare MoonSpec story breakdown output against the current repository implementation, preserve fully implemented stories as skipped, narrow partially implemented stories to remaining work, and rewrite the story breakdown handoff before issue creation.
 metadata:
   required-capabilities:
     - git
@@ -8,7 +8,7 @@ metadata:
 
 # Story Implementation Reconciliation
 
-Use this skill after `moonspec-breakdown` and before Jira issue creation when a breakdown may include work that is already fully or partially implemented.
+Use this skill after `moonspec-breakdown` and before provider-backed issue creation when a breakdown may include work that is already fully or partially implemented.
 
 ## Inputs
 
@@ -56,7 +56,7 @@ For a fully implemented story:
       "evidence": "tests/unit/example_test.py covers the acceptance path."
     }
   ],
-  "jiraCreation": {
+  "issueCreation": {
     "action": "skip",
     "reason": "All acceptance criteria have repository evidence."
   }
@@ -85,9 +85,9 @@ For a partially implemented story:
       "Unmet requirement."
     ]
   },
-  "jiraCreation": {
+  "issueCreation": {
     "action": "create_remaining_work_issue",
-    "reason": "Some criteria are already implemented; Jira should track only the remaining work."
+    "reason": "Some criteria are already implemented; the provider issue should track only the remaining work."
   }
 }
 ```
@@ -97,7 +97,7 @@ For a not implemented story:
 ```json
 {
   "implementationStatus": "not_implemented",
-  "jiraCreation": {
+  "issueCreation": {
     "action": "create_issue",
     "reason": "No implementation evidence found."
   }
@@ -109,12 +109,16 @@ For an unverifiable story:
 ```json
 {
   "implementationStatus": "unverifiable",
-  "jiraCreation": {
+  "issueCreation": {
     "action": "manual_review",
     "reason": "Repository evidence is insufficient to safely create implementation work."
   }
 }
 ```
+
+`issueCreation` is the canonical provider-neutral field. `jiraCreation` may be
+included only as a temporary compatibility alias when an existing Jira consumer
+requires it; new GitHub-facing handoffs must not rely on `jiraCreation`.
 
 ## Markdown Report
 
@@ -127,15 +131,15 @@ The markdown report must include:
 - Skipped fully implemented stories.
 - Unverifiable stories and the exact missing evidence or ambiguity.
 - Doc-drift notes: when repository evidence shows the canonical source document itself is stale, wrong, or internally inconsistent (not just a story), record the document path, the contradicted claim, and the evidence. These notes are informational input for doc reconciliation; they do not change Jira actions.
-- Confirmation that Jira issue creation should consume the reconciled JSON, not the original unreconciled story list.
+- Confirmation that provider issue creation should consume the reconciled JSON, not the original unreconciled story list.
 
 ## Key Rules
 
-- Do not create Jira issues.
-- Do not create downstream Jira Orchestrate tasks.
+- Do not create provider issues.
+- Do not create downstream workflow executions.
 - Do not implement code.
 - Do not create or modify `spec.md`.
 - Do not delete original story scope, source references, coverage IDs, dependencies, assumptions, or non-goals.
-- Fully implemented stories must use `jiraCreation.action = "skip"`.
+- Fully implemented stories must use `issueCreation.action = "skip"`.
 - Partially implemented stories must preserve original scope and define `remainingWork`.
-- Unverifiable stories must use `jiraCreation.action = "manual_review"` so deterministic Jira creation will not create work automatically.
+- Unverifiable stories must use `issueCreation.action = "manual_review"` so deterministic issue creation will not create work automatically.

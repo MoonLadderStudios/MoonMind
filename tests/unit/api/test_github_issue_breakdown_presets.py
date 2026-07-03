@@ -109,6 +109,13 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
     ]
 
     create_step = template.steps[2]
+    all_instructions = "\n".join(
+        step.get("instructions", "") for step in template.steps
+    )
+    assert "jiraCreation" not in all_instructions
+    assert "issueCreation" in all_instructions
+    assert "traceability-only" in all_instructions
+    assert "dependencyMode is intentionally none" in create_step["instructions"]
     assert create_step["storyOutput"] == {
         "mode": "github",
         "fallback": "fail",
@@ -120,6 +127,7 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
     downstream_step = template.steps[3]
     assert "workflow execution" in downstream_step["instructions"]
     assert "MoonMind task" not in downstream_step["instructions"]
+    assert "breakdown task" not in downstream_step["instructions"]
     assert downstream_step["githubOrchestration"]["traceability"] == {
         "sourceIssueKey": "{{ inputs.source_issue_key }}"
     }
