@@ -51,13 +51,19 @@ annotations:
           assignee:
             type: string
             title: Assignee
+      run_verify:
+        type: boolean
+        title: Run verification
+        description: Run the MoonSpec verification and remediation gate before pull request creation and Jira finalization.
+        default: true
   uiSchema:
     jira_issue:
       widget: jira.issue-picker
       dataSource: jira.issues
       searchPlaceholder: Search Jira issues
       allowManualKeyEntry: true
-  defaults: {}
+  defaults:
+    run_verify: true
   issueInput:
     provider: jira
     objectInput: jira_issue
@@ -74,6 +80,11 @@ inputs:
   type: textarea
   required: false
   default: ''
+- name: run_verify
+  label: Run Verification
+  type: boolean
+  required: false
+  default: true
 steps:
 - title: Load Jira preset brief
   type: tool
@@ -201,6 +212,7 @@ steps:
     verify_artifact_path: artifacts/jira-implement-verify.json
     verification_target: issue_brief
     remediation_max_attempts: '6'
+    run_verify: '{{ inputs.run_verify }}'
     constraints: '{{ inputs.constraints }}'
 - title: Finalize Jira status
   annotations:
@@ -224,14 +236,18 @@ steps:
 
 
     - Otherwise (the initial verdict was PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED),
-    transition Jira issue {{ inputs.jira_issue_key }} to status Review only after
+    {% if inputs.run_verify %}transition Jira issue {{ inputs.jira_issue_key }} to status Review only after
     the latest controlling verifier result in artifacts/jira-implement-verify.json
-    reports FULLY_IMPLEMENTED and the pull request exists. Read the previous pull
+    reports FULLY_IMPLEMENTED and the pull request exists.{% else %}transition Jira issue {{ inputs.jira_issue_key }} to status Review after
+    implementation is complete, the relevant tests have passed, and the pull request exists.
+    Verification was disabled for this workflow execution, so do not require
+    artifacts/jira-implement-verify.json or a moonspec-verify verdict.{% endif %} Read the previous pull
     request creation result or artifacts/jira-implement-pr.json and verify it contains
-    a non-empty pull_request_url for {{ inputs.jira_issue_key }}. If the verifier
+    a non-empty pull_request_url for {{ inputs.jira_issue_key }}. {% if inputs.run_verify %}If the verifier
     artifact is missing, terminal, reports ADDITIONAL_WORK_NEEDED after remediation
     is exhausted, or no confirmed pull request URL is available, stop without changing
-    Jira and report that Review is blocked until verification and PR creation succeed.
+    Jira and report that Review is blocked until verification and PR creation succeed.{% else %}If no confirmed pull request URL is available, stop without changing
+    Jira and report that Review is blocked until PR creation succeeds.{% endif %}
     Add or preserve a Jira-visible reference to the pull request when supported by
     the trusted tools.
 

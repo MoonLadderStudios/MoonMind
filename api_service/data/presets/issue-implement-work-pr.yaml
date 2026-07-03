@@ -50,6 +50,11 @@ inputs:
   type: text
   required: false
   default: '6'
+- name: run_verify
+  label: Run Verification
+  type: boolean
+  required: false
+  default: true
 - name: constraints
   label: Constraints
   type: textarea
@@ -105,6 +110,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify implementation
+  enabled: '{{ inputs.run_verify }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} (or the recorded verdict
     from the assess step) before doing anything.
 
@@ -156,6 +162,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Remediate verification gaps 1 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 1
@@ -192,6 +199,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 1 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 1
@@ -228,6 +236,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Remediate verification gaps 2 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 2
@@ -264,6 +273,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 2 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 2
@@ -300,6 +310,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Remediate verification gaps 3 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 3
@@ -336,6 +347,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 3 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 3
@@ -372,6 +384,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Remediate verification gaps 4 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 4
@@ -408,6 +421,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 4 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 4
@@ -444,6 +458,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Remediate verification gaps 5 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 5
@@ -480,6 +495,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 5 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 5
@@ -516,6 +532,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Remediate verification gaps 6 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 6
@@ -552,6 +569,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 6 of {{ inputs.remediation_max_attempts }}
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 6
@@ -605,13 +623,16 @@ steps:
 
 
     Otherwise create a pull request for the completed work for {{ inputs.issue_provider
-    }} issue {{ inputs.issue_ref }} only after the latest controlling post-remediation
+    }} issue {{ inputs.issue_ref }} {% if inputs.run_verify %}only after the latest controlling post-remediation
     moonspec-verify verdict is FULLY_IMPLEMENTED in {{ inputs.verify_artifact_path }}.
     If the verifier reported ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED,
     FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, or if
     {{ inputs.remediation_max_attempts }} remediation attempts have been exhausted
     without FULLY_IMPLEMENTED, stop without creating a pull request and report the
-    verifier evidence.
+    verifier evidence.{% else %}after implementation is complete and the focused tests
+    required by the issue have passed. Verification was disabled for this workflow
+    execution, so do not require {{ inputs.verify_artifact_path }} or a moonspec-verify
+    verdict before creating the pull request.{% endif %}
 
 
     This Issue Implement handoff step is the explicit PR-publication step for this
