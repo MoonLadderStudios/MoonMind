@@ -4232,6 +4232,18 @@ async def update_github_issue_status(
     pull_request_url = _github_status_pull_request_url(inputs, _context)
     if mode == "finalize_after_pr_or_done":
         if pull_request_url:
+            if not (
+                inputs.get("verificationArtifactPath")
+                or inputs.get("verification_artifact_path")
+            ):
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "decision": "blocked",
+                        "summary": "GitHub issue Code Review update requires a verification artifact path.",
+                    },
+                )
             verification_verdict, verification_available = (
                 _github_status_verification_verdict_from_artifact(inputs, _context)
             )

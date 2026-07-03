@@ -3102,6 +3102,7 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "issueNumber": "1067",
         "mode": "finalize_after_pr_or_done",
         "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
+        "verificationArtifactPath": "var/artifacts/moonspec-verify/github-issue-orchestrate.json",
     }
     assert expanded["steps"][11]["skill"]["id"] == "moonspec-verify"
     assert expanded["steps"][11]["skill"]["args"]["verify_artifact_path"] == (

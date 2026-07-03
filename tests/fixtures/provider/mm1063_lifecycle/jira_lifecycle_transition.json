@@ -1,0 +1,21 @@
+{
+  "provider": "jira",
+  "boundary": "lifecycle_transition",
+  "mode": "recorded_trusted_tool",
+  "tool": "jira.transition_issue",
+  "input": {
+    "issueKey": "MM-1063",
+    "transitionName": "Code Review",
+    "verificationArtifactPath": "artifacts/issue-implement-verify.json"
+  },
+  "trustedArtifacts": {
+    "verification": {
+      "verdict": "FULLY_IMPLEMENTED"
+    }
+  },
+  "output": {
+    "status": "COMPLETED",
+    "transitioned": true,
+    "issueKey": "MM-1063"
+  }
+}

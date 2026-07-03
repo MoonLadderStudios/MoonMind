@@ -554,6 +554,22 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         result = await session.execute(
             select(Preset)
             .where(
+                Preset.slug == "github-issue-orchestrate",
+                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_ref.is_(None),
+            )
+        )
+        github_orchestrate_template = result.scalar_one_or_none()
+        assert github_orchestrate_template is not None
+        final_status_step = github_orchestrate_template.steps[-1]
+        assert final_status_step["tool"]["id"] == "github.update_issue_status"
+        assert final_status_step["tool"]["inputs"]["verificationArtifactPath"] == (
+            "var/artifacts/moonspec-verify/github-issue-orchestrate.json"
+        )
+
+        result = await session.execute(
+            select(Preset)
+            .where(
                 Preset.slug == "document-update-orchestrate",
                 Preset.scope_type == PresetScopeType.GLOBAL,
                 Preset.scope_ref.is_(None),
