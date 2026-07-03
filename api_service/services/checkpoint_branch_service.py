@@ -37,15 +37,6 @@ from moonmind.statuses.checkpoint_branch import (
 SOURCE_TRACEABILITY_ISSUES = ("MM-1087", "MM-1088")
 CHECKPOINT_BRANCH_GRAPH_TRACEABILITY_ISSUES = ("MM-1087", "MM-1099")
 _PROTECTED_GIT_WORK_BRANCHES = {"", "main", "master", "HEAD"}
-_MINIMUM_BRANCH_TURN_ARTIFACTS = (
-    "input.branch_turn.instructions.md",
-    "runtime.branch_turn.context_bundle.json",
-    "runtime.branch_turn.agent_request.json",
-    "runtime.branch_turn.agent_result.json",
-    "output.branch_turn.step_execution_manifest.json",
-    "output.branch_turn.checkpoint.json",
-    "output.branch_turn.diagnostics.json",
-)
 
 
 def build_branch_turn_launch_idempotency_key(
@@ -672,7 +663,7 @@ class CheckpointBranchService:
         branch_turn_id: str,
         context_bundle_ref: str,
         step_execution_manifest_ref: str,
-        checkpoint_ref: str,
+        checkpoint_ref: str | None,
         diagnostics_ref: str,
         idempotency_key: str,
         created_step_execution_id: str | None = None,
@@ -684,6 +675,14 @@ class CheckpointBranchService:
         """Launch one persisted branch turn as semantic runtime evidence."""
 
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        if branch.state in {
+            CheckpointBranchState.ARCHIVED.value,
+            CheckpointBranchState.PROMOTED.value,
+            CheckpointBranchState.SUPERSEDED.value,
+        }:
+            raise ValueError(
+                f"cannot launch checkpoint branch turn in state '{branch.state}'"
+            )
         turn = await self._require_turn_on_branch(
             branch_id=branch.branch_id,
             branch_turn_id=branch_turn_id,
@@ -699,15 +698,8 @@ class CheckpointBranchService:
                 "branch turn launch idempotency key must include workflow, "
                 "branch, and branch turn identity"
             )
-        if (
-            not created_step_execution_id
-            and not runtime_agent_run_id
-            and not provider_session_id
-        ):
-            raise ValueError(
-                "branch turn launch requires Step Execution or typed runtime "
-                "continuation evidence"
-            )
+        if not created_step_execution_id:
+            raise ValueError("branch turn launch requires Step Execution evidence")
         launch_values = {
             "context_bundle_ref": context_bundle_ref,
             "step_execution_manifest_ref": step_execution_manifest_ref,
@@ -756,52 +748,56 @@ class CheckpointBranchService:
         }
         branch.state = CheckpointBranchState.ACTIVE.value
         branch.current_head_step_execution_id = turn.created_step_execution_id
-        branch.current_head_checkpoint_ref = checkpoint_ref.strip()
+        if checkpoint_ref:
+            branch.current_head_checkpoint_ref = checkpoint_ref.strip()
         branch.artifact_refs = {
             **(branch.artifact_refs or {}),
             "latestBranchTurnContextBundle": context_bundle_ref,
             "latestBranchTurnManifest": step_execution_manifest_ref,
-            "latestBranchTurnCheckpoint": checkpoint_ref,
             "latestBranchTurnDiagnostics": diagnostics_ref,
         }
-        await self._upsert_turn_artifact(
-            branch_id=branch.branch_id,
-            branch_turn_id=turn.branch_turn_id,
-            artifact_kind="input.branch_turn.instructions.md",
-            artifact_ref=turn.instruction_ref,
-        )
+        if checkpoint_ref:
+            branch.artifact_refs["latestBranchTurnCheckpoint"] = checkpoint_ref
+        if turn.instruction_ref.startswith("artifact://"):
+            await self._upsert_turn_artifact(
+                branch_id=branch.branch_id,
+                branch_turn_id=turn.branch_turn_id,
+                artifact_kind="input.branch_turn.instructions.md",
+                artifact_ref=turn.instruction_ref,
+            )
         await self._upsert_turn_artifact(
             branch_id=branch.branch_id,
             branch_turn_id=turn.branch_turn_id,
             artifact_kind="runtime.branch_turn.context_bundle.json",
             artifact_ref=context_bundle_ref,
         )
-        await self._upsert_turn_artifact(
-            branch_id=branch.branch_id,
-            branch_turn_id=turn.branch_turn_id,
-            artifact_kind="runtime.branch_turn.agent_request.json",
-            artifact_ref=agent_request_ref
-            or f"artifact://checkpoint-branch-turns/{turn.branch_turn_id}/agent-request",
-        )
-        await self._upsert_turn_artifact(
-            branch_id=branch.branch_id,
-            branch_turn_id=turn.branch_turn_id,
-            artifact_kind="runtime.branch_turn.agent_result.json",
-            artifact_ref=agent_result_ref
-            or f"artifact://checkpoint-branch-turns/{turn.branch_turn_id}/agent-result",
-        )
+        if agent_request_ref:
+            await self._upsert_turn_artifact(
+                branch_id=branch.branch_id,
+                branch_turn_id=turn.branch_turn_id,
+                artifact_kind="runtime.branch_turn.agent_request.json",
+                artifact_ref=agent_request_ref,
+            )
+        if agent_result_ref:
+            await self._upsert_turn_artifact(
+                branch_id=branch.branch_id,
+                branch_turn_id=turn.branch_turn_id,
+                artifact_kind="runtime.branch_turn.agent_result.json",
+                artifact_ref=agent_result_ref,
+            )
         await self._upsert_turn_artifact(
             branch_id=branch.branch_id,
             branch_turn_id=turn.branch_turn_id,
             artifact_kind="output.branch_turn.step_execution_manifest.json",
             artifact_ref=step_execution_manifest_ref,
         )
-        await self._upsert_turn_artifact(
-            branch_id=branch.branch_id,
-            branch_turn_id=turn.branch_turn_id,
-            artifact_kind="output.branch_turn.checkpoint.json",
-            artifact_ref=checkpoint_ref,
-        )
+        if checkpoint_ref:
+            await self._upsert_turn_artifact(
+                branch_id=branch.branch_id,
+                branch_turn_id=turn.branch_turn_id,
+                artifact_kind="output.branch_turn.checkpoint.json",
+                artifact_ref=checkpoint_ref,
+            )
         await self._upsert_turn_artifact(
             branch_id=branch.branch_id,
             branch_turn_id=turn.branch_turn_id,
@@ -820,10 +816,8 @@ class CheckpointBranchService:
         for field_name, requested in values.items():
             requested_value = requested.strip() if requested else None
             existing_value = getattr(turn, field_name)
-            if (
-                existing_value
-                and requested_value
-                and existing_value != requested_value
+            if existing_value is not None and (
+                requested_value is None or existing_value != requested_value
             ):
                 raise ValueError(
                     f"immutable launch field {field_name} cannot be changed"
@@ -837,6 +831,7 @@ class CheckpointBranchService:
         artifact_kind: str,
         artifact_ref: str,
     ) -> WorkflowCheckpointBranchArtifact:
+        artifact_ref = artifact_ref.strip()
         result = await self._session.execute(
             select(WorkflowCheckpointBranchArtifact).where(
                 WorkflowCheckpointBranchArtifact.branch_id == branch_id,
@@ -855,7 +850,7 @@ class CheckpointBranchService:
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,
             artifact_kind=artifact_kind,
-            artifact_ref=artifact_ref.strip(),
+            artifact_ref=artifact_ref,
         )
         self._session.add(artifact)
         await self._session.flush()

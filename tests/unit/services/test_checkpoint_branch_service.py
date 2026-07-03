@@ -988,6 +988,106 @@ async def test_checkpoint_branch_service_rejects_launch_mutation_and_bad_key(
             idempotency_key=launch_key,
         )
 
+    with pytest.raises(
+        ValueError, match="immutable launch field created_step_execution_id"
+    ):
+        await service.launch_turn(
+            workflow_id="wf-1",
+            branch_id="cbr-immutable",
+            branch_turn_id=turn_id,
+            context_bundle_ref="artifact://context/1",
+            step_execution_manifest_ref="artifact://manifest/1",
+            checkpoint_ref="artifact://checkpoint/1",
+            diagnostics_ref="artifact://diagnostics/1",
+            idempotency_key=launch_key,
+        )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_service_launch_rejects_terminal_branch(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-launch-archived"),
+            "instructionRef": "artifact://instructions/root",
+            "instructionDigest": "sha256:root",
+            "idempotencyKey": "MM-1100:cbr-launch-archived:create",
+        }
+    )
+    turn_id = graph.turns[0].branch_turn_id
+    await service.archive_branch(
+        workflow_id="wf-1",
+        branch_id="cbr-launch-archived",
+        idempotency_key="MM-1100:cbr-launch-archived:archive",
+    )
+    launch_key = build_branch_turn_launch_idempotency_key(
+        workflow_id="wf-1",
+        branch_id="cbr-launch-archived",
+        branch_turn_id=turn_id,
+    )
+
+    with pytest.raises(
+        ValueError, match="cannot launch checkpoint branch turn in state 'archived'"
+    ):
+        await service.launch_turn(
+            workflow_id="wf-1",
+            branch_id="cbr-launch-archived",
+            branch_turn_id=turn_id,
+            context_bundle_ref="artifact://context/1",
+            step_execution_manifest_ref="artifact://manifest/1",
+            checkpoint_ref=None,
+            diagnostics_ref="artifact://diagnostics/1",
+            created_step_execution_id="wf-1:run-branch:implement:execution:6",
+            idempotency_key=launch_key,
+        )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_service_launch_records_only_real_optional_artifacts(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-launch-optional"),
+            "instructionRef": "inline://checkpoint-branch-instruction/abc",
+            "instructionDigest": "sha256:abc",
+            "idempotencyKey": "MM-1100:cbr-launch-optional:create",
+        }
+    )
+    turn_id = graph.turns[0].branch_turn_id
+    launch_key = build_branch_turn_launch_idempotency_key(
+        workflow_id="wf-1",
+        branch_id="cbr-launch-optional",
+        branch_turn_id=turn_id,
+    )
+
+    await service.launch_turn(
+        workflow_id="wf-1",
+        branch_id="cbr-launch-optional",
+        branch_turn_id=turn_id,
+        context_bundle_ref="artifact://context/1",
+        step_execution_manifest_ref="artifact://manifest/1",
+        checkpoint_ref=None,
+        diagnostics_ref="artifact://diagnostics/1",
+        created_step_execution_id="wf-1:run-branch:implement:execution:7",
+        idempotency_key=launch_key,
+    )
+
+    stored_graph = await service.read_branch_graph(
+        workflow_id="wf-1", branch_id="cbr-launch-optional"
+    )
+    artifact_kinds = {artifact.artifact_kind for artifact in stored_graph.artifacts}
+
+    assert artifact_kinds == {
+        "runtime.branch_turn.context_bundle.json",
+        "output.branch_turn.step_execution_manifest.json",
+        "output.branch_turn.diagnostics.json",
+    }
+    assert "latestBranchTurnCheckpoint" not in stored_graph.branch.artifact_refs
+
 
 def test_checkpoint_branch_graph_traceability_preserves_source_issue() -> None:
     assert SOURCE_TRACEABILITY_ISSUES == ("MM-1087", "MM-1088")

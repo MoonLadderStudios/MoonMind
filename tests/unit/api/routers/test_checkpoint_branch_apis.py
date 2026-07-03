@@ -311,6 +311,7 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
     assert body["createdStepExecutionId"] == (
         "mm:wf-branch:run-branch:implement:execution:3"
     )
+    assert "checkpointRef" not in body
     assert body["contextBundleRef"].startswith(
         f"artifact://checkpoint-branch-turns/{branch_turn_id}/context-bundle/"
     )
@@ -342,12 +343,77 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
             )
         ).scalars().all()
 
-    assert len(artifact_rows) == 7
+    assert len(artifact_rows) == 5
+    assert {
+        artifact.artifact_kind for artifact in artifact_rows
+    } == {
+        "runtime.branch_turn.context_bundle.json",
+        "runtime.branch_turn.agent_request.json",
+        "runtime.branch_turn.agent_result.json",
+        "output.branch_turn.step_execution_manifest.json",
+        "output.branch_turn.diagnostics.json",
+    }
     assert len(operation_rows) == 1
+    assert "checkpointRef" not in operation_rows[0].response_payload
     assert operation_rows[0].response_payload["contextBundle"]["branch"][
         "sourceCheckpointRef"
     ] == "artifact://checkpoints/after-implement"
     assert "rawLogs" not in operation_rows[0].response_payload["contextBundle"]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_api_launch_requires_step_execution_id(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1100:create-launch-requires-step"),
+    )
+    branch_id = created.json()["branchId"]
+    turns = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
+    )
+    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
+
+    launched = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
+        f"{branch_turn_id}/launch",
+        json={"runtimeAgentRunId": "agent-run-1"},
+    )
+
+    assert launched.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_api_launch_rejects_archived_branch(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1100:create-launch-archived"),
+    )
+    branch_id = created.json()["branchId"]
+    turns = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
+    )
+    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
+    archived = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/archive",
+        json={"idempotencyKey": "mm-1100:archive-before-launch"},
+    )
+
+    launched = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
+        f"{branch_turn_id}/launch",
+        json={
+            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:9",
+            "diagnosticsRef": "artifact://diagnostics/archived",
+        },
+    )
+
+    assert archived.status_code == 200
+    assert launched.status_code == 409
+    assert launched.json()["detail"]["code"] == "branch_turn_launch_rejected"
 
 
 @pytest.mark.asyncio

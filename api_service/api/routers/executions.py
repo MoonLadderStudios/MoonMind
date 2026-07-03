@@ -11361,11 +11361,6 @@ async def launch_checkpoint_branch_turn(
             ),
         )
     )
-    checkpoint_ref = (
-        branch.current_head_checkpoint_ref
-        or turn.source_checkpoint_ref
-        or branch.source_checkpoint_ref
-    )
     try:
         launched = await CheckpointBranchService(session).launch_turn(
             workflow_id=workflow_id,
@@ -11373,7 +11368,7 @@ async def launch_checkpoint_branch_turn(
             branch_turn_id=turn.branch_turn_id,
             context_bundle_ref=context_bundle_ref,
             step_execution_manifest_ref=manifest_ref,
-            checkpoint_ref=checkpoint_ref,
+            checkpoint_ref=None,
             diagnostics_ref=diagnostics_ref,
             idempotency_key=launch_key,
             created_step_execution_id=payload.created_step_execution_id,
@@ -11401,7 +11396,6 @@ async def launch_checkpoint_branch_turn(
                 "branchTurnId": turn.branch_turn_id,
                 "contextBundleRef": context_bundle_ref,
                 "stepExecutionManifestRef": manifest_ref,
-                "checkpointRef": checkpoint_ref,
                 "diagnosticsRef": diagnostics_ref,
                 "contextBundle": context_bundle,
                 "manifest": manifest_payload,

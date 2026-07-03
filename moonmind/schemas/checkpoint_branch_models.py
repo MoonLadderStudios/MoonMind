@@ -145,8 +145,8 @@ class CheckpointBranchForkRequest(CheckpointBranchContinueRequest):
 class CheckpointBranchTurnLaunchRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    created_step_execution_id: str | None = Field(
-        None, alias="createdStepExecutionId", min_length=1, max_length=255
+    created_step_execution_id: str = Field(
+        ..., alias="createdStepExecutionId", min_length=1, max_length=255
     )
     runtime_agent_run_id: str | None = Field(
         None, alias="runtimeAgentRunId", min_length=1, max_length=255
@@ -211,14 +211,8 @@ class CheckpointBranchTurnLaunchRequest(BaseModel):
 
     @model_validator(mode="after")
     def _requires_runtime_evidence(self) -> "CheckpointBranchTurnLaunchRequest":
-        if (
-            not self.created_step_execution_id
-            and not self.runtime_agent_run_id
-            and not self.provider_session_id
-        ):
-            raise ValueError(
-                "launch requires Step Execution or typed runtime continuation evidence"
-            )
+        if not self.created_step_execution_id:
+            raise ValueError("launch requires Step Execution evidence")
         return self
 
 
