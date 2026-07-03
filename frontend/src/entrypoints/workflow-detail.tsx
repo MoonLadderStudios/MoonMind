@@ -8081,8 +8081,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               isTerminal={isTerminalExecution}
               invalidateWorkflowDetail={invalidate}
               routes={agentRunRoutes}
-              optimisticMessages={[]}
-              setOptimisticMessages={() => undefined}
+              optimisticMessages={chatOptimisticMessages}
+              setOptimisticMessages={setChatOptimisticMessages}
             />
           ) : null}
 

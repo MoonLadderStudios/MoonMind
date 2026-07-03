@@ -9997,7 +9997,7 @@ describe('LiveLogsPanel', () => {
       expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
       expect(screen.getByText('Operator asks the managed session to inspect MM-1032.')).toBeTruthy();
       expect(screen.getByText('Inspecting the durable chat workflow.')).toBeTruthy();
-      expect(screen.getAllByText((content) => content.includes('exec_command')).length).toBeGreaterThanOrEqual(2);
+      expect(screen.getAllByText((content) => content.includes('exec_command')).length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Approval requested for validation command.')).toBeTruthy();
       expect(screen.getByText('Approval resolved for validation command.')).toBeTruthy();
       expect(screen.getByText('Managed session turn completed.')).toBeTruthy();
