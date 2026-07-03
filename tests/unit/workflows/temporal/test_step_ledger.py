@@ -77,6 +77,37 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     assert rows[0]["refs"]["checkpointRefsByBoundary"] == {}
 
 
+def test_step_ledger_snapshot_normalizes_mixed_timezone_timing() -> None:
+    row = {
+        "logicalStepId": "mixed-timezone",
+        "order": 1,
+        "title": "Mixed timezone step",
+        "tool": {"type": "skill", "name": "mixed-timezone"},
+        "dependsOn": [],
+        "status": "completed",
+        "waitingReason": None,
+        "attentionRequired": False,
+        "executionOrdinal": 1,
+        "startedAt": "2026-04-07T12:00:00",
+        "updatedAt": "2026-04-07T12:00:47+00:00",
+        "summary": None,
+        "checks": [],
+        "refs": {},
+        "artifacts": {},
+        "lastError": None,
+    }
+
+    snapshot = build_step_ledger_snapshot(
+        workflow_id="wf-1",
+        run_id="run-1",
+        rows=[row],
+        queried_at=datetime(2026, 4, 7, 12, 1, tzinfo=UTC),
+    )
+
+    assert snapshot["steps"][0]["timing"]["durationMs"] == 47000
+    assert snapshot["steps"][0]["timing"]["precision"] == "fallback"
+
+
 def test_step_ledger_refs_track_latest_and_historical_step_execution_manifests() -> None:
     refs = StepLedgerRefsModel.model_validate(
         {

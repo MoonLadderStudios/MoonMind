@@ -4109,7 +4109,10 @@ function StepDurationBar({
   maxDurationMs: number;
 }) {
   const valueMs = rowTimingValueMs(row);
-  const percent = valueMs !== null && maxDurationMs > 0 ? Math.max(4, Math.min(100, (valueMs / maxDurationMs) * 100)) : 0;
+  const percent =
+    valueMs !== null && valueMs > 0 && maxDurationMs > 0
+      ? Math.max(4, Math.min(100, (valueMs / maxDurationMs) * 100))
+      : 0;
   const label = valueMs === null ? 'Step duration unavailable' : `Step duration ${formatDurationMs(valueMs)}`;
   return (
     <div className="step-duration-bar" aria-label={label}>

@@ -38,6 +38,8 @@ def _step_duration_ms(started_at: datetime | None, ended_at: datetime | None) ->
         started = started.replace(tzinfo=timezone.utc)
     if ended.tzinfo is None:
         ended = ended.replace(tzinfo=timezone.utc)
+    if ended < started:
+        return None
     return max(0, int((ended - started).total_seconds() * 1000))
 
 
