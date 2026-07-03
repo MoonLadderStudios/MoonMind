@@ -343,14 +343,23 @@ describe('Dashboard shared entry', () => {
     fireEvent.mouseLeave(createLink);
     expect(animatedNavIconMocks.rocketStop).toHaveBeenCalledTimes(1);
 
-    fireEvent.mouseEnter(screen.getByRole('link', { name: 'Schedules' }));
+    const schedulesLink = screen.getByRole('link', { name: 'Schedules' });
+    fireEvent.mouseEnter(schedulesLink);
     expect(animatedNavIconMocks.moonStart).toHaveBeenCalledTimes(1);
+    fireEvent.mouseLeave(schedulesLink);
+    expect(animatedNavIconMocks.moonStop).toHaveBeenCalledTimes(1);
 
-    fireEvent.mouseEnter(screen.getByRole('link', { name: 'Skills' }));
+    const skillsLink = screen.getByRole('link', { name: 'Skills' });
+    fireEvent.mouseEnter(skillsLink);
     expect(animatedNavIconMocks.sparklesStart).toHaveBeenCalledTimes(1);
+    fireEvent.mouseLeave(skillsLink);
+    expect(animatedNavIconMocks.sparklesStop).toHaveBeenCalledTimes(1);
 
-    fireEvent.mouseEnter(screen.getByRole('link', { name: 'Settings' }));
+    const settingsLink = screen.getByRole('link', { name: 'Settings' });
+    fireEvent.mouseEnter(settingsLink);
     expect(animatedNavIconMocks.settingsStart).toHaveBeenCalledTimes(1);
+    fireEvent.mouseLeave(settingsLink);
+    expect(animatedNavIconMocks.settingsStop).toHaveBeenCalledTimes(1);
   });
 
   it('renders dashboard alerts and lazy-loads the requested page component', async () => {
