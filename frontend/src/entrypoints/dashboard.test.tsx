@@ -16,6 +16,17 @@ import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-util
 import { DashboardApp } from './dashboard-app';
 import { navigateTo } from '../lib/navigation';
 
+const animatedNavIconMocks = vi.hoisted(() => ({
+  moonStart: vi.fn(),
+  moonStop: vi.fn(),
+  rocketStart: vi.fn(),
+  rocketStop: vi.fn(),
+  settingsStart: vi.fn(),
+  settingsStop: vi.fn(),
+  sparklesStart: vi.fn(),
+  sparklesStop: vi.fn(),
+}));
+
 function normalizeCssSelector(selector: string): string {
   return selector
     .replace(/\s*\{\s*$/, '')
@@ -104,6 +115,59 @@ vi.mock('@xterm/addon-fit', () => ({
     fit() {}
   },
 }));
+
+vi.mock('lucide-animated', async () => {
+  const React = await vi.importActual<typeof import('react')>('react');
+  type AnimatedIconProps = {
+    'aria-hidden'?: boolean | 'true' | 'false';
+    animateOnHover?: boolean;
+    className?: string;
+    size?: number;
+  };
+
+  function createAnimatedIcon(
+    testId: string,
+    startAnimation: () => void,
+    stopAnimation: () => void,
+  ) {
+    return React.forwardRef<unknown, AnimatedIconProps>((props, ref) => {
+      React.useImperativeHandle(ref, () => ({
+        startAnimation,
+        stopAnimation,
+      }));
+      return React.createElement('svg', {
+        'aria-hidden': props['aria-hidden'],
+        className: props.className,
+        'data-animate-on-hover': String(props.animateOnHover),
+        'data-size': props.size,
+        'data-testid': testId,
+      });
+    });
+  }
+
+  return {
+    MoonIcon: createAnimatedIcon(
+      'animated-nav-icon-schedules',
+      animatedNavIconMocks.moonStart,
+      animatedNavIconMocks.moonStop,
+    ),
+    RocketIcon: createAnimatedIcon(
+      'animated-nav-icon-create',
+      animatedNavIconMocks.rocketStart,
+      animatedNavIconMocks.rocketStop,
+    ),
+    SettingsIcon: createAnimatedIcon(
+      'animated-nav-icon-settings',
+      animatedNavIconMocks.settingsStart,
+      animatedNavIconMocks.settingsStop,
+    ),
+    SparklesIcon: createAnimatedIcon(
+      'animated-nav-icon-skills',
+      animatedNavIconMocks.sparklesStart,
+      animatedNavIconMocks.sparklesStop,
+    ),
+  };
+});
 
 // MM-960: simulate a transient dynamic-import (chunk-load) failure for one page
 // so we can assert the route boundary's Retry recreates the lazy import instead
@@ -223,6 +287,7 @@ describe('Dashboard shared entry', () => {
   });
 
   beforeEach(() => {
+    Object.values(animatedNavIconMocks).forEach((mock) => mock.mockClear());
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/ui/info') {
@@ -257,6 +322,35 @@ describe('Dashboard shared entry', () => {
     window.WebSocket = originalWebSocket;
     document.querySelectorAll('[data-nav]').forEach((node) => node.remove());
     window.history.replaceState({}, '', '/');
+  });
+
+  it('MM-1107 animates lucide nav icons from the whole route link hover', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+
+    const workflowsLink = screen.getByRole('link', { name: 'Workflows' });
+    expect(workflowsLink.querySelector('[data-testid^="animated-nav-icon-"]')).toBeNull();
+
+    const createLink = screen.getByRole('link', { name: 'Create' });
+    const createIcon = screen.getByTestId('animated-nav-icon-create');
+    expect(createIcon.getAttribute('data-animate-on-hover')).toBe('false');
+
+    fireEvent.mouseEnter(createLink);
+    expect(animatedNavIconMocks.rocketStart).toHaveBeenCalledTimes(1);
+
+    fireEvent.mouseLeave(createLink);
+    expect(animatedNavIconMocks.rocketStop).toHaveBeenCalledTimes(1);
+
+    fireEvent.mouseEnter(screen.getByRole('link', { name: 'Schedules' }));
+    expect(animatedNavIconMocks.moonStart).toHaveBeenCalledTimes(1);
+
+    fireEvent.mouseEnter(screen.getByRole('link', { name: 'Skills' }));
+    expect(animatedNavIconMocks.sparklesStart).toHaveBeenCalledTimes(1);
+
+    fireEvent.mouseEnter(screen.getByRole('link', { name: 'Settings' }));
+    expect(animatedNavIconMocks.settingsStart).toHaveBeenCalledTimes(1);
   });
 
   it('renders dashboard alerts and lazy-loads the requested page component', async () => {

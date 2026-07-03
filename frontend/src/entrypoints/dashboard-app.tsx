@@ -3,8 +3,10 @@ import {
   lazy,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ComponentType,
+  type Ref,
   type ReactNode,
 } from 'react';
 import {
@@ -21,9 +23,13 @@ import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/rea
 import { ScrollText } from 'lucide-react';
 import {
   MoonIcon,
+  type MoonIconHandle,
   RocketIcon,
+  type RocketIconHandle,
   SettingsIcon,
+  type SettingsIconHandle,
   SparklesIcon,
+  type SparklesIconHandle,
 } from 'lucide-animated';
 
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -66,24 +72,102 @@ type NavIconProps = {
   className?: string | undefined;
 };
 
+type AnimatedNavIconHandle =
+  | MoonIconHandle
+  | RocketIconHandle
+  | SettingsIconHandle
+  | SparklesIconHandle;
+
+type AnimatedNavIconProps = NavIconProps & {
+  iconRef?: Ref<AnimatedNavIconHandle> | undefined;
+};
+
 function WorkflowsNavIcon({ className }: NavIconProps) {
   return <ScrollText size={NAV_ICON_SIZE} className={className} aria-hidden="true" />;
 }
 
-function StartWorkflowNavIcon({ className }: NavIconProps) {
-  return <RocketIcon size={NAV_ICON_SIZE} className={className} animateOnHover aria-hidden="true" />;
+function StartWorkflowNavIcon({ className, iconRef }: AnimatedNavIconProps) {
+  return (
+    <RocketIcon
+      ref={iconRef as Ref<RocketIconHandle>}
+      size={NAV_ICON_SIZE}
+      className={className}
+      animateOnHover={false}
+      aria-hidden="true"
+    />
+  );
 }
 
-function SchedulesNavIcon({ className }: NavIconProps) {
-  return <MoonIcon size={NAV_ICON_SIZE} className={className} animateOnHover aria-hidden="true" />;
+function SchedulesNavIcon({ className, iconRef }: AnimatedNavIconProps) {
+  return (
+    <MoonIcon
+      ref={iconRef as Ref<MoonIconHandle>}
+      size={NAV_ICON_SIZE}
+      className={className}
+      animateOnHover={false}
+      aria-hidden="true"
+    />
+  );
 }
 
-function SkillsNavIcon({ className }: NavIconProps) {
-  return <SparklesIcon size={NAV_ICON_SIZE} className={className} animateOnHover aria-hidden="true" />;
+function SkillsNavIcon({ className, iconRef }: AnimatedNavIconProps) {
+  return (
+    <SparklesIcon
+      ref={iconRef as Ref<SparklesIconHandle>}
+      size={NAV_ICON_SIZE}
+      className={className}
+      animateOnHover={false}
+      aria-hidden="true"
+    />
+  );
 }
 
-function SettingsNavIcon({ className }: NavIconProps) {
-  return <SettingsIcon size={NAV_ICON_SIZE} className={className} animateOnHover aria-hidden="true" />;
+function SettingsNavIcon({ className, iconRef }: AnimatedNavIconProps) {
+  return (
+    <SettingsIcon
+      ref={iconRef as Ref<SettingsIconHandle>}
+      size={NAV_ICON_SIZE}
+      className={className}
+      animateOnHover={false}
+      aria-hidden="true"
+    />
+  );
+}
+
+function AnimatedRouteNavLink({
+  to,
+  children,
+  icon,
+  className,
+}: {
+  to: string;
+  children: ReactNode;
+  icon: ComponentType<AnimatedNavIconProps>;
+  className: ({ isActive }: { isActive: boolean }) => string | undefined;
+}) {
+  const Icon = icon;
+  const iconRef = useRef<AnimatedNavIconHandle | null>(null);
+  const ref = iconRef as Ref<AnimatedNavIconHandle>;
+  const startAnimation = () => {
+    iconRef.current?.startAnimation();
+  };
+  const stopAnimation = () => {
+    iconRef.current?.stopAnimation();
+  };
+
+  return (
+    <NavLink
+      to={to}
+      className={className}
+      onMouseEnter={startAnimation}
+      onMouseLeave={stopAnimation}
+      onFocus={startAnimation}
+      onBlur={stopAnimation}
+    >
+      <Icon className="route-nav-icon" iconRef={ref} />
+      {children}
+    </NavLink>
+  );
 }
 
 function isSupportedPage(page: string): page is DashboardPage {
@@ -305,22 +389,34 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
             <WorkflowsNavIcon className="route-nav-icon" />
             Workflows
           </NavLink>
-          <NavLink to="/workflows/new" className={({ isActive }) => (isActive ? 'active' : undefined)}>
-            <StartWorkflowNavIcon className="route-nav-icon" />
+          <AnimatedRouteNavLink
+            to="/workflows/new"
+            icon={StartWorkflowNavIcon}
+            className={({ isActive }) => (isActive ? 'active' : undefined)}
+          >
             Create
-          </NavLink>
-          <NavLink to="/schedules" className={({ isActive }) => (isActive ? 'active' : undefined)}>
-            <SchedulesNavIcon className="route-nav-icon" />
+          </AnimatedRouteNavLink>
+          <AnimatedRouteNavLink
+            to="/schedules"
+            icon={SchedulesNavIcon}
+            className={({ isActive }) => (isActive ? 'active' : undefined)}
+          >
             Schedules
-          </NavLink>
-          <NavLink to="/skills" className={({ isActive }) => (isActive ? 'active' : undefined)}>
-            <SkillsNavIcon className="route-nav-icon" />
+          </AnimatedRouteNavLink>
+          <AnimatedRouteNavLink
+            to="/skills"
+            icon={SkillsNavIcon}
+            className={({ isActive }) => (isActive ? 'active' : undefined)}
+          >
             Skills
-          </NavLink>
-          <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : undefined)}>
-            <SettingsNavIcon className="route-nav-icon" />
+          </AnimatedRouteNavLink>
+          <AnimatedRouteNavLink
+            to="/settings"
+            icon={SettingsNavIcon}
+            className={({ isActive }) => (isActive ? 'active' : undefined)}
+          >
             Settings
-          </NavLink>
+          </AnimatedRouteNavLink>
         </nav>
       </div>
 
