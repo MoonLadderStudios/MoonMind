@@ -68,7 +68,7 @@ Example:
 
 For PR publication, the authored `branch` is the selected repository branch and PR base. MoonMind creates or obtains a runtime-generated work branch for the PR head, pushes changes there, and creates a pull request back to the authored base branch.
 
-When merge automation is explicitly enabled for a PR-publishing Workflow Execution, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.UserWorkflow` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `none`; downstream dependencies on the original Workflow Execution are satisfied only after merge automation succeeds.
+When merge automation is explicitly enabled for a PR-publishing Workflow Execution, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.UserWorkflow` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `auto`; downstream dependencies on the original Workflow Execution are satisfied only after merge automation succeeds.
 
 Operator-facing detail payloads present PR publishing with merge automation as the single publish mode value `pr_with_merge_automation`. Worker-bound execution input remains normalized as `publishMode = "pr"` plus merge automation configuration, because merge automation is an orchestration extension of PR publishing rather than a separate repository publish primitive. Details must not expose a second selection flag such as `mergeAutomationSelected`; active or terminal merge automation state belongs under the `mergeAutomation` status object.
 
