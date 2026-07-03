@@ -17,6 +17,69 @@ LEGACY_STEP_STATUS_ALIASES = {
 }
 _UNSET = object()
 
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _duration_ms(started_at: datetime | None, ended_at: datetime | None) -> int | None:
+    if started_at is None or ended_at is None or ended_at < started_at:
+        return None
+    return max(0, int((ended_at - started_at).total_seconds() * 1000))
+
+
+def step_timing_for_row(
+    row: Mapping[str, Any],
+    *,
+    server_now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return user-facing logical-step timing independent from workload timing."""
+
+    status = _normalize_replayed_step_status(row.get("status"))
+    started_at = _parse_iso_datetime(row.get("startedAt"))
+    explicit_ended_at = _parse_iso_datetime(row.get("endedAt"))
+    updated_at = _parse_iso_datetime(row.get("updatedAt"))
+    server_now = server_now or updated_at
+
+    ended_at = explicit_ended_at
+    precision = "unavailable"
+    duration_ms: int | None = None
+    elapsed_ms: int | None = None
+
+    if status in TERMINAL_STEP_STATUSES:
+        if started_at is not None and ended_at is not None:
+            duration_ms = _duration_ms(started_at, ended_at)
+            elapsed_ms = duration_ms
+            precision = "exact" if duration_ms is not None else "unavailable"
+        elif started_at is not None and updated_at is not None:
+            ended_at = updated_at
+            duration_ms = _duration_ms(started_at, updated_at)
+            elapsed_ms = duration_ms
+            precision = "fallback" if duration_ms is not None else "unavailable"
+    elif status in ACTIVE_STEP_STATUSES:
+        elapsed_ms = _duration_ms(started_at, server_now)
+        precision = "live" if elapsed_ms is not None else "unavailable"
+    elif status == "ready":
+        precision = "unavailable"
+    elif status == "pending":
+        precision = "unavailable"
+
+    return {
+        "startedAt": row.get("startedAt"),
+        "endedAt": ended_at.isoformat() if ended_at is not None else None,
+        "durationMs": duration_ms,
+        "elapsedMs": elapsed_ms,
+        "serverNow": server_now.isoformat() if server_now is not None else None,
+        "precision": precision,
+    }
+
 def _normalize_replayed_step_status(status: Any) -> str:
     value = str(status or "").strip()
     return LEGACY_STEP_STATUS_ALIASES.get(value, value)
@@ -439,13 +502,17 @@ def build_step_ledger_snapshot(
     run_id: str,
     rows: list[dict[str, Any]],
     prepared_artifact_refs: list[str] | None = None,
+    server_now: datetime | None = None,
 ) -> dict[str, Any]:
+    snapshot_rows = deepcopy(rows)
+    for row in snapshot_rows:
+        row["timing"] = step_timing_for_row(row, server_now=server_now)
     return {
         "workflowId": workflow_id,
         "runId": run_id,
         "runScope": "latest",
         "preparedArtifactRefs": list(prepared_artifact_refs or []),
-        "steps": deepcopy(rows),
+        "steps": snapshot_rows,
     }
 
 
@@ -517,6 +584,13 @@ def materialize_preserved_steps(
             row.pop("terminalDisposition", None)
         row["attempt"] = 0
         row["executionOrdinal"] = 0
+        row["startedAt"] = preserved.get("startedAt") or preserved.get("started_at")
+        row["endedAt"] = (
+            preserved.get("endedAt")
+            or preserved.get("ended_at")
+            or preserved.get("completedAt")
+            or preserved.get("completed_at")
+        )
         row["summary"] = "Preserved from source run."
         row["waitingReason"] = None
         row["attentionRequired"] = False
@@ -765,6 +839,7 @@ def update_step_row(
             row["executionOrdinal"] = int(row["attempt"])
         if set_started_at:
             row["startedAt"] = updated_at.isoformat()
+            row.pop("endedAt", None)
         if summary is not _UNSET:
             row["summary"] = summary
         if waiting_reason is not _UNSET:
@@ -805,6 +880,7 @@ def update_step_row(
         if _normalize_replayed_step_status(status) in TERMINAL_STEP_STATUSES:
             row["waitingReason"] = None
             row["attentionRequired"] = False
+            row["endedAt"] = updated_at.isoformat()
         row["updatedAt"] = updated_at.isoformat()
         return row
     raise KeyError(f"Unknown logical step id: {logical_step_id}")

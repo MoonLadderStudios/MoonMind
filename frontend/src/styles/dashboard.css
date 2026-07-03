@@ -4049,6 +4049,26 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   color: rgb(var(--mm-muted));
 }
 
+.step-duration-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  border: 1px solid rgb(var(--mm-border) / 0.55);
+  background: rgb(var(--mm-ink) / 0.04);
+  color: rgb(var(--mm-ink) / 0.8);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.step-duration-text {
+  font-variant-numeric: tabular-nums;
+}
+
 .step-tl-chevron {
   display: inline-flex;
   font-size: 1.05rem;
@@ -4071,6 +4091,22 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+.step-duration-bar {
+  position: relative;
+  overflow: hidden;
+  height: 0.22rem;
+  margin-top: 0.35rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-border) / 0.38);
+}
+
+.step-duration-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: rgb(var(--mm-accent-2) / 0.62);
 }
 
 .step-execution-pill {
@@ -4331,8 +4367,71 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: flex;
   align-items: center;
   gap: 0.45rem;
+  flex-wrap: wrap;
   color: rgb(var(--mm-muted));
   font-size: 0.78rem;
+}
+
+.step-timeline-toggle {
+  min-height: 1.75rem;
+  padding: 0.22rem 0.55rem;
+  font-size: 0.72rem;
+}
+
+.step-timing-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.8rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgb(var(--mm-border) / 0.55);
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-panel) / 0.52);
+  color: rgb(var(--mm-muted));
+  font-size: 0.78rem;
+}
+
+.step-timing-strip strong {
+  color: rgb(var(--mm-ink));
+}
+
+.step-wallclock-timeline {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.6rem 0.65rem;
+  border: 1px solid rgb(var(--mm-border) / 0.45);
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-panel) / 0.3);
+}
+
+.step-wallclock-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 14rem) minmax(8rem, 1fr);
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 1.35rem;
+  font-size: 0.75rem;
+  color: rgb(var(--mm-muted));
+}
+
+.step-wallclock-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-wallclock-row > div {
+  position: relative;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-border) / 0.32);
+}
+
+.step-wallclock-row i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: inherit;
+  background: rgb(var(--mm-accent) / 0.68);
 }
 
 .step-tl-count {

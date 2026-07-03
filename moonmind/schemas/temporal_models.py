@@ -2855,6 +2855,21 @@ class StepLedgerWorkloadModel(BaseModel):
         alias="artifactPublication",
     )
 
+class StepTimingModel(BaseModel):
+    """User-facing logical-step timing independent from workload timing."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    started_at: datetime | None = Field(None, alias="startedAt")
+    ended_at: datetime | None = Field(None, alias="endedAt")
+    duration_ms: int | None = Field(None, alias="durationMs", ge=0)
+    elapsed_ms: int | None = Field(None, alias="elapsedMs", ge=0)
+    server_now: datetime | None = Field(None, alias="serverNow")
+    precision: Literal["exact", "live", "fallback", "unavailable"] = Field(
+        "unavailable",
+        alias="precision",
+    )
+
 class PreservedStepProvenanceModel(BaseModel):
     """Source execution provenance for a preserved step row."""
 
@@ -2885,7 +2900,9 @@ class StepLedgerRowModel(BaseModel):
         ge=0,
     )
     started_at: datetime | None = Field(None, alias="startedAt")
+    ended_at: datetime | None = Field(None, alias="endedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
+    timing: StepTimingModel | None = Field(None, alias="timing")
     summary: str | None = Field(None, alias="summary")
     checks: list[StepLedgerCheckModel] = Field(default_factory=list, alias="checks")
     refs: StepLedgerRefsModel = Field(default_factory=StepLedgerRefsModel, alias="refs")

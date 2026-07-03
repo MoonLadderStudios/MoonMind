@@ -9287,11 +9287,14 @@ export interface components {
             executionOrdinal: number;
             /** Startedat */
             startedAt?: string | null;
+            /** Endedat */
+            endedAt?: string | null;
             /**
              * Updatedat
              * Format: date-time
              */
             updatedAt: string;
+            timing?: components["schemas"]["StepTimingModel"] | null;
             /** Summary */
             summary?: string | null;
             /** Checks */
@@ -9367,6 +9370,28 @@ export interface components {
             } | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * StepTimingModel
+         * @description User-facing logical-step timing independent from workload timing.
+         */
+        StepTimingModel: {
+            /** Startedat */
+            startedAt?: string | null;
+            /** Endedat */
+            endedAt?: string | null;
+            /** Durationms */
+            durationMs?: number | null;
+            /** Elapsedms */
+            elapsedMs?: number | null;
+            /** Servernow */
+            serverNow?: string | null;
+            /**
+             * Precision
+             * @default unavailable
+             * @enum {string}
+             */
+            precision: "exact" | "live" | "fallback" | "unavailable";
         };
         /** StoryDraft */
         StoryDraft: {

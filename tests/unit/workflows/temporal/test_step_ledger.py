@@ -17,6 +17,7 @@ from moonmind.statuses.step_ledger import step_execution_to_ledger_status
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
+    build_step_ledger_snapshot,
     mark_step_execution_manifest_evidence,
     mark_step_checkpoint_evidence,
     refresh_ready_steps,
@@ -73,6 +74,94 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     assert rows[0]["refs"]["latestStepExecutionCheckpointRef"] is None
     assert rows[0]["refs"]["stepExecutionCheckpointRefs"] == []
     assert rows[0]["refs"]["checkpointRefsByBoundary"] == {}
+
+
+def test_step_ledger_snapshot_exposes_logical_step_timing() -> None:
+    base_time = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "completed", "tool": {"type": "skill", "name": "done"}},
+            {"id": "active", "tool": {"type": "skill", "name": "run"}},
+            {"id": "ready", "tool": {"type": "skill", "name": "next"}},
+        ],
+        dependency_map={"completed": [], "active": [], "ready": []},
+        updated_at=base_time,
+    )
+    update_step_row(
+        rows,
+        "completed",
+        updated_at=datetime(2026, 4, 7, 12, 0, 5, tzinfo=UTC),
+        status="executing",
+        increment_attempt=True,
+        set_started_at=True,
+    )
+    update_step_row(
+        rows,
+        "completed",
+        updated_at=datetime(2026, 4, 7, 12, 1, 47, tzinfo=UTC),
+        status="completed",
+    )
+    update_step_row(
+        rows,
+        "active",
+        updated_at=datetime(2026, 4, 7, 12, 2, tzinfo=UTC),
+        status="executing",
+        increment_attempt=True,
+        set_started_at=True,
+    )
+
+    snapshot = build_step_ledger_snapshot(
+        workflow_id="wf-1",
+        run_id="run-1",
+        rows=rows,
+        server_now=datetime(2026, 4, 7, 12, 5, 11, tzinfo=UTC),
+    )
+
+    completed_timing = snapshot["steps"][0]["timing"]
+    assert snapshot["steps"][0]["endedAt"] == "2026-04-07T12:01:47+00:00"
+    assert completed_timing == {
+        "startedAt": "2026-04-07T12:00:05+00:00",
+        "endedAt": "2026-04-07T12:01:47+00:00",
+        "durationMs": 102000,
+        "elapsedMs": 102000,
+        "serverNow": "2026-04-07T12:05:11+00:00",
+        "precision": "exact",
+    }
+    assert snapshot["steps"][1]["timing"]["elapsedMs"] == 191000
+    assert snapshot["steps"][1]["timing"]["precision"] == "live"
+    assert snapshot["steps"][2]["timing"]["durationMs"] is None
+    assert snapshot["steps"][2]["timing"]["precision"] == "unavailable"
+
+
+def test_step_ledger_snapshot_marks_legacy_terminal_timing_as_fallback() -> None:
+    row = {
+        "logicalStepId": "legacy",
+        "order": 1,
+        "title": "Legacy terminal step",
+        "tool": {"type": "skill", "name": "legacy"},
+        "dependsOn": [],
+        "status": "completed",
+        "waitingReason": None,
+        "attentionRequired": False,
+        "executionOrdinal": 1,
+        "startedAt": "2026-04-07T12:00:00+00:00",
+        "updatedAt": "2026-04-07T12:00:47+00:00",
+        "summary": None,
+        "checks": [],
+        "refs": {},
+        "artifacts": {},
+        "lastError": None,
+    }
+
+    snapshot = build_step_ledger_snapshot(
+        workflow_id="wf-1",
+        run_id="run-1",
+        rows=[row],
+        server_now=datetime(2026, 4, 7, 12, 1, tzinfo=UTC),
+    )
+
+    assert snapshot["steps"][0]["timing"]["durationMs"] == 47000
+    assert snapshot["steps"][0]["timing"]["precision"] == "fallback"
 
 
 def test_step_ledger_refs_track_latest_and_historical_step_execution_manifests() -> None:

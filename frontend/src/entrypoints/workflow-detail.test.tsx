@@ -1672,6 +1672,145 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('art-plan-checkpoint')).toBeTruthy();
   });
 
+  it('MM-1034 surfaces step timing in collapsed rows, overview callouts, and expanded details', async () => {
+    window.history.pushState({}, 'Step Timing Test', '/workflows/test-123/steps?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Timed task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:05:11Z',
+      actions: {},
+    };
+    const timedSnapshot = {
+      workflowId: 'test-123',
+      runId: '02-run',
+      runScope: 'latest',
+      steps: [
+        {
+          logicalStepId: 'gather',
+          order: 1,
+          title: 'Gather account context',
+          tool: { type: 'skill', name: 'context.gather', version: '1' },
+          dependsOn: [],
+          status: 'completed',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 1,
+          startedAt: '2026-04-09T00:00:05Z',
+          endedAt: '2026-04-09T00:01:47Z',
+          updatedAt: '2026-04-09T00:01:50Z',
+          timing: {
+            startedAt: '2026-04-09T00:00:05Z',
+            endedAt: '2026-04-09T00:01:47Z',
+            durationMs: 102000,
+            elapsedMs: 102000,
+            serverNow: '2026-04-09T00:05:11Z',
+            precision: 'exact',
+          },
+          summary: 'Context gathered',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {},
+          lastError: null,
+        },
+        {
+          logicalStepId: 'tests',
+          order: 2,
+          title: 'Run test suite',
+          tool: { type: 'skill', name: 'repo.test', version: '1' },
+          dependsOn: ['gather'],
+          status: 'executing',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 2,
+          startedAt: '2026-04-09T00:02:00Z',
+          updatedAt: '2026-04-09T00:05:11Z',
+          timing: {
+            startedAt: '2026-04-09T00:02:00Z',
+            endedAt: null,
+            durationMs: null,
+            elapsedMs: 191000,
+            serverNow: '2026-04-09T00:05:11Z',
+            precision: 'live',
+          },
+          summary: 'Tests are running',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {},
+          lastError: null,
+        },
+        {
+          logicalStepId: 'publish',
+          order: 3,
+          title: 'Publish results',
+          tool: { type: 'skill', name: 'publish.results', version: '1' },
+          dependsOn: ['tests'],
+          status: 'pending',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 0,
+          startedAt: null,
+          updatedAt: '2026-04-09T00:05:11Z',
+          timing: {
+            startedAt: null,
+            endedAt: null,
+            durationMs: null,
+            elapsedMs: null,
+            serverNow: '2026-04-09T00:05:11Z',
+            precision: 'unavailable',
+          },
+          summary: null,
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {},
+          lastError: null,
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => timedSnapshot } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Gather account context')).toBeTruthy();
+    });
+
+    expect(screen.getAllByText('1m 42s').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('3m 11s so far').length).toBeGreaterThan(0);
+    expect(screen.getByText('Not started')).toBeTruthy();
+    const timingSummary = screen.getByLabelText('Step timing summary').textContent ?? '';
+    expect(timingSummary).toContain('Current step Run test suite · 3m 11s so far');
+    expect(timingSummary).toContain('Longest step Run test suite · 3m 11s so far');
+    expect(timingSummary).toContain('Completed steps 1 of 3');
+    expect(screen.getAllByLabelText(/Step duration/).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Timeline view' }));
+    expect(screen.getByLabelText('Workflow wall-clock timeline')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Gather account context' }));
+    expect(screen.getByRole('heading', { name: 'Timing' })).toBeTruthy();
+    expect(screen.getByText((_, element) => element?.textContent === 'Elapsed: 1m 42s')).toBeTruthy();
+  });
+
   it('MM-831 renders expanded Step Execution history from the step-executions list endpoint', async () => {
     window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
     const mockExecution = {
@@ -1863,7 +2002,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const history = await screen.findByLabelText('Step Execution history');
     expect(screen.getByRole('heading', { name: 'Step Execution history' })).toBeTruthy();
-    expect(screen.getByText('2 step executions')).toBeTruthy();
+    expect(screen.getByText((_, element) => Boolean(element?.textContent?.startsWith('2 step executions')))).toBeTruthy();
 
     // Newest execution renders first.
     const ordinals = Array.from(
