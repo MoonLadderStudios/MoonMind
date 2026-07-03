@@ -18,6 +18,8 @@ from moonmind.workflows.skills.approval_policy import (
     build_review_prompt,
     parse_step_gate_result,
     parse_review_verdict,
+    recommended_next_actions,
+    step_gate_contract_violations,
 )
 
 # ── ApprovalPolicyPolicy ──────────────────────────────────────────────────
@@ -275,6 +277,22 @@ class TestParseReviewVerdict:
         assert gate.degraded is True
         assert gate.recommended_next_action == "blocked"
 
+    def test_parse_non_string_recommended_action_fails_closed(self):
+        gate = parse_step_gate_result(
+            {
+                "verdict": "FULLY_IMPLEMENTED",
+                "confidence": 0.95,
+                "recommendedNextAction": ["advance"],
+            }
+        )
+
+        assert gate.verdict == "NO_DETERMINATION"
+        assert gate.invalid is True
+        assert gate.degraded is True
+        assert gate.recommended_next_action == "blocked"
+        assert gate.downgrade_reason is not None
+        assert "recommendedNextAction must be a string" in gate.downgrade_reason
+
     @pytest.mark.parametrize("flag", ["invalid", "degraded"])
     def test_parse_passing_verdict_with_failure_flag_downgrades(self, flag):
         # A passing verdict that arrives already marked invalid/degraded must
@@ -286,6 +304,80 @@ class TestParseReviewVerdict:
         assert gate.verdict == "NO_DETERMINATION"
         assert gate.recommended_next_action == "blocked"
         assert getattr(gate, flag) is True
+
+    def test_downgrade_reason_names_declared_verdict_and_violation(self):
+        # Regression for approving verifier reports discarded over a
+        # non-canonical recommendedNextAction (observed: "create_pull_request"
+        # downgraded FULLY_IMPLEMENTED to an unexplained NO_DETERMINATION).
+        gate = parse_step_gate_result(
+            {
+                "verdict": "FULLY_IMPLEMENTED",
+                "confidence": "high",
+                "recommendedNextAction": "create_pull_request",
+            }
+        )
+        assert gate.verdict == "NO_DETERMINATION"
+        assert gate.downgrade_reason is not None
+        assert "FULLY_IMPLEMENTED" in gate.downgrade_reason
+        assert "create_pull_request" in gate.downgrade_reason
+        assert gate.to_payload()["downgradeReason"] == gate.downgrade_reason
+        assert (
+            gate.to_review_verdict().downgrade_reason == gate.downgrade_reason
+        )
+
+    def test_downgrade_reason_for_unrecognized_verdict(self):
+        gate = parse_step_gate_result({"verdict": "FUTURE_VERDICT"})
+        assert gate.verdict == "NO_DETERMINATION"
+        assert gate.downgrade_reason is not None
+        assert "FUTURE_VERDICT" in gate.downgrade_reason
+
+    def test_no_downgrade_reason_for_clean_payload(self):
+        gate = parse_step_gate_result(
+            {
+                "verdict": "FULLY_IMPLEMENTED",
+                "confidence": "high",
+                "recommendedNextAction": "advance",
+            }
+        )
+        assert gate.verdict == "FULLY_IMPLEMENTED"
+        assert gate.downgrade_reason is None
+        assert "downgradeReason" not in gate.to_payload()
+
+    def test_step_gate_contract_violations_clean_payload(self):
+        assert (
+            step_gate_contract_violations(
+                {
+                    "verdict": "BLOCKED",
+                    "recommendedNextAction": "blocked",
+                    "recoverableInCurrentRuntime": False,
+                }
+            )
+            == []
+        )
+
+    def test_step_gate_contract_violations_reports_each_field(self):
+        violations = step_gate_contract_violations(
+            {
+                "verdict": "SOMETHING_ELSE",
+                "recommendedNextAction": "create_pull_request",
+                "degraded": True,
+            }
+        )
+        joined = " ".join(violations)
+        assert "SOMETHING_ELSE" in joined
+        assert "create_pull_request" in joined
+        assert "degraded" in joined
+        assert step_gate_contract_violations({}) == [
+            "verdict is missing from the structured gate payload"
+        ]
+
+    def test_recommended_next_actions_vocabulary(self):
+        assert recommended_next_actions() == (
+            "advance",
+            "blocked",
+            "needs_human",
+            "reattempt_current_step",
+        )
 
     def test_parse_bad_confidence_clamped(self):
         v = parse_review_verdict({"verdict": "PASS", "confidence": 5.0})

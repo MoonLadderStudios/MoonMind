@@ -506,7 +506,7 @@ async def test_repo_create_pr_activity_delegates():
         }
         
         result = await repo_create_pr_activity(payload)
-        
+
         assert result == expected_inner.model_dump(by_alias=True)
         mock_svc.create_pull_request.assert_awaited_once_with(
             repo="owner/repo",
@@ -514,6 +514,37 @@ async def test_repo_create_pr_activity_delegates():
             base="main",
             title="Title",
             body="Body",
+            draft=False,
+        )
+
+
+async def test_repo_create_pr_activity_delegates_draft_flag():
+    from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
+
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as mock_svc_cls:
+        mock_svc = mock_svc_cls.return_value
+
+        from moonmind.workflows.adapters.github_service import CreatePRResult
+
+        mock_svc.create_pull_request = AsyncMock(
+            return_value=CreatePRResult(
+                url="https://github.com/abc", created=True, summary=""
+            )
+        )
+
+        await repo_create_pr_activity(
+            {
+                "repo": "owner/repo",
+                "head": "branch",
+                "base": "main",
+                "title": "Title",
+                "body": "Body",
+                "draft": True,
+            }
+        )
+
+        assert (
+            mock_svc.create_pull_request.await_args.kwargs["draft"] is True
         )
 
 

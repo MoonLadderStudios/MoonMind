@@ -768,6 +768,41 @@ class WorkflowSettings(BaseSettings):
             }
         },
     )
+    moonspec_environment_blocked_publish_action: str = Field(
+        "fail",
+        validation_alias=AliasChoices(
+            "WORKFLOW_MOONSPEC_ENVIRONMENT_BLOCKED_PUBLISH_ACTION",
+            "MOONMIND_MOONSPEC_ENVIRONMENT_BLOCKED_PUBLISH_ACTION",
+        ),
+        description=(
+            "Publication behavior when the MoonSpec verification gate stops "
+            "with an environment-class outcome (verdict BLOCKED, or "
+            "NO_DETERMINATION produced by a degraded/malformed gate payload): "
+            "'fail' fails the run fail-closed; 'draft_pr' publishes a draft "
+            "pull request annotated as verification-incomplete and completes "
+            "the run with attention_required."
+        ),
+        json_schema_extra={
+            "moonmind": {
+                "expose": True,
+                "key": "workflow.moonspec_environment_blocked_publish_action",
+                "section": "user-workspace",
+                "category": "Workflow",
+                "scopes": ["workspace"],
+                "ui": "select",
+                "type": "enum",
+                "requires_reload": False,
+                "apply_mode": "next_workflow",
+                "title": "MoonSpec Environment-Blocked Publish Action",
+                "options": [
+                    ("fail", "Fail the run (fail closed)"),
+                    ("draft_pr", "Publish draft PR with attention flag"),
+                ],
+                "applies_to": ["publishing"],
+                "order": 21,
+            }
+        },
+    )
     github_repository: Optional[str] = Field(
         "MoonLadderStudios/MoonMind",
         validation_alias=AliasChoices(

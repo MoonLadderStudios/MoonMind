@@ -3078,7 +3078,7 @@ def test_settings_registry_default_uses_catalog_key_ledger():
 
 def test_settings_registry_default_registry_passes_ledger_check():
     registry = SettingsRegistry(_REGISTRY)
-    assert len(registry.entries) == 7
+    assert len(registry.entries) == 8
 
 
 def test_settings_catalog_builder_filters_by_section():

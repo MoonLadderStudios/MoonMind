@@ -25,6 +25,60 @@ _RECOMMENDED_NEXT_ACTIONS = {
     "blocked",
 }
 
+_VERDICT_SYNONYMS = {
+    "PASS": "FULLY_IMPLEMENTED",
+    "FAIL": "ADDITIONAL_WORK_NEEDED",
+    "INCONCLUSIVE": "NO_DETERMINATION",
+}
+
+
+def recommended_next_actions() -> tuple[str, ...]:
+    """Canonical ``recommendedNextAction`` vocabulary for gate payloads."""
+    return tuple(sorted(_RECOMMENDED_NEXT_ACTIONS))
+
+
+def step_gate_contract_violations(payload: Mapping[str, Any]) -> list[str]:
+    """Return the contract violations that force a fail-closed downgrade.
+
+    A non-empty result means ``parse_step_gate_result`` will mark the payload
+    invalid/degraded and downgrade its verdict to ``NO_DETERMINATION``.
+    """
+    violations: list[str] = []
+    raw_verdict = str(payload.get("verdict") or "").strip()
+    if not raw_verdict:
+        violations.append(
+            "verdict is missing from the structured gate payload"
+        )
+    else:
+        normalized = raw_verdict.upper()
+        normalized = _VERDICT_SYNONYMS.get(normalized, normalized)
+        if normalized not in REVIEW_VERDICTS:
+            violations.append(
+                f"verdict {raw_verdict!r} is not one of "
+                f"{sorted(REVIEW_VERDICTS)}"
+            )
+    if bool(payload.get("invalid")):
+        violations.append("payload was flagged invalid by its producer")
+    if bool(payload.get("degraded")):
+        violations.append("payload was flagged degraded by its producer")
+    recommended_next_action = payload.get("recommendedNextAction")
+    if recommended_next_action is None:
+        recommended_next_action = payload.get("recommended_next_action")
+    if recommended_next_action is not None:
+        if not isinstance(recommended_next_action, str):
+            violations.append(
+                "recommendedNextAction must be a string, got "
+                f"{type(recommended_next_action).__name__}"
+            )
+        else:
+            recommended_text = recommended_next_action.strip()
+            if recommended_text not in _RECOMMENDED_NEXT_ACTIONS:
+                violations.append(
+                    f"recommendedNextAction {recommended_text!r} is not one of "
+                    f"{sorted(_RECOMMENDED_NEXT_ACTIONS)}"
+                )
+    return violations
+
 @dataclass(frozen=True, slots=True)
 class ReviewRequest:
     """Input envelope for the ``step.review`` activity."""
@@ -90,6 +144,7 @@ class ReviewVerdict:
     recoverable_in_current_runtime: bool = False
     invalid: bool = False
     degraded: bool = False
+    downgrade_reason: str | None = None
 
     def __post_init__(self) -> None:
         if self.verdict not in REVIEW_VERDICTS:
@@ -146,6 +201,8 @@ class ReviewVerdict:
             payload["workspacePolicyRecommendation"] = (
                 self.workspace_policy_recommendation
             )
+        if self.downgrade_reason:
+            payload["downgradeReason"] = self.downgrade_reason
         return payload
 
     def to_gate_result(self) -> "StepGateResult":
@@ -164,6 +221,7 @@ class ReviewVerdict:
             recoverable_in_current_runtime=self.recoverable_in_current_runtime,
             invalid=self.invalid,
             degraded=self.degraded,
+            downgrade_reason=self.downgrade_reason,
         )
 
 
@@ -185,6 +243,7 @@ class StepGateResult:
     recoverable_in_current_runtime: bool = False
     invalid: bool = False
     degraded: bool = False
+    downgrade_reason: str | None = None
     schema_version: str = "v1"
 
     def __post_init__(self) -> None:
@@ -254,6 +313,8 @@ class StepGateResult:
             payload["workspacePolicyRecommendation"] = (
                 self.workspace_policy_recommendation
             )
+        if self.downgrade_reason:
+            payload["downgradeReason"] = self.downgrade_reason
         return payload
 
     def to_review_verdict(self) -> ReviewVerdict:
@@ -272,6 +333,7 @@ class StepGateResult:
             recoverable_in_current_runtime=self.recoverable_in_current_runtime,
             invalid=self.invalid,
             degraded=self.degraded,
+            downgrade_reason=self.downgrade_reason,
         )
 
 def parse_review_verdict(payload: Mapping[str, Any]) -> ReviewVerdict:
@@ -281,19 +343,16 @@ def parse_review_verdict(payload: Mapping[str, Any]) -> ReviewVerdict:
 
 def parse_step_gate_result(payload: Mapping[str, Any]) -> StepGateResult:
     """Normalize activity output into the canonical gate result contract."""
-    verdict_raw = str(payload.get("verdict") or "INCONCLUSIVE").strip().upper()
-    verdict_raw = {
-        "PASS": "FULLY_IMPLEMENTED",
-        "FAIL": "ADDITIONAL_WORK_NEEDED",
-        "INCONCLUSIVE": "NO_DETERMINATION",
-    }.get(verdict_raw, verdict_raw)
+    declared_verdict = str(payload.get("verdict") or "").strip()
+    verdict_raw = (declared_verdict or "INCONCLUSIVE").upper()
+    verdict_raw = _VERDICT_SYNONYMS.get(verdict_raw, verdict_raw)
     invalid = bool(payload.get("invalid"))
     degraded = bool(payload.get("degraded"))
     if verdict_raw not in REVIEW_VERDICTS:
         verdict_raw = "NO_DETERMINATION"
         invalid = True
         degraded = True
-    elif not str(payload.get("verdict") or "").strip():
+    elif not declared_verdict:
         invalid = True
         degraded = True
 
@@ -332,24 +391,41 @@ def parse_step_gate_result(payload: Mapping[str, Any]) -> StepGateResult:
         "blocking_evidence_refs"
     )
 
-    recommended_next_action = _optional_text(
-        payload.get("recommendedNextAction")
-        or payload.get("recommended_next_action")
-    )
-    if (
-        recommended_next_action
-        and recommended_next_action not in _RECOMMENDED_NEXT_ACTIONS
+    recommended_next_action_value = payload.get("recommendedNextAction")
+    if recommended_next_action_value is None:
+        recommended_next_action_value = payload.get("recommended_next_action")
+    recommended_next_action = _optional_text(recommended_next_action_value)
+    if recommended_next_action_value is not None and (
+        not isinstance(recommended_next_action_value, str)
+        or recommended_next_action not in _RECOMMENDED_NEXT_ACTIONS
     ):
         # Fail closed gracefully on an unrecognized recommended action instead
         # of raising a hard ContractValidationError from StepGateResult.
         invalid = True
         degraded = True
+    downgrade_reason: str | None = None
     if invalid or degraded:
         # An invalid/degraded gate result must not retain a passing verdict:
         # downstream branching keys on ``verdict`` alone (see run.py), so a
         # malformed/degraded result that still says FULLY_IMPLEMENTED would
         # otherwise approve publication. Downgrade the verdict and force a
         # blocking action so the gate fails closed.
+        violations = step_gate_contract_violations(payload)
+        detail = (
+            "; ".join(violations)
+            if violations
+            else "gate payload failed contract validation"
+        )
+        if verdict_raw != "NO_DETERMINATION":
+            downgrade_reason = (
+                f"declared verdict {verdict_raw} was downgraded to "
+                f"NO_DETERMINATION because the structured gate payload failed "
+                f"contract validation: {detail}"
+            )
+        else:
+            downgrade_reason = (
+                f"structured gate payload failed contract validation: {detail}"
+            )
         verdict_raw = "NO_DETERMINATION"
         recommended_next_action = "blocked"
     elif not recommended_next_action and verdict_raw == "FULLY_IMPLEMENTED":
@@ -401,6 +477,7 @@ def parse_step_gate_result(payload: Mapping[str, Any]) -> StepGateResult:
         ),
         invalid=invalid,
         degraded=degraded,
+        downgrade_reason=downgrade_reason,
     )
 
 
@@ -504,4 +581,6 @@ __all__ = [
     "build_review_prompt",
     "parse_step_gate_result",
     "parse_review_verdict",
+    "recommended_next_actions",
+    "step_gate_contract_violations",
 ]

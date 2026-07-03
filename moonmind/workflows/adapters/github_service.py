@@ -885,6 +885,7 @@ class GitHubService:
         base: str,
         title: str,
         body: str,
+        draft: bool = False,
         github_token: str | None = None,
     ) -> CreatePRResult:
         """Create a GitHub pull request via REST API."""
@@ -902,6 +903,10 @@ class GitHubService:
         api_url = f"https://api.github.com/repos/{repo}/pulls"
         headers = self._github_headers(token)
         payload = {"title": title, "head": head, "base": base, "body": body}
+        if draft:
+            # Only applies to the create branch below; GitHub does not allow
+            # flipping an existing PR to draft via the PATCH metadata update.
+            payload["draft"] = True
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             try:
@@ -914,6 +919,19 @@ class GitHubService:
                 )
                 if existing_pr is not None:
                     existing_url = str(existing_pr.get("html_url") or "")
+                    if draft and not bool(existing_pr.get("draft")):
+                        return CreatePRResult(
+                            url=existing_url or None,
+                            created=False,
+                            adopted=False,
+                            summary=(
+                                "draft PR requested but an existing "
+                                "non-draft pull request already exists for "
+                                f"{head} -> {base}: "
+                                f"{existing_url or 'unknown URL'}"
+                            ),
+                            head_sha=(existing_pr.get("head") or {}).get("sha"),
+                        )
                     pr_number = existing_pr.get("number")
                     if pr_number is None:
                         return CreatePRResult(

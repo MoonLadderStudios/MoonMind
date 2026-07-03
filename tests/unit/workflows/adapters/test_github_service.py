@@ -77,6 +77,38 @@ async def test_create_pr_success(monkeypatch):
     assert result.url == "https://github.com/o/r/pull/42"
     assert result.head_sha == "abc123"
     assert result.adopted is False
+    _args, kwargs = mock_client.post.call_args
+    assert "draft" not in kwargs["json"]
+
+
+@pytest.mark.asyncio
+async def test_create_pr_draft_flag_reaches_rest_payload(monkeypatch):
+    """draft=True is sent to the GitHub create endpoint."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(
+        return_value=_mock_response(
+            201,
+            {
+                "html_url": "https://github.com/o/r/pull/43",
+                "head": {"sha": "def456"},
+            },
+        )
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("moonmind.workflows.adapters.github_service.httpx.AsyncClient", return_value=mock_client):
+        svc = GitHubService()
+        result = await svc.create_pull_request(
+            repo="o/r", head="feature", base="main", title="T", body="B",
+            draft=True,
+        )
+
+    assert result.created is True
+    _args, kwargs = mock_client.post.call_args
+    assert kwargs["json"]["draft"] is True
 
 
 @pytest.mark.asyncio
@@ -127,6 +159,46 @@ async def test_create_pr_adopts_existing_head_base_pr(monkeypatch):
         "https://api.github.com/repos/o/r/pulls/42",
     )
     assert mock_client.patch.await_args.kwargs["json"] == {"title": "T", "body": "B"}
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_pr_draft_request_rejects_existing_non_draft_pr(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    existing_pr = {
+        "number": 42,
+        "html_url": "https://github.com/o/r/pull/42",
+        "draft": False,
+        "head": {"ref": "feature", "sha": "abc123", "repo": {"full_name": "o/r"}},
+        "base": {"ref": "main"},
+    }
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=_mock_get_response(200, [existing_pr]))
+    mock_client.patch = AsyncMock()
+    mock_client.post = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().create_pull_request(
+            repo="o/r",
+            head="feature",
+            base="main",
+            title="T",
+            body="B",
+            draft=True,
+        )
+
+    assert result.created is False
+    assert result.adopted is False
+    assert result.url == "https://github.com/o/r/pull/42"
+    assert result.head_sha == "abc123"
+    assert "existing non-draft pull request" in result.summary
+    mock_client.patch.assert_not_awaited()
     mock_client.post.assert_not_awaited()
 
 

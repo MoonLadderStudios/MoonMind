@@ -3041,6 +3041,236 @@ def test_moonspec_verify_gate_accepts_fully_implemented_publish(
     )
 
 
+def test_moonspec_gate_downgrade_reason_surfaces_in_blocking_message(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    # Regression: an approving verifier report with a non-canonical
+    # recommendedNextAction must explain the downgrade instead of surfacing
+    # an unexplained NO_DETERMINATION.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "moonSpecVerify": {
+                "verdict": "FULLY_IMPLEMENTED",
+                "recommendedNextAction": "create_pull_request",
+                "summary": "Issue fully implemented after remediation.",
+            },
+            "diagnostics_ref": "art_verify_report",
+        },
+    )
+
+    gate_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert gate_context["verdict"] == "NO_DETERMINATION"
+    assert "create_pull_request" in gate_context["downgradeReason"]
+    assert "FULLY_IMPLEMENTED" in gate_context["downgradeReason"]
+
+    reason = mock_run_workflow._blocking_moonspec_gate_reason()
+    assert reason is not None
+    assert "FULLY_IMPLEMENTED" in reason
+    assert "create_pull_request" in reason
+    assert "art_verify_report" in reason
+
+
+def test_moonspec_contract_repair_feedback_for_degraded_verify_output(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = {
+        "outputs": {
+            "moonSpecVerify": {
+                "verdict": "FULLY_IMPLEMENTED",
+                "recommendedNextAction": "create_pull_request",
+            }
+        }
+    }
+
+    feedback = mock_run_workflow._moonspec_verify_contract_repair_feedback(
+        execution_result=execution_result,
+        tool_name="auto",
+        node_inputs={"selectedSkill": "moonspec-verify"},
+    )
+    assert feedback is not None
+    assert "create_pull_request" in feedback
+    assert "reattempt_current_step" in feedback
+    assert "FULLY_IMPLEMENTED" in feedback
+
+    # Contract-clean verify output requires no repair.
+    assert (
+        mock_run_workflow._moonspec_verify_contract_repair_feedback(
+            execution_result={
+                "outputs": {
+                    "moonSpecVerify": {
+                        "verdict": "FULLY_IMPLEMENTED",
+                        "recommendedNextAction": "advance",
+                    }
+                }
+            },
+            tool_name="auto",
+            node_inputs={"selectedSkill": "moonspec-verify"},
+        )
+        is None
+    )
+
+    # Non-verify steps never trigger contract repair, even with odd outputs.
+    assert (
+        mock_run_workflow._moonspec_verify_contract_repair_feedback(
+            execution_result=execution_result,
+            tool_name="auto",
+            node_inputs={"selectedSkill": "jira-issue-updater"},
+        )
+        is None
+    )
+
+
+def test_moonspec_gate_draft_publish_qualification(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    # Verifier-declared environment failure qualifies.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "BLOCKED"},
+    )
+    assert mock_run_workflow._moonspec_gate_qualifies_for_draft_publish() is True
+
+    # Degraded downgrade to NO_DETERMINATION qualifies.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "moonSpecVerify": {
+                "verdict": "FULLY_IMPLEMENTED",
+                "recommendedNextAction": "create_pull_request",
+            }
+        },
+    )
+    assert mock_run_workflow._moonspec_gate_qualifies_for_draft_publish() is True
+
+    # A degraded implementation-gap verdict is still an implementation gap,
+    # not an environment-class failure eligible for draft publication.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "moonSpecVerify": {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "recommendedNextAction": "create_pull_request",
+            }
+        },
+    )
+    assert mock_run_workflow._publish_context["moonSpecGate"][
+        "declaredVerdict"
+    ] == "ADDITIONAL_WORK_NEEDED"
+    assert mock_run_workflow._moonspec_gate_qualifies_for_draft_publish() is False
+
+    # Genuine implementation gaps never qualify.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "ADDITIONAL_WORK_NEEDED"},
+    )
+    assert mock_run_workflow._moonspec_gate_qualifies_for_draft_publish() is False
+
+    # A verifier-declared NO_DETERMINATION (clean payload) stays fail-closed.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "moonSpecVerify": {
+                "verdict": "NO_DETERMINATION",
+                "recommendedNextAction": "blocked",
+            }
+        },
+    )
+    assert mock_run_workflow._moonspec_gate_qualifies_for_draft_publish() is False
+
+    mock_run_workflow._moonspec_gate_verdict = None
+    assert mock_run_workflow._moonspec_gate_qualifies_for_draft_publish() is False
+
+
+def test_moonspec_environment_blocked_publish_action_defaults_to_fail(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    assert (
+        mock_run_workflow._moonspec_environment_blocked_publish_action() == "fail"
+    )
+    mock_run_workflow._moonspec_environment_blocked_publish_action_snapshot = (
+        "draft_pr"
+    )
+    assert (
+        mock_run_workflow._moonspec_environment_blocked_publish_action()
+        == "draft_pr"
+    )
+    mock_run_workflow._moonspec_environment_blocked_publish_action_snapshot = (
+        "unsupported_value"
+    )
+    assert (
+        mock_run_workflow._moonspec_environment_blocked_publish_action() == "fail"
+    )
+
+
+def test_moonspec_draft_publication_supersedes_blocking_gate(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "verdict": "BLOCKED",
+            "operator_summary": "Docker validation wrapper cannot mount repo.",
+            "diagnostics_ref": "art_verify_blocked",
+        },
+    )
+    blocking_reason = mock_run_workflow._blocking_moonspec_gate_reason()
+    assert blocking_reason is not None
+
+    summary = mock_run_workflow._activate_moonspec_draft_publication(
+        blocking_reason
+    )
+    assert "draft pull request" in summary
+
+    # The fail-closed block is superseded: publication proceeds.
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is False
+    assert mock_run_workflow._plan_blocked_message is None
+
+    # Simulate the state the run loop records after native draft-PR creation.
+    mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/7"
+    mock_run_workflow._publish_status = "published"
+    status, _message, publish_failure = (
+        mock_run_workflow._determine_publish_completion(
+            parameters={"publishMode": "pr"}
+        )
+    )
+    assert publish_failure is False
+    assert status != "failed"
+
+    assert mock_run_workflow._attention_required is True
+    draft_context = mock_run_workflow._publish_context["moonSpecDraftPublication"]
+    assert draft_context["policy"] == "draft_pr_on_environment_blocked"
+    assert mock_run_workflow._publish_context["moonSpecGate"][
+        "publicationPolicy"
+    ] == "draft_pr_on_environment_blocked"
+
+    body_section = mock_run_workflow._moonspec_draft_publication_body_section()
+    assert "MoonSpec verification incomplete" in body_section
+    assert "BLOCKED" in body_section
+    assert "art_verify_blocked" in body_section
+
+
+def test_moonspec_blocking_gate_unchanged_without_draft_activation(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    # In-flight compatibility: when the draft-publish path never activates
+    # (patch off or policy 'fail'), the gate blocks exactly as before.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "BLOCKED", "diagnostics_ref": "art_verify_blocked"},
+    )
+    assert mock_run_workflow._moonspec_draft_publication_reason is None
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    assert mock_run_workflow._publish_status == "not_required"
+    status, message, publish_failure = (
+        mock_run_workflow._determine_publish_completion(
+            parameters={"publishMode": "pr"}
+        )
+    )
+    assert publish_failure is True
+    assert "BLOCKED" in message
+
+
 def test_jira_orchestrate_external_handoff_requires_passing_moonspec_gate(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:

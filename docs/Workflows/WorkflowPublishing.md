@@ -262,12 +262,38 @@ Workflows that include MoonSpec verification gates must use the latest structure
 
 Non-retryable blocking verdicts, including `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE`, block publication without waiting for additional remediation attempts unless the workflow explicitly models the missing evidence as recoverable work inside the same bounded plan.
 
+The gate distinguishes a verifier judgment from a malformed verdict envelope:
+
+- The runtime injects the canonical output contract (allowed `verdict` and
+  `recommendedNextAction` values) into moonspec-verify instructions, and the
+  artifact-publication boundary records `contractViolations` on the structured
+  gate payload when the verifier JSON drifts from that contract.
+- A gate payload that fails contract validation is downgraded fail-closed to
+  `NO_DETERMINATION`, and the gate records a `downgradeReason` naming the
+  declared verdict and the violating field in publish context, the blocking
+  operator message, and the failure summary.
+- Before treating a contract-violating verify output as blocking, the workflow
+  re-runs the verify step a bounded number of times with corrective feedback so
+  the verifier can rewrite its structured JSON. Remediation implement cycles
+  are never spent on a malformed verdict envelope.
+
 When MoonSpec verification blocks publication, the workflow records
 `publicationBlockedBy: "moonspec_verify"` in publish context, preserves the
 latest verification report and evidence refs, writes a compact
 `failureSummary.type = "moonspec_verification_gate"` block in
 `reports/run_summary.json`, and marks downstream publication or Jira handoff
 steps skipped rather than creating a pull request with known incomplete work.
+
+Operators may opt environment-class gate outcomes into draft publication with
+`workflow.moonspec_environment_blocked_publish_action`
+(`WORKFLOW_MOONSPEC_ENVIRONMENT_BLOCKED_PUBLISH_ACTION`, default `fail`). With
+`draft_pr`, a gate stop whose outcome is environment-class — verdict `BLOCKED`,
+or `NO_DETERMINATION` produced by a degraded/malformed gate payload — publishes
+a **draft** pull request annotated with a "MoonSpec verification incomplete"
+section and the verification report ref, and the run completes with
+`attention_required: true` and a distinct summary instead of failing.
+Implementation-gap verdicts (`ADDITIONAL_WORK_NEEDED`, `FAILED_UNRECOVERABLE`)
+and verifier-declared `NO_DETERMINATION` always remain fail-closed.
 
 ### Agent Instructions
 
