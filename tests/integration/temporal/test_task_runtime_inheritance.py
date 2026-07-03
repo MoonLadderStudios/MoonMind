@@ -197,7 +197,7 @@ async def test_idempotent_resubmit_preserves_original_inherited_runtime(
                 failure_policy=None,
                 initial_parameters={
                     **_inherited_runtime_params(),
-                    "targetRuntime": "gemini_cli",
+                    "targetRuntime": "claude_code",
                     "model": "gemini-2.0",
                 },
                 idempotency_key="mm-681-child",

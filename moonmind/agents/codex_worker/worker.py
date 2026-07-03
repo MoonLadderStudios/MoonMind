@@ -202,7 +202,6 @@ _ALLOWED_WORKER_RUNTIMES = frozenset(
     {
         "codex",
         "codex_cli",
-        "gemini_cli",
         "claude",
         "claude_code",
         "jules",
@@ -238,14 +237,6 @@ def _canonical_workflow_node(canonical_payload: Mapping[str, Any]) -> Mapping[st
 _PROPOSAL_INSTRUCTIONS_PLACEHOLDER = "<OBJECTIVE>"
 _DEFAULT_PREPARE_GIT_USER_NAME = "MoonMind Worker"
 _DEFAULT_PREPARE_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
-_DEFAULT_GEMINI_MODEL = "gemini-3.1-pro"
-_DEFAULT_GEMINI_ALLOWED_TOOLS = (
-    "activate_skill",
-    "run_shell_command",
-    "replace",
-    "write_file",
-    "web_fetch",
-)
 _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
@@ -515,15 +506,10 @@ class CodexWorkerConfig:
     allowed_skills: tuple[str, ...] = ("auto",)
     default_codex_model: str | None = None
     default_codex_effort: str | None = None
-    default_gemini_model: str | None = _DEFAULT_GEMINI_MODEL
-    default_gemini_effort: str | None = None
     default_claude_model: str | None = None
     default_claude_effort: str | None = None
     default_jules_model: str | None = None
     default_jules_effort: str | None = None
-    gemini_binary: str = "gemini_cli"
-    gemini_cli_auth_mode: str = "api_key"
-    gemini_allowed_tools: tuple[str, ...] = _DEFAULT_GEMINI_ALLOWED_TOOLS
     claude_binary: str = "claude"
     claude_cli_auth_mode: str = "api_key"
     jules_enabled: bool = False
@@ -576,15 +562,6 @@ class CodexWorkerConfig:
                 ),
                 "efforts": self._normalize_runtime_option_values(
                     self.default_codex_effort,
-                ),
-            }
-        if self.worker_runtime in {"gemini_cli", "universal"}:
-            runtime_capabilities["gemini_cli"] = {
-                "models": self._normalize_runtime_option_values(
-                    self.default_gemini_model,
-                ),
-                "efforts": self._normalize_runtime_option_values(
-                    self.default_gemini_effort,
                 ),
             }
         if self.worker_runtime in {"claude", "universal"}:
@@ -732,24 +709,6 @@ class CodexWorkerConfig:
         if worker_runtime == "jules":
             allowed_types = ("task",)
 
-        default_gemini_model = (
-            str(
-                source.get(
-                    "MOONMIND_GEMINI_MODEL",
-                    source.get("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL),
-                )
-            ).strip()
-            or None
-        )
-        default_gemini_effort = (
-            str(
-                source.get(
-                    "MOONMIND_GEMINI_EFFORT",
-                    source.get("GEMINI_REASONING_EFFORT", ""),
-                )
-            ).strip()
-            or None
-        )
         default_claude_model = (
             str(
                 source.get(
@@ -786,24 +745,6 @@ class CodexWorkerConfig:
             ).strip()
             or None
         )
-        gemini_binary = (
-            str(source.get("MOONMIND_GEMINI_BINARY", "gemini_cli")).strip() or "gemini_cli"
-        )
-        gemini_cli_auth_mode = (
-            str(source.get("MOONMIND_GEMINI_CLI_AUTH_MODE", "api_key")).strip().lower()
-            or "api_key"
-        )
-        if gemini_cli_auth_mode not in {"api_key", "oauth"}:
-            raise ValueError(
-                "MOONMIND_GEMINI_CLI_AUTH_MODE must be one of: api_key, oauth"
-            )
-        gemini_allowed_tools_raw = source.get("MOONMIND_GEMINI_ALLOWED_TOOLS")
-        if gemini_allowed_tools_raw is None:
-            gemini_allowed_tools = _DEFAULT_GEMINI_ALLOWED_TOOLS
-        else:
-            gemini_allowed_tools = tuple(
-                cls._normalize_runtime_option_values(str(gemini_allowed_tools_raw))
-            )
         claude_cli_auth_mode = (
             str(source.get("MOONMIND_CLAUDE_CLI_AUTH_MODE", "oauth")).strip().lower()
             or "oauth"
@@ -891,12 +832,16 @@ class CodexWorkerConfig:
             )
         else:
             if worker_runtime == "universal":
-                runtime_caps = ["codex", "gemini_cli", "claude"]
+                runtime_caps = ["codex", "claude"]
                 if jules_gate.enabled:
                     runtime_caps.append("jules")
                 worker_capabilities = tuple([*runtime_caps, "git", "gh"])
             else:
-                worker_capabilities = (worker_runtime, "git", "gh")
+                worker_capability_runtime = {
+                    "codex_cli": "codex",
+                    "claude_code": "claude",
+                }.get(worker_runtime, worker_runtime)
+                worker_capabilities = (worker_capability_runtime, "git", "gh")
 
         docker_binary = (
             str(source.get("MOONMIND_DOCKER_BINARY", "docker")).strip() or "docker"
@@ -1083,15 +1028,10 @@ class CodexWorkerConfig:
             allowed_skills=allowed_skills,
             default_codex_model=default_codex_model,
             default_codex_effort=default_codex_effort,
-            default_gemini_model=default_gemini_model,
-            default_gemini_effort=default_gemini_effort,
             default_claude_model=default_claude_model,
             default_claude_effort=default_claude_effort,
             default_jules_model=default_jules_model,
             default_jules_effort=default_jules_effort,
-            gemini_binary=gemini_binary,
-            gemini_cli_auth_mode=gemini_cli_auth_mode,
-            gemini_allowed_tools=gemini_allowed_tools,
             claude_binary=claude_binary,
             claude_cli_auth_mode=claude_cli_auth_mode,
             jules_enabled=jules_gate.enabled,
@@ -9001,7 +8941,6 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
-                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -10125,7 +10064,6 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
-                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -11141,31 +11079,16 @@ class CodexWorker:
         instruction: str,
         model: str | None,
         effort: str | None,
-        prepared: PreparedTaskWorkspace,
     ) -> list[str]:
         canonical = _canonical_execution_runtime(runtime_mode)
-        if canonical == "gemini_cli":
-            command = [self._config.gemini_binary, "--prompt", instruction]
-            skills_active_path = prepared.job_root / "skills_active"
-            command.extend(["--include-directories", str(skills_active_path)])
-            if self._config.gemini_allowed_tools:
-                # Gemini CLI excludes or prompts for these tools in non-interactive
-                # mode unless they are explicitly allowed.
-                command.extend(
-                    [
-                        "--allowed-tools",
-                        ",".join(self._config.gemini_allowed_tools),
-                    ]
-                )
-            command.extend(["--include-directories", "skills_active"])
-        elif canonical == "claude":
+        if canonical == "claude":
             command = [self._config.claude_binary, "--print", instruction]
         else:
             raise ValueError(f"runtime adapter not implemented: {runtime_mode}")
 
         if model:
             command.extend(["--model", model])
-        if effort and canonical != "gemini_cli":
+        if effort:
             command.extend(["--effort", effort])
         return command
 
@@ -11175,65 +11098,36 @@ class CodexWorker:
         runtime_mode: str,
     ) -> Mapping[str, str] | None:
         canonical = _canonical_execution_runtime(runtime_mode)
-        if canonical not in {"gemini_cli", "claude"}:
+        if canonical != "claude":
             return None
 
-        if canonical == "gemini_cli":
-            if self._config.gemini_cli_auth_mode != "oauth":
-                return None
-            gemini_home = str(
-                environ.get("GEMINI_CLI_HOME") or environ.get("GEMINI_HOME") or ""
-            ).strip()
-            if not gemini_home:
-                logger.warning(
-                    "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth is set but GEMINI_CLI_HOME/GEMINI_HOME "
-                    "is missing; retaining API key variables for Gemini runtime command auth.",
-                    extra={"gemini_cli_auth_mode": self._config.gemini_cli_auth_mode},
-                )
-                return None
-            if not Path(gemini_home).is_dir() or not os.access(
-                gemini_home, os.W_OK | os.X_OK
-            ):
-                logger.warning(
-                    "Gemini auth home is not a writable directory; retaining API key variables "
-                    "for Gemini runtime command auth.",
-                    gemini_home,
-                    extra={"gemini_cli_auth_mode": self._config.gemini_cli_auth_mode},
-                )
-                return None
-            env = dict(environ)
-            env.pop("GEMINI_API_KEY", None)
-            env.pop("GOOGLE_API_KEY", None)
-            return env
-
-        if canonical == "claude":
-            if self._config.claude_cli_auth_mode != "oauth":
-                return None
-            claude_home = str(
-                environ.get("CLAUDE_HOME") or ""
-            ).strip()
-            if not claude_home:
-                logger.warning(
-                    "MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth is set but CLAUDE_HOME "
-                    "is missing; retaining API key variables for Claude runtime command auth.",
-                    extra={"claude_cli_auth_mode": self._config.claude_cli_auth_mode},
-                )
-                return None
-            if not Path(claude_home).is_dir() or not os.access(
-                claude_home, os.W_OK | os.X_OK
-            ):
-                logger.warning(
-                    "Claude auth home is not a writable directory; retaining API key variables "
-                    "for Claude runtime command auth.",
-                    claude_home,
-                    extra={"claude_cli_auth_mode": self._config.claude_cli_auth_mode},
-                )
-                return None
-            env = dict(environ)
-            env.pop("ANTHROPIC_API_KEY", None)
-            env.pop("ANTHROPIC_AUTH_TOKEN", None)
-            env.pop("CLAUDE_API_KEY", None)
-            return env
+        if self._config.claude_cli_auth_mode != "oauth":
+            return None
+        claude_home = str(
+            environ.get("CLAUDE_HOME") or ""
+        ).strip()
+        if not claude_home:
+            logger.warning(
+                "MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth is set but CLAUDE_HOME "
+                "is missing; retaining API key variables for Claude runtime command auth.",
+                extra={"claude_cli_auth_mode": self._config.claude_cli_auth_mode},
+            )
+            return None
+        if not Path(claude_home).is_dir() or not os.access(
+            claude_home, os.W_OK | os.X_OK
+        ):
+            logger.warning(
+                "Claude auth home is not a writable directory; retaining API key variables "
+                "for Claude runtime command auth.",
+                claude_home,
+                extra={"claude_cli_auth_mode": self._config.claude_cli_auth_mode},
+            )
+            return None
+        env = dict(environ)
+        env.pop("ANTHROPIC_API_KEY", None)
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        env.pop("CLAUDE_API_KEY", None)
+        return env
 
     def _ensure_jules_runtime_enabled(self) -> None:
         """Validate Jules runtime settings before executing delegated steps."""
@@ -11565,11 +11459,6 @@ class CodexWorker:
             return (
                 model_override or self._config.default_codex_model,
                 effort_override or self._config.default_codex_effort,
-            )
-        if canonical == "gemini_cli":
-            return (
-                model_override or self._config.default_gemini_model,
-                effort_override or self._config.default_gemini_effort,
             )
         if canonical == "claude":
             return (

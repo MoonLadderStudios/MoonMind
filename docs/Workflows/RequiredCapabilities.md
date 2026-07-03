@@ -287,7 +287,7 @@ Minimum readiness:
 
 ### 7.5 Runtime-mode capabilities
 
-Runtime tokens such as `codex_cli`, `claude_code`, or `gemini_cli` mean the selected runtime adapter is available and compatible with the workflow's Skill, Tool, policy, and provider profile requirements.
+Runtime tokens such as `codex_cli` or `claude_code` mean the selected runtime adapter is available and compatible with the workflow's Skill, Tool, policy, and provider profile requirements.
 
 Minimum readiness:
 

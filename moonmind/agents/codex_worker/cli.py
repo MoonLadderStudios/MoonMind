@@ -12,13 +12,9 @@ from typing import Mapping, Sequence
 
 from moonmind.agents.codex_worker.runtime_mode import (
     format_invalid_claude_cli_auth_mode_error,
-    format_invalid_gemini_cli_auth_mode_error,
     inspect_claude_home_for_auth_mode,
-    inspect_gemini_home_for_auth_mode,
     is_invalid_claude_cli_auth_mode,
-    is_invalid_gemini_cli_auth_mode,
     resolve_claude_cli_auth_mode,
-    resolve_gemini_cli_auth_mode,
 )
 from moonmind.agents.codex_worker.handlers import CodexExecHandler
 from moonmind.utils.cli import (
@@ -55,7 +51,7 @@ def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
     runtime = (
         str(env.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower() or "codex"
     )
-    allowed = {"codex", "codex_cli", "gemini_cli", "claude", "claude_code", "jules", "universal"}
+    allowed = {"codex", "codex_cli", "claude", "claude_code", "jules", "universal"}
     if runtime not in allowed:
         supported = ", ".join(sorted(allowed))
         raise RuntimeError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
@@ -139,11 +135,15 @@ def _effective_worker_capabilities(
     if configured:
         return configured
     if runtime == "universal":
-        capabilities = ["codex", "gemini_cli", "claude", "git", "gh"]
+        capabilities = ["codex", "claude", "git", "gh"]
         if _jules_runtime_gate_from_env(source).enabled:
-            capabilities.insert(3, "jules")
+            capabilities.insert(2, "jules")
         return tuple(capabilities)
-    return (runtime, "git", "gh")
+    normalized_runtime = {
+        "codex_cli": "codex",
+        "claude_code": "claude",
+    }.get(runtime, runtime)
+    return (normalized_runtime, "git", "gh")
 
 def _jules_runtime_gate_from_env(source: Mapping[str, str]):
     """Return Jules runtime gate state derived from worker environment."""
@@ -251,10 +251,9 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     source = env if env is not None else os.environ
     runtime = _resolve_worker_runtime(source)
     capabilities = _effective_worker_capabilities(source, runtime)
-    runtime_verification_order = ("codex", "gemini_cli", "claude", "jules")
+    runtime_verification_order = ("codex", "claude", "jules")
     resolved_paths: dict[str, str | None] = {
         "codex": None,
-        "gemini_cli": None,
         "claude": None,
         "jules": None,
         "rg": None,
@@ -321,11 +320,7 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 continue
             binary = "codex"
         else:
-            if runtime_name not in capabilities:
-                continue
-            binary = (
-                str(source.get("MOONMIND_GEMINI_BINARY", "gemini_cli")).strip() or "gemini_cli"
-            )
+            continue
 
         try:
             resolved_paths[runtime_name] = verify_cli_is_executable(binary)
@@ -359,43 +354,6 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     if resolved_paths["codex"] is not None:
         _run_checked_command(
             [resolved_paths["codex"], "login", "status"],
-            redaction_values=redaction_values,
-        )
-
-    if resolved_paths["gemini_cli"] is not None:
-        gemini_auth_mode, gemini_auth_mode_raw = resolve_gemini_cli_auth_mode(
-            env=source
-        )
-        if is_invalid_gemini_cli_auth_mode(gemini_auth_mode_raw):
-            raise RuntimeError(
-                format_invalid_gemini_cli_auth_mode_error(gemini_auth_mode_raw)
-            )
-
-        gemini_home = source.get("GEMINI_CLI_HOME") or source.get("GEMINI_HOME")
-        _gemini_home, gemini_home_issue = inspect_gemini_home_for_auth_mode(
-            auth_mode=gemini_auth_mode,
-            gemini_home=gemini_home,
-            isdir=os.path.isdir,
-            access=os.access,
-        )
-        if gemini_home_issue == "missing_for_oauth":
-            raise RuntimeError(
-                "GEMINI_CLI_HOME (or GEMINI_HOME fallback) is required when "
-                "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
-            )
-        if gemini_home_issue == "not_directory":
-            raise RuntimeError(
-                "GEMINI_CLI_HOME (or GEMINI_HOME fallback) must point to an existing "
-                "directory when "
-                f"MOONMIND_GEMINI_CLI_AUTH_MODE={gemini_auth_mode}"
-            )
-        if gemini_home_issue == "not_writable_for_oauth":
-            raise RuntimeError(
-                "GEMINI_CLI_HOME (or GEMINI_HOME fallback) must be writable when "
-                "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
-            )
-        _run_checked_command(
-            [resolved_paths["gemini_cli"], "--version"],
             redaction_values=redaction_values,
         )
 

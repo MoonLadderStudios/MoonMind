@@ -28,7 +28,6 @@ export function formatStatusLabel(status: string | null | undefined, fallback = 
 const RUNTIME_DISPLAY_NAMES: Record<string, string> = {
   codex_cli: 'Codex CLI',
   codex: 'Codex CLI',
-  gemini_cli: 'Gemini CLI',
   claude_code: 'Claude Code',
   claude: 'Claude Code',
   jules: 'Jules',

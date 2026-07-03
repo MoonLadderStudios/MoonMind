@@ -576,7 +576,7 @@ def test_promote_proposal_with_runtime_mode_shortcut(
             "repository": "Moon/Repo",
             "workflow": {
                 "instructions": "do stuff",
-                "runtime": {"mode": "gemini_cli"}
+                "runtime": {"mode": "claude_code"}
             }
         }
     }
@@ -584,12 +584,12 @@ def test_promote_proposal_with_runtime_mode_shortcut(
 
     response = test_client.post(
         f"/api/proposals/{proposal.id}/promote",
-        json={"runtimeMode": "gemini_cli"},
+        json={"runtimeMode": "claude_code"},
     )
 
     assert response.status_code == 200
     kwargs = service.promote_proposal.await_args.kwargs
-    assert kwargs["runtime_mode_override"] == "gemini_cli"
+    assert kwargs["runtime_mode_override"] == "claude_code"
     execution_service.create_execution.assert_awaited_once()
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["idempotency_key"] == f"proposal-promote-{proposal.id}"

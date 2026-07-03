@@ -157,14 +157,14 @@ class TestProfileSlotState:
 class TestProviderProfileManagerHelpers:
     def _make_workflow(self) -> MoonMindProviderProfileManagerWorkflow:
         wf = MoonMindProviderProfileManagerWorkflow()
-        wf._runtime_id = "gemini_cli"
+        wf._runtime_id = "claude_code"
         return wf
 
     def test_restore_state(self):
         wf = self._make_workflow()
         wf._restore_state(
             {
-                "runtime_id": "gemini_cli",
+                "runtime_id": "claude_code",
                 "profiles": [
                     {
                         "profile_id": "p1",
@@ -963,7 +963,7 @@ class TestProviderProfileManagerHelpers:
             cooldown_until="2099-01-01T00:00:00+00:00",
         )
         data = wf._build_continue_as_new_input()
-        assert data["runtime_id"] == "gemini_cli"
+        assert data["runtime_id"] == "claude_code"
         assert len(data["profiles"]) == 1
         assert data["leases"]["p1"] == ["wf1"]
         assert data["cooldowns"]["p1"] == "2099-01-01T00:00:00+00:00"
@@ -1043,14 +1043,14 @@ class TestProviderProfileManagerHelpers:
             wf.request_slot(
                 {
                     "requester_workflow_id": "run-1:agent:step-1",
-                    "runtime_id": "gemini_cli",
+                    "runtime_id": "claude_code",
                     "lease_group_id": "run-1",
                 }
             )
             wf.request_slot(
                 {
                     "requester_workflow_id": "run-1:agent:step-1",
-                    "runtime_id": "gemini_cli",
+                    "runtime_id": "claude_code",
                     "execution_profile_ref": "p2",
                     "lease_group_id": "run-1",
                 }
@@ -1728,12 +1728,12 @@ class TestProviderProfileManagerHelpers:
         wf._pending_requests = [
             PendingRequest(
                 requester_workflow_id="run-2:agent:step-1",
-                runtime_id="gemini_cli",
+                runtime_id="claude_code",
                 lease_group_id="run-2",
             ),
             PendingRequest(
                 requester_workflow_id="run-1:agent:step-2",
-                runtime_id="gemini_cli",
+                runtime_id="claude_code",
                 lease_group_id="run-1",
             ),
         ]
@@ -1811,15 +1811,15 @@ class TestProviderProfileManagerHelpers:
         wf._pending_requests = [
             PendingRequest(
                 requester_workflow_id="wf-canceled",
-                runtime_id="gemini_cli",
+                runtime_id="claude_code",
             ),
             PendingRequest(
                 requester_workflow_id="wf-running",
-                runtime_id="gemini_cli",
+                runtime_id="claude_code",
             ),
             PendingRequest(
                 requester_workflow_id="wf-missing-from-result",
-                runtime_id="gemini_cli",
+                runtime_id="claude_code",
             ),
         ]
         captured_payloads: list[dict] = []
@@ -1863,7 +1863,7 @@ class TestProviderProfileManagerHelpers:
         wf._pending_requests = [
             PendingRequest(
                 requester_workflow_id="wf-unknown",
-                runtime_id="gemini_cli",
+                runtime_id="claude_code",
             )
         ]
 
@@ -1922,11 +1922,11 @@ class TestProviderProfileManagerHelpers:
         wf._pending_requests = [
             PendingRequest(
                 requester_workflow_id="wf-pending-terminal",
-                runtime_id="gemini_cli",
+                runtime_id="claude_code",
             ),
             PendingRequest(
                 requester_workflow_id="wf-shared",
-                runtime_id="gemini_cli",
+                runtime_id="claude_code",
             ),
         ]
         captured_payloads: list[dict] = []
@@ -2179,7 +2179,7 @@ class TestDBLeaseSync:
 
     def _make_workflow(self) -> MoonMindProviderProfileManagerWorkflow:
         wf = MoonMindProviderProfileManagerWorkflow()
-        wf._runtime_id = "gemini_cli"
+        wf._runtime_id = "claude_code"
         return wf
 
     def _make_profile(
@@ -2504,7 +2504,7 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
 
     class FakeClient:
         def get_workflow_handle(self, workflow_id):
-            assert workflow_id == "provider-profile-manager:gemini_cli"
+            assert workflow_id == "provider-profile-manager:claude_code"
             return FakeHandle()
 
     class FakeAdapter:
@@ -2519,13 +2519,13 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
     result = await TemporalArtifactActivities(
         object()
     ).provider_profile_manager_state(
-        runtime_id="gemini_cli",
+        runtime_id="claude_code",
         requester_workflow_id="agent-run-1",
     )
 
     assert result == {
         "running": True,
-        "workflow_id": "provider-profile-manager:gemini_cli",
+        "workflow_id": "provider-profile-manager:claude_code",
         "status": "RUNNING",
         "profile_count": 2,
         "pending_requests_count": 2,
@@ -2567,11 +2567,11 @@ async def test_provider_profile_manager_state_checks_status_before_query(
 
     result = await TemporalArtifactActivities(
         object()
-    ).provider_profile_manager_state(runtime_id="gemini_cli")
+    ).provider_profile_manager_state(runtime_id="claude_code")
 
     assert result == {
         "running": False,
-        "workflow_id": "provider-profile-manager:gemini_cli",
+        "workflow_id": "provider-profile-manager:claude_code",
         "status": "COMPLETED",
     }
     assert handle.queried is False

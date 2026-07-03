@@ -536,7 +536,7 @@ class WorkflowSettings(BaseSettings):
         description="Enable attachment vision context generation during worker prepare stages.",
     )
     vision_provider: str = Field(
-        "gemini_cli",
+        "gemini",
         validation_alias=AliasChoices("MOONMIND_VISION_PROVIDER"),
         description="Vision provider identifier (gemini, openai, anthropic, off).",
     )
@@ -731,7 +731,6 @@ class WorkflowSettings(BaseSettings):
                     ("codex", "Codex"),
                     ("codex_cli", "Codex CLI"),
                     ("claude_code", "Claude Code"),
-                    ("gemini_cli", "Gemini CLI"),
                     ("jules", "Jules"),
                 ],
                 "applies_to": ["workflow_creation", "workflow_runtime"],
@@ -1223,8 +1222,10 @@ class WorkflowSettings(BaseSettings):
     @field_validator("vision_provider", mode="before")
     @classmethod
     def _normalize_vision_provider(cls, value: object) -> str:
-        candidate = str(value or "").strip().lower() or "gemini_cli"
-        allowed = {"gemini_cli", "openai", "anthropic", "off"}
+        candidate = str(value or "").strip().lower() or "gemini"
+        if candidate == "gemini_cli":
+            candidate = "gemini"
+        allowed = {"gemini", "openai", "anthropic", "off"}
         if candidate not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"MOONMIND_VISION_PROVIDER must be one of: {supported}")
@@ -1258,7 +1259,7 @@ class WorkflowSettings(BaseSettings):
         # Map legacy aliases to canonical before validation.
         _aliases = {"codex": "codex_cli", "claude": "claude_code"}
         normalized = _aliases.get(normalized, normalized)
-        allowed = {"codex_cli", "gemini_cli", "claude_code", "jules"}
+        allowed = {"codex_cli", "claude_code", "jules"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"default_runtime must be one of: {supported}")
@@ -2730,21 +2731,6 @@ class AppSettings(BaseSettings):
             "MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS",
         ),
         description="Compatibility passthrough for legacy live log flush interval setting.",
-        exclude=True,
-    )
-    moonmind_gemini_cli_auth_mode: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "moonmind_gemini_cli_auth_mode",
-            "MOONMIND_GEMINI_CLI_AUTH_MODE",
-        ),
-        description="Compatibility passthrough for legacy Gemini CLI auth mode.",
-        exclude=True,
-    )
-    gemini_home: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("gemini_home", "GEMINI_HOME"),
-        description="Compatibility passthrough for legacy Gemini auth home.",
         exclude=True,
     )
     moonmind_claude_cli_auth_mode: Optional[str] = Field(

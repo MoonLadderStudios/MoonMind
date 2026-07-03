@@ -1400,14 +1400,14 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
         await activities.proposal_submit(
             {
                 "candidates": candidates,
-                "policy": {"default_runtime": "gemini_cli"},
+                "policy": {"default_runtime": "claude_code"},
                 "origin": {},
             }
         )
         call_kwargs = mock_service.create_proposal.call_args.kwargs
         stamped = call_kwargs["workflow_create_request"]
         self.assertEqual(
-            stamped["payload"]["workflow"]["runtime"]["mode"], "gemini_cli"
+            stamped["payload"]["workflow"]["runtime"]["mode"], "claude_code"
         )
 
     async def test_no_default_runtime_leaves_candidate_untouched(self) -> None:

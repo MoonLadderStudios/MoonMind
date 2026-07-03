@@ -1,7 +1,7 @@
 """Helpers for resolving default workflow runtime settings.
 
-Canonical managed runtime IDs are: ``codex_cli``, ``gemini_cli``,
-``claude_code``.  Short aliases (``codex``, ``claude``) are normalized to
+Canonical managed runtime IDs are: ``codex_cli`` and ``claude_code``.
+Short aliases (``codex``, ``claude``) are normalized to
 these canonical forms before any lookup.
 """
 
@@ -16,7 +16,6 @@ DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 # Canonical runtime ids as primary keys.
 _DEFAULT_RUNTIME_MODELS: dict[str, str] = {
     "codex_cli": "gpt-5.5",
-    "gemini_cli": "gemini-3.1-pro",
     "claude_code": "claude-opus-4-8",
 }
 _DEFAULT_RUNTIME_EFFORTS: dict[str, str] = {
@@ -31,7 +30,6 @@ _RUNTIME_ALIASES: dict[str, str] = {
 
 _RUNTIME_MODEL_ENV_KEYS: dict[str, tuple[str, ...]] = {
     "codex_cli": ("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
-    "gemini_cli": ("MOONMIND_GEMINI_MODEL", "GEMINI_MODEL"),
     "claude_code": ("MOONMIND_CLAUDE_MODEL", "CLAUDE_MODEL"),
     "jules": ("MOONMIND_JULES_MODEL", "JULES_MODEL"),
 }
@@ -42,7 +40,6 @@ _RUNTIME_EFFORT_ENV_KEYS: dict[str, tuple[str, ...]] = {
         "CODEX_MODEL_REASONING_EFFORT",
         "MODEL_REASONING_EFFORT",
     ),
-    "gemini_cli": ("MOONMIND_GEMINI_EFFORT", "GEMINI_REASONING_EFFORT"),
     "claude_code": ("MOONMIND_CLAUDE_EFFORT", "CLAUDE_REASONING_EFFORT"),
     "jules": ("MOONMIND_JULES_EFFORT", "JULES_REASONING_EFFORT"),
 }

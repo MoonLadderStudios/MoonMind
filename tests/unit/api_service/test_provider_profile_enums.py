@@ -397,7 +397,7 @@ async def test_oauth_session_accepts_oauth_volume(_sqlite_db):
     async with _sqlite_db() as session:
         session_obj = ManagedAgentOAuthSession(
             session_id="test-oauth-volume",
-            runtime_id="gemini_cli",
+            runtime_id="claude_code",
             profile_id="gemini_default",
             auth_mode=ProviderCredentialSource.OAUTH_VOLUME,
         )
@@ -466,7 +466,7 @@ async def test_provider_profile_stores_credential_source_and_materialization_mod
     async with _sqlite_db() as session:
         profile = ManagedAgentProviderProfile(
             profile_id="test-profile-enums",
-            runtime_id="gemini_cli",
+            runtime_id="claude_code",
             provider_id="google",
             credential_source=ProviderCredentialSource.OAUTH_VOLUME,
             runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
@@ -490,7 +490,7 @@ async def test_provider_profile_composite_mode_is_default(_sqlite_db):
     async with _sqlite_db() as session:
         profile = ManagedAgentProviderProfile(
             profile_id="test-defaults",
-            runtime_id="gemini_cli",
+            runtime_id="claude_code",
             provider_id="google",
         )
         session.add(profile)

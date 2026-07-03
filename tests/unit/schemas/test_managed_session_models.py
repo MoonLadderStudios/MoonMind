@@ -51,7 +51,7 @@ def test_managed_session_runtime_id_canonicalizes_session_capable_runtimes() -> 
     assert canonical_managed_session_runtime_id("codex_cli") == "codex_cli"
     assert canonical_managed_session_runtime_id("claude") is None
     assert canonical_managed_session_runtime_id("claude_code") is None
-    assert canonical_managed_session_runtime_id("gemini_cli") is None
+    assert canonical_managed_session_runtime_id("claude_code") is None
 
 def test_managed_session_plane_contract_exposes_canonical_control_actions() -> None:
     contract = ManagedSessionPlaneContract()

@@ -7,14 +7,10 @@ from unittest.mock import patch
 from moonmind.workflows.temporal.runtime.output_parser import (
     ClaudeCodeOutputParser,
     CodexCliOutputParser,
-    GeminiCliOutputParser,
     ParsedOutput,
     PlainTextOutputParser,
 )
 
-from moonmind.workflows.temporal.runtime.strategies.gemini_cli import (
-    GeminiCliStrategy,
-)
 from moonmind.workflows.temporal.runtime.strategies.claude_code import (
     ClaudeCodeStrategy,
 )
@@ -51,25 +47,6 @@ class TestPlainTextOutputParser:
         assert result.error_messages == []
 
 class TestDefaultStrategyClassifyExit:
-    def test_gemini_success(self) -> None:
-        s = GeminiCliStrategy()
-        status, failure = s.classify_exit(0, "", "")
-        assert status == "completed"
-        assert failure is None
-
-    def test_gemini_failure(self) -> None:
-        s = GeminiCliStrategy()
-        status, failure = s.classify_exit(1, "", "")
-        assert status == "failed"
-        assert failure == "execution_error"
-
-    def test_gemini_rate_limited(self) -> None:
-        s = GeminiCliStrategy()
-        stderr = "Error 429: Too many requests\nreason: MODEL_CAPACITY_EXHAUSTED"
-        status, failure = s.classify_exit(143, "", stderr)
-        assert status == "failed"
-        assert failure == "integration_error"
-
     def test_claude_success(self) -> None:
         s = ClaudeCodeStrategy()
         status, failure = s.classify_exit(0, "", "")
@@ -128,10 +105,6 @@ class TestDefaultStrategyClassifyExit:
         assert failure == "integration_error"
 
 class TestDefaultOutputParser:
-    def test_gemini_returns_plain_text(self) -> None:
-        s = GeminiCliStrategy()
-        assert isinstance(s.create_output_parser(), GeminiCliOutputParser)
-
     def test_claude_returns_claude_code_output_parser(self) -> None:
         s = ClaudeCodeStrategy()
         assert isinstance(s.create_output_parser(), ClaudeCodeOutputParser)
@@ -204,26 +177,6 @@ class TestCodexCliOutputParser:
         with patch.object(PlainTextOutputParser, "parse", return_value=base):
             result = parser.parse("stdout", "stderr")
         assert result == base
-
-class TestGeminiCliOutputParser:
-    def test_parse_stream_chunk_detects_capacity_rate_limit(self) -> None:
-        parser = GeminiCliOutputParser()
-        events = parser.parse_stream_chunk(
-            'Attempt 6 failed with status 429. Retrying with backoff...\n'
-        )
-        assert len(events) == 1
-        assert events[0]["type"] == "rate_limit"
-        assert events[0]["status_code"] == 429
-
-    def test_parse_detects_capacity_markers(self) -> None:
-        parser = GeminiCliOutputParser()
-        result = parser.parse(
-            "",
-            'message: No capacity available for model gemini-3.1-pro-preview\n'
-            'reason: MODEL_CAPACITY_EXHAUSTED\n',
-        )
-        assert result.rate_limited
-        assert any("capacity" in message.lower() for message in result.error_messages)
 
 class TestClaudeCodeOutputParser:
     def test_parse_detects_short_limit_message(self) -> None:
@@ -423,16 +376,6 @@ class TestStrategyClassifyResultRateLimit:
             provider_error_code=result.provider_error_code,
             retry_recommendation=None,
         )
-
-    def test_gemini_cli_emits_429_provider_error_code(self) -> None:
-        s = GeminiCliStrategy()
-        result = s.classify_result(
-            exit_code=143,
-            stdout="",
-            stderr="Error 429: Too many requests\nreason: MODEL_CAPACITY_EXHAUSTED\n",
-        )
-        assert result.failure_class == "integration_error"
-        assert result.provider_error_code == "429"
 
     def test_claude_code_clean_exit_does_not_set_provider_error_code(self) -> None:
         s = ClaudeCodeStrategy()

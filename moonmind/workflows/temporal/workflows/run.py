@@ -550,9 +550,16 @@ RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
-_PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
+_PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code")
 _MANAGED_AGENT_IDS = frozenset(
-    {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
+    {
+        "claude",
+        "claude_code",
+        "codex",
+        "codex_cli",
+        # Replay-only: preserve managed classification for pre-cutover histories.
+        "gemini_cli",
+    }
 )
 
 def _normalize_agent_runtime_id(agent_id: str) -> str:
@@ -13614,7 +13621,6 @@ class MoonMindRunWorkflow:
     @staticmethod
     def _managed_runtime_id(agent_id: str) -> str:
         runtime_mapping = {
-            "gemini_cli": "gemini_cli",
             "claude": "claude_code",
             "claude_code": "claude_code",
             "codex": "codex_cli",
@@ -15574,7 +15580,7 @@ class MoonMindRunWorkflow:
         """Infer runtime_id from child workflow ID pattern.
 
         Child workflow ID pattern: "<parent_workflow_id>:agent:<node_id>[:retry<N>]"
-        The node_id typically indicates the agent kind (e.g., "jules", "gemini", "claude").
+        The node_id typically indicates the agent kind (e.g., "jules", "claude").
         """
         # Simple heuristic: extract from the workflow ID
         # Format: parent_id:agent:node_id[:retry<N>]
@@ -15584,7 +15590,6 @@ class MoonMindRunWorkflow:
             # Map common node IDs to runtime IDs
             mapping = {
                 "jules": "jules",
-                "gemini": "gemini_cli",
                 "claude": "claude_code",
                 "codex": "codex_cli",
             }

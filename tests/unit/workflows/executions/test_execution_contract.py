@@ -316,8 +316,8 @@ def test_mm786_task_steps_accept_runtime_selection_and_snapshot_it() -> None:
                 "id": "cheap-analysis",
                 "instructions": "Analyze with the cheaper runtime.",
                 "runtime": {
-                    "mode": "gemini_cli",
-                    "model": "gemini-2.5-flash",
+                    "mode": "claude_code",
+                    "model": "claude-haiku-test",
                     "effort": "low",
                 },
             }
@@ -327,15 +327,15 @@ def test_mm786_task_steps_accept_runtime_selection_and_snapshot_it() -> None:
     spec = WorkflowExecutionSpec.model_validate(payload)
 
     assert spec.steps[0].runtime is not None
-    assert spec.steps[0].runtime.mode == "gemini_cli"
-    assert spec.steps[0].runtime.model == "gemini-2.5-flash"
+    assert spec.steps[0].runtime.mode == "claude_code"
+    assert spec.steps[0].runtime.model == "claude-haiku-test"
     assert spec.steps[0].runtime.effort == "low"
 
     snapshot = build_authoritative_workflow_input_snapshot(task_payload=payload)
 
     assert snapshot["steps"][0]["runtime"] == {
-        "mode": "gemini_cli",
-        "model": "gemini-2.5-flash",
+        "mode": "claude_code",
+        "model": "claude-haiku-test",
         "effort": "low",
     }
 
@@ -496,7 +496,6 @@ def test_runtime_command_preview_config_includes_all_passthrough_runtime_ids() -
     assert config["runtimes"]["codex_cli"]["slashCommandPassthrough"] is True
     assert config["runtimes"]["claude"]["slashCommandPassthrough"] is True
     assert config["runtimes"]["claude_code"]["slashCommandPassthrough"] is True
-    assert config["runtimes"]["gemini_cli"]["slashCommandPassthrough"] is True
     assert config["runtimes"]["universal"]["slashCommandPassthrough"] is True
     assert config["runtimes"]["codex_cloud"]["slashCommandPassthrough"] is False
 
@@ -1059,19 +1058,19 @@ def test_task_step_accepts_per_step_runtime_selection() -> None:
             "id": "review",
             "instructions": "Review with a cheaper model.",
             "runtime": {
-                "mode": "gemini_cli",
-                "model": "gemini-3.1-flash",
+                "mode": "claude_code",
+                "model": "claude-haiku-test",
                 "effort": "low",
-                "profileId": "gemini-default",
+                "profileId": "claude-default",
             },
         }
     )
 
     assert spec.runtime is not None
-    assert spec.runtime.mode == "gemini_cli"
-    assert spec.runtime.model == "gemini-3.1-flash"
+    assert spec.runtime.mode == "claude_code"
+    assert spec.runtime.model == "claude-haiku-test"
     assert spec.runtime.effort == "low"
-    assert spec.runtime.provider_profile == "gemini-default"
+    assert spec.runtime.provider_profile == "claude-default"
 
 def test_mm569_accepts_executable_tool_and_skill_payload_fixtures() -> None:
     result = build_canonical_workflow_view(

@@ -31,7 +31,7 @@ The core model is:
 - higher layers store and exchange bindings, observations, events, and artifact refs,
 - runtime-native process, thread, container, transcript, and session identifiers remain opaque outside the owning plane.
 
-Codex CLI is the current concrete managed-session binding. Claude Code has managed-run support and Claude-specific session design models, but it should not be treated as a live managed-session binding until it implements its own runtime-specific session plane. Gemini CLI and future managed runtimes should implement the same shared contract through their own runtime-specific planes before being described as session-capable.
+Codex CLI is the current concrete managed-session binding. Claude Code has managed-run support and Claude-specific session design models, but it should not be treated as a live managed-session binding until it implements its own runtime-specific session plane. Future managed runtimes should implement the same shared contract through their own runtime-specific planes before being described as session-capable.
 
 ---
 
@@ -151,7 +151,7 @@ ManagedAgentSpec
 Field requirements:
 
 - `id` is the stable logical managed-agent identity. It must not be derived from a runtime-native session id.
-- `runtime` selects the managed session plane, such as `codex`, `claude-code`, or `gemini-cli`. Unsupported runtime values must fail fast.
+- `runtime` selects the managed session plane, such as `codex` or `claude-code`. Unsupported runtime values must fail fast.
 - `desiredState` is one of `present`, `suspended`, or `absent`.
 - `workspace` defines the repo, worktree, sandbox root, or equivalent scope to bind into the session.
 - `providerProfileRef` references the Provider Profile used for runtime/provider selection and launch shaping. It must not contain raw credentials.
@@ -570,7 +570,7 @@ Runtime differences belong in:
 - bounded `runtimeDetails`,
 - runtime-specific docs.
 
-Codex-specific behavior belongs in Codex-managed-session docs. Claude Code, Gemini CLI, and future runtime docs should describe how their future planes realize this contract rather than redefining it.
+Codex-specific behavior belongs in Codex-managed-session docs. Claude Code and future runtime docs should describe how their future planes realize this contract rather than redefining it.
 
 ---
 
@@ -606,7 +606,7 @@ Conformance determination is binary: a runtime is session-capable only when ever
 
 A runtime with no canonical managed-session runtime id must never be determined session-capable, even if it declares every behavior. A runtime that claims session capability it cannot back with conforming behaviors fails the suite, preventing unsupported runtimes from being surfaced as session-capable.
 
-Codex CLI is the only runtime that currently conforms. Claude Code, Gemini CLI, and future runtimes are reported as not-session-capable with explicit capability gaps until they implement their own session planes and pass the suite.
+Codex CLI is the only runtime that currently conforms. Claude Code and future runtimes are reported as not-session-capable with explicit capability gaps until they implement their own session planes and pass the suite.
 
 ## 13. Required invariants
 

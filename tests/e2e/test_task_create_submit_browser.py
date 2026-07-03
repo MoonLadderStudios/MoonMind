@@ -103,7 +103,7 @@ def _route_handlers(
                 {
                     "items": {
                         "codex": {"models": ["gpt-5.3-codex"], "efforts": ["high"]},
-                        "gemini_cli": {"models": [], "efforts": []},
+                        "claude_code": {"models": [], "efforts": []},
                         "claude": {"models": [], "efforts": []},
                     },
                 }
@@ -174,7 +174,7 @@ def _route_handlers(
                     "is_default": False,
                 },
             ]
-        elif runtime_id == "gemini_cli":
+        elif runtime_id == "claude_code":
             items = [
                 {
                     "profile_id": "profile:gemini-default",
@@ -503,7 +503,7 @@ def test_create_page_shows_provider_profiles_for_selected_runtime(server):
             "Codex Secondary",
         ]
 
-        page.select_option('select[name="runtime"]', "gemini_cli")
+        page.select_option('select[name="runtime"]', "claude_code")
         page.wait_for_function(
             """
             () => {

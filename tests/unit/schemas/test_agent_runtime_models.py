@@ -272,7 +272,7 @@ def test_agent_execution_request_rejects_managed_session_for_non_session_runtime
     ):
         AgentExecutionRequest(
             agentKind="managed",
-            agentId="gemini_cli",
+            agentId="claude_code",
             correlationId="corr-1",
             idempotencyKey="idem-1",
             managedSession={
@@ -308,7 +308,7 @@ def test_managed_agent_provider_profile_rejects_sensitive_policy_keys() -> None:
     ):
         ManagedAgentProviderProfile(
             profileId="gemini_oauth_user_a",
-            runtimeId="gemini_cli",
+            runtimeId="claude_code",
             credentialSource="oauth_volume",
             runtimeMaterializationMode="oauth_home",
             maxParallelRuns=1,
@@ -393,7 +393,7 @@ def test_managed_runtime_profile_rejects_github_tokens_in_env_overrides() -> Non
     ):
         ManagedRuntimeProfile(
             profileId="gemini_provider_profile",
-            runtimeId="gemini_cli",
+            runtimeId="claude_code",
             commandTemplate=["gemini"],
             envOverrides={"GITHUB_TOKEN": "ghp-2"},
         )
@@ -404,7 +404,7 @@ def test_managed_runtime_profile_rejects_other_sensitive_env_override_keys() -> 
     ):
         ManagedRuntimeProfile(
             profileId="gemini_provider_profile",
-            runtimeId="gemini_cli",
+            runtimeId="claude_code",
             commandTemplate=["gemini"],
             envOverrides={"OPENAI_API_KEY": "secret"},
         )
@@ -425,7 +425,7 @@ def test_managed_runtime_profile_allows_managed_launch_metadata_keys() -> None:
 def test_managed_runtime_profile_allows_secret_passthrough_key_names() -> None:
     profile = ManagedRuntimeProfile(
         profileId="gemini_provider_profile",
-        runtimeId="gemini_cli",
+        runtimeId="claude_code",
         commandTemplate=["gemini"],
         passthroughEnvKeys=["github_token", "GITHUB_TOKEN"],
     )
@@ -464,7 +464,7 @@ def test_managed_runtime_profile_rejects_unsupported_secret_passthrough_keys() -
     ):
         ManagedRuntimeProfile(
             profileId="gemini_provider_profile",
-            runtimeId="gemini_cli",
+            runtimeId="claude_code",
             commandTemplate=["gemini"],
             passthroughEnvKeys=["OPENAI_API_KEY"],
         )

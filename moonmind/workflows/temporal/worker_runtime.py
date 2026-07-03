@@ -422,7 +422,6 @@ def _build_jira_orchestrate_execution_creator():
 
     return _create_execution
 
-_SUPPORTED_AGENT_RUNTIMES = frozenset({"codex", "gemini_cli", "claude", "jules"})
 _CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
 # Agent runtimes where PR creation is driven by the provider API (e.g. Jules
 # ``automationMode`` / ``AUTO_CREATE_PR``), not by appending ``gh pr create``
@@ -860,7 +859,7 @@ def _derive_pr_resolver_title(
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
     if not normalized:
-        return str(settings.workflow.default_runtime or "gemini_cli").strip().lower()
+        return str(settings.workflow.default_runtime or "codex_cli").strip().lower()
     return normalized
 
 _JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS

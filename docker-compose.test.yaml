@@ -23,7 +23,6 @@ services:
       target: test-runtime
       args:
         INSTALL_CODEX_CLI: "false"
-        INSTALL_GEMINI_CLI: "false"
         INSTALL_TEST_DEPS: "true"
     env_file:
       - .env
@@ -55,7 +54,6 @@ services:
       dockerfile: api_service/Dockerfile
       args:
         INSTALL_CODEX_CLI: "false"
-        INSTALL_GEMINI_CLI: "false"
     env_file:
       - .env
     environment:

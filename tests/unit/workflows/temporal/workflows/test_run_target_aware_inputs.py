@@ -114,7 +114,7 @@ def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
 def test_mm786_runtime_selection_projects_cost_and_portability_metadata() -> None:
     request = _build_request_for_step(
         "collect-evidence",
-        runtime_mode="gemini_cli",
+        runtime_mode="claude_code",
         model="gemini-2.5-pro",
         effort="high",
     )
@@ -124,12 +124,12 @@ def test_mm786_runtime_selection_projects_cost_and_portability_metadata() -> Non
         "stepExecutionManifestProjection"
     ]
 
-    assert attempt_context["runtimeSelection"]["runtimeId"] == "gemini_cli"
+    assert attempt_context["runtimeSelection"]["runtimeId"] == "claude_code"
     assert attempt_context["runtimeSelection"]["model"] == "gemini-2.5-pro"
     assert attempt_context["runtimeSelection"]["effort"] == "high"
     assert attempt_context["costPolicy"]["billingAwareRouting"] is True
     assert attempt_context["costPolicy"]["routingBasis"] == "step_runtime_selection"
-    assert attempt_context["costPolicy"]["runtimeId"] == "gemini_cli"
+    assert attempt_context["costPolicy"]["runtimeId"] == "claude_code"
     assert attempt_context["costPolicy"]["model"] == "gemini-2.5-pro"
     assert attempt_context["costPolicy"]["effort"] == "high"
     assert attempt_context["costPolicy"]["estimatedCostUnits"] >= 1

@@ -183,7 +183,6 @@ _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _SUPPORTED_TASK_RUNTIMES = frozenset({
     "codex_cli",
-    "gemini_cli",
     "claude_code",
     "codex_cloud",
     "jules",
@@ -209,17 +208,6 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.FAILED: "failed",
     MoonMindWorkflowState.CANCELED: "canceled",
 }
-_SUPPORTED_TASK_RUNTIMES = frozenset({
-    "codex_cli",
-    "gemini_cli",
-    "claude_code",
-    "codex_cloud",
-    "jules",
-    # Legacy aliases accepted and normalized below.
-    "codex",
-    "claude",
-})
-
 _MAX_TASK_TITLE_LENGTH = 150
 _MAX_TASK_SUMMARY_LENGTH = 180
 _TASK_SUMMARY_ELLIPSIS = "..."
@@ -1872,7 +1860,6 @@ def _facet_label(facet: str, value: str) -> str:
         labels = {
             "codex_cli": "Codex CLI",
             "claude_code": "Claude Code",
-            "gemini_cli": "Gemini CLI",
             "codex_cloud": "Codex Cloud",
         }
         return labels.get(value, value.replace("_", " ").title())
@@ -6678,8 +6665,8 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                             raise _invalid_workflow_request(
                                 "Unsupported payload.workflow.steps"
                                 f"[{index}].runtime.mode: {value!r}. "
-                                "Must be one of: codex_cli, gemini_cli, "
-                                "claude_code, codex_cloud, jules."
+                                "Must be one of: codex_cli, claude_code, "
+                                "codex_cloud, jules."
                             )
                     normalized_runtime[target_key] = normalized_value
             if normalized_runtime:
@@ -6895,7 +6882,7 @@ async def _resolve_step_runtime_selections(
                 raise _invalid_workflow_request(
                     f"Unsupported payload.workflow.steps[{index}].runtime.mode: "
                     f"{raw_step_runtime!r}. Must be one of: codex_cli, "
-                    "gemini_cli, claude_code, codex_cloud, jules."
+                    "claude_code, codex_cloud, jules."
                 )
             canonical_step_runtime = normalized_rt
 
@@ -8943,7 +8930,7 @@ async def _create_execution_from_workflow_request(
         if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
             raise _invalid_workflow_request(
                 f"Unsupported targetRuntime: {raw_target_runtime!r}. "
-                "Must be one of: codex_cli, gemini_cli, claude_code, codex_cloud, jules."
+                "Must be one of: codex_cli, claude_code, codex_cloud, jules."
             )
         canonical_target_runtime = normalized_rt
 

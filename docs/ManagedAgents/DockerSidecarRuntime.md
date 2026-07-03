@@ -65,14 +65,14 @@ The related architecture documents carry the same desired-state split: ordinary 
 - Kubernetes orchestration of MoonMind itself.
 - A general arbitrary-shell execution surface from the control plane.
 - A generic container marketplace or cross-session container reuse.
-- The detailed Codex / Claude / Gemini managed session protocols (owned by the runtime-specific docs).
+- The detailed Codex / Claude managed session protocols (owned by the runtime-specific docs).
 - The provider-profile, secrets, and OAuth subsystems.
 
 ---
 
 ## 4. Terminology
 
-- **Managed agent session container** (or "agent container"): the workflow-scoped runtime container that holds the agent runtime — Codex CLI, Claude Code, Gemini CLI, or equivalent — and the workspace bind. In this document this is the container that runs `docker version`, `docker run`, and so on.
+- **Managed agent session container** (or "agent container"): the workflow-scoped runtime container that holds the agent runtime — Codex CLI, Claude Code, or equivalent — and the workspace bind. In this document this is the container that runs `docker version`, `docker run`, and so on.
 - **Docker sidecar container**: a sibling container in the same managed session that runs `dockerd` (classic or rootless) and exposes the daemon socket on a shared volume.
 - **Workspace volume**: the shared volume mounted at the same path into both containers so that `-v "$PWD":/workspace` bind mounts work transparently.
 - **Docker socket volume**: the shared volume that carries the Unix socket exposed by `dockerd` and consumed by the Docker CLI in the agent container.
@@ -89,7 +89,7 @@ A managed session with Docker capability is two containers and a small set of sh
 ```
 Managed session
 ├── agent container
-│   ├── agent runtime (Codex / Claude / Gemini / shell)
+│   ├── agent runtime (Codex / Claude / shell)
 │   ├── git, repo tools
 │   ├── Docker CLI (+ Compose plugin, optional)
 │   ├── DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock
@@ -273,7 +273,7 @@ The managed agent image stays lightweight.
 - shell (bash), git, curl/wget, ca-certificates
 - Docker CLI
 - Docker Compose plugin (when sessions are expected to use `docker compose`)
-- the agent runtime tooling (Codex CLI, Claude Code, Gemini CLI, or equivalent)
+- the agent runtime tooling (Codex CLI, Claude Code, or equivalent)
 
 **Must not include:**
 

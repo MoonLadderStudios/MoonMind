@@ -166,9 +166,6 @@ class ProviderProfileMaterializer:
             env["CLAUDE_VOLUME_PATH"] = mount_path
         elif runtime_id == "codex_cli":
             env["CODEX_HOME"] = mount_path
-        elif runtime_id == "gemini_cli":
-            env["GEMINI_HOME"] = mount_path
-            env["GEMINI_CLI_HOME"] = mount_path
 
     def _render_string(self, value: str, context: dict[str, Any]) -> str:
         def _replace(match: re.Match[str]) -> str:

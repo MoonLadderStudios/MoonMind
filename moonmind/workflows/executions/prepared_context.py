@@ -65,7 +65,6 @@ _RUNTIME_COST_UNITS = {
     "codex_cli": 3,
     "claude": 3,
     "claude_code": 3,
-    "gemini_cli": 2,
     "jules": 2,
 }
 

@@ -534,10 +534,6 @@ async def add_request_id(request: Request, call_next):
 
 _CODEX_OPENROUTER_QWEN36_PLUS_MODEL = "qwen/qwen3.6-plus"
 _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL = "qwen/qwen3.6-plus:free"
-_CLAUDE_ANTHROPIC_LEGACY_DISPLAY_MODEL_ALIASES = {
-    "Sonnet 4.6": "claude-sonnet-4-6",
-    "Opus 4.7": "claude-opus-4-7",
-}
 
 def _codex_openrouter_qwen36_plus_file_templates(
     model: str,
@@ -683,10 +679,10 @@ async def _auto_seed_provider_profiles() -> list[str]:
         logger.info("Provider profile auto-seeding disabled via MOONMIND_SKIP_PROVIDER_PROFILE_SEED.")
         return []
 
-    # Documented default readiness labels for first-party setup stubs
-    # (docs/Security/ProviderProfiles.md §7.2 / §15.1). The stubs are visible
-    # but disabled until first OAuth or API-key setup succeeds.
-    def _make_first_party_setup_command_behavior() -> dict[str, Any]:
+    # First-party setup profiles are visible but disabled until OAuth setup
+    # succeeds or an API key is added. API-key profiles are inserted only when
+    # the corresponding env key is configured.
+    def _make_first_party_oauth_command_behavior() -> dict[str, Any]:
         return {
             "supported_auth_methods": ["oauth_volume", "secret_ref"],
             "auth_actions": ["connect_oauth", "use_api_key"],
@@ -697,51 +693,41 @@ async def _auto_seed_provider_profiles() -> list[str]:
             },
         }
 
+    def _make_first_party_api_key_missing_command_behavior(
+        env_key: str,
+    ) -> dict[str, Any]:
+        return {
+            "supported_auth_methods": ["secret_ref"],
+            "auth_actions": ["use_api_key"],
+            "auth_strategy": "api_key_env",
+            "auth_state": "not_configured",
+            "auth_status_label": f"{env_key} is not configured",
+            "auth_readiness": {
+                "connected": False,
+                "backing_secret_exists": False,
+                "launch_ready": False,
+                "failure_reason": f"{env_key} is not configured.",
+            },
+        }
+
+    def _make_first_party_api_command_behavior(ready_label: str) -> dict[str, Any]:
+        return {
+            "supported_auth_methods": ["secret_ref"],
+            "auth_actions": ["use_api_key"],
+            "auth_strategy": "api_key_env",
+            "auth_state": "connected",
+            "auth_status_label": ready_label,
+            "auth_readiness": {
+                "connected": True,
+                "backing_secret_exists": True,
+                "launch_ready": True,
+            },
+        }
+
     # Well-known runtime defaults matching docker-compose.yaml conventions.
     _DEFAULT_PROFILES = [
         {
-            "profile_id": "gemini_google_default",
-            "runtime_id": "gemini_cli",
-            "is_default": False,
-            "provider_id": "google",
-            "provider_label": "Google",
-            "default_model": None,  # inherits runtime default: gemini-3.1-pro
-            "credential_source": ProviderCredentialSource.NONE,
-            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
-            "volume_ref": None,
-            "volume_mount_path": None,
-            "account_label": "Gemini CLI (setup required)",
-            "enabled": False,
-            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
-            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
-            "tags": ["setup-required", "first-party"],
-            "command_behavior": _make_first_party_setup_command_behavior(),
-        },
-        {
-            "profile_id": "gemini_default",
-            "runtime_id": "gemini_cli",
-            "is_default": False,
-            "provider_id": "google",
-            "provider_label": "Google",
-            "default_model": None,  # inherits runtime default: gemini-3.1-pro
-            "credential_source": ProviderCredentialSource.NONE,
-            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
-            "volume_ref": None,
-            "volume_mount_path": None,
-            "clear_env_keys": [
-                "GEMINI_API_KEY",
-                "GOOGLE_API_KEY",
-                "GOOGLE_APPLICATION_CREDENTIALS",
-            ],
-            "account_label": "Gemini CLI (auto-seeded)",
-            "enabled": False,
-            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
-            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
-            "tags": ["setup-required", "first-party"],
-            "command_behavior": _make_first_party_setup_command_behavior(),
-        },
-        {
-            "profile_id": "codex_openai_default",
+            "profile_id": "codex_openai_oauth",
             "runtime_id": "codex_cli",
             "is_default": False,
             "provider_id": "openai",
@@ -751,88 +737,107 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
             "volume_ref": None,
             "volume_mount_path": None,
-            "account_label": "Codex CLI (setup required)",
+            "account_label": "Codex OpenAI OAuth",
             "enabled": False,
             "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
             "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
-            "tags": ["setup-required", "first-party"],
-            "command_behavior": _make_first_party_setup_command_behavior(),
+            "tags": ["oauth", "first-party"],
+            "command_behavior": _make_first_party_oauth_command_behavior(),
         },
         {
-            "profile_id": "codex_default",
+            "profile_id": "claude_anthropic_oauth",
+            "runtime_id": "claude_code",
+            "is_default": False,
+            "provider_id": "anthropic",
+            "provider_label": "Anthropic",
+            "default_model": None,  # inherits runtime default: claude-opus-4-8
+            "credential_source": ProviderCredentialSource.NONE,
+            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "account_label": "Claude Anthropic OAuth",
+            "enabled": False,
+            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+            "tags": ["oauth", "first-party"],
+            "command_behavior": _make_first_party_oauth_command_behavior(),
+        },
+
+    ]
+
+    if os.environ.get("OPENAI_API_KEY"):
+        _DEFAULT_PROFILES.append({
+            "profile_id": "codex_openai_api",
             "runtime_id": "codex_cli",
             "is_default": False,
             "provider_id": "openai",
             "provider_label": "OpenAI",
             "default_model": None,  # inherits runtime default: gpt-5.5
-            "credential_source": ProviderCredentialSource.NONE,
+            "credential_source": ProviderCredentialSource.SECRET_REF,
             "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
-            "volume_ref": None,
-            "volume_mount_path": None,
+            "secret_refs": {
+                "openai_api_key": "env://OPENAI_API_KEY",
+            },
             "clear_env_keys": [
-                "OPENAI_API_KEY",
                 "OPENAI_BASE_URL",
                 "OPENAI_ORG_ID",
                 "OPENAI_PROJECT",
                 "MINIMAX_API_KEY",
             ],
-            "account_label": "Codex CLI (auto-seeded)",
-            "enabled": False,
-            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
-            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
-            "tags": ["setup-required", "first-party"],
-            "command_behavior": _make_first_party_setup_command_behavior(),
-        },
-        {
-            "profile_id": "claude_anthropic_default",
+            "env_template": {
+                "OPENAI_API_KEY": {
+                    "from_secret_ref": "openai_api_key",
+                },
+            },
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "account_label": "Codex OpenAI API",
+            "enabled": True,
+            "auth_state": ProviderProfileAuthState.CONNECTED,
+            "disabled_reason": None,
+            "tags": ["api-key", "first-party"],
+            "command_behavior": _make_first_party_api_command_behavior(
+                "OpenAI API key ready"
+            ),
+            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
+        })
+
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        _DEFAULT_PROFILES.append({
+            "profile_id": "claude_anthropic_api",
             "runtime_id": "claude_code",
             "is_default": False,
             "provider_id": "anthropic",
             "provider_label": "Anthropic",
             "default_model": None,  # inherits runtime default: claude-opus-4-8
-            "credential_source": ProviderCredentialSource.NONE,
+            "credential_source": ProviderCredentialSource.SECRET_REF,
             "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
-            "volume_ref": None,
-            "volume_mount_path": None,
+            "secret_refs": {
+                "anthropic_api_key": "env://ANTHROPIC_API_KEY",
+            },
             "clear_env_keys": [
-                "ANTHROPIC_API_KEY",
-                "CLAUDE_API_KEY",
-                "OPENAI_API_KEY",
-            ],
-            "account_label": "Claude Code (setup required)",
-            "enabled": False,
-            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
-            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
-            "tags": ["setup-required", "first-party"],
-            "command_behavior": _make_first_party_setup_command_behavior(),
-        },
-        {
-            "profile_id": "claude_anthropic",
-            "runtime_id": "claude_code",
-            "is_default": False,
-            "provider_id": "anthropic",
-            "provider_label": "Anthropic",
-            "default_model": None,  # inherits runtime default: claude-opus-4-8
-            "credential_source": ProviderCredentialSource.NONE,
-            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
-            "volume_ref": None,
-            "volume_mount_path": None,
-            "clear_env_keys": [
-                "ANTHROPIC_API_KEY",
                 "ANTHROPIC_AUTH_TOKEN",
                 "ANTHROPIC_BASE_URL",
                 "CLAUDE_API_KEY",
                 "OPENAI_API_KEY",
             ],
-            "account_label": "Claude Code (auto-seeded)",
-            "enabled": False,
-            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
-            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
-            "tags": ["setup-required", "first-party"],
-            "command_behavior": _make_first_party_setup_command_behavior(),
-        },
-
-    ]
+            "env_template": {
+                "ANTHROPIC_API_KEY": {
+                    "from_secret_ref": "anthropic_api_key",
+                },
+            },
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "account_label": "Claude Anthropic API",
+            "enabled": True,
+            "auth_state": ProviderProfileAuthState.CONNECTED,
+            "disabled_reason": None,
+            "tags": ["api-key", "first-party"],
+            "command_behavior": _make_first_party_api_command_behavior(
+                "Anthropic API key ready"
+            ),
+            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
+        })
 
     # Conditionally include MiniMax profile when the API key is available.
     if os.environ.get("MINIMAX_API_KEY"):
@@ -970,7 +975,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
     seeded: list[str] = []
     try:
         async with get_async_session_context() as session:
-            from sqlalchemy import update
+            from sqlalchemy import delete, update
             existing_result = await session.execute(
                 select(
                     ManagedAgentProviderProfile.profile_id,
@@ -979,6 +984,15 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ManagedAgentProviderProfile.default_model,
                     ManagedAgentProviderProfile.clear_env_keys,
                     ManagedAgentProviderProfile.file_templates,
+                    ManagedAgentProviderProfile.credential_source,
+                    ManagedAgentProviderProfile.runtime_materialization_mode,
+                    ManagedAgentProviderProfile.secret_refs,
+                    ManagedAgentProviderProfile.env_template,
+                    ManagedAgentProviderProfile.enabled,
+                    ManagedAgentProviderProfile.auth_state,
+                    ManagedAgentProviderProfile.disabled_reason,
+                    ManagedAgentProviderProfile.command_behavior,
+                    ManagedAgentProviderProfile.last_auth_method,
                 )
             )
             existing_rows = existing_result.all()
@@ -989,35 +1003,118 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "default_model": row.default_model,
                     "clear_env_keys": row.clear_env_keys,
                     "file_templates": row.file_templates,
+                    "credential_source": row.credential_source,
+                    "runtime_materialization_mode": row.runtime_materialization_mode,
+                    "secret_refs": row.secret_refs,
+                    "env_template": row.env_template,
+                    "enabled": row.enabled,
+                    "auth_state": row.auth_state,
+                    "disabled_reason": row.disabled_reason,
+                    "command_behavior": row.command_behavior,
+                    "last_auth_method": row.last_auth_method,
                 }
                 for row in existing_rows
             }
             existing_ids: set[str] = set(existing_by_id)
 
+            deprecated_gemini_profile_ids = {
+                "gemini_google_default",
+                "gemini_default",
+            }
+            deprecated_gemini_profile_ids_to_delete = (
+                deprecated_gemini_profile_ids.intersection(existing_ids)
+            )
+            needs_commit = False
+            if deprecated_gemini_profile_ids_to_delete:
+                await session.execute(
+                    delete(ManagedAgentProviderProfile).where(
+                        ManagedAgentProviderProfile.profile_id.in_(
+                            deprecated_gemini_profile_ids_to_delete
+                        ),
+                        ManagedAgentProviderProfile.runtime_id == "gemini_cli",
+                    )
+                )
+                needs_commit = True
+                existing_by_id = {
+                    profile_id: row
+                    for profile_id, row in existing_by_id.items()
+                    if profile_id not in deprecated_gemini_profile_ids_to_delete
+                }
+                existing_ids = set(existing_by_id)
+
+            first_party_env_api_profiles = {
+                "codex_openai_api": "OPENAI_API_KEY",
+                "claude_anthropic_api": "ANTHROPIC_API_KEY",
+            }
+            default_profile_by_id = {
+                profile_def["profile_id"]: profile_def
+                for profile_def in _DEFAULT_PROFILES
+            }
+            for profile_id, env_key in first_party_env_api_profiles.items():
+                current = existing_by_id.get(profile_id)
+                if current is None:
+                    continue
+                configured = bool(os.environ.get(env_key))
+                profile_def = default_profile_by_id.get(profile_id)
+                updates: dict[str, Any] = {}
+                if configured and profile_def is not None:
+                    desired_values = {
+                        "credential_source": profile_def["credential_source"],
+                        "runtime_materialization_mode": profile_def[
+                            "runtime_materialization_mode"
+                        ],
+                        "secret_refs": profile_def.get("secret_refs"),
+                        "env_template": profile_def.get("env_template"),
+                        "clear_env_keys": profile_def.get("clear_env_keys"),
+                        "enabled": True,
+                        "auth_state": ProviderProfileAuthState.CONNECTED,
+                        "disabled_reason": None,
+                        "command_behavior": profile_def.get("command_behavior"),
+                        "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
+                    }
+                    updates = {
+                        key: value
+                        for key, value in desired_values.items()
+                        if current.get(key) != value
+                    }
+                elif not configured:
+                    secret_refs = current.get("secret_refs") or {}
+                    env_ref = f"env://{env_key}"
+                    uses_env_ref = any(
+                        str(value or "").strip() == env_ref
+                        for value in secret_refs.values()
+                    )
+                    if uses_env_ref:
+                        desired_values = {
+                            "enabled": False,
+                            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+                            "disabled_reason": (
+                                ProviderProfileDisabledReason.MISSING_CREDENTIALS
+                            ),
+                            "command_behavior": _make_first_party_api_key_missing_command_behavior(
+                                env_key
+                            ),
+                        }
+                        updates = {
+                            key: value
+                            for key, value in desired_values.items()
+                            if current.get(key) != value
+                        }
+                if updates:
+                    await session.execute(
+                        update(ManagedAgentProviderProfile)
+                        .where(ManagedAgentProviderProfile.profile_id == profile_id)
+                        .values(**updates)
+                    )
+                    existing_by_id[profile_id].update(updates)
+                    needs_commit = True
+
             to_insert = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
 
-            needs_commit = False
             for profile_def in _DEFAULT_PROFILES:
                 profile_id = profile_def["profile_id"]
                 desired_default_model = profile_def.get("default_model")
                 if profile_id in existing_by_id:
-                    if profile_id == "codex_default":
-                        current_provider_id = str(
-                            existing_by_id[profile_id]["provider_id"] or ""
-                        ).strip()
-                        if current_provider_id == "moonladder":
-                            stmt = (
-                                update(ManagedAgentProviderProfile)
-                                .where(
-                                    ManagedAgentProviderProfile.profile_id == profile_id
-                                )
-                                .values(
-                                    provider_id=profile_def["provider_id"],
-                                    provider_label=profile_def.get("provider_label"),
-                                )
-                            )
-                            await session.execute(stmt)
-                            needs_commit = True
                     current_model = existing_by_id[profile_id]["default_model"]
                     # Only reconcile when the seeded profile has an explicit desired model
                     # (non-None) and the existing row is blank or contains an old
@@ -1030,18 +1127,6 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         profile_id == "codex_openrouter_qwen36_plus"
                         and current_model_text == legacy_openrouter_model
                     )
-                    is_legacy_claude_display_model = (
-                        profile_id == "claude_anthropic"
-                        and current_model_text
-                        in _CLAUDE_ANTHROPIC_LEGACY_DISPLAY_MODEL_ALIASES
-                    )
-                    reconciled_model = (
-                        _CLAUDE_ANTHROPIC_LEGACY_DISPLAY_MODEL_ALIASES[
-                            current_model_text
-                        ]
-                        if is_legacy_claude_display_model
-                        else desired_default_model
-                    )
                     should_reconcile_default_model = (
                         desired_default_model is not None
                         and (
@@ -1049,14 +1134,11 @@ async def _auto_seed_provider_profiles() -> list[str]:
                             or should_reconcile_deprecated_model
                         )
                     )
-                    if (
-                        should_reconcile_default_model
-                        or is_legacy_claude_display_model
-                    ):
+                    if should_reconcile_default_model:
                         stmt = (
                             update(ManagedAgentProviderProfile)
                             .where(ManagedAgentProviderProfile.profile_id == profile_id)
-                            .values(default_model=reconciled_model)
+                            .values(default_model=desired_default_model)
                         )
                         await session.execute(stmt)
                         needs_commit = True
@@ -1124,6 +1206,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     file_templates=profile_def.get("file_templates"),
                     home_path_overrides=profile_def.get("home_path_overrides"),
                     command_behavior=profile_def.get("command_behavior"),
+                    tags=profile_def.get("tags"),
                     max_parallel_runs=profile_def.get("max_parallel_runs", 1),
                     cooldown_after_429_seconds=profile_def.get(
                         "cooldown_after_429_seconds", 900

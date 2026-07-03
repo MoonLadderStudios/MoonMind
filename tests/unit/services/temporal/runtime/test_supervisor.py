@@ -862,24 +862,24 @@ async def test_supervise_uses_output_parser_from_strategy(supervisor_env, tmp_pa
     store, artifact_storage, _, supervisor = supervisor_env
 
     record = ManagedRunRecord(
-        run_id="run-gemini-parser",
+        run_id="run-claude-parser",
         agent_id="agent-1",
-        runtime_id="gemini_cli",
+        runtime_id="claude_code",
         status="launching",
         started_at=datetime.now(tz=UTC),
     )
     store.save(record)
 
-    gemini_err = "message: No capacity available for model\nreason: MODEL_CAPACITY_EXHAUSTED"
+    claude_err = "You've hit your usage limit. Contact your admin."
     process = await asyncio.create_subprocess_exec(
-        "sh", "-c", f"echo '{gemini_err}' >&2",
+        "sh", "-c", f"printf '%s\\n' \"{claude_err}\" >&2; exit 1",
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
 
     result = await supervisor.supervise(
-        run_id="run-gemini-parser", process=process, timeout_seconds=30
+        run_id="run-claude-parser", process=process, timeout_seconds=30
     )
 
     # Read the diagnostics artifact and verify parsed_output is present

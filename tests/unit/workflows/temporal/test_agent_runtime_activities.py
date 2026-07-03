@@ -1285,18 +1285,18 @@ async def test_status_failed_record_returns_typed_model_with_metadata(tmp_path: 
         store,
         run_id="run-3",
         status="failed",
-        runtime_id="gemini_cli",
+        runtime_id="claude_code",
         failure_class="execution_error",
         error_message="Process exited with code 1",
     )
 
     activities = TemporalAgentRuntimeActivities(run_store=store)
-    result = await activities.agent_runtime_status({"run_id": "run-3", "agent_id": "gemini_cli"})
+    result = await activities.agent_runtime_status({"run_id": "run-3", "agent_id": "claude_code"})
 
     assert isinstance(result, AgentRunStatus)
     assert result.status == "failed"
     assert result.metadata is not None
-    assert result.metadata.get("runtimeId") == "gemini_cli"
+    assert result.metadata.get("runtimeId") == "claude_code"
 
 async def test_status_no_record_returns_optimistic_running(tmp_path: Path) -> None:
     """T1.4 — missing record in store yields stub AgentRunStatus with status='running'."""

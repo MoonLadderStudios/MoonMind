@@ -110,10 +110,10 @@ async def mock_artifact_read_agent(args: Dict[str, Any]) -> bytes:
                 "id": "agent-step-1",
                 "tool": {
                     "type": "agent_runtime",
-                    "name": "gemini_cli",
+                    "name": "claude_code",
                 },
                 "inputs": {
-                    "targetRuntime": "gemini_cli",
+                    "targetRuntime": "claude_code",
                     "instructions": "Fix the bug",
                     "runtime": {
                         "model": "gemini-2.5-pro",

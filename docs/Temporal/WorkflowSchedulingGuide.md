@@ -136,7 +136,7 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
  "target": {
  "workflowType": "MoonMind.UserWorkflow",
  "initialParameters": {
- "runtime": "gemini_cli",
+ "runtime": "claude_code",
  "model": "gemini-2.5-pro",
  "repository": "MoonLadderStudios/MoonMind"
  }
@@ -212,7 +212,7 @@ POST /api/executions
  "manifestArtifactRef": null,
  "failurePolicy": null,
  "initialParameters": {
- "runtime": "gemini_cli",
+ "runtime": "claude_code",
  "model": "gemini-2.5-pro",
  "effort": "high",
  "repository": "MoonLadderStudios/MoonMind",
@@ -271,7 +271,7 @@ POST /api/executions
 1. User navigates to **New Workflow** from the dashboard sidebar or header.
 2. The submit form offers:
  - **Instructions** text area
- - **Runtime** selector (Codex, Gemini CLI, Claude, Jules when enabled)
+ - **Runtime** selector (Codex, Claude, Jules when enabled)
  - **Model** and **Effort** selection (runtime-specific defaults auto-populated)
  - **Repository** field
  - **Publish mode** (PR, direct commit, etc.)
@@ -446,7 +446,7 @@ curl -X POST http://localhost:7000/api/executions \
  "workflowType": "MoonMind.UserWorkflow",
  "title": "Fix login bug",
  "initialParameters": {
- "runtime": "gemini_cli",
+ "runtime": "claude_code",
  "model": "gemini-2.5-pro",
  "repository": "MoonLadderStudios/MoonMind"
  }
@@ -463,7 +463,7 @@ curl -X POST http://localhost:7000/api/executions \
  "workflowType": "MoonMind.UserWorkflow",
  "title": "Deploy staging environment",
  "initialParameters": {
- "runtime": "gemini_cli",
+ "runtime": "claude_code",
  "model": "gemini-2.5-pro",
  "repository": "MoonLadderStudios/MoonMind"
  },
@@ -487,7 +487,7 @@ curl -X POST http://localhost:7000/api/recurring-workflows \
  "scopeType": "personal",
  "workflowType": "MoonMind.UserWorkflow",
  "initialParameters": {
- "runtime": "gemini_cli",
+ "runtime": "claude_code",
  "model": "gemini-2.5-pro",
  "repository": "MoonLadderStudios/MoonMind"
  }

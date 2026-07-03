@@ -235,7 +235,7 @@ class VisionService:
 
     def _provider_credentials_available(self) -> bool:
         provider = self._config.provider
-        if provider == "gemini_cli":
+        if provider == "gemini":
             return bool(settings.google.google_api_key)
         if provider == "openai":
             return bool(settings.openai.openai_api_key)

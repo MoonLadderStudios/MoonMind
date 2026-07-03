@@ -331,10 +331,14 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         plan_ref="art_plan_1",
     )
 
-    # provider_profile.list calls (3) happen first, then artifact.read for plan.
-    # Canonical checkpoint writes may occur before the manifest artifact create.
-    assert captured[3][0] == "artifact.read"
-    assert captured[3][1]["artifact_ref"] == "art_plan_1"
+    # Provider profile probes happen before plan loading, but the exact runtime set
+    # can change as runtimes are added or removed.
+    plan_read = next(
+        payload
+        for activity_type, payload in captured
+        if activity_type == "artifact.read" and payload.get("artifact_ref") == "art_plan_1"
+    )
+    assert plan_read["artifact_ref"] == "art_plan_1"
     manifest_create = next(
         payload
         for activity_type, payload in captured[4:]
@@ -5790,7 +5794,7 @@ async def test_run_proposals_stage_uses_workflow_proposal_policy(
                 "proposalPolicy": {
                     "maxItems": {"workflow_repo": 12},
                     "targets": ["workflow_repo"],
-                    "defaultRuntime": "gemini_cli",
+                    "defaultRuntime": "claude_code",
                 }
             }
         }
@@ -5799,7 +5803,7 @@ async def test_run_proposals_stage_uses_workflow_proposal_policy(
     assert captured_policy is not None
     assert captured_policy["maxItems"] == {"workflow_repo": 12}
     assert captured_policy["targets"] == ["workflow_repo"]
-    assert captured_policy["defaultRuntime"] == "gemini_cli"
+    assert captured_policy["defaultRuntime"] == "claude_code"
     
     # Also verify origin format DOC-REQ-005
     assert captured_origin["source"] == "workflow"

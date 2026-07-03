@@ -520,7 +520,7 @@ async def test_task_step_runtime_selection_is_normalized_and_resolved() -> None:
                     "id": "review",
                     "instructions": "Review with a step model.",
                     "runtime": {
-                        "mode": "gemini_cli",
+                        "mode": "claude_code",
                         "model": "gemini-step-model",
                         "effort": "low",
                     },
@@ -538,7 +538,7 @@ async def test_task_step_runtime_selection_is_normalized_and_resolved() -> None:
     )
 
     assert steps[0]["runtime"] == {
-        "mode": "gemini_cli",
+        "mode": "claude_code",
         "model": "gemini-step-model",
         "effort": "low",
         "requestedModel": "gemini-step-model",
@@ -591,7 +591,7 @@ async def test_step_runtime_normalizes_explicit_profile_without_session() -> Non
                     "id": "review",
                     "instructions": "Review with a profile ref in a unit test.",
                     "runtime": {
-                        "mode": "gemini_cli",
+                        "mode": "claude_code",
                         "profileId": "profile-gemini",
                     },
                 }
@@ -607,7 +607,7 @@ async def test_step_runtime_normalizes_explicit_profile_without_session() -> Non
         session=None,
     )
 
-    assert steps[0]["runtime"]["mode"] == "gemini_cli"
+    assert steps[0]["runtime"]["mode"] == "claude_code"
     assert steps[0]["runtime"]["profileId"] == "profile-gemini"
     assert steps[0]["runtime"]["providerProfile"] == "profile-gemini"
 
@@ -736,7 +736,7 @@ async def test_goal_preset_submission_uses_default_runtime_for_composite_context
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings.workflow, "default_runtime", "gemini_cli")
+    monkeypatch.setattr(settings.workflow, "default_runtime", "claude_code")
     db_url = f"sqlite+aiosqlite:///{tmp_path}/goal_preset_default_runtime.db"
     engine = create_async_engine(db_url, future=True)
     session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -761,7 +761,7 @@ async def test_goal_preset_submission_uses_default_runtime_for_composite_context
     downstream_task = task_payload["steps"][3]["jiraOrchestration"]["task"]
     assert task_payload["presetSchedule"]["presetSlug"] == "jira-breakdown-orchestrate"
     assert downstream_task["repository"] == "MoonLadderStudios/MoonMind"
-    assert downstream_task["runtime"] == {"mode": "gemini_cli"}
+    assert downstream_task["runtime"] == {"mode": "claude_code"}
 
 
 class _QueryHandle:
@@ -5110,7 +5110,7 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
                         "targets": ["workflow_repo", "moonmind"],
                         "maxItems": {"workflow_repo": 2, "moonmind": 1},
                         "minSeverityForMoonMind": "medium",
-                        "defaultRuntime": "gemini_cli",
+                        "defaultRuntime": "claude_code",
                     },
                         "skills": {
                             "sets": ["deployment-default", "proposal-quality"],
@@ -5145,7 +5145,7 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
         "targets": ["workflow_repo", "moonmind"],
         "maxItems": {"workflow_repo": 2, "moonmind": 1},
         "minSeverityForMoonMind": "medium",
-        "defaultRuntime": "gemini_cli",
+        "defaultRuntime": "claude_code",
     }
     assert initial_parameters["workflow"]["skills"] == {
         "sets": ["deployment-default", "proposal-quality"],
@@ -5786,7 +5786,7 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
                 "repository": "MoonLadderStudios/MoonMind",
                 "workflow": {
                     "runtime": {
-                        "mode": "gemini_cli",
+                        "mode": "claude_code",
                     },
                     "steps": [
                         {
@@ -6132,7 +6132,7 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_structured_sel
             "payload": {
                 "workflow": {
                     "instructions": "Verify MM-940 and move to DONE if it is a PASS",
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                     "tool": {
                         "type": "skill",
                         "name": "pr-resolver",
@@ -6166,7 +6166,7 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
             "type": "workflow",
             "payload": {
                 "workflow": {
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                     "tool": {
                         "type": "skill",
                         "name": "pr-resolver",
@@ -6201,7 +6201,7 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_non_default_git_br
             "type": "workflow",
             "payload": {
                 "workflow": {
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                     "tool": {
                         "type": "skill",
                         "name": "pr-resolver",
@@ -6234,7 +6234,7 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_numeric_pr_selecto
             "type": "workflow",
             "payload": {
                 "workflow": {
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                     "tool": {
                         "type": "skill",
                         "name": "pr-resolver",
@@ -6520,10 +6520,10 @@ def test_create_task_shaped_submit_accepts_task_payload_pr_resolver(
             "type": "task",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
-                "targetRuntime": "gemini_cli",
+                "targetRuntime": "claude_code",
                 "task": {
                     "instructions": "Resolve the current branch PR.",
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                     "publish": {"mode": "none"},
                     "skills": {"include": [{"name": "pr-resolver"}]},
                 },
@@ -7363,7 +7363,7 @@ def test_create_task_shaped_execution_derives_pr_resolver_title_from_tool_inputs
             "type": "workflow",
             "payload": {
                 "workflow": {
-                    "runtime": {"mode": "gemini_cli"},
+                    "runtime": {"mode": "claude_code"},
                     "tool": {
                         "type": "skill",
                         "name": "PR-Resolver",
@@ -7450,7 +7450,7 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
                         "proposeTasks": True,
                         "proposalPolicy": {
                             "targets": ["workflow_repo"],
-                            "defaultRuntime": "gemini_cli",
+                            "defaultRuntime": "claude_code",
                         },
                     },
                 },
@@ -7467,7 +7467,7 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
     assert stored_payload["workflow"]["proposeTasks"] is True
     assert stored_payload["workflow"]["proposalPolicy"] == {
         "targets": ["workflow_repo"],
-        "defaultRuntime": "gemini_cli",
+        "defaultRuntime": "claude_code",
     }
 
 def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
@@ -8625,7 +8625,7 @@ def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key
         closed_at=None,
         integration_state=None,
         parameters={
-            "runtime": {"mode": "gemini_cli", "model": "gemini-2.0"},
+            "runtime": {"mode": "claude_code", "model": "claude-sonnet-test"},
         },
         paused=False,
         waiting_reason=None,
@@ -8634,9 +8634,9 @@ def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key
 
     payload = _serialize_execution(record)
 
-    assert payload.target_runtime == "gemini_cli"
+    assert payload.target_runtime == "claude_code"
     dumped = payload.model_dump(by_alias=True)
-    assert dumped["targetRuntime"] == "gemini_cli"
+    assert dumped["targetRuntime"] == "claude_code"
 
 def test_serialize_execution_surfaces_runtime_fields_from_task_runtime_payload() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
@@ -12678,11 +12678,11 @@ async def test_mm773_hydrates_related_run_runtime_model_metadata() -> None:
     source.run_id = "run-source"
     source.close_status = TemporalExecutionCloseStatus.COMPLETED
     source.parameters = {
-        "targetRuntime": "gemini_cli",
+        "targetRuntime": "claude_code",
         "model": "gemini-2.5-pro",
         "requestedModel": "gemini-2.5-pro",
         "effort": "medium",
-        "workflow": {"runtime": {"mode": "gemini_cli", "effort": "medium"}},
+        "workflow": {"runtime": {"mode": "claude_code", "effort": "medium"}},
     }
     session = SimpleNamespace(get=AsyncMock(return_value=source))
 
@@ -12692,7 +12692,7 @@ async def test_mm773_hydrates_related_run_runtime_model_metadata() -> None:
     assert related["workflowId"] == "mm:source-run"
     assert related["runId"] == "run-source"
     assert related["status"] == "completed"
-    assert related["targetRuntime"] == "gemini_cli"
+    assert related["targetRuntime"] == "claude_code"
     assert related["model"] == "gemini-2.5-pro"
     assert related["requestedModel"] == "gemini-2.5-pro"
     assert related["effort"] == "medium"

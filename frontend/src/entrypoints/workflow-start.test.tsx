@@ -124,15 +124,13 @@ const mockPayload: BootPayload = {
         defaultProposeTasks: false,
         defaultTaskModelByRuntime: {
           codex_cli: "gpt-5.4",
-          gemini_cli: "gemini-2.5-pro",
           claude_code: "claude-opus-4-7",
         },
         defaultTaskEffortByRuntime: {
           codex_cli: "medium",
-          gemini_cli: "high",
           claude_code: "low",
         },
-        supportedAgentRuntimes: ["codex_cli", "gemini_cli", "claude_code"],
+        supportedAgentRuntimes: ["codex_cli", "claude_code"],
         providerProfiles: {
           list: "/api/v1/provider-profiles",
         },
@@ -269,7 +267,6 @@ function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayl
           ...system,
           supportedAgentRuntimes: [
             "codex_cli",
-            "gemini_cli",
             "claude_code",
             "codex_cloud",
           ],
@@ -285,11 +282,6 @@ function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayl
                 slashCommandPassthrough: true,
                 renderMode: "prompt_prefix",
                 commandHintsRef: "claude_code",
-              },
-              gemini_cli: {
-                slashCommandPassthrough: true,
-                renderMode: "prompt_prefix",
-                commandHintsRef: "gemini_cli",
               },
               codex_cloud: {
                 slashCommandPassthrough: false,
@@ -962,34 +954,26 @@ describe.skip("Task Create Entrypoint", () => {
             "runtime_id",
           );
           const items =
-            runtimeId === "gemini_cli"
+            runtimeId === "claude_code"
               ? [
                   {
-                    profile_id: "profile:gemini-default",
-                    account_label: "Gemini Default",
+                    profile_id: "profile:claude-default",
+                    account_label: "Claude Default",
                     is_default: true,
                   },
                 ]
-              : runtimeId === "claude_code"
-                ? [
-                    {
-                      profile_id: "profile:claude-default",
-                      account_label: "Claude Default",
-                      is_default: true,
-                    },
-                  ]
-                : [
-                    {
-                      profile_id: "profile:codex-default",
-                      account_label: "Codex Default",
-                      is_default: true,
-                    },
-                    {
-                      profile_id: "profile:codex-secondary",
-                      account_label: "Codex Secondary",
-                      is_default: false,
-                    },
-                  ];
+              : [
+                  {
+                    profile_id: "profile:codex-default",
+                    account_label: "Codex Default",
+                    is_default: true,
+                  },
+                  {
+                    profile_id: "profile:codex-secondary",
+                    account_label: "Codex Secondary",
+                    is_default: false,
+                  },
+                ];
           return Promise.resolve({
             ok: true,
             json: async () => items,
@@ -1017,9 +1001,9 @@ describe.skip("Task Create Entrypoint", () => {
               workflowId: "mm:edit-123",
               workflowType: "MoonMind.UserWorkflow",
               state: "executing",
-              targetRuntime: "gemini_cli",
-              profileId: "profile:gemini-default",
-              model: "gemini-2.5-pro",
+              targetRuntime: "claude_code",
+              profileId: "profile:claude-default",
+              model: "claude-sonnet-test",
               effort: "high",
               repository: "MoonLadderStudios/MoonMind",
               startingBranch: "main",
@@ -1027,7 +1011,7 @@ describe.skip("Task Create Entrypoint", () => {
               publishMode: "branch",
               targetSkill: "speckit-implement",
               inputParameters: {
-                targetRuntime: "gemini_cli",
+                targetRuntime: "claude_code",
                 operatorNote: "Keep this unedited top-level value.",
                 startingBranch: "stale-legacy-source",
                 targetBranch: "stale-legacy-target",
@@ -1035,10 +1019,10 @@ describe.skip("Task Create Entrypoint", () => {
                   instructions: "Rebuild the Temporal task draft.",
                   proposeTasks: true,
                   runtime: {
-                    mode: "gemini_cli",
-                    model: "gemini-2.5-pro",
+                    mode: "claude_code",
+                    model: "claude-sonnet-test",
                     effort: "high",
-                    profileId: "profile:gemini-default",
+                    profileId: "profile:claude-default",
                   },
                   git: {
                     startingBranch: "main",
@@ -2918,9 +2902,9 @@ describe.skip("Task Create Entrypoint", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:edit-123",
       workflowType: "MoonMind.UserWorkflow",
-      targetRuntime: "gemini_cli",
-      profileId: "profile:gemini-default",
-      model: "gemini-2.5-pro",
+      targetRuntime: "claude_code",
+      profileId: "profile:claude-default",
+      model: "claude-sonnet-test",
       effort: "high",
       repository: "MoonLadderStudios/MoonMind",
       branch: "main",
@@ -2943,9 +2927,9 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     expect(draft).toMatchObject({
-      runtime: "gemini_cli",
-      providerProfile: "profile:gemini-default",
-      model: "gemini-2.5-pro",
+      runtime: "claude_code",
+      providerProfile: "profile:claude-default",
+      model: "claude-sonnet-test",
       effort: "high",
       repository: "MoonLadderStudios/MoonMind",
       branch: "main",
@@ -3815,13 +3799,13 @@ describe.skip("Task Create Entrypoint", () => {
         (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
       ).toBe("Rebuild the Temporal task draft.");
       expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe(
-        "gemini_cli",
+        "claude_code",
       );
       expect(
         (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
-      ).toBe("profile:gemini-default");
+      ).toBe("profile:claude-default");
       expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe(
-        "gemini-2.5-pro",
+        "claude-sonnet-test",
       );
       expect((screen.getByLabelText("Effort") as HTMLInputElement).value).toBe(
         "high",
@@ -4211,7 +4195,7 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Runtime"), {
-      target: { value: "gemini_cli" },
+      target: { value: "claude_code" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start Comparison Run" }));
 
@@ -4230,7 +4214,7 @@ describe.skip("Task Create Entrypoint", () => {
       .at(-1);
     const request = JSON.parse(String(createCall?.[1]?.body));
 
-    expect(request.payload.targetRuntime).toBe("gemini_cli");
+    expect(request.payload.targetRuntime).toBe("claude_code");
     expect(request.payload.task.comparison).toEqual({
       kind: "model_runtime_comparison",
       sourceWorkflowId: "mm:complex-rerun",
@@ -4722,12 +4706,12 @@ describe.skip("Task Create Entrypoint", () => {
       parametersPatch: {
         repository: "MoonLadderStudios/MoonMind",
         operatorNote: "Keep this unedited top-level value.",
-        targetRuntime: "gemini_cli",
-        model: "gemini-2.5-pro",
-        requestedModel: "gemini-2.5-pro",
-        resolvedModel: "gemini-2.5-pro",
+        targetRuntime: "claude_code",
+        model: "claude-sonnet-test",
+        requestedModel: "claude-sonnet-test",
+        resolvedModel: "claude-sonnet-test",
         effort: "high",
-        profileId: "profile:gemini-default",
+        profileId: "profile:claude-default",
         task: {
           instructions: "Save edited Temporal inputs.",
           proposeTasks: true,
@@ -4742,10 +4726,10 @@ describe.skip("Task Create Entrypoint", () => {
             include: [{ name: "speckit-demo" }],
           },
           runtime: {
-            mode: "gemini_cli",
-            model: "gemini-2.5-pro",
+            mode: "claude_code",
+            model: "claude-sonnet-test",
             effort: "high",
-            profileId: "profile:gemini-default",
+            profileId: "profile:claude-default",
           },
           git: {
             branch: "main",
@@ -5523,10 +5507,10 @@ describe.skip("Task Create Entrypoint", () => {
     ) as HTMLElement;
 
     fireEvent.change(within(firstStep).getByLabelText("Step 1 Runtime"), {
-      target: { value: "gemini_cli" },
+      target: { value: "claude_code" },
     });
     fireEvent.change(within(firstStep).getByLabelText("Step 1 Model"), {
-      target: { value: "gemini-step-model" },
+      target: { value: "claude-step-model" },
     });
     fireEvent.change(within(secondStep).getByLabelText("Instructions"), {
       target: { value: "Use Codex for implementation." },
@@ -5557,13 +5541,13 @@ describe.skip("Task Create Entrypoint", () => {
     };
     expect(request.payload.requiredCapabilities).toEqual([
       "codex_cli",
-      "gemini_cli",
+      "claude_code",
       "git",
       "gh",
     ]);
     expect(request.payload.task.steps[0]?.runtime).toEqual({
-      mode: "gemini_cli",
-      model: "gemini-step-model",
+      mode: "claude_code",
+      model: "claude-step-model",
     });
     expect(request.payload.task.steps[1]?.runtime).toEqual({
       mode: "codex_cli",
@@ -9618,16 +9602,16 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(screen.getByLabelText("Runtime"), {
-      target: { value: "gemini_cli" },
+      target: { value: "claude_code" },
     });
 
     await waitFor(() => {
       const labels = Array.from(
         (providerSelect as HTMLSelectElement).options,
       ).map((option) => option.text);
-      expect(labels).toEqual(["Gemini Default (Default)"]);
+      expect(labels).toEqual(["Claude Default (Default)"]);
       expect((providerSelect as HTMLSelectElement).value).toBe(
-        "profile:gemini-default",
+        "profile:claude-default",
       );
     });
   });

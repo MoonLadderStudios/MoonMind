@@ -407,7 +407,7 @@ async def test_managed_secret_statuses_ignores_malformed_secret_refs() -> None:
 
 async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
     """Helper to create a baseline profile in the test DB."""
-    profile_id = "test_gemini_profile"
+    profile_id = "test_custom_profile"
     async with db_base.async_session_maker() as session:
         existing = await session.get(ManagedAgentProviderProfile, profile_id)
         if existing:
@@ -415,9 +415,9 @@ async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
             
         profile = ManagedAgentProviderProfile(
             profile_id=profile_id,
-            runtime_id="gemini_pro_runtime",
+            runtime_id="custom_runtime",
             credential_source=ProviderCredentialSource.OAUTH_VOLUME,
-            volume_ref="gemini_auth_volume",
+            volume_ref="custom_auth_volume",
             account_label="test_account",
             max_parallel_runs=2,
             cooldown_after_429_seconds=120,
@@ -1246,7 +1246,7 @@ async def test_get_single_profile(client_app: AsyncClient, _module_db):
     async with client_app as client:
         response = await client.get(f"/api/v1/provider-profiles/{sample_profile.profile_id}")
     assert response.status_code == 200
-    assert response.json()["runtime_id"] == "gemini_pro_runtime"
+    assert response.json()["runtime_id"] == "custom_runtime"
 
 @pytest.mark.asyncio
 async def test_get_unknown_profile(client_app: AsyncClient, _module_db):
@@ -1500,16 +1500,6 @@ def test_claude_manual_auth_secret_slug_is_collision_resistant() -> None:
             "MINIMAX_API_KEY",
             "OpenAI API key ready",
         ),
-        (
-            "mm-875-google-api-key",
-            "gemini_cli",
-            "google",
-            "google-mm875-route-token",
-            "google_api_key",
-            "GEMINI_API_KEY",
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            "Google API key ready",
-        ),
     ],
 )
 async def test_provider_api_key_setup_stores_secret_ref_mappings_only(
@@ -1569,8 +1559,6 @@ async def test_provider_api_key_setup_stores_secret_ref_mappings_only(
         existing.home_path_overrides = {
             "CLAUDE_HOME": "/oauth/claude",
             "CODEX_HOME": "/oauth/codex",
-            "GEMINI_HOME": "/oauth/gemini",
-            "GEMINI_CLI_HOME": "/oauth/gemini",
             "CUSTOM_HOME": "/custom/home",
         }
         await session.commit()
@@ -1617,17 +1605,12 @@ async def test_provider_api_key_setup_stores_secret_ref_mappings_only(
     expected_home_path_overrides = {
         "CLAUDE_HOME": "/oauth/claude",
         "CODEX_HOME": "/oauth/codex",
-        "GEMINI_HOME": "/oauth/gemini",
-        "GEMINI_CLI_HOME": "/oauth/gemini",
         "CUSTOM_HOME": "/custom/home",
     }
     if runtime_id == "claude_code":
         expected_home_path_overrides.pop("CLAUDE_HOME")
     elif runtime_id == "codex_cli":
         expected_home_path_overrides.pop("CODEX_HOME")
-    elif runtime_id == "gemini_cli":
-        expected_home_path_overrides.pop("GEMINI_HOME")
-        expected_home_path_overrides.pop("GEMINI_CLI_HOME")
     assert profile_payload["home_path_overrides"] == expected_home_path_overrides
     assert clear_env_key in profile_payload["clear_env_keys"]
     assert profile_payload["account_label"] == "MM-875 route test"
@@ -1840,11 +1823,11 @@ async def test_provider_api_key_setup_can_validate_without_enabling(
     _module_db,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    profile_id = "mm-875-google-validate-only"
-    raw_key = "google-mm875-validate-only"
+    profile_id = "mm-875-openai-validate-only"
+    raw_key = "sk-mm875-openai-validate-only"
 
     async def _fake_validate(provider: str, key: str) -> None:
-        assert (provider, key) == ("google", raw_key)
+        assert (provider, key) == ("openai", raw_key)
 
     monkeypatch.setattr(
         "api_service.api.routers.provider_profiles.validate_provider_api_key",
@@ -1857,9 +1840,9 @@ async def test_provider_api_key_setup_can_validate_without_enabling(
             session.add(
                 ManagedAgentProviderProfile(
                     profile_id=profile_id,
-                    runtime_id="gemini_cli",
-                    provider_id="google",
-                    provider_label="Google",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    provider_label="OpenAI",
                     credential_source=ProviderCredentialSource.NONE,
                     runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                     enabled=False,
@@ -2318,17 +2301,14 @@ async def test_claude_oauth_validate_failure_uses_unknown_reason_fallback(
             {"CODEX_HOME": "/home/app/.codex"},
         ),
         (
-            "gemini-google-oauth-lifecycle",
-            "gemini_cli",
-            "google",
-            "gemini_auth_volume",
-            "/var/lib/gemini-auth",
-            "Gemini",
-            "gemini_credential_methods",
-            {
-                "GEMINI_HOME": "/var/lib/gemini-auth",
-                "GEMINI_CLI_HOME": "/var/lib/gemini-auth",
-            },
+            "claude-anthropic-oauth-lifecycle",
+            "claude_code",
+            "anthropic",
+            "claude_auth_volume",
+            "/home/app/.claude",
+            "Claude",
+            "claude_credential_methods",
+            {"CLAUDE_HOME": "/home/app/.claude"},
         ),
     ],
 )
@@ -2486,10 +2466,10 @@ async def test_oauth_lifecycle_rejects_non_first_party_profile(
             f"/api/v1/provider-profiles/{profile_id}/oauth/disconnect"
         )
 
-    expected_detail = (
-        "OAuth lifecycle actions are only supported for first-party "
-        "Claude, Codex, and Gemini provider profiles."
-    )
+        expected_detail = (
+            "OAuth lifecycle actions are only supported for first-party "
+            "Claude and Codex provider profiles."
+        )
     assert validate_response.status_code == 422
     assert validate_response.json()["detail"] == expected_detail
     assert disconnect_response.status_code == 422

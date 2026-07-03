@@ -450,37 +450,6 @@ def test_run_preflight_google_embedding_requires_credential(monkeypatch) -> None
             }
         )
 
-def test_run_preflight_gemini_runtime_verifies_gemini_not_codex(monkeypatch) -> None:
-    """Gemini worker runtime should check Gemini CLI without Codex login."""
-
-    calls: list[list[str]] = []
-    verifications: list[str] = []
-
-    def fake_verify(name: str) -> str:
-        verifications.append(name)
-        return f"/usr/bin/{name}"
-
-    def fake_run(command, *args, **kwargs):
-        calls.append(list(command))
-        return subprocess.CompletedProcess(
-            args=command, returncode=0, stdout="", stderr=""
-        )
-
-    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    cli.run_preflight(
-        env={
-            "MOONMIND_WORKER_RUNTIME": "gemini_cli",
-            "DEFAULT_EMBEDDING_PROVIDER": "openai",
-        }
-    )
-
-    assert verifications == ["gemini_cli"]
-    assert calls == [
-        ["/usr/bin/gemini_cli", "--version"],
-    ]
-
 def test_run_preflight_claude_runtime_requires_api_key(monkeypatch) -> None:
     """Claude runtime should fail fast when no Claude API credential env is set."""
 
@@ -624,14 +593,14 @@ def test_run_preflight_universal_without_claude_capability_skips_checks(
         env={
             "MOONMIND_WORKER_RUNTIME": "universal",
             "DEFAULT_EMBEDDING_PROVIDER": "openai",
-            "MOONMIND_WORKER_CAPABILITIES": "codex,gemini_cli",        }
+            "MOONMIND_WORKER_CAPABILITIES": "codex",
+        }
     )
 
-    assert verifications == ["codex", "gemini_cli", "rg"]
+    assert verifications == ["codex", "rg"]
     assert calls == [
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
-        ["/usr/bin/gemini_cli", "--version"],
     ]
 
 def test_run_preflight_universal_with_claude_capability_requires_key(
@@ -648,7 +617,7 @@ def test_run_preflight_universal_with_claude_capability_requires_key(
             env={
                 "MOONMIND_WORKER_RUNTIME": "universal",
                 "DEFAULT_EMBEDDING_PROVIDER": "openai",
-                "MOONMIND_WORKER_CAPABILITIES": "codex,claude,gemini_cli",
+                "MOONMIND_WORKER_CAPABILITIES": "codex,claude",
             }
         )
 
@@ -694,115 +663,17 @@ def test_run_preflight_universal_with_claude_capability_runs_checks(
         env={
             "MOONMIND_WORKER_RUNTIME": "universal",
             "DEFAULT_EMBEDDING_PROVIDER": "openai",
-            "MOONMIND_WORKER_CAPABILITIES": "codex,claude,gemini_cli",
+            "MOONMIND_WORKER_CAPABILITIES": "codex,claude",
             "ANTHROPIC_API_KEY": "secret",
         }
     )
 
-    assert verifications == ["codex", "gemini_cli", "claude", "rg"]
+    assert verifications == ["codex", "claude", "rg"]
     assert calls == [
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
-        ["/usr/bin/gemini_cli", "--version"],
         ["/usr/bin/claude", "--version"],
     ]
-
-def test_run_preflight_gemini_oauth_requires_gemini_home(monkeypatch) -> None:
-    """Gemini oauth mode should fail fast when GEMINI_HOME is unset."""
-
-    monkeypatch.setattr(
-        cli,
-        "verify_cli_is_executable",
-        lambda name: f"/usr/bin/{name}",
-    )
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda command, *args, **kwargs: subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout="",
-            stderr="",
-        ),
-    )
-
-    with pytest.raises(
-        RuntimeError,
-        match=r"GEMINI_CLI_HOME \(or GEMINI_HOME fallback\) is required",
-    ):
-        cli.run_preflight(
-            env={
-                "MOONMIND_WORKER_RUNTIME": "gemini_cli",
-                "MOONMIND_GEMINI_CLI_AUTH_MODE": "oauth",
-                "DEFAULT_EMBEDDING_PROVIDER": "openai",
-            }
-        )
-
-def test_run_preflight_gemini_invalid_auth_mode_redacts_value(monkeypatch) -> None:
-    """Invalid auth mode should fail with a redacted diagnostic."""
-
-    monkeypatch.setattr(
-        cli,
-        "verify_cli_is_executable",
-        lambda name: f"/usr/bin/{name}",
-    )
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda command, *args, **kwargs: subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout="",
-            stderr="",
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match=r"received <redacted:\d+ chars>"):
-        cli.run_preflight(
-            env={
-                "MOONMIND_WORKER_RUNTIME": "gemini_cli",
-                "MOONMIND_GEMINI_CLI_AUTH_MODE": "AIza-secret-like-value",
-                "DEFAULT_EMBEDDING_PROVIDER": "openai",
-            }
-        )
-
-def test_run_preflight_gemini_oauth_requires_writable_gemini_home(monkeypatch) -> None:
-    """Gemini oauth mode should enforce writable GEMINI_HOME directories."""
-
-    monkeypatch.setattr(
-        cli,
-        "verify_cli_is_executable",
-        lambda name: f"/usr/bin/{name}",
-    )
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda command, *args, **kwargs: subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout="",
-            stderr="",
-        ),
-    )
-    monkeypatch.setattr(os.path, "isdir", lambda path: path == "/tmp/gemini-auth")
-    monkeypatch.setattr(
-        os,
-        "access",
-        lambda _path, _mode: False,
-    )
-
-    with pytest.raises(
-        RuntimeError,
-        match=r"GEMINI_CLI_HOME \(or GEMINI_HOME fallback\) must be writable",
-    ):
-        cli.run_preflight(
-            env={
-                "MOONMIND_WORKER_RUNTIME": "gemini_cli",
-                "MOONMIND_GEMINI_CLI_AUTH_MODE": "oauth",
-                "GEMINI_HOME": "/tmp/gemini-auth",
-                "DEFAULT_EMBEDDING_PROVIDER": "openai",
-            }
-        )
 
 def test_run_preflight_claude_oauth_with_valid_home_succeeds(monkeypatch) -> None:
     """Claude oauth mode with a valid writable CLAUDE_HOME should pass preflight."""

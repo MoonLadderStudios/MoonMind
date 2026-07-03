@@ -843,7 +843,7 @@ async def finalize_oauth_session(
         profile_obj = new_profile
 
     # Stamp the documented OAuth-after-setup metadata (home_path_overrides and
-    # connected credential-method readiness) for first-party Claude/Codex/Gemini
+    # connected credential-method readiness) for first-party Claude/Codex
     # profiles so the persisted row matches the canonical OAuth profile shape.
     apply_oauth_connected_state(
         profile_obj,
@@ -880,7 +880,7 @@ async def _disable_profile_after_failed_verification(
     Profile must also be marked ``auth_state=validation_failed`` /
     ``disabled_reason=auth_invalid`` (not only session/command_behavior
     metadata) so it stays visible in Settings with a retry action. Applies to
-    any first-party OAuth profile (Claude, Codex, Gemini) flowing through
+    any first-party OAuth profile (Claude or Codex) flowing through
     finalize, not just the Claude-only validate endpoint.
     """
     if not session_obj.profile_id:

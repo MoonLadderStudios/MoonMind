@@ -18,12 +18,6 @@ from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
 class TestProviderCredentialPaths:
     """Verify per-provider credential path definitions."""
 
-    def test_gemini_paths_defined(self) -> None:
-        assert "gemini_cli" in PROVIDER_CREDENTIAL_PATHS
-        paths = PROVIDER_CREDENTIAL_PATHS["gemini_cli"]
-        assert len(paths) >= 1
-        assert any("gemini" in p or "google-cloud-sdk" in p for p in paths)
-
     def test_codex_paths_defined(self) -> None:
         assert "codex_cli" in PROVIDER_CREDENTIAL_PATHS
         paths = PROVIDER_CREDENTIAL_PATHS["codex_cli"]
@@ -59,16 +53,16 @@ class TestCredentialCheckCommand:
 
     def test_quotes_generic_credential_paths_before_shell_execution(self) -> None:
         command = _build_credential_check_command(
-            runtime_id="gemini_cli",
+            runtime_id="custom_runtime",
             mount_path='/mnt/auth"; touch /tmp/injected; echo "',
-            credential_paths=(".config/gemini/credentials.json",),
+            credential_paths=("auth/credentials.json",),
         )
 
         assert 'touch /tmp/injected' in command
-        assert '"/mnt/auth"; touch /tmp/injected; echo "/.config' not in command
+        assert '"/mnt/auth"; touch /tmp/injected; echo "/auth' not in command
         assert (
             "'/mnt/auth\"; touch /tmp/injected; echo "
-            "\"/.config/gemini/credentials.json'"
+            "\"/auth/credentials.json'"
             in command
         )
 
@@ -189,7 +183,7 @@ class TestVerifyVolumeCredentials:
     @pytest.mark.asyncio
     async def test_missing_volume_ref_returns_not_verified(self) -> None:
         result = await verify_volume_credentials(
-            runtime_id="gemini_cli",
+            runtime_id="codex_cli",
             volume_ref="",
         )
         assert result["verified"] is False
@@ -203,7 +197,7 @@ class TestVerifyVolumeCredentials:
             side_effect=FileNotFoundError("docker not found"),
         ):
             result = await verify_volume_credentials(
-                runtime_id="gemini_cli",
+                runtime_id="codex_cli",
                 volume_ref="test_volume",
             )
         assert result["verified"] is False
@@ -223,7 +217,7 @@ class TestVerifyVolumeCredentials:
             side_effect=asyncio.TimeoutError(),
         ):
             result = await verify_volume_credentials(
-                runtime_id="gemini_cli",
+                runtime_id="claude_code",
                 volume_ref="test_volume",
             )
         assert result["verified"] is False
@@ -243,19 +237,19 @@ class TestVerifyVolumeCredentials:
             "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
             new_callable=AsyncMock,
             return_value=(
-                b"FOUND:.config/gemini/credentials.json\nMISSING:.config/google-cloud-sdk/application_default_credentials.json\n",
+                b"VALID:auth.json\nFOUND:config.toml\n",
                 b"",
             )
         ):
             result = await verify_volume_credentials(
-                runtime_id="gemini_cli",
-                volume_ref="gemini_auth_volume",
+                runtime_id="codex_cli",
+                volume_ref="codex_auth_volume",
             )
 
         assert result["verified"] is True
         assert result["status"] == "verified"
-        assert result["credentials_found_count"] == 1
-        assert result["credentials_missing_count"] == 1
+        assert result["credentials_found_count"] == 2
+        assert result["credentials_missing_count"] == 0
         assert "found" not in result
         assert "missing" not in result
 
@@ -470,19 +464,19 @@ class TestVerifyVolumeCredentials:
             "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
             new_callable=AsyncMock,
             return_value=(
-                b"MISSING:.config/gemini/credentials.json\nMISSING:.config/google-cloud-sdk/application_default_credentials.json\n",
+                b"MISSING:.credentials.json\nMISSING:credentials.json\nMISSING:settings.json\n",
                 b"",
             )
         ):
             result = await verify_volume_credentials(
-                runtime_id="gemini_cli",
-                volume_ref="gemini_auth_volume",
+                runtime_id="claude_code",
+                volume_ref="claude_auth_volume",
             )
 
         assert result["verified"] is False
         assert result["status"] == "failed"
         assert result["reason"] == "no_credentials_found"
         assert result["credentials_found_count"] == 0
-        assert result["credentials_missing_count"] == 2
+        assert result["credentials_missing_count"] == 3
         assert "found" not in result
         assert "missing" not in result

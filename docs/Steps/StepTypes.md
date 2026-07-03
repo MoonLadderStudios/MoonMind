@@ -203,7 +203,7 @@ Examples:
 3. Convert a feature request into a MoonSpec.
 4. Resolve a pull request review thread.
 5. Investigate failing tests and propose a fix.
-6. Run a managed agent runtime such as Codex CLI, Claude Code, or Gemini CLI with a selected behavior profile.
+6. Run a managed agent runtime such as Codex CLI or Claude Code with a selected behavior profile.
 7. Delegate to an external agent provider through a supported integration.
 
 A Skill step may use tools internally, but the user-authored step is still a Skill because the primary work is agentic.

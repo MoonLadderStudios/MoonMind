@@ -74,6 +74,17 @@ def _run_command_env(command: tuple[str, ...]) -> dict[str, str]:
         index += 1
     return env
 
+def _managed_session_run_command(
+    commands: list[tuple[str, ...]],
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    for command in commands:
+        if command[:2] != ("docker", "run"):
+            continue
+        env = _run_command_env(command)
+        if "MOONMIND_SESSION_WORKSPACE_PATH" in env:
+            return command, env
+    raise AssertionError("managed session docker run command was not captured")
+
 async def _run_checked(
     *command: str,
     cwd: Path | None = None,
@@ -218,8 +229,19 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
         commands.append(command)
         if command[:3] == ("docker", "rm", "-f"):
             return 1, "", "No such container"
+        if command[:3] == ("docker", "volume", "create"):
+            return 0, "", ""
+        if command[:3] == ("docker", "volume", "rm"):
+            return 0, "", ""
         if command[:2] == ("docker", "run"):
             return 0, "ctr-session-1\n", ""
+        if command[:2] == ("docker", "exec") and "docker" in command:
+            if "compose" in command and "version" in command:
+                return 0, "Docker Compose version v2.27.0\n", ""
+            if "version" in command:
+                return 0, "26.1.0\n", ""
+            if "info" in command:
+                return 0, '"26.1.0"\n', ""
         if "ready" in command:
             return 0, '{"ready": true}\n', ""
         if "launch_session" in command:
@@ -250,10 +272,7 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
 
     try:
         await controller.launch_session(request)
-        run_command = next(
-            command for command in commands if command[:2] == ("docker", "run")
-        )
-        run_env = _run_command_env(run_command)
+        run_command, run_env = _managed_session_run_command(commands)
 
         assert ("--network", "local-network") == (
             run_command[run_command.index("--network")],
@@ -349,8 +368,19 @@ async def test_codex_session_launch_command_uses_workspace_and_explicit_auth_tar
         commands.append(command)
         if command[:3] == ("docker", "rm", "-f"):
             return 1, "", "No such container"
+        if command[:3] == ("docker", "volume", "create"):
+            return 0, "", ""
+        if command[:3] == ("docker", "volume", "rm"):
+            return 0, "", ""
         if command[:2] == ("docker", "run"):
             return 0, "ctr-session-1\n", ""
+        if command[:2] == ("docker", "exec") and "docker" in command:
+            if "compose" in command and "version" in command:
+                return 0, "Docker Compose version v2.27.0\n", ""
+            if "version" in command:
+                return 0, "26.1.0\n", ""
+            if "info" in command:
+                return 0, '"26.1.0"\n', ""
         if "ready" in command:
             return 0, '{"ready": true}\n', ""
         if "launch_session" in command:
@@ -378,10 +408,7 @@ async def test_codex_session_launch_command_uses_workspace_and_explicit_auth_tar
 
     await controller.launch_session(request)
 
-    run_command = next(
-        command for command in commands if command[:2] == ("docker", "run")
-    )
-    run_env = _run_command_env(run_command)
+    run_command, run_env = _managed_session_run_command(commands)
 
     assert f"type=volume,src=agent_workspaces,dst={workspace_root}" in run_command
     assert "type=volume,src=codex_auth_volume,dst=/home/app/.codex-auth" in run_command

@@ -43,14 +43,13 @@ def test_shape_agent_environment_api_key():
     assert shaped["GEMINI_API_KEY"] == "secret4"
     assert shaped["OTHER_VAR"] == "keepme"
 
-def test_resolve_volume_mount_env_gemini():
-    """Test volume mount resolution for Gemini CLI."""
+def test_resolve_volume_mount_env_unknown_runtime():
+    """Unknown runtimes should not receive CLI-specific home variables."""
     base_env = {"EXISTING": "var"}
-    shaped = resolve_volume_mount_env(base_env, "gemini_cli", "/custom/mount/gemini")
+    shaped = resolve_volume_mount_env(base_env, "unknown_runtime", "/custom/mount")
     
     assert shaped["EXISTING"] == "var"
-    assert shaped["GEMINI_HOME"] == "/custom/mount/gemini"
-    assert shaped["GEMINI_CLI_HOME"] == "/custom/mount/gemini"
+    assert shaped == base_env
 
 def test_resolve_volume_mount_env_claude():
     """Test volume mount resolution for Claude."""
@@ -59,7 +58,7 @@ def test_resolve_volume_mount_env_claude():
     
     assert shaped["EXISTING"] == "var"
     assert shaped["CLAUDE_HOME"] == "/custom/mount/claude"
-    assert "GEMINI_HOME" not in shaped
+    assert "CODEX_HOME" not in shaped
 
 def test_resolve_volume_mount_env_codex():
     """Test volume mount resolution for Codex CLI."""
@@ -72,8 +71,7 @@ def test_resolve_volume_mount_env_codex():
 def test_resolve_volume_mount_env_empty():
     """Test volume mount is ignored if path is empty."""
     base_env = {"EXISTING": "var"}
-    shaped = resolve_volume_mount_env(base_env, "gemini_cli", "")
+    shaped = resolve_volume_mount_env(base_env, "codex_cli", "")
     
     assert shaped == base_env
-    assert "GEMINI_HOME" not in shaped
-
+    assert "CODEX_HOME" not in shaped

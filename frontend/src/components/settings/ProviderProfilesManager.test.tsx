@@ -814,16 +814,16 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.getByText('Claude credentials not connected')).toBeTruthy();
   });
 
-  it('shows setup-required OAuth action for Gemini setup stubs', () => {
+  it('shows setup-required OAuth action for Codex OAuth setup profiles', () => {
     renderProviderProfilesManager([
       {
         ...codexOauthProfile,
-        profile_id: 'gemini-default',
-        runtime_id: 'gemini_cli',
-        provider_id: 'google',
-        provider_label: 'Google',
-        volume_ref: 'gemini_auth_volume',
-        volume_mount_path: '/home/app/.gemini',
+        profile_id: 'codex-openai-oauth',
+        runtime_id: 'codex_cli',
+        provider_id: 'openai',
+        provider_label: 'OpenAI',
+        volume_ref: 'codex_auth_volume',
+        volume_mount_path: '/home/app/.codex',
         enabled: false,
         auth_state: 'not_configured',
         disabled_reason: 'missing_credentials',
@@ -831,7 +831,7 @@ describe('ProviderProfilesManager form controls', () => {
     ]);
 
     expect(screen.getByText('Setup required')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'OAuth gemini-default' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'OAuth codex-openai-oauth' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Enable' })).toHaveProperty('disabled', true);
   });
 

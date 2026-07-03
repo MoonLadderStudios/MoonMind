@@ -59,7 +59,7 @@ def _save_record(
     store: ManagedRunStore,
     run_id: str,
     *,
-    runtime_id: str = "gemini_cli",
+    runtime_id: str = "claude_code",
 ) -> ManagedRunRecord:
     workspace_path = store.store_root.parent / "workspace" / run_id
     workspace_path.mkdir(parents=True, exist_ok=True)
@@ -291,10 +291,10 @@ async def test_supervise_nonzero_exit_classified_as_failed(tmp_path: Path):
     assert result.exit_code == 1
 
 @pytest.mark.asyncio
-async def test_supervise_terminates_gemini_on_live_rate_limit(tmp_path: Path):
-    """Gemini rate-limit output should terminate the live process early."""
+async def test_supervise_terminates_claude_on_live_rate_limit(tmp_path: Path):
+    """Claude rate-limit output should terminate the live process early."""
     supervisor, store, storage = _make_supervisor(tmp_path)
-    run_id = "run-gemini-rate-limit"
+    run_id = "run-claude-rate-limit"
     _save_record(store, run_id)
 
     process = await asyncio.create_subprocess_exec(
@@ -302,8 +302,7 @@ async def test_supervise_terminates_gemini_on_live_rate_limit(tmp_path: Path):
         "-c",
         (
             "import sys,time; "
-            "sys.stderr.write('Attempt 6 failed with status 429. Retrying with backoff...\\n'); "
-            "sys.stderr.write('reason: MODEL_CAPACITY_EXHAUSTED\\n'); "
+            "sys.stderr.write(\"You've hit your usage limit. Contact your admin.\\n\"); "
             "sys.stderr.flush(); "
             "time.sleep(30)"
         ),

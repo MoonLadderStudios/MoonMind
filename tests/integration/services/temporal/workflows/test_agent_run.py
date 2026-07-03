@@ -550,7 +550,7 @@ async def mock_agent_runtime_status_rate_limited(request: dict) -> dict:
     return {
         "runId": request.get("run_id", "managed-rate-limit-run"),
         "agentKind": "managed",
-        "agentId": request.get("agent_id", "gemini_cli"),
+        "agentId": request.get("agent_id", "claude_code"),
         "status": "failed",
     }
 
@@ -583,7 +583,7 @@ async def test_agent_run_workflow():
                 )
             
                 # Start dummy manager
-                runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+                runtime_mapping = {"claude_code": "claude_code", "claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                 manager_id = f"provider-profile-manager:{runtime_id}"
                 await env.client.start_workflow(
@@ -629,7 +629,7 @@ async def test_agent_run_workflow_cancellation():
                 )
             
                 # Start dummy manager
-                runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+                runtime_mapping = {"claude_code": "claude_code", "claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                 manager_id = f"provider-profile-manager:{runtime_id}"
                 await env.client.start_workflow(
@@ -683,16 +683,16 @@ async def test_agent_run_reports_managed_429_retry_summary_to_parent():
         ):
                 request = AgentExecutionRequest(
                     agent_kind="managed",
-                    agent_id="gemini_cli",
+                    agent_id="claude_code",
                     execution_profile_ref="default-managed",
                     correlation_id="corr-429",
                     idempotency_key="idem-429",
                 )
 
-                manager_id = "provider-profile-manager:gemini_cli"
+                manager_id = "provider-profile-manager:claude_code"
                 await env.client.start_workflow(
                     MockProviderProfileManager.run,
-                    {"runtime_id": "gemini_cli"},
+                    {"runtime_id": "claude_code"},
                     id=manager_id,
                     task_queue="agent-run-task-queue",
                 )
@@ -762,10 +762,10 @@ async def test_managed_agent_runtime_selection_update_replaces_slot_wait_request
                 activities=_COMMON_AGENT_RUN_ACTIVITIES,
             ),
         ):
-            manager_id = "provider-profile-manager:gemini_cli"
+            manager_id = "provider-profile-manager:claude_code"
             await env.client.start_workflow(
                 RuntimeUpdateProviderProfileManager.run,
-                {"runtime_id": "gemini_cli"},
+                {"runtime_id": "claude_code"},
                 id=manager_id,
                 task_queue="agent-run-task-queue-runtime-update",
             )
@@ -775,7 +775,7 @@ async def test_managed_agent_runtime_selection_update_replaces_slot_wait_request
                 MoonMindAgentRun.run,
                 AgentExecutionRequest(
                     agent_kind="managed",
-                    agent_id="gemini_cli",
+                    agent_id="claude_code",
                     execution_profile_ref="default-managed",
                     correlation_id="corr-runtime-update",
                     idempotency_key="idem-runtime-update",
@@ -845,11 +845,11 @@ async def test_managed_agent_model_update_keeps_simultaneously_assigned_slot():
                 activities=_COMMON_AGENT_RUN_ACTIVITIES,
             ),
         ):
-            manager_id = "provider-profile-manager:gemini_cli"
+            manager_id = "provider-profile-manager:claude_code"
             await env.client.start_workflow(
                 RuntimeUpdateProviderProfileManager.run,
                 {
-                    "runtime_id": "gemini_cli",
+                    "runtime_id": "claude_code",
                     "assign_then_update_model": "new-model",
                 },
                 id=manager_id,
@@ -860,7 +860,7 @@ async def test_managed_agent_model_update_keeps_simultaneously_assigned_slot():
                 MoonMindAgentRun.run,
                 AgentExecutionRequest(
                     agent_kind="managed",
-                    agent_id="gemini_cli",
+                    agent_id="claude_code",
                     execution_profile_ref="default-managed",
                     correlation_id="corr-runtime-update-model",
                     idempotency_key="idem-runtime-update-model",
@@ -1571,7 +1571,7 @@ async def test_cancellation_releases_provider_profile_slot():
                 )
 
                 # Start dummy manager that assigns slots
-                runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+                runtime_mapping = {"claude_code": "claude_code", "claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                 manager_id = f"provider-profile-manager:{runtime_id}"
                 manager_handle = await env.client.start_workflow(

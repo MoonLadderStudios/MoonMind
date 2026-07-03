@@ -475,7 +475,7 @@ def test_resolve_runtime_selection_ignores_env_profile_for_other_runtime(
         (),
         {
             "task_context_path": None,
-            "runtime_mode": "gemini_cli",
+            "runtime_mode": "claude_code",
             "runtime_model": None,
             "runtime_effort": None,
             "runtime_provider_profile": None,
@@ -483,7 +483,7 @@ def test_resolve_runtime_selection_ignores_env_profile_for_other_runtime(
     )()
 
     runtime = resolve_runtime_selection(args)
-    assert runtime.mode == "gemini_cli"
+    assert runtime.mode == "claude_code"
     assert runtime.provider_profile is None
 
 def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Path):

@@ -645,7 +645,7 @@ class TestMoonMindUserWorkflow(unittest.IsolatedAsyncioTestCase):
                                     "instructions": "Run with proposals.",
                                     "proposeTasks": True,
                                     "proposalPolicy": {
-                                        "defaultRuntime": "gemini_cli",
+                                        "defaultRuntime": "claude_code",
                                     },
                                 },
                             },

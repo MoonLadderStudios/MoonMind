@@ -15,7 +15,7 @@ def test_write_target_context_artifacts_creates_expected_workspace_files(tmp_pat
     service = VisionService(
         config=VisionConfig(
             enabled=False,
-            provider="gemini_cli",
+            provider="gemini",
             model="gemini-1.5-flash",
             max_tokens=512,
             ocr_enabled=True,
