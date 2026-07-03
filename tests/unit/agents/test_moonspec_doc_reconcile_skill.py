@@ -12,9 +12,11 @@ def test_moonspec_doc_reconcile_skill_defines_gate_and_output_contract() -> None
     assert "FULLY_IMPLEMENTED" in text
     assert "## Update Gate" in text
     assert "definitely requires" in text
-    assert "**Function**" in text
-    assert "**Consistency**" in text
-    assert "**Best practices**" in text
+    assert "**Impossible**" in text
+    assert "**Unclear**" in text
+    assert "**Inconsistent**" in text
+    assert "Deliberate divergence" in text
+    assert "escalate for an owner decision instead of editing" in text
     assert "## Authority-Scope Resolution" in text
     assert "docs/DocumentationArchitecture.md" in text
     assert "module-owned contract policy" in text
