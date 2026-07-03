@@ -2268,6 +2268,96 @@ async def test_fetch_result_prefers_explicit_pr_resolver_disposition(tmp_path: P
     assert result.failure_class is None
     assert result.metadata["mergeAutomationDisposition"] == "already_merged"
 
+async def test_fetch_result_normalizes_pr_resolver_publish_result_evidence(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.publish_auto_evidence import (
+        parse_auto_publish_evidence,
+    )
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    artifact_dir = workspace_path / "artifacts"
+    result_dir.mkdir(parents=True)
+    artifact_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "merged",\n'
+            '  "merge_outcome": "merged",\n'
+            '  "mergeAutomationDisposition": "merged",\n'
+            '  "reason": "ci_complete"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "publish_result.json").write_text(
+        (
+            "{\n"
+            '  "schemaVersion": "moonmind.publish.auto.v1",\n'
+            '  "mode": "auto",\n'
+            '  "owner": "agent",\n'
+            '  "status": "published",\n'
+            '  "action": "merge",\n'
+            '  "repository": "MoonLadderStudios/MoonMind",\n'
+            '  "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2970",\n'
+            '  "branch": "fetch-jira-issue-mm-1107-through-the-det-25649d51",\n'
+            '  "headSha": "51fc10087379596d08df45b9017724e6b81e2eb2",\n'
+            '  "verification": {\n'
+            '    "githubPrState": "MERGED",\n'
+            '    "remoteHeadVerified": true,\n'
+            '    "localTests": [\n'
+            '      {"command": "./tools/test_unit.sh --dashboard-only", "status": "passed"}\n'
+            "    ]\n"
+            "  }\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-publish-evidence",
+            agent_id="codex_cli",
+            runtime_id="codex_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-publish-evidence",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-publish-evidence", pr_resolver_expected=True
+    )
+
+    publish_result = result.metadata["publishResult"]
+    assert result.failure_class is None
+    assert publish_result["status"] == "verified"
+    assert publish_result["action"] == "merge"
+    assert publish_result["skillId"] == "pr-resolver"
+    assert publish_result["repository"] == "MoonLadderStudios/MoonMind"
+    assert publish_result["merged"] is True
+    assert (
+        publish_result["prUrl"]
+        == "https://github.com/MoonLadderStudios/MoonMind/pull/2970"
+    )
+    assert publish_result["verificationCommands"]
+    assert parse_auto_publish_evidence(publish_result).finish_code == "PUBLISHED_PR"
+
 async def test_fetch_result_fails_when_expected_pr_resolver_artifact_missing(
     tmp_path: Path,
 ):

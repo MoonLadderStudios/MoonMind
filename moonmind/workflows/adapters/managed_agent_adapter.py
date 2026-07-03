@@ -69,6 +69,7 @@ _PR_RESOLVER_RESULT_PATHS: tuple[Path, ...] = (
     Path("var/pr_resolver/result.json"),
     Path("artifacts/pr_resolver_result.json"),
 )
+_PR_RESOLVER_AUTO_PUBLISH_RESULT_PATH = Path("artifacts/publish_result.json")
 _PR_RESOLVER_ATTEMPTS_DIR = Path("var/pr_resolver/attempts")
 _PR_RESOLVER_FAILURE_STATUSES: frozenset[str] = frozenset(
     {"failed", "blocked", "attempts_exhausted"}
@@ -91,6 +92,10 @@ _PR_RESOLVER_REENTER_NEXT_STEPS: frozenset[str] = frozenset(
 )
 _PR_RESOLVER_RESULT_PATH_LIST = ", ".join(
     str(path) for path in _PR_RESOLVER_RESULT_PATHS
+)
+_AUTO_PUBLISH_SCHEMA_VERSION = "moonmind.publish.auto.v1"
+_AUTO_PUBLISH_ALLOWED_STATUSES = frozenset(
+    {"verified", "no_op_verified", "blocked", "failed"}
 )
 
 
@@ -278,6 +283,158 @@ def _first_stripped_text(*values: Any) -> str:
         if candidate:
             return candidate
     return ""
+
+
+def _github_repository_from_pr_url(value: str) -> str:
+    """Return ``owner/repo`` parsed from a GitHub PR URL, when available."""
+
+    parts = value.split("github.com/", 1)
+    if len(parts) != 2:
+        return ""
+    path = parts[1].split("?", 1)[0].split("#", 1)[0].strip("/")
+    segments = path.split("/")
+    if len(segments) >= 4 and segments[2] == "pull":
+        return f"{segments[0]}/{segments[1]}"
+    return ""
+
+
+def _load_pr_resolver_auto_publish_result(
+    workspace_path: str | None,
+) -> dict[str, Any] | None:
+    """Load agent-written auto-publish evidence from the repo workspace."""
+
+    workspace = str(workspace_path or "").strip()
+    if not workspace:
+        return None
+    return _load_json_dict(Path(workspace) / _PR_RESOLVER_AUTO_PUBLISH_RESULT_PATH)
+
+
+def _pr_resolver_auto_publish_verification_commands(
+    payload: Mapping[str, Any],
+    *,
+    pr_url: str,
+) -> list[str]:
+    """Return compact verification command evidence for synthesized auto publish."""
+
+    commands: list[str] = []
+    verification = payload.get("verification")
+    if isinstance(verification, Mapping):
+        local_tests = verification.get("localTests")
+        if isinstance(local_tests, list):
+            for item in local_tests:
+                if not isinstance(item, Mapping):
+                    continue
+                command = _first_stripped_text(item.get("command"))
+                status = _first_stripped_text(item.get("status"))
+                if command:
+                    commands.append(
+                        f"{command} ({status})" if status else command
+                    )
+    if pr_url:
+        commands.insert(
+            0,
+            f"gh pr view {pr_url} --json state,mergedAt,mergeCommit",
+        )
+    return list(dict.fromkeys(commands))
+
+
+def _normalize_pr_resolver_auto_publish_result(
+    payload: Mapping[str, Any],
+    *,
+    resolver_payload: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Translate pr-resolver's repo-local publish result into canonical evidence."""
+
+    schema_version = _first_stripped_text(payload.get("schemaVersion"))
+    status = _first_stripped_text(payload.get("status")).lower()
+    if (
+        schema_version == _AUTO_PUBLISH_SCHEMA_VERSION
+        and status in _AUTO_PUBLISH_ALLOWED_STATUSES
+    ):
+        return dict(payload)
+
+    disposition = _pr_resolver_disposition(dict(resolver_payload))
+    resolver_status = _pr_resolver_status(dict(resolver_payload))
+    if disposition not in {"merged", "already_merged"} and resolver_status != "merged":
+        return None
+
+    action = _first_stripped_text(payload.get("action")).lower()
+    if action and action != "merge":
+        return None
+
+    final = _pr_resolver_final_payload(dict(resolver_payload))
+    pr_url = _first_stripped_text(
+        payload.get("prUrl"),
+        payload.get("pr_url"),
+        payload.get("url"),
+        resolver_payload.get("prUrl"),
+        resolver_payload.get("pr_url"),
+        resolver_payload.get("url"),
+        final.get("prUrl"),
+        final.get("pr_url"),
+        final.get("url"),
+    )
+    branch = _first_stripped_text(
+        payload.get("branch"),
+        payload.get("headBranch"),
+        payload.get("head_branch"),
+        resolver_payload.get("branch"),
+        resolver_payload.get("headBranch"),
+        resolver_payload.get("head_branch"),
+        final.get("branch"),
+        final.get("headBranch"),
+        final.get("head_branch"),
+    )
+    repository = _first_stripped_text(
+        payload.get("repository"),
+        payload.get("repo"),
+        resolver_payload.get("repository"),
+        resolver_payload.get("repo"),
+        final.get("repository"),
+        final.get("repo"),
+    ) or _github_repository_from_pr_url(pr_url)
+    if not pr_url or not branch or not repository:
+        return None
+
+    verification = payload.get("verification")
+    remote_verified = False
+    if isinstance(verification, Mapping):
+        remote_verified = bool(
+            verification.get("remoteHeadVerified")
+            or verification.get("remoteVerified")
+        )
+
+    head_sha = _first_stripped_text(
+        payload.get("headSha"),
+        payload.get("localHead"),
+        resolver_payload.get("headSha"),
+        resolver_payload.get("head_sha"),
+        final.get("headSha"),
+        final.get("head_sha"),
+        final.get("headRefOid"),
+    )
+
+    return {
+        "schemaVersion": _AUTO_PUBLISH_SCHEMA_VERSION,
+        "mode": "auto",
+        "owner": "agent",
+        "skillId": "pr-resolver",
+        "status": "verified",
+        "action": "merge",
+        "repository": repository,
+        "branch": branch,
+        "localHead": head_sha or None,
+        "remoteBranchHead": None,
+        "remoteVerified": remote_verified,
+        "pushed": False,
+        "merged": True,
+        "prUrl": pr_url,
+        "blockedReason": None,
+        "verificationCommands": _pr_resolver_auto_publish_verification_commands(
+            payload,
+            pr_url=pr_url,
+        ),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -550,6 +707,14 @@ def _derive_pr_resolver_metadata(
     )
     if head_sha:
         metadata["headSha"] = head_sha
+    publish_payload = _load_pr_resolver_auto_publish_result(workspace_path)
+    if publish_payload is not None:
+        publish_result = _normalize_pr_resolver_auto_publish_result(
+            publish_payload,
+            resolver_payload=payload,
+        )
+        if publish_result is not None:
+            metadata["publishResult"] = publish_result
     return metadata
 
 def _is_generic_process_exit_summary(summary: str | None) -> bool:
