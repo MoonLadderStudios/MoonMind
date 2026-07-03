@@ -177,6 +177,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
+          submodules: recursive
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -296,6 +297,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
+          submodules: recursive
       - name: Check docs terminology guardrails
         run: |
           set -euo pipefail

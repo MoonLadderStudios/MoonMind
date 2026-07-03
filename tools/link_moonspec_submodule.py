@@ -41,9 +41,19 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def _resolve_inside(path: Path, root: Path, label: str) -> Path:
-    resolved = Path(os.path.abspath(path))
-    root_resolved = Path(os.path.abspath(root))
+def _resolve_inside(
+    path: Path,
+    root: Path,
+    label: str,
+    *,
+    follow_final: bool = True,
+) -> Path:
+    resolved = (
+        path.resolve(strict=False)
+        if follow_final
+        else path.parent.resolve(strict=False) / path.name
+    )
+    root_resolved = root.resolve(strict=False)
     if resolved != root_resolved and root_resolved not in resolved.parents:
         raise ValueError(f"{label} escapes allowed root: {path}")
     return resolved
@@ -80,7 +90,12 @@ def _planned_links(
             raise ValueError(f"{projection_path} mappings must be mappings")
         mode = mapping.get("mode")
         source = _resolve_inside(bundle_root / str(mapping.get("from", "")), bundle_root, "source")
-        target = _resolve_inside(repo_root / str(mapping.get("to", "")), repo_root, "target")
+        target = _resolve_inside(
+            repo_root / str(mapping.get("to", "")),
+            repo_root,
+            "target",
+            follow_final=False,
+        )
         if mode == "file":
             if not source.is_file():
                 raise ValueError(f"mapped source file does not exist: {source}")
@@ -98,7 +113,12 @@ def _planned_links(
             for child in sorted(source.rglob("*")):
                 if child.is_file():
                     relative_child = child.relative_to(source)
-                    target_file = _resolve_inside(target / relative_child, repo_root, "target")
+                    target_file = _resolve_inside(
+                        target / relative_child,
+                        repo_root,
+                        "target",
+                        follow_final=False,
+                    )
                     links.append(
                         PlannedLink(
                             source=child.resolve(strict=False),
@@ -121,7 +141,7 @@ def _relative_link_target(source: Path, target: Path) -> str:
 def _is_generated_projection(path: Path) -> bool:
     try:
         text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
+    except Exception:
         return False
     return GENERATED_MARKER in text
 

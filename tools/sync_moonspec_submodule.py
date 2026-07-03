@@ -235,12 +235,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     print(DEPRECATION_NOTICE, file=sys.stderr)
+    if args.write:
+        print(
+            "ERROR: --write is no longer supported by the deprecated copy-based "
+            "projection; use tools/link_moonspec_submodule.py instead.",
+            file=sys.stderr,
+        )
+        return 1
+
     source_root = args.source.resolve()
     try:
         files, unexpected_patterns = _planned_files(source_root, args.projection)
-        if args.write:
-            _write_projection(files)
-            _remove_stale(files, unexpected_patterns)
         drift = _drift(files, unexpected_patterns)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

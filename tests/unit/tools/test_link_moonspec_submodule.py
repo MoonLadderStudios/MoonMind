@@ -135,6 +135,31 @@ def test_refuses_source_and_target_path_escapes(
         mod._planned_links(source, "moonmind", repo_root=repo)
 
 
+def test_refuses_symlink_source_escape(
+    projection_repo: tuple[Path, Path],
+) -> None:
+    repo, source = projection_repo
+    outside = repo.parent / "outside.md"
+    _write(outside, "outside\n")
+    source_path = source / "bundle/linked-outside.md"
+    source_path.symlink_to(os.path.relpath(outside, source_path.parent))
+    projection = source / "bundle/projections/moonmind.yaml"
+    projection.write_text(
+        "schemaVersion: 1\nconsumer: moonmind\nmappings:\n"
+        "  - from: linked-outside.md\n"
+        "    to: docs/linked-outside.md\n"
+        "    mode: file\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="source escapes allowed root"):
+        mod._planned_links(source, "moonmind", repo_root=repo)
+
+
+def test_generated_projection_check_handles_os_errors(tmp_path: Path) -> None:
+    assert mod._is_generated_projection(tmp_path) is False
+
+
 def test_prunes_only_stale_moonspec_symlinks(
     projection_repo: tuple[Path, Path],
 ) -> None:
