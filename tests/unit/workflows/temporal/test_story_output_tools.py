@@ -940,7 +940,10 @@ async def test_load_jira_preset_brief_uses_trusted_jira_issue_payload():
     }
 
     result = await load_jira_preset_brief(
-        {"issueKey": "MM-657"},
+        {
+            "issueKey": "MM-657",
+            "artifactPath": "artifacts/jira-implement-brief.json",
+        },
         jira_service_factory=lambda: service,
     )
 
@@ -949,6 +952,8 @@ async def test_load_jira_preset_brief_uses_trusted_jira_issue_payload():
     assert service.get_issue_requests[0].expand == ["names"]
     assert result.outputs["trustedSource"] == "moonmind.jira.get_issue"
     assert result.outputs["jiraIssueKey"] == "MM-657"
+    assert result.outputs["artifactPath"] == "artifacts/jira-implement-brief.json"
+    assert result.outputs["presetBrief"] == result.outputs["jiraPresetBrief"]
     assert "MM-657: Settings HTTP API surface" in result.outputs["jiraPresetBrief"]
     assert "Expose catalog and audit endpoints." in result.outputs["jiraPresetBrief"]
     assert "Given an operator" in result.outputs["jiraPresetBrief"]

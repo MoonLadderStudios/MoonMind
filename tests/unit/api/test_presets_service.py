@@ -2107,7 +2107,8 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
                 "jira.load_preset_brief"
             )
             assert expanded_with_source_issue["steps"][0]["tool"]["inputs"] == {
-                "issueKey": "MM-910"
+                "issueKey": "MM-910",
+                "artifactPath": "artifacts/jira-breakdown-brief.json",
             }
             assert expanded_with_source_issue["steps"][1]["skill"]["id"] == (
                 "moonspec-breakdown"
@@ -2765,7 +2766,10 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             ]
             assert expanded["steps"][2]["type"] == "tool"
             assert expanded["steps"][2]["tool"]["id"] == "jira.load_preset_brief"
-            assert expanded["steps"][2]["tool"]["inputs"] == {"issueKey": "MM-328"}
+            assert expanded["steps"][2]["tool"]["inputs"] == {
+                "issueKey": "MM-328",
+                "artifactPath": "artifacts/jira-orchestrate-brief.json",
+            }
             assert "Jira preset brief" in expanded["steps"][2]["instructions"]
             assert "Keep the scope narrow." in expanded["steps"][3]["instructions"]
             assert expanded["steps"][11]["title"] == "Remediate verification gaps 1 of 6"
@@ -2859,7 +2863,10 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
             )
 
             assert expanded["steps"][0]["tool"]["id"] == "jira.load_preset_brief"
-            assert expanded["steps"][0]["tool"]["inputs"] == {"issueKey": "MM-742"}
+            assert expanded["steps"][0]["tool"]["inputs"] == {
+                "issueKey": "MM-742",
+                "artifactPath": "artifacts/jira-implement-brief.json",
+            }
             assert expanded["steps"][1]["skill"]["id"] == "auto"
             assert (
                 expanded["steps"][1]["title"] == "Assess existing implementation state"
@@ -2911,7 +2918,10 @@ async def test_seed_catalog_jira_implement_accepts_common_jira_issue_shapes(
                 context={},
             )
 
-            assert expanded["steps"][0]["tool"]["inputs"] == {"issueKey": "MM-742"}
+            assert expanded["steps"][0]["tool"]["inputs"] == {
+                "issueKey": "MM-742",
+                "artifactPath": "artifacts/jira-implement-brief.json",
+            }
             assert expanded["appliedTemplate"]["inputs"]["jira_issue_key"] == "MM-742"
 
 
@@ -2949,12 +2959,25 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "Mark GitHub issue In Progress",
         "Implement the issue",
         "Verify implementation",
-        "Remediate verification gaps",
-        "Verify remediation",
+        "Remediate verification gaps 1 of 6",
+        "Verify remediation 1 of 6",
+        "Remediate verification gaps 2 of 6",
+        "Verify remediation 2 of 6",
+        "Remediate verification gaps 3 of 6",
+        "Verify remediation 3 of 6",
+        "Remediate verification gaps 4 of 6",
+        "Verify remediation 4 of 6",
+        "Remediate verification gaps 5 of 6",
+        "Verify remediation 5 of 6",
+        "Remediate verification gaps 6 of 6",
+        "Verify remediation 6 of 6",
         "Create pull request",
         "Finalize GitHub issue status",
     ]
     assert expanded["steps"][0]["tool"]["id"] == "github.load_issue_preset_brief"
+    assert expanded["steps"][0]["tool"]["inputs"]["artifactPath"] == (
+        "artifacts/github-issue-implement-brief.json"
+    )
     assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
     assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
     assert expanded["steps"][5]["skill"]["id"] == "moonspec-verify"
@@ -2975,7 +2998,7 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert expanded["steps"][6]["annotations"] == {
         "issueImplementRole": "moonspec-remediation",
         "moonSpecRemediationAttempt": 1,
-        "moonSpecRemediationMaxAttempts": 1,
+        "moonSpecRemediationMaxAttempts": 6,
     }
     assert expanded["steps"][7]["skill"]["id"] == "moonspec-verify"
     assert expanded["steps"][7]["skill"]["args"]["verify_artifact_path"] == (
@@ -2984,17 +3007,24 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert expanded["steps"][7]["annotations"] == {
         "issueImplementRole": "moonspec-verification-gate",
         "moonSpecRemediationAttempt": 1,
-        "moonSpecRemediationMaxAttempts": 1,
+        "moonSpecRemediationMaxAttempts": 6,
+    }
+    assert "remediation verification attempt 1 of 6" in expanded["steps"][7][
+        "instructions"
+    ]
+    assert expanded["steps"][17]["annotations"] == {
+        "issueImplementRole": "moonspec-verification-gate",
+        "moonSpecRemediationAttempt": 6,
+        "moonSpecRemediationMaxAttempts": 6,
         "moonSpecFinalRemediationGate": True,
     }
-    assert "controlling verification gate" in expanded["steps"][7]["instructions"]
-    assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][8][
+    assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][18][
         "instructions"
     ]
     assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
-        expanded["steps"][8]["instructions"]
+        expanded["steps"][18]["instructions"]
     )
-    assert expanded["steps"][9]["tool"]["inputs"]["verificationArtifactPath"] == (
+    assert expanded["steps"][19]["tool"]["inputs"]["verificationArtifactPath"] == (
         "artifacts/github-issue-implement-verify.json"
     )
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
@@ -3225,7 +3255,10 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
 
             assert len(expanded["steps"]) == 5
             assert expanded["steps"][0]["tool"]["id"] == "jira.load_preset_brief"
-            assert expanded["steps"][0]["tool"]["inputs"] == {"issueKey": "MM-404"}
+            assert expanded["steps"][0]["tool"]["inputs"] == {
+                "issueKey": "MM-404",
+                "artifactPath": "artifacts/jira-breakdown-orchestrate-brief.json",
+            }
             assert expanded["steps"][1]["skill"]["id"] == "moonspec-breakdown"
             assert "input preference chain" in expanded["steps"][1]["instructions"]
             assert expanded["steps"][2]["skill"]["id"] == (
@@ -3349,7 +3382,10 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
     assert "jira_board_id" not in {item["name"] for item in template["inputs"]}
     assert len(expanded["steps"]) == 5
     assert expanded["steps"][0]["tool"]["id"] == "jira.load_preset_brief"
-    assert expanded["steps"][0]["tool"]["inputs"] == {"issueKey": "MM-404"}
+    assert expanded["steps"][0]["tool"]["inputs"] == {
+        "issueKey": "MM-404",
+        "artifactPath": "artifacts/jira-breakdown-implement-brief.json",
+    }
     assert expanded["steps"][1]["skill"]["id"] == "moonspec-breakdown"
     assert expanded["steps"][2]["skill"]["id"] == "story-reconcile-implementation"
     assert expanded["steps"][3]["skill"]["id"] == "story.create_jira_issues"

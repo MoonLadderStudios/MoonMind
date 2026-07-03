@@ -5234,7 +5234,9 @@ class MoonMindRunWorkflow:
         for key in (
             "jiraIssueKey",
             "jiraPresetBrief",
+            "presetBrief",
             "jiraStepInstructions",
+            "artifactPath",
             "resolvedSourceDesignPath",
             "sourceResolution",
             "jiraIssue",
@@ -5273,9 +5275,11 @@ class MoonMindRunWorkflow:
                 "trustedSource",
                 "jiraIssueKey",
                 "summary",
+                "artifactPath",
                 "resolvedSourceDesignPath",
                 "sourceResolution",
                 "jiraPresetBrief",
+                "presetBrief",
                 "jiraStepInstructions",
             )
             if key in compact_context

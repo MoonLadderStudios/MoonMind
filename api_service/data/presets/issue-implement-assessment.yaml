@@ -57,11 +57,20 @@ steps:
     \ the current repository state. A full implementation pass is required.\n- BLOCKED:\
     \ the requirements are too ambiguous to assess, or required Jira/repo evidence\
     \ is unavailable. Do not guess; report BLOCKED with the exact missing evidence\
-    \ and stop the preset.\n\nRecord the verdict and a concise list of met/partially-met/unmet\
-    \ requirements in the step result AND in a local handoff artifact at {{ inputs.assessment_artifact_path\
-    \ }} with keys issue_provider, issue_ref, issue_url, verdict, branch, base_ref,\
-    \ mode, summary, and requirements (list of objects with description and status\
-    \ of met, partially_met, not_met, or unverifiable).\n\nThe verdict written here\
+    \ and stop the preset.\n\nBefore writing the assessment result, also materialize\
+    \ the loaded issue brief as a local JSON handoff artifact at {{ inputs.brief_artifact_path\
+    \ }}. Build it from the trusted previous step output, not from provider-native\
+    \ connectors or guessed issue text. Include keys issue_provider, issue_ref, issue_url,\
+    \ title or summary when available, body or description when available, acceptance_criteria\
+    \ when available, labels when available, preset_brief, sourceResolution when available,\
+    \ and trustedSource. This artifact is the authoritative issue-brief input for\
+    \ later moonspec-verify steps; stop with BLOCKED if the loaded issue brief is\
+    \ unavailable and the artifact cannot be written.\n\nRecord the verdict and a\
+    \ concise list of met/partially-met/unmet requirements in the step result AND\
+    \ in a local handoff artifact at {{ inputs.assessment_artifact_path }} with keys\
+    \ issue_provider, issue_ref, issue_url, verdict, branch, base_ref, mode, summary,\
+    \ and requirements (list of objects with description and status of met, partially_met,\
+    \ not_met, or unverifiable).\n\nThe verdict written here\
     \ is the controlling input for every later step in this preset: the blocker preflight,\
     \ the In Progress transition, the implementation step, the verification step,\
     \ the pull request step, and the final Jira transition all gate on this verdict.\
