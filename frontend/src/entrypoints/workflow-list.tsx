@@ -2172,13 +2172,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   // Desktop promotes the per-column filter buttons and an Actions-header "View
   // options" icon, dropping the results header row. The icon lives inside the
   // rendered table header, so it can only host "View options" when the table is
-  // actually on screen. The labelled control falls back to the results header
-  // otherwise — on mobile, when there is no Actions column, and on the
-  // loading/error/empty states where the table (and its column filters) are
-  // replaced by a message and the Filters trigger is the only filter affordance.
+  // actually on screen. The labelled control falls back to the results header on
+  // mobile only; desktop empty/loading states intentionally avoid showing the
+  // mobile Filters and View options row.
   const tableHasRows = !isLoading && !isError && sortedItems.length > 0;
   const showViewOptionsIcon = isDesktop && actionsEnabled && tableHasRows;
-  const showResultsHeader = !showViewOptionsIcon;
+  const showResultsHeader = !isDesktop && !showViewOptionsIcon;
 
   return (
     <div className="stack">

@@ -2435,6 +2435,48 @@ describe('Workflows Entrypoint', () => {
     }
   });
 
+  it('keeps mobile Filters and View options controls hidden on desktop empty states', async () => {
+    const actionsPayload: BootPayload = {
+      page: 'workflow-list',
+      apiBase: '/api',
+      initialData: {
+        dashboardConfig: {
+          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+        },
+      },
+    };
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], count: 0 }),
+    } as Response);
+
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    );
+
+    try {
+      renderWithClient(<WorkflowListPage payload={actionsPayload} />);
+      expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
+
+      expect(document.querySelector('.workflow-list-results-header')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Filters' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'View options' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Advanced filters' })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps a desktop entry point to the advanced filters drawer after dropping the Filters row', async () => {
     const actionsPayload: BootPayload = {
       page: 'workflow-list',

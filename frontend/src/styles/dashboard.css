@@ -2624,14 +2624,28 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @media (max-width: 767px) {
+  .workflow-list-results-header {
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+  }
+
   .workflow-list-filter-bar {
-    align-items: stretch;
-    width: 100%;
+    flex: 0 1 auto;
+    align-items: center;
+    width: auto;
   }
 
   .workflow-list-filter-trigger {
     justify-content: center;
-    width: 100%;
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .workflow-list-view-options {
+    flex: 0 0 auto;
+    margin-left: 0;
   }
 
   .queue-results-toolbar,
