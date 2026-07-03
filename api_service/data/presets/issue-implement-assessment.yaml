@@ -34,6 +34,11 @@ inputs:
   label: Assessment Artifact Path
   type: text
   required: true
+- name: constraints
+  label: Constraints
+  type: textarea
+  required: false
+  default: ''
 steps:
 - title: Assess existing implementation state
   annotations:
@@ -58,13 +63,22 @@ steps:
 
     First persist the loaded issue preset brief as a local handoff artifact at {{
     inputs.brief_artifact_path }} with keys issue_provider, issue_ref, issue_url,
-    title, description, acceptance_criteria, preset_brief, and source. Copy the brief
-    content exactly from the trusted brief-loading tool step context for {{ inputs.issue_provider
-    }} issue {{ inputs.issue_ref }}; do not re-fetch, paraphrase, or invent requirements.
-    Later moonspec-verify steps in this preset require this artifact as the authoritative
-    issue brief for verification target issue_brief. If no trusted loaded brief is
-    available to persist, report BLOCKED with that missing evidence instead of writing
-    a fabricated brief.
+    title, description, acceptance_criteria, preset_brief, constraints, source_resolution,
+    and truncated. Copy the brief content exactly from the trusted brief-loading tool
+    step context for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }}; do
+    not re-fetch, paraphrase, or invent requirements. Set truncated to true when any
+    copied field contains the literal marker ...[truncated], and record that truncation
+    as a risk in the assessment summary; otherwise set truncated to false. Later moonspec-verify
+    steps in this preset require this artifact as the authoritative issue brief for
+    verification target issue_brief. If no trusted loaded brief is available to persist,
+    report BLOCKED with that missing evidence instead of writing a fabricated brief.
+
+
+    Record the following workflow constraints verbatim under the constraints key
+    in the brief artifact and treat them as binding scope for the assessment (an
+    empty value means no additional constraints):
+
+    {{ inputs.constraints }}
 
 
     Classify the result into exactly one verdict:

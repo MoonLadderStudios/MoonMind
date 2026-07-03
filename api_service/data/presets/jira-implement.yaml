@@ -107,6 +107,7 @@ steps:
     issue_url: "{{ inputs.jira_issue.url | default('') }}"
     brief_artifact_path: artifacts/jira-implement-brief.json
     assessment_artifact_path: artifacts/jira-implement-assessment.json
+    constraints: '{{ inputs.constraints }}'
 - title: Check Jira blockers before implementation
   type: tool
   instructions: 'Read artifacts/jira-implement-assessment.json (or the recorded verdict
