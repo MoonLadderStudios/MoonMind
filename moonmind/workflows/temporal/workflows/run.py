@@ -523,6 +523,7 @@ RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = (
 RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = (
     "run-moonspec-verify-remediation-index-v1"
 )
+RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH = "run-moonspec-remediation-step-skip-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
 # execution begins so every step execution can be traced to the policy values
@@ -4583,14 +4584,58 @@ class MoonMindRunWorkflow:
         inputs = node.get("inputs")
         return inputs if isinstance(inputs, Mapping) else {}
 
-    def _is_moonspec_remediation_step(self, node: Mapping[str, Any]) -> bool:
+    def _node_annotations_mapping(
+        self,
+        node: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
         node_inputs = self._node_inputs_mapping(node)
         annotations = node_inputs.get("annotations") or node.get("annotations")
-        if isinstance(annotations, Mapping):
-            for key in ("jiraOrchestrateRole", "issueImplementRole"):
-                role = str(annotations.get(key) or "").strip().lower()
-                if role == "moonspec-remediation":
-                    return True
+        return annotations if isinstance(annotations, Mapping) else {}
+
+    def _moonspec_step_role(self, node: Mapping[str, Any]) -> str:
+        annotations = self._node_annotations_mapping(node)
+        for key in ("jiraOrchestrateRole", "issueImplementRole"):
+            role = str(annotations.get(key) or "").strip().lower()
+            if role:
+                return role
+        return ""
+
+    @staticmethod
+    def _coerce_positive_int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            return None
+        return coerced if coerced >= 1 else None
+
+    def _moonspec_remediation_attempt_metadata(
+        self,
+        node: Mapping[str, Any],
+    ) -> tuple[int | None, int | None]:
+        annotations = self._node_annotations_mapping(node)
+        attempt = self._coerce_positive_int(
+            annotations.get("moonSpecRemediationAttempt")
+        )
+        max_attempts = self._coerce_positive_int(
+            annotations.get("moonSpecRemediationMaxAttempts")
+        )
+        return attempt, max_attempts
+
+    def _moonspec_remediation_attempt_within_budget(
+        self,
+        node: Mapping[str, Any],
+    ) -> bool:
+        attempt, max_attempts = self._moonspec_remediation_attempt_metadata(node)
+        if attempt is None or max_attempts is None:
+            return True
+        return attempt <= max_attempts
+
+    def _is_moonspec_remediation_step(self, node: Mapping[str, Any]) -> bool:
+        node_inputs = self._node_inputs_mapping(node)
+        if self._moonspec_step_role(node) == "moonspec-remediation":
+            return True
         skill_node = node.get("skill")
         skill_id_from_node = (
             skill_node.get("id") or skill_node.get("name")
@@ -4620,9 +4665,49 @@ class MoonMindRunWorkflow:
         current_index: int,
     ) -> bool:
         for node in ordered_nodes[current_index + 1:]:
-            if self._is_moonspec_remediation_step(node):
+            if self._is_moonspec_remediation_step(
+                node
+            ) and self._moonspec_remediation_attempt_within_budget(node):
                 return True
         return False
+
+    def _moonspec_remediation_loop_skip_reason(
+        self,
+        node: Mapping[str, Any],
+        *,
+        tool_name: str,
+        node_inputs: Mapping[str, Any],
+    ) -> str | None:
+        role = self._moonspec_step_role(node)
+        is_remediation = self._is_moonspec_remediation_step(node)
+        is_verification_gate = (
+            role == "moonspec-verification-gate"
+            and self._is_moonspec_verify_step(
+                tool_name=tool_name,
+                node_inputs=node_inputs,
+            )
+        )
+        if not (is_remediation or is_verification_gate):
+            return None
+
+        attempt, max_attempts = self._moonspec_remediation_attempt_metadata(node)
+        if (
+            attempt is not None
+            and max_attempts is not None
+            and attempt > max_attempts
+        ):
+            return (
+                "Skipped MoonSpec remediation loop step "
+                f"{attempt}; configured maximum is {max_attempts}."
+            )
+
+        verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+        if verdict in _MOONSPEC_GATE_PASSING_VERDICTS:
+            return (
+                "Skipped MoonSpec remediation loop step because verification already "
+                f"passed with verdict {verdict}."
+            )
+        return None
 
     def _extract_moonspec_verify_verdict(
         self,
@@ -5227,12 +5312,19 @@ class MoonMindRunWorkflow:
         if not isinstance(previous_outputs, Mapping):
             return None
         trusted_source = str(previous_outputs.get("trustedSource") or "").strip()
-        if trusted_source != "moonmind.jira.get_issue":
+        if trusted_source not in {
+            "moonmind.jira.get_issue",
+            "moonmind.github.get_issue",
+        }:
             return None
 
         context: dict[str, Any] = {"trustedSource": trusted_source}
         for key in (
             "jiraIssueKey",
+            "repository",
+            "issueNumber",
+            "issueRef",
+            "issueUrl",
             "jiraPresetBrief",
             "presetBrief",
             "jiraStepInstructions",
@@ -5240,6 +5332,11 @@ class MoonMindRunWorkflow:
             "resolvedSourceDesignPath",
             "sourceResolution",
             "jiraIssue",
+            "githubIssue",
+            "issue",
+            "title",
+            "body",
+            "labels",
             "summary",
         ):
             value = previous_outputs.get(key)
@@ -5274,6 +5371,10 @@ class MoonMindRunWorkflow:
             for key in (
                 "trustedSource",
                 "jiraIssueKey",
+                "repository",
+                "issueNumber",
+                "issueRef",
+                "issueUrl",
                 "summary",
                 "artifactPath",
                 "resolvedSourceDesignPath",
@@ -5281,6 +5382,10 @@ class MoonMindRunWorkflow:
                 "jiraPresetBrief",
                 "presetBrief",
                 "jiraStepInstructions",
+                "githubIssue",
+                "issue",
+                "title",
+                "body",
             )
             if key in compact_context
         }
@@ -5311,9 +5416,9 @@ class MoonMindRunWorkflow:
         payload = MoonMindRunWorkflow._trusted_context_payload(context)
         return (
             "MoonMind trusted previous step context:\n"
-            "The following JSON was produced by MoonMind's trusted Jira tool path. "
+            "The following JSON was produced by MoonMind's trusted issue tool path. "
             "Treat it as authoritative for this step. Do not use provider-native "
-            "Jira/Atlassian connectors, web scraping, or guessed issue content to "
+            "issue-provider connectors, web scraping, or guessed issue content to "
             "replace it.\n"
             f"```json\n{payload}\n```"
         )
@@ -7064,6 +7169,10 @@ class MoonMindRunWorkflow:
                 tool.get("name") or tool.get("id") or ""
             ).strip()
             node_id = str(node.get("id") or "unknown")
+            raw_node_inputs = node.get("inputs")
+            original_node_inputs = (
+                dict(raw_node_inputs) if isinstance(raw_node_inputs, Mapping) else {}
+            )
             if self._is_preserved_step(node_id):
                 self._record_preserved_step_terminal_state(node_id, node)
                 preserved_outputs = self._preserved_step_outputs(node_id)
@@ -7076,6 +7185,24 @@ class MoonMindRunWorkflow:
                 and current_step_row.get("status") == "pending"
             ):
                 continue
+            if workflow.patched(RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH):
+                skip_reason = self._moonspec_remediation_loop_skip_reason(
+                    node,
+                    tool_name=tool_name,
+                    node_inputs=original_node_inputs,
+                )
+                if skip_reason:
+                    self._mark_step_terminal(
+                        node_id,
+                        status="skipped",
+                        updated_at=workflow.now(),
+                        summary=skip_reason,
+                        last_error=None,
+                    )
+                    self._summary = skip_reason
+                    self._refresh_step_readiness(updated_at=workflow.now())
+                    self._update_memo()
+                    continue
             handoff_block_reason = (
                 self._jira_orchestrate_external_handoff_block_reason(node)
             )
@@ -7093,7 +7220,6 @@ class MoonMindRunWorkflow:
                 self._refresh_step_readiness(updated_at=workflow.now())
                 self._update_memo()
                 break
-            original_node_inputs = dict(node.get("inputs", {}))
             if tool_type == "skill":
                 await load_registry_snapshot()
             approval_policy = plan_definition.policy.approval_policy

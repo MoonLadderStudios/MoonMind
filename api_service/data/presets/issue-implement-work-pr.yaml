@@ -155,14 +155,14 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 1 of 6
+- title: Remediate verification gaps 1 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 1
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
     }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
-    1 of 6.
+    1 of {{ inputs.remediation_max_attempts }}.
 
 
     If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
@@ -191,23 +191,21 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 1 of 6
+- title: Verify remediation 1 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 1
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
 
-    Run moonspec-verify against verification target {{ inputs.verification_target
-    }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation,
-    even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
 
 
-    This is remediation verification attempt 1 of 6. If the verdict is ADDITIONAL_WORK_NEEDED,
+    This is remediation verification attempt 1 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
     preserve the verification report as the mandatory input for the next remediation
     attempt and continue only to the next remediation step. If the verdict is NO_DETERMINATION,
     stop and report the missing evidence. If the verdict is BLOCKED,
@@ -229,14 +227,14 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 2 of 6
+- title: Remediate verification gaps 2 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 2
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
     }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
-    2 of 6.
+    2 of {{ inputs.remediation_max_attempts }}.
 
 
     If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
@@ -265,23 +263,21 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 2 of 6
+- title: Verify remediation 2 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 2
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
 
-    Run moonspec-verify against verification target {{ inputs.verification_target
-    }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation,
-    even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
 
 
-    This is remediation verification attempt 2 of 6. If the verdict is ADDITIONAL_WORK_NEEDED,
+    This is remediation verification attempt 2 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
     preserve the verification report as the mandatory input for the next remediation
     attempt and continue only to the next remediation step. If the verdict is NO_DETERMINATION,
     stop and report the missing evidence. If the verdict is BLOCKED,
@@ -303,14 +299,14 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 3 of 6
+- title: Remediate verification gaps 3 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 3
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
     }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
-    3 of 6.
+    3 of {{ inputs.remediation_max_attempts }}.
 
 
     If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
@@ -339,23 +335,21 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 3 of 6
+- title: Verify remediation 3 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 3
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
 
-    Run moonspec-verify against verification target {{ inputs.verification_target
-    }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation,
-    even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
 
 
-    This is remediation verification attempt 3 of 6. If the verdict is ADDITIONAL_WORK_NEEDED,
+    This is remediation verification attempt 3 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
     preserve the verification report as the mandatory input for the next remediation
     attempt and continue only to the next remediation step. If the verdict is NO_DETERMINATION,
     stop and report the missing evidence. If the verdict is BLOCKED,
@@ -377,14 +371,14 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 4 of 6
+- title: Remediate verification gaps 4 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 4
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
     }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
-    4 of 6.
+    4 of {{ inputs.remediation_max_attempts }}.
 
 
     If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
@@ -413,23 +407,21 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 4 of 6
+- title: Verify remediation 4 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 4
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
 
-    Run moonspec-verify against verification target {{ inputs.verification_target
-    }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation,
-    even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
 
 
-    This is remediation verification attempt 4 of 6. If the verdict is ADDITIONAL_WORK_NEEDED,
+    This is remediation verification attempt 4 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
     preserve the verification report as the mandatory input for the next remediation
     attempt and continue only to the next remediation step. If the verdict is NO_DETERMINATION,
     stop and report the missing evidence. If the verdict is BLOCKED,
@@ -451,14 +443,14 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 5 of 6
+- title: Remediate verification gaps 5 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 5
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
     }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
-    5 of 6.
+    5 of {{ inputs.remediation_max_attempts }}.
 
 
     If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
@@ -487,23 +479,21 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 5 of 6
+- title: Verify remediation 5 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 5
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
 
-    Run moonspec-verify against verification target {{ inputs.verification_target
-    }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation,
-    even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
 
 
-    This is remediation verification attempt 5 of 6. If the verdict is ADDITIONAL_WORK_NEEDED,
+    This is remediation verification attempt 5 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
     preserve the verification report as the mandatory input for the next remediation
     attempt and continue only to the next remediation step. If the verdict is NO_DETERMINATION,
     stop and report the missing evidence. If the verdict is BLOCKED,
@@ -525,14 +515,14 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 6 of 6
+- title: Remediate verification gaps 6 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 6
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
     }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
-    6 of 6.
+    6 of {{ inputs.remediation_max_attempts }}.
 
 
     If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
@@ -561,19 +551,17 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 6 of 6
+- title: Verify remediation 6 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 6
-    moonSpecRemediationMaxAttempts: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
     moonSpecFinalRemediationGate: true
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
 
-    Run moonspec-verify against verification target {{ inputs.verification_target
-    }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation,
-    even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
 

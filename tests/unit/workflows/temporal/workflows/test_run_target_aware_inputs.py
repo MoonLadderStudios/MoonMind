@@ -469,7 +469,41 @@ def test_agent_request_includes_trusted_jira_previous_outputs_in_instruction_ref
     assert "moonmind.jira.get_issue" in request.instruction_ref
     assert "MM-657: Settings HTTP API surface" in request.instruction_ref
     assert "docs/Designs/RuntimeTypes.md" in request.instruction_ref
-    assert "Do not use provider-native Jira/Atlassian connectors" in request.instruction_ref
+    assert "Do not use provider-native issue-provider connectors" in request.instruction_ref
+
+
+def test_agent_request_includes_trusted_github_previous_outputs_in_instruction_ref() -> None:
+    wf = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "claude_code"},
+                "instructions": "Assess the GitHub issue.",
+                "previousOutputs": {
+                    "trustedSource": "moonmind.github.get_issue",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "issueNumber": 1067,
+                    "issue": {
+                        "title": "Add GitHub Issue Implement preset",
+                        "body": "Build the preset.",
+                    },
+                    "presetBrief": "MoonLadderStudios/MoonMind#1067: Add preset",
+                    "artifactPath": "artifacts/github-issue-implement-brief.json",
+                },
+            },
+            node_id="classify",
+            tool_name="claude_code",
+            workflow_parameters={"task": {}},
+        )
+
+    assert request.instruction_ref is not None
+    assert "MoonMind trusted previous step context:" in request.instruction_ref
+    assert "moonmind.github.get_issue" in request.instruction_ref
+    assert "MoonLadderStudios/MoonMind#1067: Add preset" in request.instruction_ref
+    assert "artifacts/github-issue-implement-brief.json" in request.instruction_ref
 
 
 def test_trusted_jira_context_persists_after_intermediate_step_output() -> None:
