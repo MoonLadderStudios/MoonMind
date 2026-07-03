@@ -4197,6 +4197,10 @@ export interface components {
             expectedHeadStepExecutionId: string;
             /** Expectedheadcommit */
             expectedHeadCommit?: string | null;
+            /** Acceptedoutputrefs */
+            acceptedOutputRefs?: {
+                [key: string]: unknown;
+            };
             /** Gateevidence */
             gateEvidence: {
                 [key: string]: unknown;
@@ -4205,10 +4209,18 @@ export interface components {
             sideEffectDisposition: {
                 [key: string]: unknown;
             };
+            /** Downstreaminvalidation */
+            downstreamInvalidation?: {
+                [key: string]: unknown;
+            };
             /** Approvalevidence */
             approvalEvidence?: {
                 [key: string]: unknown;
             } | null;
+            /** Policyevidence */
+            policyEvidence?: {
+                [key: string]: unknown;
+            };
             /**
              * Policyrequiresapproval
              * @default false

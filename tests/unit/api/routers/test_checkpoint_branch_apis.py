@@ -132,6 +132,7 @@ async def checkpoint_branch_client(tmp_path):
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
+        client.app = app  # type: ignore[attr-defined]
         yield client
 
     app.dependency_overrides.clear()
@@ -201,7 +202,7 @@ async def _set_branch_head(
     branch_id: str,
     step_execution_id: str = "mm:wf-branch:run:implement:execution:2",
 ) -> None:
-    async for session in client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+    async for session in client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
     ]():
         result = await session.execute(
@@ -296,7 +297,7 @@ async def test_checkpoint_branch_create_prepares_git_binding_before_launch(
     assert body["gitWorkBranch"].startswith("mm/mm-wf-branch/implement/cp-")
     assert body["gitWorkBranch"] != body["branchId"]
 
-    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
     ]():
         binding = await session.get(WorkflowCheckpointBranchGitBinding, body["branchId"])
@@ -429,7 +430,7 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
         f"mm:wf-branch:{branch_id}:{branch_turn_id}:launch"
     )
 
-    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
     ]():
         artifact_rows = (
@@ -561,7 +562,7 @@ async def test_checkpoint_branch_api_rejects_launch_raw_context_and_immutable_mu
     )
     assert launched.status_code == 200
 
-    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
     ]():
         turn = (
@@ -670,7 +671,7 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     assert (
         first_continue.json()["branchTurnId"] == second_continue.json()["branchTurnId"]
     )
-    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
     ]():
         branch = await session.get(WorkflowCheckpointBranch, branch_id)
@@ -703,6 +704,7 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     fork_id = first_fork.json()["branchId"]
     assert fork_id == second_fork.json()["branchId"]
     assert first_fork.json()["parentBranchId"] == branch_id
+    await _set_branch_head(checkpoint_branch_client, branch_id)
 
     first_compare = await checkpoint_branch_client.get(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
@@ -720,9 +722,64 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     assert comparison["summaryRef"].startswith("artifact://checkpoint-branch-comparisons/")
     assert comparison["summaryRef"] == second_compare.json()["summaryRef"]
     assert comparison["comparisonRecord"]["recordType"] == "checkpoint_branch_comparison"
+    assert comparison["comparisonRecord"]["quality"] == {
+        "branchGateVerdict": "unknown",
+        "againstGateVerdict": "unknown",
+    }
+    assert comparison["comparisonRecord"]["artifactRefs"][
+        "output.branch_comparison.metadata.json"
+    ].startswith("artifact://checkpoint-branch-comparisons/")
     assert comparison["comparisonRecord"]["evidenceRefs"]["branchCheckpointRef"] == (
         "artifact://checkpoints/after-implement"
     )
+
+    promoted = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
+        json={
+            "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
+            "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
+            "sideEffectDisposition": {"status": "isolated"},
+            "idempotencyKey": "mm-1091:promote-before-recompare",
+        },
+    )
+    assert promoted.status_code == 200
+
+    compare_after_promotion = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+        params={"against": fork_id},
+    )
+    assert compare_after_promotion.status_code == 200
+    promoted_comparison = compare_after_promotion.json()
+    assert promoted_comparison["summaryRef"] != comparison["summaryRef"]
+    assert promoted_comparison["comparisonRecord"]["quality"] == {
+        "branchGateVerdict": "passed",
+        "againstGateVerdict": "unknown",
+    }
+
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        comparison_operations = (
+            await session.execute(
+                select(WorkflowCheckpointBranchOperation).where(
+                    WorkflowCheckpointBranchOperation.operation
+                    == "checkpoint_branch.compare"
+                )
+            )
+        ).scalars().all()
+        comparison_artifacts = (
+            await session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == branch_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind.like(
+                        "output.branch_comparison.%"
+                    ),
+                )
+            )
+        ).scalars().all()
+
+    assert len(comparison_operations) == 2
+    assert len(comparison_artifacts) == 6
 
 
 @pytest.mark.asyncio
@@ -749,6 +806,23 @@ async def test_checkpoint_branch_promotion_requires_head_gate_side_effects_and_a
     assert missing_approval.status_code == 409
     assert missing_approval.json()["detail"]["code"] == "approval_required"
 
+    conflicting_accepted_refs = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
+        json={
+            "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
+            "acceptedOutputRefs": {
+                "headStepExecutionId": "mm:wf-branch:run:implement:execution:stale"
+            },
+            "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
+            "sideEffectDisposition": {"status": "isolated"},
+            "idempotencyKey": "mm-1091:promote-conflicting-accepted-refs",
+        },
+    )
+    assert conflicting_accepted_refs.status_code == 409
+    assert conflicting_accepted_refs.json()["detail"]["code"] == (
+        "accepted_output_refs_mismatch"
+    )
+
     promoted = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
         json={
@@ -765,6 +839,60 @@ async def test_checkpoint_branch_promotion_requires_head_gate_side_effects_and_a
     assert promoted.json()["currentHeadStepExecutionId"] == (
         "mm:wf-branch:run:implement:execution:2"
     )
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = (
+            await session.execute(
+                select(WorkflowCheckpointBranch).where(
+                    WorkflowCheckpointBranch.branch_id == branch_id
+                )
+            )
+        ).scalar_one()
+        operation = (
+            await session.execute(
+                select(WorkflowCheckpointBranchOperation).where(
+                    WorkflowCheckpointBranchOperation.operation
+                    == "checkpoint_branch.promote"
+                )
+            )
+        ).scalar_one()
+        promotion_artifacts = (
+            await session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == branch_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind.in_(
+                        {
+                            "output.branch_promotion.record.json",
+                            "output.branch_promotion.downstream_invalidation.json",
+                        }
+                    ),
+                )
+            )
+        ).scalars().all()
+
+    assert branch.promotion_evidence["acceptedOutputRefs"][
+        "headStepExecutionId"
+    ] == "mm:wf-branch:run:implement:execution:2"
+    assert branch.promotion_evidence["gitEvidence"]["repository"] == (
+        "MoonLadderStudios/MoonMind"
+    )
+    assert branch.promotion_evidence["downstreamInvalidation"]["status"] == (
+        "not_required"
+    )
+    assert branch.promotion_evidence["policyEvidence"][
+        "policyRequiresApproval"
+    ] is True
+    assert operation.response_payload["recordType"] == "checkpoint_branch_promotion"
+    assert operation.response_payload["artifactRefs"][
+        "output.branch_promotion.record.json"
+    ].startswith("artifact://checkpoint-branch-promotions/")
+    assert {
+        artifact.artifact_kind for artifact in promotion_artifacts
+    } == {
+        "output.branch_promotion.record.json",
+        "output.branch_promotion.downstream_invalidation.json",
+    }
 
     head_mismatch = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
@@ -986,7 +1114,7 @@ async def test_checkpoint_branch_compare_records_operation_payload(
     # The compare path is a read API, but the comparison record itself is durable
     # evidence referenced by clients and stored in the operation ledger.
     operation = None
-    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
     ]():
         result = await session.execute(
@@ -998,6 +1126,13 @@ async def test_checkpoint_branch_compare_records_operation_payload(
         operation = result.scalar_one()
     assert operation is not None
     assert operation.response_payload["summaryRef"] == compared.json()["summaryRef"]
+    assert operation.response_payload["quality"] == {
+        "branchGateVerdict": "unknown",
+        "againstGateVerdict": "unknown",
+    }
+    assert operation.response_payload["artifactRefs"][
+        "output.branch_comparison.range_diff.patch"
+    ].startswith("artifact://checkpoint-branch-comparisons/")
 
 
 @pytest.mark.asyncio
@@ -1025,7 +1160,7 @@ async def test_checkpoint_branch_compare_refreshes_when_branch_head_changes(
     )
     assert first_compare.status_code == 200
 
-    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
     ]():
         result = await session.execute(
@@ -1051,7 +1186,7 @@ async def test_checkpoint_branch_compare_refreshes_when_branch_head_changes(
         "branchCheckpointRef"
     ] == "artifact://checkpoints/after-review"
 
-    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
     ]():
         result = await session.execute(

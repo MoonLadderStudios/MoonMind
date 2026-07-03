@@ -223,9 +223,18 @@ class CheckpointBranchPromoteRequest(BaseModel):
         ..., alias="expectedHeadStepExecutionId"
     )
     expected_head_commit: str | None = Field(None, alias="expectedHeadCommit")
+    accepted_output_refs: dict[str, Any] = Field(
+        default_factory=dict, alias="acceptedOutputRefs"
+    )
     gate_evidence: dict[str, Any] = Field(..., alias="gateEvidence")
     side_effect_disposition: dict[str, Any] = Field(..., alias="sideEffectDisposition")
+    downstream_invalidation: dict[str, Any] = Field(
+        default_factory=dict, alias="downstreamInvalidation"
+    )
     approval_evidence: dict[str, Any] | None = Field(None, alias="approvalEvidence")
+    policy_evidence: dict[str, Any] = Field(
+        default_factory=dict, alias="policyEvidence"
+    )
     policy_requires_approval: bool = Field(False, alias="policyRequiresApproval")
     idempotency_key: str = Field(
         ..., alias="idempotencyKey", min_length=1, max_length=512
