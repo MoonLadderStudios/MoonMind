@@ -116,20 +116,22 @@ async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -
     assert "complete structured verifier JSON" in prepared
 
 
-async def test_codex_skill_payload_accepts_auto_publish_mode() -> None:
-    from moonmind.agents.codex_worker.handlers import CodexSkillPayload
-
-    payload = CodexSkillPayload.from_payload(
-        {
-            "skillId": "fix-ci",
-            "inputs": {
-                "repo": "MoonLadderStudios/MoonMind",
-                "publishMode": "auto",
-            },
-        }
+async def test_codex_skill_payload_rejects_auto_publish_mode() -> None:
+    from moonmind.agents.codex_worker.handlers import (
+        CodexSkillPayload,
+        CodexWorkerHandlerError,
     )
 
-    assert payload.publish_mode == "auto"
+    with pytest.raises(CodexWorkerHandlerError, match="codex_skill publishMode"):
+        CodexSkillPayload.from_payload(
+            {
+                "skillId": "fix-ci",
+                "inputs": {
+                    "repo": "MoonLadderStudios/MoonMind",
+                    "publishMode": "auto",
+                },
+            }
+        )
 
 
 async def test_checkpoint_activity_runtime_bindings_are_registered() -> None:
