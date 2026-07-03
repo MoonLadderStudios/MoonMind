@@ -34,8 +34,10 @@ Path parameters:
 
 Success status:
 
-- `200 OK` when a running execution accepts or rejects the instruction through workflow logic.
+- `200 OK` when a running execution accepts the instruction through workflow logic.
 - `201 Created` when the API creates a linked follow-up execution for a terminal source.
+
+Rejected instructions are not success responses. Well-formed instructions rejected by state or policy return `409 chat_instruction_rejected`; invalid request shape or domain validation returns `422 invalid_chat_instruction_request`.
 
 ## 3. Request body
 
@@ -75,7 +77,7 @@ Rules:
 
 - `message` is accepted at the API boundary and then stored as an artifact before workflow delivery.
 - The workflow-facing Update receives `messageArtifactRef`, not the full user message.
-- `instructionId` and/or `idempotencyKey` should dedupe retries.
+- `instructionId` and/or `idempotencyKey` are stable client keys and must dedupe retries.
 - `observedState` lets the workflow reject stale UI targets before applying semantic effects.
 - `policy` expresses caller/product permission for destructive changes such as active-Step cancel-and-reattempt.
 

@@ -64,6 +64,7 @@ The response tells the UI what happened.
 | `rejected_stale_target` | Ask the user to refresh or retarget because the page was stale. |
 | `rejected_terminal` | Offer follow-up creation if policy allows. |
 | `rejected_policy` | Explain the policy block and show available safe actions. |
+| `rejected_invalid_payload` | Explain that the submitted instruction payload or target state is invalid. |
 | `rejected_unsupported_runtime` | Explain that the active runtime cannot accept live chat instructions. |
 
 ## 6. Targeting controls

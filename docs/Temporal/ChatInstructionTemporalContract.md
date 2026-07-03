@@ -25,14 +25,14 @@ Reasons:
 - the workflow must validate stale `runId`, Step, plan revision, and policy before accepting semantic effects,
 - the response must explain whether the instruction attached to active work, queued for a safe point, triggered replan, or was rejected.
 
-Internal child workflow delivery may use Signals, including the existing `operator_message` shape or a typed successor. Signals are appropriate after the parent has accepted the instruction and is notifying an active child asynchronously.
+Internal child workflow delivery uses a typed artifact-ref Signal after the parent has accepted the instruction and is notifying an active child asynchronously. The existing `operator_message` Signal remains legacy non-chat behavior because it carries raw message text in workflow history.
 
 ## 3. Update handling pattern
 
 The `SubmitChatInstruction` handler should stay lightweight:
 
 1. validate the typed request,
-2. dedupe by `instructionId`, `idempotencyKey`, or Temporal Update ID,
+2. dedupe by stable client keys (`idempotencyKey` and/or `instructionId`) when present, with Temporal Update ID only as a fallback for requests without a client key,
 3. reject stale targets before acceptance,
 4. record a compact instruction command in workflow state,
 5. wake the main workflow loop,
