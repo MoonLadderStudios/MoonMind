@@ -56,6 +56,10 @@ from moonmind.statuses.compat import (
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
 from moonmind.workflows.executions.routing import _coerce_bool
+from moonmind.workflows.temporal.activity_catalog import (
+    TemporalActivityCatalogError,
+    build_default_activity_catalog,
+)
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
@@ -824,15 +828,24 @@ def _validate_branch_policy(
     publish_mode: str | None = None,
     git_work_branch: str | None = None,
     max_budget_usd: float | None = None,
+    omnigent_continuation: object | None = None,
 ) -> None:
     if runtime_context_policy == "external_provider_continuation":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "provider_continuation_unsupported",
-                "reason": "provider_continuation_unsupported",
-            },
-        )
+        if omnigent_continuation is not None:
+            catalog = build_default_activity_catalog()
+            try:
+                catalog.resolve_activity("integration.omnigent.send_message")
+                catalog.resolve_activity("integration.omnigent.harvest_session")
+            except TemporalActivityCatalogError:
+                omnigent_continuation = None
+        if omnigent_continuation is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "provider_continuation_unsupported",
+                    "reason": "provider_continuation_unsupported",
+                },
+            )
     if publish_mode and publish_mode != "none" and not git_work_branch:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -11001,6 +11014,7 @@ async def create_checkpoint_branch(
         publish_mode=payload.publish_mode,
         git_work_branch=payload.git_work_branch,
         max_budget_usd=payload.max_budget_usd,
+        omnigent_continuation=payload.omnigent_continuation,
     )
     request_digest = _operation_digest(payload)
     existing_op = await session.execute(
@@ -11137,6 +11151,7 @@ async def _record_branch_turn_operation(
         workspace_policy=payload.workspace_policy,
         runtime_context_policy=payload.runtime_context_policy,
         max_budget_usd=payload.max_budget_usd,
+        omnigent_continuation=payload.omnigent_continuation,
     )
     if branch.state in {"archived", "promoted", "superseded"}:
         raise HTTPException(

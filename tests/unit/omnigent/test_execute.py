@@ -130,6 +130,58 @@ def test_build_omnigent_result_maps_snake_case_metadata() -> None:
     assert result.metadata["githubPrUrl"] == "https://github.example/pr/1"
 
 
+def test_build_omnigent_result_binds_checkpoint_branch_turn_evidence() -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile:test",
+        correlationId="corr-1",
+        idempotencyKey="wf-1:cbr-1:cbt-1:omnigent",
+        parameters={
+            "metadata": {
+                "moonmind": {
+                    "checkpointBranchTurn": {
+                        "branchId": "cbr-1",
+                        "branchTurnId": "cbt-1",
+                        "sourceCheckpointRef": "artifact://checkpoint/after",
+                        "priorCaptureEvidenceRefs": [
+                            "artifact://omnigent/source-capture"
+                        ],
+                        "omnigentIdempotencyKey": "wf-1:cbr-1:cbt-1:omnigent",
+                        "providerIdsAreDiagnosticsOnly": True,
+                    }
+                }
+            }
+        },
+    )
+
+    result = build_omnigent_result(
+        request=request,
+        terminal_status="completed",
+        session_id="sess-branch",
+        agent_id="agent-branch",
+        final_snapshot={"summary": "branch done"},
+        event_count=3,
+        capture_bundle=_bundle(),
+    )
+
+    assert result.metadata["checkpointBranchTurn"] == {
+        "branchId": "cbr-1",
+        "branchTurnId": "cbt-1",
+        "sourceCheckpointRef": "artifact://checkpoint/after",
+        "priorCaptureEvidenceRefs": ["artifact://omnigent/source-capture"],
+        "omnigentIdempotencyKey": "wf-1:cbr-1:cbt-1:omnigent",
+        "providerIdsAreDiagnosticsOnly": True,
+    }
+    assert "omnigentSessionId" not in result.metadata
+    assert "omnigentAgentId" not in result.metadata
+    assert result.metadata["providerDiagnostics"]["omnigent"] == {
+        "sessionId": "sess-branch",
+        "agentId": "agent-branch",
+        "providerIdsAreDiagnosticsOnly": True,
+    }
+
+
 def test_agent_items_ignores_unexpected_payload_shape() -> None:
     assert _agent_items({"items": "unexpected"}) == []
 

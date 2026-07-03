@@ -97,6 +97,51 @@ class CheckpointBranchInstructionsModel(BaseModel):
         return self
 
 
+class OmnigentBranchContinuationModel(BaseModel):
+    """Capability-gated Omnigent same-session continuation request."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_session_id: str = Field(..., alias="sourceSessionId", min_length=1)
+    continuation_mode: Literal["send_message"] = Field(
+        "send_message", alias="continuationMode"
+    )
+    instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
+    harvest_after_turn: bool = Field(True, alias="harvestAfterTurn")
+    lifecycle_activities_enabled: bool = Field(
+        False, alias="lifecycleActivitiesEnabled"
+    )
+    capability_gate: dict[str, Any] = Field(
+        default_factory=dict, alias="capabilityGate"
+    )
+
+    @field_validator("source_session_id", "instruction_ref", mode="before")
+    @classmethod
+    def _strip_required_text(cls, value: Any) -> str | None:
+        return _optional_text(value)
+
+    @model_validator(mode="after")
+    def _requires_lifecycle_capabilities(self) -> "OmnigentBranchContinuationModel":
+        activities = self.capability_gate.get("activities")
+        if not isinstance(activities, list):
+            activities = []
+        activity_names = {str(item).strip() for item in activities if str(item).strip()}
+        required = {
+            "integration.omnigent.send_message",
+            "integration.omnigent.harvest_session",
+        }
+        if (
+            not self.lifecycle_activities_enabled
+            or self.capability_gate.get("enabled") is not True
+            or not required.issubset(activity_names)
+        ):
+            raise ValueError(
+                "Omnigent same-session continuation requires enabled lifecycle "
+                "activities and capability gate evidence"
+            )
+        return self
+
+
 class CheckpointBranchCreateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -113,6 +158,9 @@ class CheckpointBranchCreateRequest(BaseModel):
     )
     git_work_branch: str | None = Field(None, alias="gitWorkBranch", max_length=255)
     max_budget_usd: float | None = Field(None, alias="maxBudgetUsd", ge=0)
+    omnigent_continuation: OmnigentBranchContinuationModel | None = Field(
+        None, alias="omnigentContinuation"
+    )
 
 
 class CheckpointBranchContinueRequest(BaseModel):
@@ -130,6 +178,9 @@ class CheckpointBranchContinueRequest(BaseModel):
         ..., alias="idempotencyKey", min_length=1, max_length=512
     )
     max_budget_usd: float | None = Field(None, alias="maxBudgetUsd", ge=0)
+    omnigent_continuation: OmnigentBranchContinuationModel | None = Field(
+        None, alias="omnigentContinuation"
+    )
 
 
 class CheckpointBranchForkRequest(CheckpointBranchContinueRequest):

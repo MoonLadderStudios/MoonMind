@@ -3829,6 +3829,145 @@ class MoonMindRunWorkflow:
             or "fresh_branch_from_source"
         )
 
+    def _checkpoint_branch_turn_sequence_refs(
+        self,
+        payload: Mapping[str, Any],
+        *keys: str,
+    ) -> list[str]:
+        for key in keys:
+            raw = payload.get(key)
+            if raw is None:
+                continue
+            if not isinstance(raw, Sequence) or isinstance(
+                raw,
+                (str, bytes, bytearray),
+            ):
+                raise ValueError(f"checkpoint branch turn {key} must be a string array")
+            return [str(item).strip() for item in raw if str(item).strip()]
+        return []
+
+    def _omnigent_branch_turn_idempotency_key(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        branch_turn_id: str,
+    ) -> str:
+        return f"{workflow_id}:{branch_id}:{branch_turn_id}:omnigent"
+
+    def _apply_omnigent_checkpoint_branch_turn_request(
+        self,
+        *,
+        parameters: dict[str, Any],
+        workspace_spec: Mapping[str, Any] | None,
+        workflow_id: str,
+        branch_turn_payload: Mapping[str, Any],
+        branch_id: str | None,
+        branch_turn_id: str | None,
+        instruction_ref: str | None,
+        source_checkpoint: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], Mapping[str, Any] | None, str]:
+        """Normalize Omnigent v1 checkpoint branch turns into fresh sessions."""
+
+        if not branch_id or not branch_turn_id:
+            raise ValueError(
+                "Omnigent checkpoint branch turns require branchId and branchTurnId"
+            )
+        checkpoint_ref = str(source_checkpoint.get("checkpointRef") or "").strip()
+        if not checkpoint_ref:
+            raise ValueError(
+                "Omnigent checkpoint branch turns require checkpoint evidence"
+            )
+        if not instruction_ref:
+            raise ValueError(
+                "Omnigent checkpoint branch turns require an instructionRef artifact"
+            )
+
+        normalized = dict(parameters)
+        omnigent_payload = dict(normalized.get("omnigent") or {})
+        prompt_payload = dict(omnigent_payload.get("prompt") or {})
+        prompt_payload.pop("text", None)
+        prompt_payload["instructionRef"] = instruction_ref
+        omnigent_payload["prompt"] = prompt_payload
+
+        branch_idempotency_key = self._omnigent_branch_turn_idempotency_key(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+        )
+        session_payload = dict(omnigent_payload.get("session") or {})
+        session_payload.setdefault("hostType", "managed")
+        labels = dict(session_payload.get("labels") or {})
+        labels.update(
+            {
+                "moonmind.branch_id": branch_id,
+                "moonmind.branch_turn_id": branch_turn_id,
+            }
+        )
+        session_payload["labels"] = labels
+        omnigent_payload["session"] = session_payload
+
+        capture_payload = dict(omnigent_payload.get("capture") or {})
+        capture_payload.setdefault("branchTurnEvidence", True)
+        omnigent_payload["capture"] = capture_payload
+        normalized["omnigent"] = omnigent_payload
+
+        metadata_payload = (
+            dict(normalized.get("metadata") or {})
+            if isinstance(normalized.get("metadata"), Mapping)
+            else {}
+        )
+        moonmind_payload = (
+            dict(metadata_payload.get("moonmind") or {})
+            if isinstance(metadata_payload.get("moonmind"), Mapping)
+            else {}
+        )
+        checkpoint_turn = dict(moonmind_payload.get("checkpointBranchTurn") or {})
+        checkpoint_turn.update(
+            {
+                "branchId": branch_id,
+                "branchTurnId": branch_turn_id,
+                "sourceCheckpointRef": checkpoint_ref,
+                "runtimeContextPolicy": "fresh_agent_run",
+                "omnigentIdempotencyKey": branch_idempotency_key,
+                "providerIdsAreDiagnosticsOnly": True,
+            }
+        )
+        prior_capture_refs = self._checkpoint_branch_turn_sequence_refs(
+            branch_turn_payload,
+            "priorOmnigentCaptureRefs",
+            "prior_omnigent_capture_refs",
+            "priorCaptureRefs",
+            "prior_capture_refs",
+        )
+        if prior_capture_refs:
+            checkpoint_turn["priorCaptureEvidenceRefs"] = prior_capture_refs
+        moonmind_payload["checkpointBranchTurn"] = checkpoint_turn
+        provider_diagnostics = dict(
+            moonmind_payload.get("providerDiagnostics") or {}
+        )
+        provider_diagnostics["omnigent"] = {
+            "providerIdsAreDiagnosticsOnly": True,
+            "priorCaptureEvidenceRefs": prior_capture_refs,
+        }
+        moonmind_payload["providerDiagnostics"] = provider_diagnostics
+        metadata_payload["moonmind"] = moonmind_payload
+        normalized["metadata"] = metadata_payload
+
+        next_workspace_spec = workspace_spec
+        git_work_branch = self._checkpoint_branch_turn_text(
+            branch_turn_payload,
+            "gitWorkBranch",
+            "git_work_branch",
+        )
+        if git_work_branch and isinstance(workspace_spec, Mapping):
+            next_workspace_spec = dict(workspace_spec)
+            if next_workspace_spec.get("repository"):
+                next_workspace_spec["branch"] = git_work_branch
+                next_workspace_spec["startingBranch"] = git_work_branch
+
+        return normalized, next_workspace_spec, branch_idempotency_key
+
     def _step_execution_branch_metadata(
         self,
         logical_step_id: str,
@@ -13051,6 +13190,9 @@ class MoonMindRunWorkflow:
         branch_projection = None
         branch_artifact_manifest = None
         branch_instruction_ref = None
+        branch_id = None
+        branch_turn_id = None
+        branch_source_checkpoint: dict[str, Any] | None = None
         metadata_payload_for_branch = (
             parameters.get("metadata")
             if isinstance(parameters.get("metadata"), dict)
@@ -13072,6 +13214,7 @@ class MoonMindRunWorkflow:
                 wf_info=wf_info,
                 context_workspace=context_workspace,
             )
+            branch_source_checkpoint = dict(source_checkpoint)
             branch_id = self._checkpoint_branch_turn_text(
                 branch_turn_payload,
                 "branchId",
@@ -13345,6 +13488,22 @@ class MoonMindRunWorkflow:
             or node_inputs.get("instructions")
             or node_inputs.get("instructionRef")
         )
+        if (
+            branch_turn_payload is not None
+            and str(agent_id or "").strip().lower() == "omnigent"
+        ):
+            parameters, workspace_spec, idempotency_key = (
+                self._apply_omnigent_checkpoint_branch_turn_request(
+                    parameters=parameters,
+                    workspace_spec=workspace_spec,
+                    workflow_id=wf_info.workflow_id,
+                    branch_turn_payload=branch_turn_payload,
+                    branch_id=branch_id,
+                    branch_turn_id=branch_turn_id,
+                    instruction_ref=branch_instruction_ref,
+                    source_checkpoint=branch_source_checkpoint or {},
+                )
+            )
 
         return AgentExecutionRequest(
             agent_kind=agent_kind,

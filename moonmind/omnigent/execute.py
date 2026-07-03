@@ -607,15 +607,28 @@ def build_omnigent_result(
             else "Omnigent session failed"
         )
 
+    branch_turn_evidence = _checkpoint_branch_turn_evidence(request)
     metadata = {
         "providerName": "omnigent",
         "normalizedStatus": terminal_status,
-        "omnigentSessionId": session_id,
         "idempotencyKey": request.idempotency_key,
         "sseEventsCaptured": event_count,
         "correlationId": request.correlation_id,
     }
-    if agent_id:
+    if branch_turn_evidence:
+        metadata["checkpointBranchTurn"] = branch_turn_evidence
+        provider_diagnostics: dict[str, Any] = {
+            "omnigent": {
+                "sessionId": session_id,
+                "providerIdsAreDiagnosticsOnly": True,
+            }
+        }
+        if agent_id:
+            provider_diagnostics["omnigent"]["agentId"] = agent_id
+        metadata["providerDiagnostics"] = provider_diagnostics
+    else:
+        metadata["omnigentSessionId"] = session_id
+    if agent_id and not branch_turn_evidence:
         metadata["omnigentAgentId"] = agent_id
     if capture_bundle.capture_manifest_ref:
         metadata["captureManifestRef"] = capture_bundle.capture_manifest_ref
@@ -646,6 +659,40 @@ def build_omnigent_result(
         providerErrorCode=provider_error_code,
         metadata=metadata,
     )
+
+
+def _checkpoint_branch_turn_evidence(
+    request: AgentExecutionRequest,
+) -> dict[str, Any]:
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    metadata = parameters.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    moonmind = metadata.get("moonmind")
+    if not isinstance(moonmind, dict):
+        return {}
+    branch_turn = moonmind.get("checkpointBranchTurn")
+    if not isinstance(branch_turn, dict):
+        return {}
+    allowed_keys = {
+        "branchId",
+        "branchTurnId",
+        "sourceCheckpointRef",
+        "sourceCheckpointDigest",
+        "rootCheckpointRef",
+        "contextBundleRef",
+        "contextBundleDigest",
+        "artifactManifestRef",
+        "artifactManifestDigest",
+        "priorCaptureEvidenceRefs",
+        "omnigentIdempotencyKey",
+        "providerIdsAreDiagnosticsOnly",
+    }
+    return {
+        key: value
+        for key, value in branch_turn.items()
+        if key in allowed_keys and value is not None
+    }
 
 
 def _assert_no_provider_native_refs(refs: list[str]) -> None:

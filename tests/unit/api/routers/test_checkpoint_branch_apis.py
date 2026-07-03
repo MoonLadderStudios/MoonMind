@@ -512,6 +512,32 @@ async def test_checkpoint_branch_api_fails_closed_for_invalid_source_provider_bu
         == "provider_continuation_unsupported"
     )
 
+    gated_omnigent_response = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json={
+            **_create_payload("mm-1092:gated-omnigent-provider"),
+            "runtimeContextPolicy": "external_provider_continuation",
+            "omnigentContinuation": {
+                "sourceSessionId": "omnigent-session-source",
+                "continuationMode": "send_message",
+                "instructionRef": "artifact://instructions/omnigent-turn",
+                "harvestAfterTurn": True,
+                "lifecycleActivitiesEnabled": True,
+                "capabilityGate": {
+                    "enabled": True,
+                    "activities": [
+                        "integration.omnigent.send_message",
+                        "integration.omnigent.harvest_session",
+                    ],
+                },
+            },
+        },
+    )
+    assert gated_omnigent_response.status_code == 409
+    assert gated_omnigent_response.json()["detail"]["code"] == (
+        "provider_continuation_unsupported"
+    )
+
     budget_response = await checkpoint_branch_client.post(
         "/api/executions/mm:wf-branch/checkpoint-branches",
         json={**_create_payload("mm-1091:budget"), "maxBudgetUsd": 0},

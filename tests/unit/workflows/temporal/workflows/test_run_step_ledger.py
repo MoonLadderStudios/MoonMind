@@ -20,6 +20,87 @@ from moonmind.workflows.executions.prepared_context import (
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
+
+def test_omnigent_branch_turn_uses_instruction_ref_and_branch_idempotency() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    parameters, workspace_spec, idempotency_key = (
+        workflow._apply_omnigent_checkpoint_branch_turn_request(
+            parameters={
+                "omnigent": {
+                    "prompt": {
+                        "text": "inline text must not be sent for branch turns"
+                    },
+                    "session": {"labels": {"existing": "label"}},
+                },
+                "metadata": {"moonmind": {}},
+            },
+            workspace_spec={
+                "repository": "https://github.com/org/repo.git",
+                "branch": "main",
+            },
+            workflow_id="wf-run-1",
+            branch_turn_payload={
+                "branchId": "cbr-1",
+                "branchTurnId": "cbt-1",
+                "gitWorkBranch": "mm/wf-run-1/cbr-1",
+                "priorCaptureRefs": ["artifact://omnigent/source-capture"],
+            },
+            branch_id="cbr-1",
+            branch_turn_id="cbt-1",
+            instruction_ref="artifact://instructions/branch-turn",
+            source_checkpoint={"checkpointRef": "artifact://checkpoint/after"},
+        )
+    )
+
+    assert idempotency_key == "wf-run-1:cbr-1:cbt-1:omnigent"
+    assert parameters["omnigent"]["prompt"] == {
+        "instructionRef": "artifact://instructions/branch-turn"
+    }
+    assert parameters["omnigent"]["session"]["labels"] == {
+        "existing": "label",
+        "moonmind.branch_id": "cbr-1",
+        "moonmind.branch_turn_id": "cbt-1",
+    }
+    assert workspace_spec["branch"] == "mm/wf-run-1/cbr-1"
+    assert workspace_spec["startingBranch"] == "mm/wf-run-1/cbr-1"
+    branch_turn = parameters["metadata"]["moonmind"]["checkpointBranchTurn"]
+    assert branch_turn["sourceCheckpointRef"] == "artifact://checkpoint/after"
+    assert branch_turn["priorCaptureEvidenceRefs"] == [
+        "artifact://omnigent/source-capture"
+    ]
+    assert branch_turn["providerIdsAreDiagnosticsOnly"] is True
+    provider_diagnostics = parameters["metadata"]["moonmind"]["providerDiagnostics"]
+    assert provider_diagnostics["omnigent"]["providerIdsAreDiagnosticsOnly"] is True
+
+
+def test_omnigent_checkpoint_branch_turn_requires_checkpoint_and_instruction_refs() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    with pytest.raises(ValueError, match="checkpoint evidence"):
+        workflow._apply_omnigent_checkpoint_branch_turn_request(
+            parameters={},
+            workspace_spec={},
+            workflow_id="wf-run-1",
+            branch_turn_payload={},
+            branch_id="cbr-1",
+            branch_turn_id="cbt-1",
+            instruction_ref="artifact://instructions/branch-turn",
+            source_checkpoint={},
+        )
+
+    with pytest.raises(ValueError, match="instructionRef artifact"):
+        workflow._apply_omnigent_checkpoint_branch_turn_request(
+            parameters={},
+            workspace_spec={},
+            workflow_id="wf-run-1",
+            branch_turn_payload={},
+            branch_id="cbr-1",
+            branch_turn_id="cbt-1",
+            instruction_ref=None,
+            source_checkpoint={"checkpointRef": "artifact://checkpoint/after"},
+        )
+
 def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     workflow_info = SimpleNamespace(
         namespace="default",
