@@ -1601,8 +1601,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read Checkpoint Branch */
-        get: operations["read_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__get"];
+        /** Describe Checkpoint Branch */
+        get: operations["describe_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1934,23 +1934,6 @@ export interface paths {
         put?: never;
         /** Recover Execution From Selected Step */
         post: operations["recover_execution_from_selected_step_api_executions__workflow_id__recover_from_selected_step_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/publish-ready": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Mark Checkpoint Branch Publish Ready */
-        post: operations["mark_checkpoint_branch_publish_ready_api_executions__workflow_id__checkpoint_branches__branch_id__publish_ready_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3995,44 +3978,12 @@ export interface components {
             /** Checkpointdigest */
             checkpointDigest?: string | null;
         };
-        /**
-         * CheckpointBranchArchiveModel
-         * @description Archive a branch without deleting its evidence.
-         */
-        CheckpointBranchArchiveModel: {
-            /** Idempotencykey */
-            idempotencyKey: string;
-        };
         /** CheckpointBranchArchiveRequest */
         CheckpointBranchArchiveRequest: {
             /** Reason */
             reason?: string | null;
             /** Idempotencykey */
             idempotencyKey: string;
-        };
-        /**
-         * CheckpointBranchArtifactRecordModel
-         * @description Read model for branch evidence artifacts.
-         */
-        CheckpointBranchArtifactRecordModel: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Branchid */
-            branchId: string;
-            /** Branchturnid */
-            branchTurnId?: string | null;
-            /** Artifactref */
-            artifactRef: string;
-            /** Artifactkind */
-            artifactKind: string;
-            /**
-             * Createdat
-             * Format: date-time
-             */
-            createdAt: string;
         };
         /** CheckpointBranchCompareResponse */
         CheckpointBranchCompareResponse: {
@@ -4058,28 +4009,6 @@ export interface components {
             comparisonRecord?: {
                 [key: string]: unknown;
             };
-        };
-        /**
-         * CheckpointBranchContinueModel
-         * @description Product-level continue request for appending one branch turn.
-         */
-        CheckpointBranchContinueModel: {
-            /** Branchturnid */
-            branchTurnId?: string | null;
-            /** Instructionref */
-            instructionRef: string;
-            /** Instructiondigest */
-            instructionDigest: string;
-            /** Contextbundleref */
-            contextBundleRef?: string | null;
-            /** Createdstepexecutionid */
-            createdStepExecutionId?: string | null;
-            /** Runtimeagentrunid */
-            runtimeAgentRunId?: string | null;
-            /** Providersessionid */
-            providerSessionId?: string | null;
-            /** Idempotencykey */
-            idempotencyKey: string;
         };
         /** CheckpointBranchContinueRequest */
         CheckpointBranchContinueRequest: {
@@ -4133,40 +4062,6 @@ export interface components {
             /** Maxbudgetusd */
             maxBudgetUsd?: number | null;
         };
-        /**
-         * CheckpointBranchForkModel
-         * @description Product-level child fork request.
-         */
-        CheckpointBranchForkModel: {
-            /** Branchid */
-            branchId: string;
-            /** Label */
-            label: string;
-            /** Parentturnid */
-            parentTurnId: string;
-            /**
-             * Workspacepolicy
-             * @enum {string}
-             */
-            workspacePolicy: "continue_from_previous_execution" | "restore_pre_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source";
-            /**
-             * Runtimecontextpolicy
-             * @enum {string}
-             */
-            runtimeContextPolicy: "fresh_agent_run" | "reuse_session_new_epoch" | "reuse_session_same_epoch" | "external_provider_continuation";
-            /** Branchturnid */
-            branchTurnId?: string | null;
-            /** Instructionref */
-            instructionRef: string;
-            /** Instructiondigest */
-            instructionDigest: string;
-            /** Contextbundleref */
-            contextBundleRef?: string | null;
-            /** Createdstepexecutionid */
-            createdStepExecutionId?: string | null;
-            /** Idempotencykey */
-            idempotencyKey: string;
-        };
         /** CheckpointBranchForkRequest */
         CheckpointBranchForkRequest: {
             /** Label */
@@ -4190,88 +4085,6 @@ export interface components {
             maxBudgetUsd?: number | null;
             /** Parentturnid */
             parentTurnId?: string | null;
-        };
-        /**
-         * CheckpointBranchGraphCreateModel
-         * @description Product-level branch create request including the first branch turn.
-         */
-        CheckpointBranchGraphCreateModel: {
-            /** Branchid */
-            branchId: string;
-            source: components["schemas"]["CheckpointBranchSourceModel"];
-            /** Label */
-            label: string;
-            /**
-             * State
-             * @default created
-             * @enum {string}
-             */
-            state: "created" | "preparing" | "active" | "blocked" | "failed" | "succeeded" | "promotable" | "promoted" | "archived" | "superseded";
-            /**
-             * Branchkind
-             * @default root
-             * @enum {string}
-             */
-            branchKind: "root" | "child_fork";
-            /**
-             * Workspacepolicy
-             * @enum {string}
-             */
-            workspacePolicy: "continue_from_previous_execution" | "restore_pre_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source";
-            /**
-             * Runtimecontextpolicy
-             * @enum {string}
-             */
-            runtimeContextPolicy: "fresh_agent_run" | "reuse_session_new_epoch" | "reuse_session_same_epoch" | "external_provider_continuation";
-            /** Parentbranchid */
-            parentBranchId?: string | null;
-            /** Parentturnid */
-            parentTurnId?: string | null;
-            /** Gitrepository */
-            gitRepository?: string | null;
-            /** Gitbasebranch */
-            gitBaseBranch?: string | null;
-            /** Gitbasecommit */
-            gitBaseCommit?: string | null;
-            /** Gitworkbranch */
-            gitWorkBranch?: string | null;
-            /** Createdby */
-            createdBy?: string | null;
-            /** Branchturnid */
-            branchTurnId?: string | null;
-            /** Instructionref */
-            instructionRef: string;
-            /** Instructiondigest */
-            instructionDigest: string;
-            /** Contextbundleref */
-            contextBundleRef?: string | null;
-            /** Createdstepexecutionid */
-            createdStepExecutionId?: string | null;
-            /** Runtimeagentrunid */
-            runtimeAgentRunId?: string | null;
-            /** Providersessionid */
-            providerSessionId?: string | null;
-            /** Idempotencykey */
-            idempotencyKey: string;
-        };
-        /**
-         * CheckpointBranchGraphListModel
-         * @description List response for checkpoint branch graph records.
-         */
-        CheckpointBranchGraphListModel: {
-            /** Items */
-            items?: components["schemas"]["CheckpointBranchGraphModel"][];
-        };
-        /**
-         * CheckpointBranchGraphModel
-         * @description Branch graph read model with append-only evidence.
-         */
-        CheckpointBranchGraphModel: {
-            branch: components["schemas"]["CheckpointBranchRecordModel"];
-            /** Turns */
-            turns?: components["schemas"]["CheckpointBranchTurnRecordModel"][];
-            /** Artifacts */
-            artifacts?: components["schemas"]["CheckpointBranchArtifactRecordModel"][];
         };
         /** CheckpointBranchInstructionsModel */
         CheckpointBranchInstructionsModel: {
@@ -4383,16 +4196,6 @@ export interface components {
             /** Idempotencykey */
             idempotencyKey: string;
         };
-        /**
-         * CheckpointBranchPublishReadyModel
-         * @description Mark a branch candidate ready for publication without promotion.
-         */
-        CheckpointBranchPublishReadyModel: {
-            /** Artifactref */
-            artifactRef?: string | null;
-            /** Idempotencykey */
-            idempotencyKey: string;
-        };
         /** CheckpointBranchPublishRequest */
         CheckpointBranchPublishRequest: {
             /**
@@ -4414,129 +4217,6 @@ export interface components {
             provider: string;
             /** Idempotencykey */
             idempotencyKey: string;
-        };
-        /**
-         * CheckpointBranchRecordModel
-         * @description Read model for a persisted checkpoint branch.
-         */
-        CheckpointBranchRecordModel: {
-            /** Branchid */
-            branchId: string;
-            /** Workflowid */
-            workflowId: string;
-            /** Rootworkflowid */
-            rootWorkflowId: string;
-            /** Sourcerunid */
-            sourceRunId: string;
-            /** Logicalstepid */
-            logicalStepId?: string | null;
-            /** Sourceexecutionordinal */
-            sourceExecutionOrdinal?: number | null;
-            /** Sourcecheckpointboundary */
-            sourceCheckpointBoundary?: string | null;
-            /** Sourcecheckpointref */
-            sourceCheckpointRef?: string | null;
-            /** Sourcecheckpointdigest */
-            sourceCheckpointDigest?: string | null;
-            /** Sourcestatekind */
-            sourceStateKind?: string | null;
-            /** Sourcestateref */
-            sourceStateRef?: string | null;
-            /** Sourcestatedigest */
-            sourceStateDigest?: string | null;
-            /** Parentbranchid */
-            parentBranchId?: string | null;
-            /** Parentturnid */
-            parentTurnId?: string | null;
-            /** Label */
-            label: string;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "created" | "preparing" | "active" | "blocked" | "failed" | "succeeded" | "promotable" | "promoted" | "archived" | "superseded";
-            /**
-             * Branchkind
-             * @enum {string}
-             */
-            branchKind: "root" | "child_fork";
-            /**
-             * Workspacepolicy
-             * @enum {string}
-             */
-            workspacePolicy: "continue_from_previous_execution" | "restore_pre_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source";
-            /**
-             * Runtimecontextpolicy
-             * @enum {string}
-             */
-            runtimeContextPolicy: "fresh_agent_run" | "reuse_session_new_epoch" | "reuse_session_same_epoch" | "external_provider_continuation";
-            /** Currentheadstepexecutionid */
-            currentHeadStepExecutionId?: string | null;
-            /** Currentheadcheckpointref */
-            currentHeadCheckpointRef?: string | null;
-            /** Currentheadcommit */
-            currentHeadCommit?: string | null;
-            /** Pullrequesturl */
-            pullRequestUrl?: string | null;
-            /** Promotedat */
-            promotedAt?: string | null;
-            /** Archivedat */
-            archivedAt?: string | null;
-            /**
-             * Createdat
-             * Format: date-time
-             */
-            createdAt: string;
-            /**
-             * Updatedat
-             * Format: date-time
-             */
-            updatedAt: string;
-        };
-        /**
-         * CheckpointBranchSourceModel
-         * @description Pinned source evidence for a checkpoint branch root or fork.
-         */
-        CheckpointBranchSourceModel: {
-            /** Workflowid */
-            workflowId: string;
-            /** Rootworkflowid */
-            rootWorkflowId?: string | null;
-            /** Runid */
-            runId: string;
-            /** Logicalstepid */
-            logicalStepId?: string | null;
-            /** Sourceexecutionordinal */
-            sourceExecutionOrdinal?: number | null;
-            /** Checkpointboundary */
-            checkpointBoundary?: string | null;
-            /** Checkpointref */
-            checkpointRef?: string | null;
-            /** Checkpointdigest */
-            checkpointDigest?: string | null;
-            /** Sourcestatekind */
-            sourceStateKind?: string | null;
-            /** Sourcestateref */
-            sourceStateRef?: string | null;
-            /** Sourcestatedigest */
-            sourceStateDigest?: string | null;
-        };
-        /**
-         * CheckpointBranchStateUpdateModel
-         * @description Small response for branch lifecycle transition operations.
-         */
-        CheckpointBranchStateUpdateModel: {
-            /** Branchid */
-            branchId: string;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "created" | "preparing" | "active" | "blocked" | "failed" | "succeeded" | "promotable" | "promoted" | "archived" | "superseded";
-            /** Promotedat */
-            promotedAt?: string | null;
-            /** Archivedat */
-            archivedAt?: string | null;
         };
         /** CheckpointBranchTurnListResponse */
         CheckpointBranchTurnListResponse: {
@@ -4565,71 +4245,6 @@ export interface components {
             idempotencyKey: string;
             /** Status */
             status: string;
-            /**
-             * Createdat
-             * Format: date-time
-             */
-            createdAt: string;
-            /**
-             * Updatedat
-             * Format: date-time
-             */
-            updatedAt: string;
-        };
-        /**
-         * CheckpointBranchTurnRecordModel
-         * @description Read model for one persisted checkpoint branch turn.
-         */
-        CheckpointBranchTurnRecordModel: {
-            /** Branchturnid */
-            branchTurnId: string;
-            /** Branchid */
-            branchId: string;
-            /** Parentturnid */
-            parentTurnId?: string | null;
-            /** Sourcecheckpointref */
-            sourceCheckpointRef?: string | null;
-            /** Sourcecheckpointdigest */
-            sourceCheckpointDigest?: string | null;
-            /** Sourcestatekind */
-            sourceStateKind?: string | null;
-            /** Sourcestateref */
-            sourceStateRef?: string | null;
-            /** Sourcestatedigest */
-            sourceStateDigest?: string | null;
-            /**
-             * Workspacepolicy
-             * @enum {string}
-             */
-            workspacePolicy: "continue_from_previous_execution" | "restore_pre_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source";
-            /**
-             * Runtimecontextpolicy
-             * @enum {string}
-             */
-            runtimeContextPolicy: "fresh_agent_run" | "reuse_session_new_epoch" | "reuse_session_same_epoch" | "external_provider_continuation";
-            /** Instructionref */
-            instructionRef: string;
-            /** Instructiondigest */
-            instructionDigest: string;
-            /** Contextbundleref */
-            contextBundleRef?: string | null;
-            /** Createdstepexecutionid */
-            createdStepExecutionId?: string | null;
-            /** Runtimeagentrunid */
-            runtimeAgentRunId?: string | null;
-            /** Providersessionid */
-            providerSessionId?: string | null;
-            /** Idempotencykey */
-            idempotencyKey: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "created" | "preparing" | "running" | "checking" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded";
-            /** Startedat */
-            startedAt?: string | null;
-            /** Completedat */
-            completedAt?: string | null;
             /**
              * Createdat
              * Format: date-time
@@ -13773,7 +13388,7 @@ export interface operations {
     list_checkpoint_branches_api_executions__workflow_id__checkpoint_branches_get: {
         parameters: {
             query?: {
-                activeOnly?: boolean;
+                active?: boolean;
             };
             header?: never;
             path: {
@@ -13789,7 +13404,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CheckpointBranchGraphListModel"];
+                    "application/json": components["schemas"]["CheckpointBranchListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -13814,7 +13429,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CheckpointBranchGraphCreateModel"];
+                "application/json": components["schemas"]["CheckpointBranchCreateRequest"];
             };
         };
         responses: {
@@ -13824,7 +13439,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CheckpointBranchGraphModel"];
+                    "application/json": components["schemas"]["CheckpointBranchModel"];
                 };
             };
             /** @description Validation Error */
@@ -13838,7 +13453,7 @@ export interface operations {
             };
         };
     };
-    read_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__get: {
+    describe_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13856,7 +13471,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CheckpointBranchGraphModel"];
+                    "application/json": components["schemas"]["CheckpointBranchModel"];
                 };
             };
             /** @description Validation Error */
@@ -13914,7 +13529,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CheckpointBranchContinueModel"];
+                "application/json": components["schemas"]["CheckpointBranchContinueRequest"];
             };
         };
         responses: {
@@ -13924,7 +13539,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CheckpointBranchTurnRecordModel"];
+                    "application/json": components["schemas"]["CheckpointBranchTurnModel"];
                 };
             };
             /** @description Validation Error */
@@ -13950,7 +13565,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CheckpointBranchForkModel"];
+                "application/json": components["schemas"]["CheckpointBranchForkRequest"];
             };
         };
         responses: {
@@ -13960,7 +13575,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CheckpointBranchGraphModel"];
+                    "application/json": components["schemas"]["CheckpointBranchModel"];
                 };
             };
             /** @description Validation Error */
@@ -14056,7 +13671,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CheckpointBranchArchiveModel"];
+                "application/json": components["schemas"]["CheckpointBranchArchiveRequest"];
             };
         };
         responses: {
@@ -14066,7 +13681,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CheckpointBranchStateUpdateModel"];
+                    "application/json": components["schemas"]["CheckpointBranchModel"];
                 };
             };
             /** @description Validation Error */
@@ -14513,42 +14128,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecoverFromFailedStepResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    mark_checkpoint_branch_publish_ready_api_executions__workflow_id__checkpoint_branches__branch_id__publish_ready_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workflow_id: string;
-                branch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CheckpointBranchPublishReadyModel"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CheckpointBranchStateUpdateModel"];
                 };
             };
             /** @description Validation Error */

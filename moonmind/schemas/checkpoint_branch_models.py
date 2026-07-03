@@ -605,12 +605,6 @@ class CheckpointBranchGraphModel(BaseModel):
     artifacts: list[CheckpointBranchArtifactRecordModel] = Field(default_factory=list)
 
 
-class CheckpointBranchGraphListModel(BaseModel):
-    """List response for checkpoint branch graph records."""
-
-    items: list[CheckpointBranchGraphModel] = Field(default_factory=list)
-
-
 class CheckpointBranchGraphCreateModel(CheckpointBranchCreateModel):
     """Product-level branch create request including the first branch turn."""
 
@@ -693,35 +687,6 @@ class CheckpointBranchForkModel(BaseModel):
         if isinstance(value, str) or value is None:
             return _optional_text(value)
         return value
-
-
-class CheckpointBranchPublishReadyModel(BaseModel):
-    """Mark a branch candidate ready for publication without promotion."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    artifact_ref: str | None = Field(None, alias="artifactRef", min_length=1)
-    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
-
-    @field_validator("*", mode="before")
-    @classmethod
-    def _strip_strings(cls, value: Any) -> Any:
-        if isinstance(value, str) or value is None:
-            return _optional_text(value)
-        return value
-
-
-class CheckpointBranchArchiveModel(BaseModel):
-    """Archive a branch without deleting its evidence."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
-
-    @field_validator("idempotency_key", mode="before")
-    @classmethod
-    def _strip_idempotency_key(cls, value: Any) -> str | None:
-        return _optional_text(value)
 
 
 class CheckpointBranchStateUpdateModel(BaseModel):

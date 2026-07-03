@@ -18,9 +18,7 @@ from api_service.db.models import (
 )
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
-    CHECKPOINT_BRANCH_CONTROL_OPERATIONS,
     CHECKPOINT_BRANCH_GRAPH_TRACEABILITY_ISSUES,
-    NON_BRANCH_CONTROL_OPERATIONS,
     SOURCE_TRACEABILITY_ISSUES,
 )
 from moonmind.schemas.checkpoint_branch_models import (
@@ -424,13 +422,11 @@ async def test_checkpoint_branch_graph_operations_and_queries(
         },
     )
     await service.archive_branch(workflow_id="wf-1", branch_id=child.branch.branch_id)
-    await service.mark_publish_ready(
+    await service.mark_promotable(
         workflow_id="wf-1",
         branch_id="cbr-graph",
-        payload={
-            "artifactRef": "artifact://publish/candidate",
-            "idempotencyKey": "MM-1099:cbr-graph:publish-ready",
-        },
+        idempotency_key="MM-1099:cbr-graph:promotable",
+        candidate_artifact_ref="artifact://publish/candidate",
     )
     await checkpoint_branch_session.commit()
 
@@ -447,7 +443,7 @@ async def test_checkpoint_branch_graph_operations_and_queries(
     assert branch_by_id["cbr-child"].branch.parent_branch_id == "cbr-graph"
     assert branch_by_id["cbr-child"].branch.parent_turn_id == continued.branch_turn_id
     assert any(
-        artifact.artifact_kind == "publish_ready"
+        artifact.artifact_kind == "candidate_result"
         for artifact in branch_by_id["cbr-graph"].artifacts
     )
     assert all(
@@ -521,21 +517,17 @@ async def test_checkpoint_branch_graph_operations_are_idempotent_by_operation_id
         branch_id="cbr-idempotent-child",
         idempotency_key="MM-1099:cbr-idempotent-child:archive",
     )
-    first_publish_ready = await service.mark_publish_ready(
+    first_promotable = await service.mark_promotable(
         workflow_id="wf-1",
         branch_id="cbr-idempotent",
-        payload={
-            "artifactRef": "artifact://publish/candidate",
-            "idempotencyKey": "MM-1099:cbr-idempotent:publish-ready",
-        },
+        idempotency_key="MM-1099:cbr-idempotent:promotable",
+        candidate_artifact_ref="artifact://publish/candidate",
     )
-    duplicate_publish_ready = await service.mark_publish_ready(
+    duplicate_promotable = await service.mark_promotable(
         workflow_id="wf-1",
         branch_id="cbr-idempotent",
-        payload={
-            "artifactRef": "artifact://publish/candidate",
-            "idempotencyKey": "MM-1099:cbr-idempotent:publish-ready",
-        },
+        idempotency_key="MM-1099:cbr-idempotent:promotable",
+        candidate_artifact_ref="artifact://publish/candidate",
     )
     await checkpoint_branch_session.commit()
 
@@ -551,7 +543,7 @@ async def test_checkpoint_branch_graph_operations_are_idempotent_by_operation_id
         == first_child.turns[0].branch_turn_id
     )
     assert duplicate_archive.archived_at == first_archive.archived_at
-    assert duplicate_publish_ready.state == first_publish_ready.state == "promotable"
+    assert duplicate_promotable.state == first_promotable.state == "promotable"
 
     branches = (
         await checkpoint_branch_session.execute(select(WorkflowCheckpointBranch))
@@ -579,12 +571,12 @@ async def test_checkpoint_branch_graph_operations_are_idempotent_by_operation_id
     assert sorted(
         (artifact.artifact_kind, artifact.artifact_ref) for artifact in artifacts
     ) == [
+        ("candidate_result", "artifact://publish/candidate"),
         ("operation_archive", "idempotency://MM-1099:cbr-idempotent-child:archive"),
         (
-            "operation_publish_ready",
-            "idempotency://MM-1099:cbr-idempotent:publish-ready",
+            "operation_promotable",
+            "idempotency://MM-1099:cbr-idempotent:promotable",
         ),
-        ("publish_ready", "artifact://publish/candidate"),
     ]
 
 
@@ -640,37 +632,16 @@ async def test_checkpoint_branch_graph_inactive_evidence_remains_queryable(
         await service.read_branch_graph(workflow_id="wf-1", branch_id="cbr-failed")
     ).branch.state == "failed"
 
+    # Failed branches remain active work: they allow follow-up turns. Only
+    # archive and supersession hide a branch from active listings.
     active_branches = await service.list_branch_graphs(
         workflow_id="wf-1",
         active_only=True,
     )
-    assert {item.branch.branch_id for item in active_branches} == {"cbr-unpromoted"}
-
-
-def test_checkpoint_branch_control_operations_preserve_runtime_terminology() -> None:
-    assert CHECKPOINT_BRANCH_CONTROL_OPERATIONS == frozenset(
-        {
-            "checkpoint_branch_create",
-            "checkpoint_branch_continue",
-            "checkpoint_branch_fork",
-            "checkpoint_branch_archive",
-            "checkpoint_branch_publish_ready",
-            "checkpoint_branch_failed",
-            "checkpoint_branch_superseded",
-        }
-    )
-    assert NON_BRANCH_CONTROL_OPERATIONS == frozenset(
-        {
-            "retry",
-            "step_reexecution",
-            "recovery",
-            "promotion",
-            "publication",
-        }
-    )
-    assert CHECKPOINT_BRANCH_CONTROL_OPERATIONS.isdisjoint(
-        NON_BRANCH_CONTROL_OPERATIONS
-    )
+    assert {item.branch.branch_id for item in active_branches} == {
+        "cbr-unpromoted",
+        "cbr-failed",
+    }
 
 
 @pytest.mark.asyncio
@@ -713,6 +684,64 @@ async def test_checkpoint_branch_graph_rejects_invalid_product_operations(
                 "runtimeContextPolicy": "fresh_agent_run",
             },
         )
+
+    with pytest.raises(ValueError, match="different instructions"):
+        await service.continue_branch(
+            workflow_id="wf-1",
+            branch_id=branch.branch.branch_id,
+            payload={
+                "instructionRef": "artifact://instructions/other",
+                "instructionDigest": "sha256:other",
+                "idempotencyKey": "MM-1099:cbr-invalid:create",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_fork_sources_from_parent_turn_checkpoint(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-fork-lineage"),
+            "instructionRef": "artifact://instructions/root",
+            "instructionDigest": "sha256:root",
+            "idempotencyKey": "MM-1099:cbr-fork-lineage:create",
+        }
+    )
+    root_turn = graph.turns[0]
+
+    branch = (
+        await checkpoint_branch_session.execute(
+            select(WorkflowCheckpointBranch).where(
+                WorkflowCheckpointBranch.branch_id == "cbr-fork-lineage"
+            )
+        )
+    ).scalar_one()
+    branch.current_head_checkpoint_ref = "artifact://checkpoint/advanced-head"
+    await checkpoint_branch_session.flush()
+
+    child = await service.fork_branch(
+        workflow_id="wf-1",
+        branch_id="cbr-fork-lineage",
+        payload={
+            "branchId": "cbr-fork-lineage-child",
+            "label": "Fork from before the bad turn",
+            "parentTurnId": root_turn.branch_turn_id,
+            "instructionRef": "artifact://instructions/child",
+            "instructionDigest": "sha256:child",
+            "idempotencyKey": "MM-1099:cbr-fork-lineage-child:create",
+            "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
+    )
+    await checkpoint_branch_session.commit()
+
+    assert child.branch.source_checkpoint_ref == root_turn.source_checkpoint_ref
+    assert child.branch.source_checkpoint_digest == root_turn.source_checkpoint_digest
+    assert child.branch.source_checkpoint_ref != "artifact://checkpoint/advanced-head"
+    assert child.turns[0].source_checkpoint_ref == root_turn.source_checkpoint_ref
 
 
 def test_checkpoint_branch_graph_traceability_preserves_source_issue() -> None:
