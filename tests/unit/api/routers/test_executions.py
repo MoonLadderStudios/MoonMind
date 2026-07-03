@@ -6185,8 +6185,9 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     ]
     assert initial_parameters["workflow"]["title"] == "feature/resolve-pr"
     assert initial_parameters["workflow"]["git"] == {
-        "startingBranch": "feature/resolve-pr"
+        "startingBranch": "feature/resolve-pr",
     }
+    assert initial_parameters["knownRefs"] == ["feature/resolve-pr"]
 
 
 def test_create_task_shaped_execution_allows_pr_resolver_with_non_default_git_branch(
@@ -6218,8 +6219,9 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_non_default_git_br
     initial_parameters = called_kwargs["initial_parameters"]
     assert initial_parameters["workflow"]["title"] == "feature/resolve-pr"
     assert initial_parameters["workflow"]["git"] == {
-        "branch": "feature/resolve-pr"
+        "branch": "feature/resolve-pr",
     }
+    assert initial_parameters["knownRefs"] == ["feature/resolve-pr"]
 
 
 def test_create_task_shaped_execution_allows_pr_resolver_with_numeric_pr_selector(

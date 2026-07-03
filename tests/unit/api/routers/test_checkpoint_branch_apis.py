@@ -243,6 +243,26 @@ def test_checkpoint_branch_git_context_reads_workflow_shaped_payload() -> None:
     assert context["knownRefs"] == {"feature/from-workflow"}
 
 
+def test_checkpoint_branch_git_context_does_not_synthesize_known_refs() -> None:
+    record = SimpleNamespace(
+        parameters={
+            "git": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "startingBranch": "feature/from-workflow",
+                "currentRef": "feature/from-workflow",
+            }
+        },
+        memo={},
+        search_attributes={},
+    )
+
+    context = _checkpoint_branch_git_context(record)
+
+    assert context["baseBranch"] == "feature/from-workflow"
+    assert context["currentRef"] == "feature/from-workflow"
+    assert context["knownRefs"] == set()
+
+
 def _create_payload(idempotency_key: str = "mm-1091:create") -> dict[str, object]:
     return {
         "source": {
@@ -803,6 +823,23 @@ async def test_checkpoint_branch_api_fails_closed_for_invalid_source_provider_bu
         workspace_policy_response.json()["detail"]["code"]
         == "workspace_policy_incompatible"
     )
+
+    service = checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+        _get_service
+    ]()
+    record = service.describe_execution.return_value
+    original_known_refs = record.parameters["git"].get("knownRefs")
+    record.parameters["git"].pop("knownRefs", None)
+    try:
+        unknown_ref_response = await checkpoint_branch_client.post(
+            "/api/executions/mm:wf-branch/checkpoint-branches",
+            json=_create_payload("mm-1101:missing-known-refs"),
+        )
+        assert unknown_ref_response.status_code == 409
+        assert unknown_ref_response.json()["detail"]["code"] == "unknown_ref"
+    finally:
+        if original_known_refs is not None:
+            record.parameters["git"]["knownRefs"] = original_known_refs
 
     conflict_payload = _create_payload("mm-1091:idempotency-conflict")
     first_conflict = await checkpoint_branch_client.post(

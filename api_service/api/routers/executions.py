@@ -662,10 +662,6 @@ def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
         if isinstance(raw_known_refs, list | tuple | set)
         else set()
     )
-    if base_branch:
-        known_refs.add(base_branch)
-    if current_ref:
-        known_refs.add(current_ref)
     if not repository or not base_branch:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -9258,6 +9254,19 @@ async def _create_execution_from_workflow_request(
     if normalized_steps:
         normalized_task_for_planner["steps"] = normalized_steps
 
+    known_refs = {
+        str(value).strip()
+        for value in (
+            _coerce_mapping(normalized_task_for_planner.get("git")).get(
+                "startingBranch"
+            ),
+            _coerce_mapping(normalized_task_for_planner.get("git")).get("branch"),
+            normalized_task_for_planner.get("startingBranch"),
+            normalized_task_for_planner.get("branch"),
+        )
+        if str(value or "").strip()
+    }
+
     initial_parameters = {
         "requestType": request.type,
         "repository": repository,
@@ -9273,6 +9282,8 @@ async def _create_execution_from_workflow_request(
         "publishMode": publish_payload["mode"],
         "stepCount": step_count,
     }
+    if known_refs:
+        initial_parameters["knownRefs"] = sorted(known_refs)
     if story_output_payload:
         initial_parameters["storyOutput"] = dict(story_output_payload)
     if report_output_payload:
