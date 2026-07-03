@@ -2,16 +2,18 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-04-04
+Last Updated: 2026-07-02
 
 ## 1. Purpose
 
-Define the REST API surfaces used to create, monitor, and observe MoonMind Workflow runs in the Temporal-first architecture.
+Define the REST API surfaces used to create, monitor, steer, and observe MoonMind Workflow runs in the Temporal-first architecture.
 
 MoonMind now splits this responsibility across:
 
 - **`/api/executions`** for Temporal-backed execution lifecycle operations
 - **`/api/agent-runs`** for managed-run observability (logs, diagnostics, live follow)
+
+The planned `/api/executions/{workflowId}/chat-instructions` route is the target surface for chat-based workflow steering, active-Step addenda, plan-revision requests, and terminal follow-up starts once the router is implemented.
 
 The dashboard still presents these executions as **Workflows** in the product UI, but the active lifecycle API is execution-oriented.
 
@@ -31,7 +33,7 @@ Workflow runs are served by two active router families:
 | `POST` | `/api/executions` | Create/start a Temporal-backed execution |
 | `GET`  | `/api/executions` | List executions visible to the caller |
 | `GET`  | `/api/executions/{workflowId}` | Get execution detail |
-| `POST` | `/api/executions/{workflowId}/update` | Apply an in-place workflow update such as `UpdateInputs`, `SetTitle`, or `RequestRerun` (Continue-As-New on the same logical execution) |
+| `POST` | `/api/executions/{workflowId}/update` | Apply an in-place workflow update such as `UpdateInputs`, `SetTitle`, `RequestRerun`, or the compatibility form of `SubmitChatInstruction` |
 | `POST` | `/api/executions/{workflowId}/signal` | Send an asynchronous workflow signal such as pause, resume, or approve |
 | `POST` | `/api/executions/{workflowId}/cancel` | Cancel or terminate an execution |
 
@@ -99,6 +101,15 @@ The default `recover-from-failed-step` route preserves the original task input a
 
 Recovery routes do not accept edited task instructions, attachments, runtime/model settings, dependency changes, or publish changes. Operators must use edit/rerun flows for those behaviors.
 
+## 4.2 Chat Instruction Behavior
+
+Chat instructions are not recovery and are not ordinary projection-side edits. The planned chat instruction route stores the chat text as an artifact, then either:
+
+- sends a typed `SubmitChatInstruction` Update to a running `MoonMind.UserWorkflow`, or
+- creates a linked `chat_followup` execution when the source execution is terminal and policy permits follow-up creation.
+
+Running-workflow decisions are returned as `ChatInstructionDecision` values such as `attached_to_active_step`, `queued_for_safe_point`, `plan_revision_requested`, `future_steps_superseded`, or a typed rejection. Terminal source executions remain immutable; `created_followup_execution` belongs only to the terminal API follow-up path.
+
 ## 5. Request Model Posture
 
 `POST /api/executions` is the active create surface. It accepts the execution-oriented request model and, during migration, may also normalize legacy `task`-typed payloads into the same Temporal-backed execution contract.
@@ -122,6 +133,7 @@ The legacy `/api/queue/jobs` lifecycle routes and `/api/queue` worker callback r
 
 ## 7. Related Documentation
 
+- [ChatInstructionIntervention.md](ChatInstructionIntervention.md) — Chat instruction steering, active-Step addendum, plan revision, and terminal follow-up design
 - [../Api/ExecutionsApiContract.md](../Api/ExecutionsApiContract.md) — Direct execution lifecycle contract
 - [WorkflowArchitecture.md](WorkflowArchitecture.md) — Overall Workflow system design
 - [../UI/WorkflowConsoleArchitecture.md](../UI/WorkflowConsoleArchitecture.md) — Workflow-oriented UI over execution APIs
