@@ -58,6 +58,8 @@ steps:
       Source issue key:
       {{ inputs.source_issue_key }}
 
+      The Source Issue Key is traceability-only for this GitHub breakdown workflow. This preset does not load a trusted GitHub source issue brief; provide Source Document Path or Workflow Instructions as the source content.
+
       Workflow instructions:
       {{ inputs.feature_request }}
 
@@ -78,10 +80,10 @@ steps:
     instructions: |-
       Use story-reconcile-implementation to compare the generated MoonSpec story breakdown against the current repository implementation before any GitHub issue creation occurs.
 
-      Read the runtime-provided story breakdown JSON path and rewrite that same JSON handoff with implementationStatus and jiraCreation fields for every story.
-      Mark fully implemented stories with jiraCreation.action = "skip" so no GitHub issue or downstream GitHub Issue Orchestrate workflow execution is created for completed work.
+      Read the runtime-provided story breakdown JSON path and rewrite that same JSON handoff with implementationStatus and issueCreation fields for every story.
+      Mark fully implemented stories with issueCreation.action = "skip" so no GitHub issue or downstream GitHub Issue Orchestrate workflow execution is created for completed work.
       For partially implemented stories, preserve the original story scope and add remainingWork so GitHub tracks only the unmet requirements.
-      Mark unverifiable stories with jiraCreation.action = "manual_review" so deterministic GitHub issue creation will not create orchestration work automatically.
+      Mark unverifiable stories with issueCreation.action = "manual_review" so deterministic GitHub issue creation will not create orchestration work automatically.
       Write the reconciliation report to the runtime-provided markdown breakdown path when available.
       Do not create GitHub issues, do not create downstream workflow executions, and do not implement code in this reconciliation step.
     skill:
@@ -95,8 +97,8 @@ steps:
 
       Use the runtime-provided story breakdown JSON path.
       Every GitHub issue must include the Source Document path and canonical claim IDs from the story breakdown when present; otherwise include the source title and Source issue key when present.
-      Do not create GitHub issues for stories where jiraCreation.action is skip or manual_review.
-      For stories where jiraCreation.action is create_remaining_work_issue, create the GitHub issue from the story's remainingWork while preserving the original story traceability.
+      Do not create GitHub issues for stories where issueCreation.action is skip or manual_review.
+      For stories where issueCreation.action is create_remaining_work_issue, create the GitHub issue from the story's remainingWork while preserving the original story traceability.
       Preserve story order in the returned issue mappings.
       Return the created GitHub issue numbers, URLs, source traceability, skipped stories, and blocked stories.
     storyOutput:
@@ -119,7 +121,7 @@ steps:
       Do not create downstream workflow executions for skipped fully implemented stories or manual-review stories that did not produce GitHub issue mappings.
       Each downstream workflow execution must run GitHub Issue Orchestrate on its corresponding GitHub issue and must not run implementation inline inside this breakdown run.
       Create workflow dependencies with dependsOn so each later generated workflow execution waits for the immediately earlier generated workflow ID.
-      Preserve source issue {{ inputs.source_issue_key }}, source document path, dependencies, and traceability in downstream workflow inputs.
+      Preserve source issue {{ inputs.source_issue_key }} as traceability-only metadata, plus source document path, dependencies, and traceability in downstream workflow inputs.
       Report created workflow executions, skipped stories, dependency edges, partial failures, and no-downstream-workflow outcomes honestly.
     githubOrchestration:
       task:

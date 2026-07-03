@@ -541,9 +541,16 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             }
             github_downstream_step = github_breakdown_template.steps[3]
             assert "workflow execution" in github_downstream_step["instructions"]
+            assert "breakdown task" not in github_downstream_step["instructions"]
             assert "Create workflow dependencies with dependsOn" in (
                 github_downstream_step["instructions"]
             )
+            github_preset_text = "\n".join(
+                step["instructions"] for step in github_breakdown_template.steps
+            )
+            assert "jiraCreation" not in github_preset_text
+            assert "issueCreation" in github_preset_text
+            assert "traceability-only" in github_preset_text
             assert github_downstream_step["githubOrchestration"]["task"]["publish"] == {
                 "mode": "{{ inputs.publish_mode }}",
             }

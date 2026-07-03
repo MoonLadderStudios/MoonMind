@@ -640,6 +640,55 @@ async def test_create_github_issues_from_reconciled_story_breakdown():
 
 
 @pytest.mark.asyncio
+async def test_create_github_issues_honors_provider_neutral_issue_creation():
+    service = _FakeGitHubService()
+
+    result = await create_github_issues_from_stories(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "Already implemented",
+                    "implementationStatus": "partially_implemented",
+                    "issueCreation": {
+                        "action": "skip",
+                        "reason": "Covered by existing tests.",
+                    },
+                },
+                {
+                    "id": "STORY-002",
+                    "summary": "Needs remaining GitHub work",
+                    "description": "Original work.",
+                    "implementationStatus": "partially_implemented",
+                    "issueCreation": {
+                        "action": "create_remaining_work_issue",
+                        "remainingWork": {
+                            "summary": "Complete provider-neutral creation",
+                            "description": "Use issueCreation for GitHub breakdowns.",
+                        },
+                        "reason": "Only provider-neutral cleanup remains.",
+                    },
+                },
+            ],
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["storyOutput"]["createdCount"] == 1
+    assert result.outputs["storyOutput"]["skippedStories"][0]["issueCreationAction"] == (
+        "skip"
+    )
+    assert result.outputs["storyOutput"]["partialStoriesAdjusted"][0][
+        "issueCreationAction"
+    ] == "create_remaining_work_issue"
+    assert service.create_issue_requests[0]["title"] == (
+        "Complete provider-neutral creation"
+    )
+
+
+@pytest.mark.asyncio
 async def test_create_github_issues_narrows_partial_story_to_remaining_work():
     service = _FakeGitHubService()
 
@@ -872,6 +921,8 @@ def test_github_downstream_workflow_payload_propagates_fallback_repository():
         "title": "Fallback repo issue",
     }
     assert task["inputs"]["github_issue_ref"] == "MoonLadderStudios/MoonMind#101"
+    assert "breakdown workflow execution" in task["instructions"]
+    assert "breakdown task" not in task["instructions"]
 
 
 @pytest.mark.asyncio
@@ -3167,6 +3218,8 @@ async def test_create_jira_implement_tasks_targets_jira_implement_preset():
         "Use the existing Jira Implement workflow"
         in first_task["instructions"]
     )
+    assert "breakdown workflow execution" in first_task["instructions"]
+    assert "breakdown task" not in first_task["instructions"]
     assert first_task["inputs"]["jira_issue"] == {
         "key": "MM-501",
         "summary": "First",

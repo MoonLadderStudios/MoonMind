@@ -628,9 +628,17 @@ def _story_description(story: Mapping[str, Any]) -> str:
 def _normalized_story_token(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", _string(value).lower()).strip("_")
 
-def _story_jira_creation(story: Mapping[str, Any]) -> dict[str, Any]:
-    value = story.get("jiraCreation") or story.get("jira_creation")
+def _story_issue_creation(story: Mapping[str, Any]) -> dict[str, Any]:
+    value = (
+        story.get("issueCreation")
+        or story.get("issue_creation")
+        or story.get("jiraCreation")
+        or story.get("jira_creation")
+    )
     return dict(value) if isinstance(value, Mapping) else {}
+
+def _story_jira_creation(story: Mapping[str, Any]) -> dict[str, Any]:
+    return _story_issue_creation(story)
 
 def _story_implementation_status(story: Mapping[str, Any]) -> str:
     return _normalized_story_token(
@@ -640,9 +648,11 @@ def _story_implementation_status(story: Mapping[str, Any]) -> str:
     )
 
 def _story_jira_creation_action(story: Mapping[str, Any]) -> str:
-    jira_creation = _story_jira_creation(story)
+    issue_creation = _story_issue_creation(story)
     action = _normalized_story_token(
-        jira_creation.get("action")
+        issue_creation.get("action")
+        or story.get("issueCreationAction")
+        or story.get("issue_creation_action")
         or story.get("jiraCreationAction")
         or story.get("jira_creation_action")
     )
@@ -658,15 +668,23 @@ def _story_jira_creation_action(story: Mapping[str, Any]) -> str:
     return STORY_JIRA_ACTION_CREATE_ISSUE
 
 def _story_jira_creation_reason(story: Mapping[str, Any]) -> str:
-    jira_creation = _story_jira_creation(story)
+    issue_creation = _story_issue_creation(story)
     return _string(
-        jira_creation.get("reason")
+        issue_creation.get("reason")
+        or story.get("issueCreationReason")
+        or story.get("issue_creation_reason")
         or story.get("jiraCreationReason")
         or story.get("jira_creation_reason")
     )
 
 def _story_remaining_work(story: Mapping[str, Any]) -> dict[str, Any]:
-    value = story.get("remainingWork") or story.get("remaining_work")
+    issue_creation = _story_issue_creation(story)
+    value = (
+        issue_creation.get("remainingWork")
+        or issue_creation.get("remaining_work")
+        or story.get("remainingWork")
+        or story.get("remaining_work")
+    )
     return dict(value) if isinstance(value, Mapping) else {}
 
 def _story_implemented_evidence(story: Mapping[str, Any]) -> list[Any]:
@@ -776,6 +794,7 @@ def _story_reconciliation_record(
         "storyIndex": index,
         "summary": _story_summary(story, index=index),
         "implementationStatus": _story_implementation_status(story),
+        "issueCreationAction": action,
         "jiraCreationAction": action,
     }
     reason = _story_jira_creation_reason(story)
@@ -1359,7 +1378,7 @@ def _downstream_task_payload(
         f"{claim_line}"
         f"Original brief reference: {source_brief_ref or 'not provided'}.\n\n"
         f"Use the existing {preset_label} workflow for this Jira issue. "
-        "Do not run implementation inline inside the breakdown task."
+        "Do not run implementation inline inside the breakdown workflow execution."
     )
     runtime = _mapping(task_payload.get("runtime"))
     publish = _mapping(task_payload.get("publish"))
@@ -1812,7 +1831,7 @@ def _github_downstream_workflow_payload(
         f"{claim_line}"
         f"Original brief reference: {source_brief_ref or 'not provided'}.\n\n"
         f"Use the existing {preset_label} workflow for this GitHub issue. "
-        "Do not run implementation inline inside the breakdown task."
+        "Do not run implementation inline inside the breakdown workflow execution."
     )
     runtime = _mapping(task_payload.get("runtime"))
     publish = _mapping(task_payload.get("publish"))

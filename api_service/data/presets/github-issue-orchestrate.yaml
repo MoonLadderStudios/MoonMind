@@ -866,3 +866,4 @@ steps:
       issueNumber: '{{ inputs.github_issue.number }}'
       mode: finalize_after_pr_or_done
       pullRequestArtifactPath: artifacts/github-issue-orchestrate-pr.json
+      verificationArtifactPath: artifacts/github-issue-orchestrate-verify.json

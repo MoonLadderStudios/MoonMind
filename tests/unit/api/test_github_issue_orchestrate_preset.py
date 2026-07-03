@@ -236,6 +236,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
             "issueNumber": "1063",
             "mode": "finalize_after_pr_or_done",
             "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
+            "verificationArtifactPath": "artifacts/github-issue-orchestrate-verify.json",
         },
     }
     assert "apply the configured Done strategy" in steps[26]["instructions"]

@@ -120,6 +120,11 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
     downstream_step = template.steps[3]
     assert "workflow execution" in downstream_step["instructions"]
     assert "MoonMind task" not in downstream_step["instructions"]
+    assert "breakdown task" not in downstream_step["instructions"]
+    preset_text = "\n".join(step["instructions"] for step in template.steps)
+    assert "jiraCreation" not in preset_text
+    assert "issueCreation" in preset_text
+    assert "traceability-only" in preset_text
     assert downstream_step["githubOrchestration"]["traceability"] == {
         "sourceIssueKey": "{{ inputs.source_issue_key }}"
     }

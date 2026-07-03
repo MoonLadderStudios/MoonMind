@@ -579,12 +579,26 @@ If Jira output succeeds, workflow PR output is skipped because Jira is the reque
 
 `story.create_github_issues` uses the same runtime story breakdown inputs and
 reconciliation semantics as `story.create_jira_issues`, but creates GitHub
-issues through the trusted GitHub integration. It preserves source
+issues through the trusted GitHub integration. Reconciled story payloads should
+use provider-neutral `issueCreation.action`, `issueCreation.remainingWork`, and
+`issueCreation.reason`; legacy `jiraCreation` fields remain accepted only for
+older reconciliation handoffs. GitHub breakdown composite presets treat
+`source_issue_key` as traceability-only input and do not load a trusted source
+GitHub issue brief; callers that need trusted issue brief loading use the
+GitHub Issue Orchestrate preset. It preserves source
 path/title/section/claim/source issue traceability in each GitHub issue body and
 returns stable `github.issueMappings` for downstream workflow creation. GitHub
 issue dependency output is conservative: the tool reports
 `dependencyMode = "none"` and `dependencyCount = 0` unless a trusted GitHub API
 operation has actually established a dependency relationship.
+
+Provider-backed lifecycle behavior for GitHub and Jira issue status changes is
+covered in repository tests with trusted-tool fakes and deterministic artifact
+gates. Live-provider behavior still depends on configured GitHub/Jira
+credentials, repository/project permissions, and provider workflow labels or
+transition policy, so release validation should exercise the same trusted tools
+against a live or recorded provider fixture before claiming end-to-end provider
+lifecycle coverage.
 
 `story.create_github_issue_implement_workflows` and
 `story.create_github_issue_orchestrate_workflows` consume the GitHub issue
