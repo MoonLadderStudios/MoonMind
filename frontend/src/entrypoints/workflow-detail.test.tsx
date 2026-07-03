@@ -8333,6 +8333,149 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('handles Escape as a supported stop action and exposes disabled reasons for compact chat controls', async () => {
+    window.history.pushState({}, 'Test', '/workflows/test-123?source=temporal');
+    const codexPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: { actionsEnabled: true },
+            logStreamingEnabled: true,
+            liveLogsSessionTimelineEnabled: true,
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Codex session task',
+      summary: 'Session-backed work',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      targetRuntime: 'codex_cli',
+      agentRunId: 'wf-task-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+    };
+    let capabilities = {
+      sendFollowUp: false,
+      clearSession: false,
+      interruptTurn: true,
+      cancelSession: true,
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 1,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+                activeTurnId: 'turn-1',
+              },
+              interventionCapabilities: capabilities,
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({ ok: true, json: async () => ({ events: [], truncated: false }) } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => '' } as unknown as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            action: JSON.parse(String(init?.body || '{}')).action,
+            projection: {
+              agent_run_id: 'wf-task-1',
+              session_id: 'sess:wf-task-1:codex_cli',
+              session_epoch: 1,
+              grouped_artifacts: [],
+              latest_summary_ref: null,
+              latest_checkpoint_ref: null,
+              latest_control_event_ref: { artifact_id: 'art-control' },
+              latest_reset_boundary_ref: null,
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            agent_run_id: 'wf-task-1',
+            session_id: 'sess:wf-task-1:codex_cli',
+            session_epoch: 1,
+            grouped_artifacts: [],
+            latest_summary_ref: null,
+            latest_checkpoint_ref: null,
+            latest_control_event_ref: null,
+            latest_reset_boundary_ref: null,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
+
+    const followUp = await screen.findByLabelText('Follow-up message');
+    expect((screen.getByRole('button', { name: 'Send follow-up' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getAllByText('Follow-up is not supported for this session.').length).toBeGreaterThan(0);
+    expect((screen.getByRole('button', { name: 'Clear / Reset' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Clear / Reset is not supported for this session.')).toBeTruthy();
+
+    fireEvent.keyDown(followUp, { key: 'Escape' });
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ action: 'interrupt_turn' }),
+        }),
+      );
+    });
+
+    fetchSpy.mockClear();
+    capabilities = {
+      sendFollowUp: false,
+      clearSession: false,
+      interruptTurn: false,
+      cancelSession: false,
+    };
+    cleanup();
+    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
+    fireEvent.keyDown(await screen.findByLabelText('Follow-up message'), { key: 'Escape' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/control'))).toBe(false);
+    expect((screen.getByRole('button', { name: 'Interrupt turn' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Interrupt turn is not supported for this session.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Cancel session' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Cancel session is not supported for this session.')).toBeTruthy();
+  });
+
   it('keeps polling session continuity until a projection or terminal state exists', () => {
     expect(getSessionProjectionRefetchInterval(false, false, false)).toBe(5000);
     expect(getSessionProjectionRefetchInterval(false, true, false)).toBe(false);
@@ -8708,6 +8851,76 @@ describe('LiveLogsPanel', () => {
     } finally {
       scrollIntoViewSpy.mockRestore();
     }
+  });
+
+  it('sticks the chat transcript to the bottom while allowing scroll escape', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({ ok: true, json: async () => activeSummary } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-08T00:00:01Z',
+                stream: 'session',
+                kind: 'assistant_message',
+                text: 'Initial assistant message.',
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    const blockList = await screen.findByTestId('chat-session-blocks');
+    Object.defineProperty(blockList, 'clientHeight', { configurable: true, value: 100 });
+    Object.defineProperty(blockList, 'scrollHeight', { configurable: true, value: 300 });
+    blockList.scrollTop = 200;
+
+    await waitForEventSourceInstance();
+    const es = MockEventSource.instances.at(-1)!;
+    act(() => es.triggerOpen());
+    act(() =>
+      es.triggerLogChunk({
+        sequence: 2,
+        stream: 'session',
+        kind: 'assistant_message',
+        text: 'Live assistant update.',
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText('Live assistant update.')).toBeTruthy());
+    await waitFor(() => expect(blockList.scrollTop).toBe(300));
+
+    blockList.scrollTop = 0;
+    fireEvent.scroll(blockList);
+    act(() =>
+      es.triggerLogChunk({
+        sequence: 3,
+        stream: 'session',
+        kind: 'assistant_message',
+        text: 'Second live update.',
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText('Second live update.')).toBeTruthy());
+    expect(blockList.scrollTop).toBe(0);
   });
 
   it('does not create EventSource for ended runs', async () => {

@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent,
   type ReactNode,
   type Ref,
   type RefObject,
@@ -3614,6 +3615,24 @@ function ChatSessionView({
   wrapLines: boolean;
 }) {
   const hasFallbackRows = rows.some((row) => row.rowType === 'fallback' || row.rowType === 'output');
+  const blockListRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const lastBlockSignature = chatBlocks.length > 0
+    ? `${chatBlocks.at(-1)?.id}:${chatBlocks.at(-1)?.text}`
+    : 'empty';
+
+  const updateStickToBottom = () => {
+    const element = blockListRef.current;
+    if (!element) return;
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom <= 48;
+  };
+
+  useEffect(() => {
+    const element = blockListRef.current;
+    if (!element || !shouldStickToBottomRef.current) return;
+    element.scrollTop = element.scrollHeight;
+  }, [lastBlockSignature]);
 
   return (
     <div className="chat-session-view" aria-label="Chat session projection">
@@ -3631,7 +3650,12 @@ function ChatSessionView({
           Structured chat projection is unavailable for these rows. Use Raw Timeline for durable history.
         </div>
       ) : (
-        <div className="chat-session-blocks">
+        <div
+          ref={blockListRef}
+          className="chat-session-blocks"
+          data-testid="chat-session-blocks"
+          onScroll={updateStickToBottom}
+        >
           {chatBlocks.map((block, index) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase))}
         </div>
       )}
@@ -5487,6 +5511,19 @@ function SessionContinuityPanel({
   const canClearSession = Boolean(sessionId && interventionCapabilities.clearSession && !isTerminal);
   const canInterruptTurn = Boolean(sessionId && interventionCapabilities.interruptTurn && !isTerminal);
   const canCancelSession = Boolean(sessionId && interventionCapabilities.cancelSession && !isTerminal);
+  const unavailableReason = (capabilityAvailable: boolean, actionLabel: string) => {
+    if (busy) return 'Session control request in progress.';
+    if (isTerminal) return `${actionLabel} unavailable because this workflow is terminal.`;
+    if (!sessionId) return `${actionLabel} unavailable because the managed session is unavailable.`;
+    if (!capabilityAvailable) return `${actionLabel} is not supported for this session.`;
+    return null;
+  };
+  const sendDisabledReason = followUpMessage.trim()
+    ? unavailableReason(canSendFollowUp, 'Follow-up')
+    : (canSendFollowUp ? 'Enter a message to send a follow-up.' : unavailableReason(canSendFollowUp, 'Follow-up'));
+  const clearDisabledReason = unavailableReason(canClearSession, 'Clear / Reset');
+  const interruptDisabledReason = unavailableReason(canInterruptTurn, 'Interrupt turn');
+  const cancelDisabledReason = unavailableReason(canCancelSession, 'Cancel session');
 
   const submitFollowUp = () => {
     const message = followUpMessage.trim();
@@ -5525,6 +5562,62 @@ function SessionContinuityPanel({
     controlMutation.mutate({
       action: 'cancel_session',
     });
+  };
+
+  const stopActiveTurn = () => {
+    if (busy || isTerminal) return;
+    if (canInterruptTurn) {
+      interruptTurn();
+      return;
+    }
+    if (canCancelSession) {
+      cancelSession();
+    }
+  };
+
+  const handleFollowUpKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Escape') return;
+    if (!canInterruptTurn && !canCancelSession) return;
+    event.preventDefault();
+    stopActiveTurn();
+  };
+
+  const renderControlButton = ({
+    label,
+    className,
+    disabledReason,
+    onClick,
+    hiddenWhenUnavailable = false,
+  }: {
+    label: string;
+    className: string;
+    disabledReason: string | null;
+    onClick: () => void;
+    hiddenWhenUnavailable?: boolean;
+  }) => {
+    const disabled = Boolean(disabledReason);
+    if (!compact && hiddenWhenUnavailable && disabled) return null;
+    return (
+      <span className="chat-session-control-action">
+        <button
+          type="button"
+          className={className}
+          disabled={disabled}
+          onClick={onClick}
+          aria-describedby={disabled ? `session-control-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-reason` : undefined}
+        >
+          {label}
+        </button>
+        {disabled && compact ? (
+          <span
+            id={`session-control-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-reason`}
+            className="chat-session-disabled-reason"
+          >
+            {disabledReason}
+          </span>
+        ) : null}
+      </span>
+    );
   };
 
   return (
@@ -5636,51 +5729,46 @@ function SessionContinuityPanel({
           id="session-follow-up"
           value={followUpMessage}
           onChange={(event) => setFollowUpMessage(event.target.value)}
+          onKeyDown={handleFollowUpKeyDown}
           rows={3}
           placeholder="Send a follow-up turn to the managed Codex session."
           disabled={busy || !canSendFollowUp}
+          aria-describedby={sendDisabledReason && (busy || !canSendFollowUp) ? 'session-follow-up-disabled-reason' : undefined}
         />
-        <div className="actions">
-          {canSendFollowUp ? (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy || !followUpMessage.trim()}
-              onClick={submitFollowUp}
-            >
-              Send follow-up
-            </button>
-          ) : null}
-          {canClearSession ? (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={clearSession}
-            >
-              Clear / Reset
-            </button>
-          ) : null}
-          {canInterruptTurn ? (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={interruptTurn}
-            >
-              Interrupt turn
-            </button>
-          ) : null}
-          {canCancelSession ? (
-            <button
-              type="button"
-              className="queue-action queue-action-danger"
-              disabled={busy}
-              onClick={cancelSession}
-            >
-              Cancel session
-            </button>
-          ) : null}
+        {sendDisabledReason && (busy || !canSendFollowUp) ? (
+          <p id="session-follow-up-disabled-reason" className="chat-session-disabled-reason">
+            {sendDisabledReason}
+          </p>
+        ) : null}
+        <div className="actions chat-session-control-actions">
+          {renderControlButton({
+            label: 'Send follow-up',
+            className: 'secondary',
+            disabledReason: busy || !followUpMessage.trim() || !canSendFollowUp ? sendDisabledReason : null,
+            onClick: submitFollowUp,
+            hiddenWhenUnavailable: true,
+          })}
+          {renderControlButton({
+            label: 'Clear / Reset',
+            className: 'secondary',
+            disabledReason: clearDisabledReason,
+            onClick: clearSession,
+            hiddenWhenUnavailable: true,
+          })}
+          {renderControlButton({
+            label: 'Interrupt turn',
+            className: 'secondary',
+            disabledReason: interruptDisabledReason,
+            onClick: interruptTurn,
+            hiddenWhenUnavailable: true,
+          })}
+          {renderControlButton({
+            label: 'Cancel session',
+            className: 'queue-action queue-action-danger',
+            disabledReason: cancelDisabledReason,
+            onClick: cancelSession,
+            hiddenWhenUnavailable: true,
+          })}
         </div>
       </div>
     </section>
