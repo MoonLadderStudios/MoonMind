@@ -1,9 +1,10 @@
 # Workflow Remediation
 
 **Status:** Desired-state design
+**Document Class:** System / Feature Design View
 **Owners:** MoonMind Platform + dashboard
-**Last Updated:** 2026-05-07
-**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowRunsApi.md`, `docs/Workflows/WorkflowProposalSystem.md`, `docs/ManagedAgents/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Temporal/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/SkillSystem.md`
+**Last Updated:** 2026-07-03
+**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/CheckpointBranchSystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowRunsApi.md`, `docs/Workflows/WorkflowProposalSystem.md`, `docs/Observability/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Artifacts/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/StepExecutionsAndCheckpointing.md`, `docs/Steps/SkillSystem.md`, `docs/Omnigent/OmnigentAdapter.md`
 
 ---
 
@@ -143,6 +144,14 @@ For the target execution:
 - projections remain read models, not a second workflow engine.
 
 Workflow Remediation is layered on top of those contracts; it does not redefine them.
+
+### 5.5 Remediation reuses existing repair and evidence substrates
+
+Workflow Remediation must not create a second repair-attempt or evidence substrate. It should remain a `MoonMind.UserWorkflow` that targets another Workflow Execution, while reusing existing Step Execution, checkpoint, Checkpoint Branch, artifact, adapter evidence, and observability systems.
+
+The remediation context artifact is a bounded index over existing evidence, not a parallel evidence store. It names the target, pinned run, relevant Step Execution manifests, checkpoint refs, recovery and incident manifests, branch refs, adapter capture refs, logs, diagnostics, and policy snapshots.
+
+Checkpoint Branches are the preferred continuation primitive when remediation needs to run work with corrected instructions, a different branch, a different publish mode, a different runtime, or a different model. Failed-step recovery remains the path that preserves the original Workflow input and resumes from validated checkpoint evidence unchanged.
 
 ---
 
@@ -357,6 +366,20 @@ task:
 
 The important rule is that **automatic remediation is policy-driven and bounded**, not an undocumented side effect of failure.
 
+### 7.7 Create-page first remediation flow
+
+The dashboard `Remediate` action should open `/workflows/new` with an editable remediation draft instead of immediately submitting a hidden remediation run. The Create page should prefill:
+
+- target `workflowId` and pinned `runId`;
+- selected step or checkpoint refs when available;
+- repository `MoonLadderStudios/MoonMind` for MoonMind platform or prevention work;
+- default mode `snapshot_then_follow`;
+- default authority `approval_gated`;
+- default action policy `admin_healer_default`;
+- branch and publish controls through the normal Create page fields.
+
+The operator can then edit instructions, runtime, model, branch, and publish mode before submitting through the normal `POST /api/executions` path with `task.remediation`.
+
 ---
 
 ## 8. Identity, linkage, and read models
@@ -473,11 +496,32 @@ This artifact is the remediation Workflow Execution’s stable entrypoint. It sh
 - target identity,
 - selected steps,
 - observability refs,
+- recovery manifest refs,
+- incident reconstruction manifest refs,
+- Step Execution manifest refs,
+- checkpoint refs,
+- Checkpoint Branch refs,
+- adapter capture and diagnostics refs,
 - bounded summaries,
 - compact diagnosis hints,
 - live-follow cursor state if applicable,
 - action policy and approval policy snapshot,
 - lock policy snapshot.
+
+When available, the builder should resolve evidence in this order:
+
+1. target execution detail;
+2. failed-run recovery manifest;
+3. incident reconstruction manifest;
+4. Step Execution manifests;
+5. checkpoint artifacts and read models;
+6. Checkpoint Branch records and branch-turn context bundles;
+7. adapter capture manifests and provider diagnostics;
+8. step ledger projection;
+9. managed-run observability summaries, logs, and diagnostics;
+10. execution-linked artifacts and summaries.
+
+The builder may fall back to historical logs and summaries. Branch repair is allowed only when checkpoint validation succeeds.
 
 ### 9.3 Context artifact shape
 
@@ -612,6 +656,32 @@ The remediation decision log must record:
 - the root-cause category selected for long-term prevention,
 - the prevention branch, commit, and pull request URL when created,
 - the reason no prevention PR was created when the Workflow Execution only reports findings.
+
+### 9.9 Checkpoint-backed repair
+
+Corrected-instruction remediation should use Checkpoint Branches. When remediation needs to execute code or workflow work with different instructions, branch, publish mode, runtime, or model, it should call a Checkpoint Branch operation rather than silently editing the original workflow input or overloading failed-step Resume.
+
+A remediation-created branch should record:
+
+- source workflow id and pinned source run id;
+- logical step id and Step Execution ordinal when applicable;
+- checkpoint boundary and checkpoint ref;
+- immutable instruction artifact ref and digest;
+- workspace policy;
+- runtime context policy;
+- publish mode;
+- remediation workflow/run provenance;
+- idempotency key.
+
+Failed-step recovery remains the path that preserves original inputs and resumes from validated checkpoint evidence. It must not accept edited instructions, alternate branch settings, or publish-mode changes. Those belong to a Checkpoint Branch or a fresh workflow created through Create.
+
+### 9.10 Omnigent-backed remediation
+
+For Omnigent-backed target work, remediation consumes MoonMind artifacts harvested by the Omnigent adapter: normalized stream artifacts, snapshots, transcripts, workspace manifests, optional patch refs, PR metadata, and diagnostics.
+
+Omnigent session ids, file ids, resource ids, runner ids, and provider URLs are runtime binding or diagnostics metadata. They are not MoonMind evidence authority and should not replace artifact refs.
+
+Omnigent v1 uses a streaming-gateway activity that returns terminal results. Therefore remediation should not send hidden follow-up messages into a parent Omnigent session in v1. Corrective execution should create a fresh Checkpoint Branch turn with a new Omnigent session. Same-session continuation should wait for typed v2 activities such as `integration.omnigent.send_message` and `integration.omnigent.harvest_session`.
 
 ---
 
@@ -757,6 +827,14 @@ The initial registry should include at least the following action families.
 - `workload.restart_helper_container`
 - `workload.reap_orphan_container`
 
+#### Checkpoint Branch actions
+- `checkpoint_branch.create_from_remediation_context`
+- `checkpoint_branch.continue`
+- `checkpoint_branch.compare`
+- `checkpoint_branch.publish`
+- `checkpoint_branch.promote`
+- `checkpoint_branch.archive`
+
 The registry may later grow, but every new action kind must declare:
 - target type,
 - allowed inputs,
@@ -808,6 +886,9 @@ Release a managed runtime slot lease when the lease is stale or orphaned accordi
 
 #### `workload.restart_helper_container` / `workload.reap_orphan_container`
 These operate on workload containers that MoonMind launched through the Docker workload plane. They do not imply arbitrary image execution or unrestricted Docker access.
+
+#### `checkpoint_branch.create_from_remediation_context`
+Create a branch from a validated remediation context and checkpoint. Use this when corrected instructions, alternate branch settings, alternate publish mode, or a different runtime/model are required. This action must preserve source checkpoint identity, immutable instruction refs, workspace policy, runtime context policy, publish mode, remediation provenance, and idempotency key.
 
 ### 11.4 Action request contract
 
@@ -1312,12 +1393,14 @@ A practical v1 should ship with the following constraints:
 
 1. **Manual creation first**
    - Operators create remediation Workflow Executions explicitly from the dashboard.
+   - `Remediate` opens Create with an editable draft rather than submitting a hidden run.
 
 2. **Pinned target run**
    - Always persist `workflowId + runId`.
 
 3. **Artifact-first context bundle**
    - Generate `reports/remediation_context.json` up front.
+   - Treat the context as a ref-only index over existing recovery, incident, Step Execution, checkpoint, branch, adapter, and observability artifacts.
 
 4. **MoonMind-owned evidence tools**
    - Provide read access to:
@@ -1329,12 +1412,12 @@ A practical v1 should ship with the following constraints:
 
 5. **Two authority modes only in v1**
    - `observe_only`
-   - `admin_auto`
+   - `approval_gated`
 
 6. **Small action registry**
    - `execution.pause`
    - `execution.resume`
-   - `execution.retry_failed_step_with_remediation_context`
+   - `checkpoint_branch.create_from_remediation_context`
    - `execution.request_rerun_same_workflow`
    - `session.interrupt_turn`
    - `session.clear`
@@ -1347,6 +1430,9 @@ A practical v1 should ship with the following constraints:
 
 8. **Full audit artifacts**
    - always publish context, plan, actions, verification, summary
+
+9. **Omnigent v1 fresh-session branch repair**
+   - do not send hidden same-session remediation messages into a parent Omnigent session until typed v2 lifecycle activities exist.
 
 This v1 is powerful enough to heal common MoonMind operational failures while staying aligned with the existing architecture.
 
@@ -1389,6 +1475,9 @@ This document is complete enough to guide implementation when all of the followi
 12. Automatic self-healing, when later added, is policy-driven and bounded.
 13. Remediation Workflow Executions attempt the smallest safe immediate repair when one is plausible.
 14. Remediation Workflow Executions create a reviewable long-term MoonMind, preset, prompt, or Agent Skill prevention PR when recurrence analysis identifies an actionable systemic fix and repository write policy allows it.
+15. Checkpoint-backed repair uses Checkpoint Branch APIs when instructions, branch, publish mode, runtime, or model differ from the original target run.
+16. Provider-specific evidence is consumed through MoonMind artifact refs; provider session ids and URLs remain diagnostics/runtime binding metadata.
+17. Omnigent same-session continuation is blocked until typed v2 lifecycle activities exist.
 
 ---
 
@@ -1401,6 +1490,7 @@ RemediationActionPolicy:
     - execution.pause
     - execution.resume
     - execution.retry_failed_step_with_remediation_context
+    - checkpoint_branch.create_from_remediation_context
     - execution.request_rerun_same_workflow
     - session.interrupt_turn
     - session.clear
@@ -1412,9 +1502,11 @@ RemediationActionPolicy:
       - execution.force_terminate
       - session.restart_container
       - execution.retry_failed_step_with_remediation_context
+      - checkpoint_branch.create_from_remediation_context
   verification_rules:
     require_verification_for:
       - execution.retry_failed_step_with_remediation_context
+      - checkpoint_branch.create_from_remediation_context
       - execution.request_rerun_same_workflow
       - session.clear
       - provider_profile.evict_stale_lease
