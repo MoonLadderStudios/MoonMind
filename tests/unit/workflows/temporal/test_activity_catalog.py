@@ -137,6 +137,17 @@ def test_plan_generate_timeout_budget_allows_retry_after_attempt_timeout():
     )
     assert route.retries.max_attempts == 3
 
+def test_launch_session_timeout_budget_covers_cold_sidecar_startup():
+    catalog = build_default_activity_catalog()
+
+    route = catalog.resolve_activity("agent_runtime.launch_session")
+
+    assert route.timeouts.start_to_close_seconds == 300
+    assert route.timeouts.schedule_to_close_seconds == 1200
+    assert route.timeouts.heartbeat_timeout_seconds == 120
+    assert route.heartbeat_required is True
+    assert route.retries.max_attempts == 3
+
 def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     catalog = build_default_activity_catalog()
 

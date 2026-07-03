@@ -648,6 +648,45 @@ class DockerCodexManagedSessionController:
                 raise
             return False
 
+    async def _create_docker_sidecar_volumes(
+        self,
+        *,
+        session_id: str,
+        session_epoch: int,
+        agent_run_id: str,
+    ) -> None:
+        await self._create_volume(
+            self._sidecar_socket_volume_name(session_id),
+            labels=self._sidecar_volume_labels(
+                session_id=session_id,
+                role="docker-socket",
+                agent_run_id=agent_run_id,
+                session_epoch=session_epoch,
+            ),
+        )
+        await self._create_volume(
+            self._sidecar_graph_volume_name(session_id),
+            labels=self._sidecar_volume_labels(
+                session_id=session_id,
+                role="docker-graph",
+                agent_run_id=agent_run_id,
+                session_epoch=session_epoch,
+            ),
+        )
+
+    @staticmethod
+    def _docker_name_conflict(exc: RuntimeError, container_name: str) -> bool:
+        detail = str(exc).lower()
+        name = str(container_name or "").strip().lower()
+        if not name:
+            return False
+        return (
+            "conflict" in detail
+            and "container name" in detail
+            and "already in use" in detail
+            and name in detail
+        )
+
     async def _cleanup_docker_sidecar_resources(
         self,
         session_id: str,
@@ -687,24 +726,6 @@ class DockerCodexManagedSessionController:
         sidecar_name = self._sidecar_container_name(session_id)
         socket_volume = self._sidecar_socket_volume_name(session_id)
         graph_volume = self._sidecar_graph_volume_name(session_id)
-        await self._create_volume(
-            socket_volume,
-            labels=self._sidecar_volume_labels(
-                session_id=session_id,
-                role="docker-socket",
-                agent_run_id=agent_run_id,
-                session_epoch=session_epoch,
-            ),
-        )
-        await self._create_volume(
-            graph_volume,
-            labels=self._sidecar_volume_labels(
-                session_id=session_id,
-                role="docker-graph",
-                agent_run_id=agent_run_id,
-                session_epoch=session_epoch,
-            ),
-        )
         command = [
             self._docker_binary,
             "run",
@@ -742,7 +763,25 @@ class DockerCodexManagedSessionController:
                 f"--group={_MANAGED_SESSION_CONTAINER_GID}",
             ]
         )
-        stdout, _stderr = await self._run(command)
+        for attempt in range(2):
+            await self._create_docker_sidecar_volumes(
+                session_id=session_id,
+                session_epoch=session_epoch,
+                agent_run_id=agent_run_id,
+            )
+            try:
+                stdout, _stderr = await self._run(command)
+                break
+            except RuntimeError as exc:
+                if attempt == 0 and self._docker_name_conflict(exc, sidecar_name):
+                    await self._cleanup_docker_sidecar_resources(
+                        session_id,
+                        ignore_failure=True,
+                    )
+                    continue
+                raise
+        else:  # pragma: no cover - loop always exits by break or raise.
+            raise RuntimeError("docker sidecar run did not start")
         sidecar_id = stdout.strip()
         if not sidecar_id:
             raise RuntimeError("docker sidecar run returned a blank container id")
@@ -2829,31 +2868,13 @@ class DockerCodexManagedSessionController:
             ]
         )
         container_id = ""
-        try:
-            if docker_activate_at_launch:
-                await self._launch_docker_sidecar(
-                    session_id=request.session_id,
-                    session_epoch=request.session_epoch,
-                    agent_run_id=request.agent_run_id,
-                    docker_network=docker_network,
+
+        async def _cleanup_failed_launch(container_identifier: str) -> None:
+            if container_identifier:
+                await self._remove_container(
+                    container_identifier,
+                    ignore_failure=True,
                 )
-            stdout, _stderr = await self._run(
-                run_command,
-                extra_env=container_secret_environment or None,
-            )
-            container_id = stdout.strip()
-            if not container_id:
-                raise RuntimeError("docker run returned a blank container id")
-            if unrestricted_proxy_network:
-                await self._connect_container_network(
-                    container_id=container_id,
-                    network_name=unrestricted_proxy_network,
-                )
-        except Exception:
-            await self._remove_container(
-                container_id or container_name,
-                ignore_failure=True,
-            )
             if docker_sidecar_enabled:
                 await self._cleanup_docker_sidecar_resources(
                     request.session_id,
@@ -2862,6 +2883,41 @@ class DockerCodexManagedSessionController:
                 self._cleanup_session_docker_config(request.session_workspace_path)
             if github_broker_started:
                 await self._github_auth_brokers.stop(request.session_id)
+
+        try:
+            if docker_activate_at_launch:
+                await self._launch_docker_sidecar(
+                    session_id=request.session_id,
+                    session_epoch=request.session_epoch,
+                    agent_run_id=request.agent_run_id,
+                    docker_network=docker_network,
+                )
+            try:
+                stdout, _stderr = await self._run(
+                    run_command,
+                    extra_env=container_secret_environment or None,
+                )
+            except RuntimeError as exc:
+                if not self._docker_name_conflict(exc, container_name):
+                    raise
+                await self._remove_container(container_name, ignore_failure=True)
+                stdout, _stderr = await self._run(
+                    run_command,
+                    extra_env=container_secret_environment or None,
+                )
+            container_id = stdout.strip()
+            if not container_id:
+                raise RuntimeError("docker run returned a blank container id")
+            if unrestricted_proxy_network:
+                await self._connect_container_network(
+                    container_id=container_id,
+                    network_name=unrestricted_proxy_network,
+                )
+        except asyncio.CancelledError:
+            await asyncio.shield(_cleanup_failed_launch(container_id or container_name))
+            raise
+        except Exception:
+            await _cleanup_failed_launch(container_id or container_name)
             raise
         try:
             await self._wait_ready(container_id=container_id)
@@ -2936,16 +2992,11 @@ class DockerCodexManagedSessionController:
                 payload=container_payload,
                 extra_env={"MOONMIND_SESSION_CONTAINER_ID": container_id},
             )
+        except asyncio.CancelledError:
+            await asyncio.shield(_cleanup_failed_launch(container_id))
+            raise
         except Exception:
-            await self._remove_container(container_id, ignore_failure=True)
-            if docker_sidecar_enabled:
-                await self._cleanup_docker_sidecar_resources(
-                    request.session_id,
-                    ignore_failure=True,
-                )
-                self._cleanup_session_docker_config(request.session_workspace_path)
-            if github_broker_started:
-                await self._github_auth_brokers.stop(request.session_id)
+            await _cleanup_failed_launch(container_id)
             raise
         handle = self._with_runtime_family(
             CodexManagedSessionHandle.model_validate(payload),
