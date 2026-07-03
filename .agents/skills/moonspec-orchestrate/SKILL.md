@@ -22,7 +22,7 @@ Orchestrate downstream MoonSpec skills instead of reimplementing their detailed 
 - `moonspec-align`: analyze and remediate artifact drift before implementation.
 - `moonspec-implement`: implement the task breakdown with TDD.
 - `moonspec-verify`: perform final read-only verification.
-- `moonspec-doc-reconcile`: update the canonical source document when verified discoveries definitely require it.
+- `moonspec-doc-reconcile`: update the owning canonical document when verified discoveries show it is impossible, unclear, or inconsistent, or escalate instead of editing.
 
 MoonSpec skill IDs and command IDs use `moonspec-*` and `/moonspec.*`.
 
@@ -43,7 +43,7 @@ Default intent is `runtime`: production code plus tests must be delivered. Use `
 - Single-story requests go through `moonspec-specify`.
 - TDD is the default strategy.
 - Unit tests and integration tests are both expected.
-- The original request or source design preserved in `spec.md` `**Input**` is the final alignment source, interpreted against the canonical source document per `docs/Workflows/MoonSpecDocumentModel.md`. When a derived artifact conflicts with its canonical source document, the canonical document wins unless verified evidence shows the document itself is wrong — then the conflict goes to doc reconciliation, never silent override.
+- The original request or source design preserved in `spec.md` `**Input**` is the final alignment source, interpreted against the canonical source document per `docs/Workflows/MoonSpecDocumentModel.md`. When a derived artifact conflicts with its canonical source document, the canonical document wins unless verified evidence shows the document itself is impossible, unclear, or inconsistent — then the conflict goes to doc reconciliation, never silent override.
 - `moonspec-align` replaces the old multi-step analyze remediation sequence.
 - Do not synthesize user approvals, scripted user responses, or pretend an analyze report exists.
 - Resume from existing artifacts when they pass gates; do not regenerate by default.
@@ -100,10 +100,11 @@ Use these gates before advancing:
   - Unit and integration tests have been run or blocked with exact reasons.
 - Verify gate:
   - `moonspec-verify` produced a concrete report for the active `spec.md`.
-  - Verdict is not `NO_DETERMINATION`.
+  - Verdict is not `NO_DETERMINATION` or `BLOCKED`.
   - Completion is claimed only when verdict is `FULLY_IMPLEMENTED`.
 - Doc Reconcile gate:
   - `moonspec-doc-reconcile` has run after a `FULLY_IMPLEMENTED` verdict when at least one canonical source candidate exists: `spec.md` records a canonical source document, the breakdown `sourceReference.path` points under `docs/`, or the orchestration step provides a source design path under `docs/`.
+  - An escalate-only invocation triggered by documentation-type verification gaps is also valid; it must produce `escalated` or `no_update_required` without document edits.
   - Its result is exactly one of `updated`, `no_update_required`, or `escalated`, with rationale.
 
 If a gate fails, stop or run the appropriate upstream skill. Do not continue on a claimed success without artifacts or evidence.
@@ -157,16 +158,18 @@ This replaces the old manual analyze remediation flow. Do not provide scripted "
    - run `moonspec-implement` for bounded code or test gaps,
    - rerun targeted unit/integration validation,
    - rerun `moonspec-verify`.
-4. Run at most two verification-remediation cycles unless the user explicitly asks to keep going.
-5. If verdict is `NO_DETERMINATION`, stop and report the exact missing evidence, commands, or context.
+4. If the remaining work is dominated by `documentation`-type gaps — the canonical document, not the code, blocks completion, for example because it demands something that cannot be satisfied as written — do not spend remediation cycles on it: run `moonspec-doc-reconcile` in escalate-only mode so the document problem becomes a tracked escalation, then stop and report that outcome.
+5. Run at most two verification-remediation cycles unless the user explicitly asks to keep going.
+6. If verdict is `NO_DETERMINATION`, stop and report the exact missing evidence, commands, or context.
+7. If verdict is `BLOCKED`, stop and report the environment diagnostic and minimum repair; do not count it as a remediation cycle.
 
 ### 7. Reconcile Declarative Docs
 
-Run only when the final verdict is `FULLY_IMPLEMENTED` and at least one canonical source candidate exists: `spec.md` records a canonical source document, the breakdown `sourceReference.path` points under `docs/`, or the orchestration step provides a source design path under `docs/`:
+Run only when the final verdict is `FULLY_IMPLEMENTED` and at least one canonical source candidate exists: `spec.md` records a canonical source document, the breakdown `sourceReference.path` points under `docs/`, or the orchestration step provides a source design path under `docs/`. (The escalate-only invocation from the Verify stage is the one exception; it never edits documents.)
 
 1. Run `moonspec-doc-reconcile` with the canonical document path(s), the latest verification report (including its Source Document Drift section), and `artifacts/doc-discoveries/<feature>.json` when present.
-2. Accept exactly one outcome: `updated` (canonical doc edited), `no_update_required` (gate not met), or `escalated` (Jira issue created for a misaligned update).
-3. `escalated` does not retroactively fail verification; report the issue key alongside the outcome.
+2. Accept exactly one outcome: `updated` (canonical doc edited), `no_update_required` (gate not met), or `escalated` (a tracker issue when integration exists, otherwise a full escalation record in the structured output and report).
+3. `escalated` does not retroactively fail verification; report the issue key or escalation record alongside the outcome.
 4. Skip this stage with outcome `no_update_required` when no canonical source candidate exists.
 
 ## Multi-Spec Designs
@@ -195,7 +198,7 @@ Stages:
 - Tasks: PASS/FAIL/SKIPPED
 - Align: PASS/FAIL/SKIPPED
 - Implement: PASS/FAIL/SKIPPED
-- Verify: FULLY_IMPLEMENTED/ADDITIONAL_WORK_NEEDED/NO_DETERMINATION/SKIPPED
+- Verify: FULLY_IMPLEMENTED/ADDITIONAL_WORK_NEEDED/NO_DETERMINATION/BLOCKED/SKIPPED
 - Doc Reconcile: updated/no_update_required/escalated/SKIPPED
 
 Changed files:
@@ -222,4 +225,4 @@ Mention source design coverage and `DOC-REQ-*`/`DESIGN-REQ-*` status when presen
 - Enforce one story per spec.
 - Keep TDD, unit tests, integration tests, and `/moonspec.verify` in the pipeline.
 - Treat verification as the final authority for completion.
-- Run doc reconciliation after a `FULLY_IMPLEMENTED` verdict when a canonical source candidate exists; never let derived artifacts silently override canonical docs.
+- Run doc reconciliation after a `FULLY_IMPLEMENTED` verdict when a canonical source candidate exists; use escalate-only mode when documentation-type gaps block verification. Never let derived artifacts silently override canonical docs.

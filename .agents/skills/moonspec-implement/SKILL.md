@@ -205,7 +205,7 @@ Rules:
 
 ## Discovery Ledger
 
-When implementation deviates from the canonical source document recorded in `spec.md`, or reveals that the document is wrong, incomplete, or internally inconsistent, append a structured entry to a gitignored handoff at `artifacts/doc-discoveries/<feature>.json` (create the file with a top-level `discoveries` array on first use):
+When implementation deviates from the canonical source document recorded in `spec.md`, or reveals that the document is impossible to satisfy as written, unclear, or internally inconsistent, append a structured entry to a gitignored handoff at `artifacts/doc-discoveries/<feature>.json` (create the file with a top-level `discoveries` array on first use):
 
 ```json
 {
@@ -220,7 +220,8 @@ When implementation deviates from the canonical source document recorded in `spe
 
 Rules:
 
-- Use `definite` only when the document is factually wrong against verified behavior, internally inconsistent, or the implementation deliberately and correctly diverged for a defensible reason.
+- Use `definite` only when verified evidence shows the document cannot be satisfied as written, is factually incorrect independent of this implementation, is internally inconsistent, or contains an ambiguity the implementation had to resolve.
+- When the implementation deliberately diverged from a clear, satisfiable documented approach, record the divergence as its own entry and state in `observed` that it is a deliberate divergence; doc reconciliation escalates these for an owner decision instead of editing the document.
 - Use `possible` for unconfirmed suspicions; these never authorize doc edits.
 - Write no entry when there is nothing to report. Do not invent discoveries.
 - Discoveries do not authorize editing canonical `docs/` files during implementation. They feed the `moonspec-doc-reconcile` step that runs after verification (see `docs/Workflows/MoonSpecDocumentModel.md`).

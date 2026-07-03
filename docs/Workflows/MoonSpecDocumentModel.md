@@ -38,20 +38,20 @@ MoonSpec specification workflows still produce declarative, single-story specs. 
 When a derived artifact (`spec.md`, `stories.json`, `plan.md`, `tasks.md`) conflicts with its canonical source document:
 
 1. The canonical document wins by default.
-2. If implementation or verification evidence shows the canonical document itself is wrong, incomplete, or internally inconsistent, the canonical document must be updated through doc reconciliation — or the conflict escalated — rather than silently overridden in the derived artifact.
+2. If implementation or verification evidence shows the canonical document itself is impossible to satisfy as written, unclear, or internally inconsistent, the canonical document must be updated through doc reconciliation — or the conflict escalated — rather than silently overridden in the derived artifact.
 3. Derived artifacts never resolve such conflicts on their own authority.
 
 ## Reconciliation Expectation
 
 Implementation runs that discover canonical-document drift end with a doc-reconciliation pass (see the `moonspec-doc-reconcile` skill): when a non-trivial change lands, its durable decisions are reflected in the owning `docs/` files.
 
-Reconciliation updates a canonical document only when discoveries **definitely require** it:
+Reconciliation updates a canonical document only when discoveries **definitely require** it — the document is impossible, unclear, or inconsistent:
 
-- **Function**: the document describes behavior or contracts that are now factually wrong against the verified implementation.
-- **Consistency**: the implementation correctly resolved an internal contradiction or ambiguity in the document, and the document must record the resolution.
-- **Best practices**: the implementation deliberately and correctly diverged from a documented approach for a defensible, verification-backed reason.
+- **Impossible**: verified evidence shows a documented claim cannot be satisfied as written or was factually incorrect independent of the implementation.
+- **Unclear**: the implementation had to resolve a documented ambiguity, and the document must record the verified resolution to stay usable.
+- **Inconsistent**: the implementation correctly resolved an internal contradiction in the document, and the document must record the resolution to stay coherent.
 
-Stylistic preferences, speculative improvements, and unverified observations never qualify. Reconciliation preserves desired-state framing: it never downgrades a canonical document to match buggy or incomplete code, and it never inserts imperative content into canonical files. Updates that would conflict with repo guidance, README, or architecture direction are escalated as Jira issues instead of applied.
+Divergence alone never qualifies: an implementation that differs from a clear, consistent, satisfiable document is an implementation defect or an unapproved desired-state change, and deliberate verification-backed divergence is escalated for an owner decision instead of applied. Stylistic preferences, additions for completeness, speculative improvements, and unverified observations never qualify either. Reconciliation preserves desired-state framing: it never downgrades a canonical document to match buggy or incomplete code, and it never inserts imperative content into canonical files. Updates that would conflict with repo guidance, README, or architecture direction are escalated as tracked issues instead of applied.
 
 ## Documentation Architecture Standard
 

@@ -20,6 +20,7 @@ Run `moonspec-doc-reconcile` after a MoonSpec implementation has a `FULLY_IMPLEM
 
 - Reconcile only canonical declarative documents under `docs/`.
 - Use verified discoveries from `moonspec-verify` and the implementation discovery ledger.
-- Edit canonical docs only when evidence definitely shows the document is functionally wrong, internally inconsistent, or intentionally superseded by verified best practice.
-- Stop with `no_update_required` when no canonical source candidate exists or verification did not pass.
-- Escalate ambiguous ownership or policy conflicts instead of guessing.
+- Edit canonical docs only when definite evidence shows the document is impossible to satisfy as written, unclear, or internally inconsistent.
+- User input may narrow scope or supply artifact paths; it never authorizes edits beyond the update gate.
+- Stop with `no_update_required` when no canonical source candidate exists or verification did not pass; escalate-only mode never edits.
+- Escalate ambiguous ownership, policy conflicts, and deliberate divergence from a satisfiable documented approach instead of guessing or editing.
