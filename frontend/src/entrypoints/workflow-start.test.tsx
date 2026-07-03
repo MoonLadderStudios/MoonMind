@@ -7476,7 +7476,9 @@ describe.skip("Task Create Entrypoint", () => {
     const notesInput = (await screen.findByLabelText("Notes")) as HTMLInputElement;
     fireEvent.change(notesInput, { target: { value: "hello " } });
     expect(notesInput.value).toBe("hello ");
-    fireEvent.click(screen.getByLabelText("Enabled"));
+    const enabledInput = screen.getByLabelText("Enabled") as HTMLInputElement;
+    expect(enabledInput.checked).toBe(true);
+    fireEvent.click(enabledInput);
     fireEvent.change(
       screen.getByLabelText("Instructions"),
       { target: { value: "Build configurable options." } },
@@ -16488,7 +16490,9 @@ describe("Task Create schema-driven capability inputs", () => {
     expect(within(step).getByLabelText("Notes").tagName).toBe("TEXTAREA");
     expect(within(step).getByLabelText("Markdown").tagName).toBe("TEXTAREA");
     expect((within(step).getByLabelText("Effort") as HTMLInputElement).type).toBe("number");
-    expect(within(step).getByLabelText("Enabled")).toBeTruthy();
+    const enabledInput = within(step).getByLabelText("Enabled") as HTMLInputElement;
+    expect(enabledInput.type).toBe("checkbox");
+    expect(enabledInput.checked).toBe(true);
     expect(within(step).getByLabelText("Priority")).toBeTruthy();
     expect((within(step).getByLabelText("Labels") as HTMLSelectElement).multiple).toBe(true);
     expect((within(step).getByLabelText("Homepage") as HTMLInputElement).type).toBe("url");

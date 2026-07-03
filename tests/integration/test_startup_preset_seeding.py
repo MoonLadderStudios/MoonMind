@@ -121,6 +121,15 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "key"
         ]
         assert (
+            annotations["inputSchema"]["properties"]["run_verify"]["type"]
+            == "boolean"
+        )
+        assert (
+            annotations["inputSchema"]["properties"]["run_verify"]["default"]
+            is True
+        )
+        assert annotations["defaults"]["run_verify"] is True
+        assert (
             annotations["uiSchema"]["jira_issue"]["widget"]
             == "jira.issue-picker"
         )
@@ -233,6 +242,44 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "status Review" in code_review_step["instructions"]
         assert "pull_request_url" in code_review_step["instructions"]
 
+        expanded_orchestrate_without_verify = await PresetCatalogService(
+            session
+        ).expand_template(
+            slug="jira-orchestrate",
+            scope="global",
+            scope_ref=None,
+            inputs={
+                "jira_issue": {"key": "MM-999"},
+                "constraints": "",
+                "run_verify": False,
+            },
+            context={"repository": "MoonLadderStudios/MoonMind"},
+        )
+        no_verify_orchestrate_titles = [
+            step["title"] for step in expanded_orchestrate_without_verify["steps"]
+        ]
+        no_verify_orchestrate_skill_ids = [
+            (step.get("skill") or step.get("tool"))["id"]
+            for step in expanded_orchestrate_without_verify["steps"]
+        ]
+        assert "Verify completion" not in no_verify_orchestrate_titles
+        assert "Verify remediation 6 of 6" not in no_verify_orchestrate_titles
+        assert "Reconcile declarative docs" not in no_verify_orchestrate_titles
+        assert "moonspec-verify" not in no_verify_orchestrate_skill_ids
+        assert "Implement the task breakdown" in no_verify_orchestrate_titles
+        assert "Create pull request" in no_verify_orchestrate_titles
+        no_verify_orchestrate_pr_step = next(
+            step
+            for step in expanded_orchestrate_without_verify["steps"]
+            if step["title"] == "Create pull request"
+        )
+        assert "Verification was disabled" in no_verify_orchestrate_pr_step[
+            "instructions"
+        ]
+        assert "confirm the verdict is FULLY_IMPLEMENTED" not in (
+            no_verify_orchestrate_pr_step["instructions"]
+        )
+
         result = await session.execute(
             select(Preset)
             .where(
@@ -259,6 +306,15 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             implement_annotations["uiSchema"]["jira_issue"]["allowManualKeyEntry"]
             is True
         )
+        assert (
+            implement_annotations["inputSchema"]["properties"]["run_verify"]["type"]
+            == "boolean"
+        )
+        assert (
+            implement_annotations["inputSchema"]["properties"]["run_verify"]["default"]
+            is True
+        )
+        assert implement_annotations["defaults"]["run_verify"] is True
         assert (
             implement_annotations.get("postMergeJiraCompletion") == "done_category"
         )
@@ -421,6 +477,44 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert (
             "FULLY_IMPLEMENTED" in implement_finalize_step["instructions"]
         )
+
+        expanded_without_verify = await PresetCatalogService(session).expand_template(
+            slug="jira-implement",
+            scope="global",
+            scope_ref=None,
+            inputs={
+                "jira_issue": {"key": "MM-999"},
+                "constraints": "",
+                "run_verify": False,
+            },
+            context={"repository": "MoonLadderStudios/MoonMind"},
+        )
+        no_verify_titles = [
+            step["title"] for step in expanded_without_verify["steps"]
+        ]
+        no_verify_skill_ids = [
+            (step.get("skill") or step.get("tool"))["id"]
+            for step in expanded_without_verify["steps"]
+        ]
+        assert "Verify implementation" not in no_verify_titles
+        assert "Verify remediation 6 of 6" not in no_verify_titles
+        assert "Remediate verification gaps 1 of 6" not in no_verify_titles
+        assert "moonspec-verify" not in no_verify_skill_ids
+        assert "Implement the issue" in no_verify_titles
+        assert "Create pull request" in no_verify_titles
+        no_verify_pr_step = next(
+            step
+            for step in expanded_without_verify["steps"]
+            if step["title"] == "Create pull request"
+        )
+        assert "Verification was disabled" in no_verify_pr_step["instructions"]
+        assert "moonspec-verify verdict is FULLY_IMPLEMENTED in" not in (
+            no_verify_pr_step["instructions"]
+        )
+        no_verify_finalize_step = expanded_without_verify["steps"][-1]
+        assert no_verify_finalize_step["title"] == "Finalize Jira status"
+        assert "Verification was disabled" in no_verify_finalize_step["instructions"]
+        assert "verifier result" not in no_verify_finalize_step["instructions"]
 
         result = await session.execute(
             select(Preset)
