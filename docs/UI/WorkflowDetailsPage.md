@@ -496,12 +496,15 @@ It contains:
 - Failed step, when applicable
 - Pending steps
 - Step-level timestamps
+- Step-level elapsed duration from the step's own start time
 - Step-level outputs or summaries, when available
 - Preserved steps reused from a source run, when viewing a resumed execution
 
 For running Workflows, this section updates as new progress is received.
 
 For terminal Workflows, this section displays the final execution path.
+
+Each collapsed step row displays a duration chip. Terminal steps show final duration, active steps show elapsed time with "so far", ready or pending steps show their start state, and missing timing evidence is explicitly labeled unavailable. Expanded step details include a Timing section with started, ended when available, elapsed, and last update values.
 
 For resumed executions, prior completed steps restored from the source run are displayed as preserved, for example:
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Mapping
 from copy import deepcopy
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 ACTIVE_STEP_STATUSES = ("executing", "reviewing", "awaiting_external")
@@ -16,6 +16,29 @@ LEGACY_STEP_STATUS_ALIASES = {
     "succeeded": "completed",
 }
 _UNSET = object()
+
+
+def _coerce_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _duration_ms(started_at: datetime, ended_at: datetime) -> int:
+    return max(0, int((ended_at - started_at).total_seconds() * 1000))
 
 def _normalize_replayed_step_status(status: Any) -> str:
     value = str(status or "").strip()
@@ -422,6 +445,7 @@ def build_initial_step_rows(
                 "attempt": 0,
                 "executionOrdinal": 0,
                 "startedAt": None,
+                "endedAt": None,
                 "updatedAt": updated_at_iso,
                 "summary": None,
                 "checks": [],
@@ -439,14 +463,65 @@ def build_step_ledger_snapshot(
     run_id: str,
     rows: list[dict[str, Any]],
     prepared_artifact_refs: list[str] | None = None,
+    server_now: datetime | None = None,
 ) -> dict[str, Any]:
+    now = server_now or datetime.now(tz=UTC)
+    steps = deepcopy(rows)
+    for row in steps:
+        row["timing"] = step_timing(row, server_now=now)
     return {
         "workflowId": workflow_id,
         "runId": run_id,
         "runScope": "latest",
         "preparedArtifactRefs": list(prepared_artifact_refs or []),
-        "steps": deepcopy(rows),
+        "steps": steps,
     }
+
+
+def step_timing(
+    row: Mapping[str, Any],
+    *,
+    server_now: datetime,
+) -> dict[str, Any]:
+    """Project a compact, user-facing timing summary for one step row."""
+
+    started_at = _coerce_datetime(row.get("startedAt") or row.get("started_at"))
+    ended_at = _coerce_datetime(row.get("endedAt") or row.get("ended_at"))
+    updated_at = _coerce_datetime(row.get("updatedAt") or row.get("updated_at"))
+    status = _normalize_replayed_step_status(row.get("status"))
+    base = {
+        "startedAt": started_at.isoformat() if started_at else None,
+        "endedAt": ended_at.isoformat() if ended_at else None,
+        "durationMs": None,
+        "elapsedMs": None,
+        "serverNow": server_now.isoformat(),
+        "precision": "unavailable",
+    }
+    if status in {"pending", "ready"}:
+        base["serverNow"] = None
+        return base
+    if started_at is None:
+        base["serverNow"] = None
+        return base
+    if status in ACTIVE_STEP_STATUSES:
+        elapsed_ms = _duration_ms(started_at, server_now)
+        base["elapsedMs"] = elapsed_ms
+        base["precision"] = "live"
+        return base
+    if status in TERMINAL_STEP_STATUSES:
+        terminal_at = ended_at or updated_at
+        if terminal_at is None:
+            base["serverNow"] = None
+            return base
+        duration_ms = _duration_ms(started_at, terminal_at)
+        base["endedAt"] = terminal_at.isoformat()
+        base["durationMs"] = duration_ms
+        base["elapsedMs"] = duration_ms
+        base["serverNow"] = None
+        base["precision"] = "exact" if ended_at else "fallback"
+        return base
+    base["serverNow"] = None
+    return base
 
 
 def materialize_preserved_steps(
@@ -546,6 +621,17 @@ def materialize_preserved_steps(
         )
         if isinstance(dependency_inputs, Mapping):
             row["dependencyInputs"] = deepcopy(dict(dependency_inputs))
+        started_at = _coerce_datetime(
+            preserved.get("startedAt") or preserved.get("started_at")
+        )
+        ended_at = _coerce_datetime(
+            preserved.get("endedAt")
+            or preserved.get("ended_at")
+            or preserved.get("updatedAt")
+            or preserved.get("updated_at")
+        )
+        row["startedAt"] = started_at.isoformat() if started_at else None
+        row["endedAt"] = ended_at.isoformat() if ended_at else None
         row["updatedAt"] = updated_at.isoformat()
 
 
@@ -765,6 +851,7 @@ def update_step_row(
             row["executionOrdinal"] = int(row["attempt"])
         if set_started_at:
             row["startedAt"] = updated_at.isoformat()
+            row["endedAt"] = None
         if summary is not _UNSET:
             row["summary"] = summary
         if waiting_reason is not _UNSET:
@@ -803,6 +890,7 @@ def update_step_row(
         if workload is not _UNSET:
             row["workload"] = dict(workload) if isinstance(workload, Mapping) else None
         if _normalize_replayed_step_status(status) in TERMINAL_STEP_STATUSES:
+            row["endedAt"] = updated_at.isoformat()
             row["waitingReason"] = None
             row["attentionRequired"] = False
         row["updatedAt"] = updated_at.isoformat()

@@ -1536,7 +1536,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('MM-815 surfaces latest evidence refs and preserved provenance markers in the default step row', async () => {
+  it('MM-815 and MM-1034 surfaces evidence refs, provenance markers, and duration in the default step row', async () => {
     window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
@@ -1573,7 +1573,16 @@ describe('Workflow Detail Entrypoint', () => {
           attentionRequired: false,
           executionOrdinal: 1,
           startedAt: '2026-04-08T00:00:01Z',
+          endedAt: '2026-04-08T00:00:02Z',
           updatedAt: '2026-04-08T00:00:02Z',
+          timing: {
+            startedAt: '2026-04-08T00:00:01Z',
+            endedAt: '2026-04-08T00:00:02Z',
+            durationMs: 1000,
+            elapsedMs: 1000,
+            serverNow: null,
+            precision: 'exact',
+          },
           summary: 'Plan complete',
           checks: [],
           refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
@@ -1608,7 +1617,16 @@ describe('Workflow Detail Entrypoint', () => {
           attentionRequired: false,
           executionOrdinal: 2,
           startedAt: '2026-04-09T00:00:03Z',
+          endedAt: '2026-04-09T00:00:04Z',
           updatedAt: '2026-04-09T00:00:04Z',
+          timing: {
+            startedAt: '2026-04-09T00:00:03Z',
+            endedAt: '2026-04-09T00:00:04Z',
+            durationMs: 1000,
+            elapsedMs: 1000,
+            serverNow: null,
+            precision: 'exact',
+          },
           summary: 'Applying repository changes',
           checks: [
             {
@@ -1659,6 +1677,9 @@ describe('Workflow Detail Entrypoint', () => {
 
     // Latest attempt count is surfaced on the re-run row.
     expect(screen.getByText('Execution 2')).toBeTruthy();
+    expect(screen.getByText('Original duration: 1s')).toBeTruthy();
+    expect(screen.getByText('Current step')).toBeTruthy();
+    expect(screen.getByText(/Longest step/)).toBeTruthy();
 
     // Latest evidence refs are surfaced ref-only in the collapsed rows.
     expect(screen.getAllByLabelText('Latest evidence refs').length).toBeGreaterThan(0);
@@ -1670,6 +1691,10 @@ describe('Workflow Detail Entrypoint', () => {
     // only durable latest evidence for running/recovered rows.
     expect(screen.getByText('art-plan-manifest')).toBeTruthy();
     expect(screen.getByText('art-plan-checkpoint')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
+    expect(screen.getByRole('heading', { name: 'Timing' })).toBeTruthy();
+    expect(screen.getByText('Elapsed:')).toBeTruthy();
   });
 
   it('MM-831 renders expanded Step Execution history from the step-executions list endpoint', async () => {

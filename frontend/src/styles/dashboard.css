@@ -4027,6 +4027,35 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   flex-wrap: wrap;
 }
 
+.step-duration-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.45rem;
+  border: 1px solid rgb(var(--mm-border) / 0.75);
+  border-radius: 999px;
+  padding: 0 0.48rem;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--mm-ink));
+  background: rgb(var(--mm-surface) / 0.82);
+  white-space: nowrap;
+}
+
+.step-duration-bar {
+  height: 0.18rem;
+  margin-top: 0.4rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-border) / 0.45);
+  overflow: hidden;
+}
+
+.step-duration-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgb(var(--mm-accent) / 0.68);
+}
+
 .step-tl-tool {
   font-size: 0.72rem;
   color: rgb(var(--mm-muted));
@@ -4321,6 +4350,23 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .step-tl-count {
   padding-left: 0.3rem;
   border-left: 1px solid rgb(var(--mm-border) / 0.5);
+}
+
+.step-timing-overview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.85rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgb(var(--mm-border) / 0.72);
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-surface) / 0.72);
+  color: rgb(var(--mm-muted));
+  font-size: 0.82rem;
+}
+
+.step-timing-overview strong {
+  color: rgb(var(--mm-ink));
+  font-weight: 600;
 }
 
 .live-logs-panel {

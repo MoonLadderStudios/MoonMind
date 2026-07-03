@@ -17,6 +17,7 @@ from moonmind.statuses.step_ledger import step_execution_to_ledger_status
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
+    build_step_ledger_snapshot,
     mark_step_execution_manifest_evidence,
     mark_step_checkpoint_evidence,
     refresh_ready_steps,
@@ -73,6 +74,89 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     assert rows[0]["refs"]["latestStepExecutionCheckpointRef"] is None
     assert rows[0]["refs"]["stepExecutionCheckpointRefs"] == []
     assert rows[0]["refs"]["checkpointRefsByBoundary"] == {}
+
+
+def test_mm_1034_step_ledger_snapshot_projects_step_timing() -> None:
+    started_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    ended_at = datetime(2026, 4, 7, 12, 1, 42, tzinfo=UTC)
+    server_now = datetime(2026, 4, 7, 12, 3, 11, tzinfo=UTC)
+    rows = [
+        {
+            "logicalStepId": "gather",
+            "order": 1,
+            "title": "Gather account context",
+            "tool": {},
+            "dependsOn": [],
+            "status": "completed",
+            "executionOrdinal": 1,
+            "startedAt": started_at.isoformat(),
+            "endedAt": ended_at.isoformat(),
+            "updatedAt": (ended_at.replace(second=51)).isoformat(),
+            "refs": {},
+            "artifacts": {},
+        },
+        {
+            "logicalStepId": "tests",
+            "order": 2,
+            "title": "Run test suite",
+            "tool": {},
+            "dependsOn": [],
+            "status": "executing",
+            "executionOrdinal": 1,
+            "startedAt": started_at.isoformat(),
+            "updatedAt": server_now.isoformat(),
+            "refs": {},
+            "artifacts": {},
+        },
+        {
+            "logicalStepId": "publish",
+            "order": 3,
+            "title": "Publish results",
+            "tool": {},
+            "dependsOn": [],
+            "status": "pending",
+            "executionOrdinal": 0,
+            "startedAt": None,
+            "updatedAt": server_now.isoformat(),
+            "refs": {},
+            "artifacts": {},
+        },
+        {
+            "logicalStepId": "legacy",
+            "order": 4,
+            "title": "Legacy terminal row",
+            "tool": {},
+            "dependsOn": [],
+            "status": "failed",
+            "executionOrdinal": 1,
+            "startedAt": started_at.isoformat(),
+            "updatedAt": ended_at.isoformat(),
+            "refs": {},
+            "artifacts": {},
+        },
+    ]
+
+    snapshot = build_step_ledger_snapshot(
+        workflow_id="wf-1",
+        run_id="run-1",
+        rows=rows,
+        server_now=server_now,
+    )
+
+    assert snapshot["steps"][0]["timing"] == {
+        "startedAt": started_at.isoformat(),
+        "endedAt": ended_at.isoformat(),
+        "durationMs": 102000,
+        "elapsedMs": 102000,
+        "serverNow": None,
+        "precision": "exact",
+    }
+    assert snapshot["steps"][1]["timing"]["elapsedMs"] == 191000
+    assert snapshot["steps"][1]["timing"]["precision"] == "live"
+    assert snapshot["steps"][1]["timing"]["serverNow"] == server_now.isoformat()
+    assert snapshot["steps"][2]["timing"]["precision"] == "unavailable"
+    assert snapshot["steps"][3]["timing"]["durationMs"] == 102000
+    assert snapshot["steps"][3]["timing"]["precision"] == "fallback"
 
 
 def test_step_ledger_refs_track_latest_and_historical_step_execution_manifests() -> None:
@@ -170,6 +254,7 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
             "attempt": 0,
             "executionOrdinal": 0,
             "startedAt": None,
+            "endedAt": None,
             "updatedAt": updated_at.isoformat(),
             "summary": None,
             "checks": [],

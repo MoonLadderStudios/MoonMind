@@ -591,7 +591,16 @@ Representative response:
  "attentionRequired": false,
  "attempt": 1,
  "startedAt": "2026-04-04T18:10:00Z",
+ "endedAt": null,
  "updatedAt": "2026-04-04T18:11:15Z",
+ "timing": {
+ "startedAt": "2026-04-04T18:10:00Z",
+ "endedAt": null,
+ "durationMs": null,
+ "elapsedMs": 75000,
+ "serverNow": "2026-04-04T18:11:15Z",
+ "precision": "live"
+ },
  "summary": "Executing tests in sandbox",
  "checks": [],
  "refs": {
@@ -626,7 +635,9 @@ Per-step required fields:
 - `attentionRequired`
 - `attempt`
 - `startedAt`
+- `endedAt`
 - `updatedAt`
+- `timing`
 - `summary`
 - `checks[]`
 - `refs.childWorkflowId`

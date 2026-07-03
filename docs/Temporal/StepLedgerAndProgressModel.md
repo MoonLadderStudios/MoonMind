@@ -155,7 +155,16 @@ Representative response:
       "attentionRequired": false,
       "attempt": 1,
       "startedAt": "2026-04-04T18:10:00Z",
+      "endedAt": null,
       "updatedAt": "2026-04-04T18:11:15Z",
+      "timing": {
+        "startedAt": "2026-04-04T18:10:00Z",
+        "endedAt": null,
+        "durationMs": null,
+        "elapsedMs": 75000,
+        "serverNow": "2026-04-04T18:11:15Z",
+        "precision": "live"
+      },
       "summary": "Executing tests in sandbox",
       "checks": [],
       "refs": {
@@ -197,7 +206,9 @@ Required fields:
 | `attentionRequired` | Whether the step currently needs operator action |
 | `attempt` | Current attempt number for the run-scoped logical step |
 | `startedAt` | Timestamp for the current attempt start |
+| `endedAt` | Timestamp for the current attempt end when known |
 | `updatedAt` | Last meaningful user-visible mutation for the step |
+| `timing` | First-class logical step duration projection from §7.1 |
 | `summary` | Short bounded operator summary |
 | `checks[]` | Structured review/check verdicts from §9 |
 | `refs` | Child-workflow / workflow-run references from §10 |
@@ -213,6 +224,21 @@ Rules:
 - `lastError` is a summary only; large error details belong in artifacts
 - `preservedFrom` must be present when a row is reused from a source run during failed-step recovery
 - preserved rows must not be counted as freshly executed work in the resumed run
+
+### 7.1 Step timing
+
+Every step row exposes a `timing` object so clients can display elapsed time without inferring duration from `updatedAt`.
+
+| Field | Meaning |
+| --- | --- |
+| `startedAt` | Current/latest execution start timestamp, or `null` before start |
+| `endedAt` | Current/latest execution end timestamp, or `null` while active or unavailable |
+| `durationMs` | Exact terminal duration when `endedAt` is known, otherwise `null` |
+| `elapsedMs` | `durationMs` for terminal steps, or active elapsed time as of `serverNow` |
+| `serverNow` | Server clock used for active elapsed calculation, or `null` when not needed |
+| `precision` | `exact`, `live`, `fallback`, or `unavailable` |
+
+Terminal rows use `endedAt - startedAt` with `precision: "exact"` when both timestamps are known. Active rows use `serverNow - startedAt` with `precision: "live"` so clients can tick locally without relying on the client clock. If a terminal row lacks `endedAt`, `updatedAt` may be used only as a `precision: "fallback"` projection. Pending and ready rows use `precision: "unavailable"` and no elapsed value.
 
 If a step exhausts retries because of model-provider rate limits, the current
 step row must include a bounded operator-facing summary such as:
