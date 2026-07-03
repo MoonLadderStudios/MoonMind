@@ -29,6 +29,11 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(run_module.workflow, "info", lambda: workflow_info)
     monkeypatch.setattr(run_module.workflow, "logger", logger)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "now",
+        lambda: datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
+    )
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
 
 

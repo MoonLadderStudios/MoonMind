@@ -2,6 +2,11 @@
 name: pr-resolver
 description: Master orchestrator to resolve a PR by diagnosing state and delegating to specialized skills.
 metadata:
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
   required-skills: "fix-comments fix-ci fix-merge-conflicts"
   required-capabilities:
     - git
@@ -157,6 +162,6 @@ python3 .agents/skills/pr-resolver/bin/pr_resolve_full.py --pr <pr_number_or_bra
 - Keep `pr_resolve_finalize.py` as a gate checker; do not add remediation mutations there.
 - Do NOT invent custom conflict/CI/comment workflows; always execute the specialized skill instructions.
 - Respect retry caps; if retries are exhausted, return `attempts_exhausted` and stop.
-- This skill is allowed to commit/push and merge (task.publish.mode MUST be none).
+- This skill owns publishing under `task.publish.mode = "auto"` and may commit, push, or merge only as required to resolve the target PR. Before reporting success, write `artifacts/publish_result.json` with auto publish evidence proving the verified outcome.
 - A failed push, missing GitHub auth, or missing remote branch update is an unresolved PR blocker, even if all code changes are committed locally.
 - Never background the orchestration command or rely on notifications/scheduled wakeups to finish the merge; run it in the foreground and wait for it to return (see Foreground Execution Contract).

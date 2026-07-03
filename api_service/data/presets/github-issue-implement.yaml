@@ -108,6 +108,7 @@ steps:
     inputs:
       repository: '{{ inputs.github_issue.repository }}'
       issueNumber: '{{ inputs.github_issue.number }}'
+      artifactPath: artifacts/github-issue-implement-brief.json
 - kind: include
   slug: issue-implement-assessment
   alias: assess
@@ -119,6 +120,7 @@ steps:
     issue_url: "{{ inputs.github_issue.url | default('') }}"
     brief_artifact_path: artifacts/github-issue-implement-brief.json
     assessment_artifact_path: artifacts/github-issue-implement-assessment.json
+    constraints: '{{ inputs.constraints }}'
 - title: Check GitHub issue blockers before implementation
   type: tool
   instructions: 'Read artifacts/github-issue-implement-assessment.json (or the recorded
@@ -175,7 +177,7 @@ steps:
     pr_artifact_path: artifacts/github-issue-implement-pr.json
     verify_artifact_path: artifacts/github-issue-implement-verify.json
     verification_target: issue_brief
-    remediation_max_attempts: '1'
+    remediation_max_attempts: '6'
     constraints: '{{ inputs.constraints }}'
 - title: Finalize GitHub issue status
   type: tool

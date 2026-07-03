@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from pydantic import (
@@ -25,7 +25,10 @@ from moonmind.statuses.step_execution import (
     StepExecutionStatus,
     StepExecutionTerminalDisposition,
 )
-from moonmind.statuses.step_ledger import StepLedgerStatusValue
+from moonmind.statuses.step_ledger import (
+    StepLedgerStatusValue,
+    step_execution_to_ledger_status,
+)
 from moonmind.statuses.temporal_status import TemporalStatusValue
 
 SUPPORTED_WORKFLOW_TYPES = (
@@ -2855,8 +2858,12 @@ class StepLedgerWorkloadModel(BaseModel):
         alias="artifactPublication",
     )
 
+
+StepTimingPrecision = Literal["exact", "live", "fallback", "unavailable"]
+
+
 class StepTimingModel(BaseModel):
-    """User-facing logical-step timing independent from workload timing."""
+    """Bounded user-facing logical timing for a step or step execution."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -2865,10 +2872,71 @@ class StepTimingModel(BaseModel):
     duration_ms: int | None = Field(None, alias="durationMs", ge=0)
     elapsed_ms: int | None = Field(None, alias="elapsedMs", ge=0)
     server_now: datetime | None = Field(None, alias="serverNow")
-    precision: Literal["exact", "live", "fallback", "unavailable"] = Field(
-        "unavailable",
-        alias="precision",
-    )
+    precision: StepTimingPrecision = Field("unavailable", alias="precision")
+    preserved: bool = Field(False, alias="preserved")
+
+
+_ACTIVE_STEP_TIMING_STATUSES = {"executing", "reviewing", "awaiting_external"}
+_TERMINAL_STEP_TIMING_STATUSES = {"completed", "failed", "skipped", "canceled"}
+
+
+def _duration_ms_between(
+    started_at: datetime | None,
+    ended_at: datetime | None,
+) -> int | None:
+    if started_at is None or ended_at is None:
+        return None
+    started = started_at
+    ended = ended_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if ended.tzinfo is None:
+        ended = ended.replace(tzinfo=timezone.utc)
+    return max(0, int((ended - started).total_seconds() * 1000))
+
+
+def _fallback_step_timing_payload(
+    *,
+    status: str | None,
+    started_at: datetime | None,
+    updated_at: datetime | None,
+    preserved: bool = False,
+    status_source: Literal["ledger", "step_execution"] = "ledger",
+) -> dict[str, Any]:
+    normalized_status = str(status or "").strip()
+    if status_source == "step_execution" and normalized_status:
+        normalized_status = step_execution_to_ledger_status(normalized_status).value
+    if normalized_status in _ACTIVE_STEP_TIMING_STATUSES and started_at is not None:
+        elapsed_ms = _duration_ms_between(started_at, updated_at)
+        return {
+            "startedAt": started_at,
+            "endedAt": None,
+            "durationMs": None,
+            "elapsedMs": elapsed_ms,
+            "serverNow": updated_at,
+            "precision": "live" if elapsed_ms is not None else "unavailable",
+            "preserved": preserved,
+        }
+    if normalized_status in _TERMINAL_STEP_TIMING_STATUSES and started_at is not None:
+        duration_ms = _duration_ms_between(started_at, updated_at)
+        return {
+            "startedAt": started_at,
+            "endedAt": updated_at if duration_ms is not None else None,
+            "durationMs": duration_ms,
+            "elapsedMs": duration_ms,
+            "serverNow": updated_at,
+            "precision": "fallback" if duration_ms is not None else "unavailable",
+            "preserved": preserved,
+        }
+    return {
+        "startedAt": started_at,
+        "endedAt": None,
+        "durationMs": None,
+        "elapsedMs": None,
+        "serverNow": updated_at,
+        "precision": "unavailable",
+        "preserved": preserved,
+    }
 
 class PreservedStepProvenanceModel(BaseModel):
     """Source execution provenance for a preserved step row."""
@@ -2900,9 +2968,7 @@ class StepLedgerRowModel(BaseModel):
         ge=0,
     )
     started_at: datetime | None = Field(None, alias="startedAt")
-    ended_at: datetime | None = Field(None, alias="endedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
-    timing: StepTimingModel | None = Field(None, alias="timing")
     summary: str | None = Field(None, alias="summary")
     checks: list[StepLedgerCheckModel] = Field(default_factory=list, alias="checks")
     refs: StepLedgerRefsModel = Field(default_factory=StepLedgerRefsModel, alias="refs")
@@ -2919,7 +2985,21 @@ class StepLedgerRowModel(BaseModel):
         None, alias="recoveryPreservation"
     )
     workload: StepLedgerWorkloadModel | None = Field(None, alias="workload")
+    timing: StepTimingModel | None = Field(None, alias="timing")
     last_error: str | None = Field(None, alias="lastError")
+
+    @model_validator(mode="after")
+    def _populate_timing(self) -> "StepLedgerRowModel":
+        if self.timing is None:
+            self.timing = StepTimingModel.model_validate(
+                _fallback_step_timing_payload(
+                    status=self.status,
+                    started_at=self.started_at,
+                    updated_at=self.updated_at,
+                    preserved=self.preserved_from is not None,
+                )
+            )
+        return self
 
 class StepLedgerSnapshotModel(BaseModel):
     """Latest-run step-ledger query payload."""
@@ -2967,6 +3047,7 @@ class StepExecutionProjectionModel(BaseModel):
     )
     started_at: datetime | None = Field(None, alias="startedAt")
     updated_at: datetime | None = Field(None, alias="updatedAt")
+    timing: StepTimingModel | None = Field(None, alias="timing")
     summary: str | None = Field(None, alias="summary", max_length=1000)
     runtime_child_refs: dict[str, Any] = Field(
         default_factory=dict, alias="runtimeChildRefs"
@@ -2985,6 +3066,19 @@ class StepExecutionProjectionModel(BaseModel):
     compatibility_decision: CompatibilityBoundaryDecisionModel | None = Field(
         None, alias="compatibilityDecision"
     )
+
+    @model_validator(mode="after")
+    def _populate_timing(self) -> "StepExecutionProjectionModel":
+        if self.timing is None:
+            self.timing = StepTimingModel.model_validate(
+                _fallback_step_timing_payload(
+                    status=self.status,
+                    started_at=self.started_at,
+                    updated_at=self.updated_at,
+                    status_source="step_execution",
+                )
+            )
+        return self
 
 
 class StepExecutionDetailModel(StepExecutionProjectionModel):

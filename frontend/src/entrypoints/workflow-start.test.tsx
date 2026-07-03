@@ -100,55 +100,115 @@ describe("buildEditParametersPatch", () => {
   });
 });
 
-const mockPayload: BootPayload = {
-  page: "workflow-start",
-  apiBase: "/api",
-  initialData: {
-    dashboardConfig: {
-      sources: {
-        temporal: {
-          create: "/api/executions",
-          artifactCreate: "/api/artifacts",
-        },
-        github: {
-          branches: "/api/github/branches?repository={repository}",
-          issues: "/api/github/issues?repository={repository}&q={query}",
-        },
-      },
-      system: {
-        defaultRepository: "MoonLadderStudios/MoonMind",
-        defaultAgentRuntime: "codex_cli",
-        defaultTaskModel: "gpt-5.4",
-        defaultTaskEffort: "medium",
-        defaultPublishMode: "pr",
-        defaultProposeTasks: false,
-        defaultTaskModelByRuntime: {
-          codex_cli: "gpt-5.4",
-          claude_code: "claude-opus-4-7",
-        },
-        defaultTaskEffortByRuntime: {
-          codex_cli: "medium",
-          claude_code: "low",
-        },
-        supportedAgentRuntimes: ["codex_cli", "claude_code"],
-        providerProfiles: {
-          list: "/api/v1/provider-profiles",
-        },
-        presetCatalog: {
-          enabled: true,
-          templateSaveEnabled: true,
-          list: "/api/presets",
-          detail: "/api/presets/{slug}",
-          expand: "/api/presets/{slug}:expand",
-          saveFromWorkflow: "/api/presets/save-from-workflow",
-        },
-      },
+describe("WorkflowStartPage loading placeholders", () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/workflows/new?editExecutionId=mm%3Aloading-draft",
+    );
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/executions/mm%3Aloading-draft")) {
+        return new Promise(() => {}) as Promise<Response>;
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("renders a create-flow placeholder while loading an editable execution draft", () => {
+    const dashboardConfig = {
+      ...mockDashboardConfig,
       features: {
         temporalDashboard: {
           temporalTaskEditing: true,
         },
       },
+    };
+
+    renderWithClient(
+      <WorkflowStartPage
+        payload={{
+          ...mockPayload,
+          initialData: {
+            dashboardConfig,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    expect(screen.getByText("Workflow start editable draft loading placeholder").closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByTestId("loading-placeholder-form-controls")).toBeTruthy();
+  });
+});
+
+const mockDashboardConfig = {
+  sources: {
+    temporal: {
+      create: "/api/executions",
+      artifactCreate: "/api/artifacts",
     },
+    github: {
+      branches: "/api/github/branches?repository={repository}",
+      issues: "/api/github/issues?repository={repository}&q={query}",
+    },
+  },
+  system: {
+    defaultRepository: "MoonLadderStudios/MoonMind",
+    defaultAgentRuntime: "codex_cli",
+    defaultTaskModel: "gpt-5.4",
+    defaultTaskEffort: "medium",
+    defaultPublishMode: "pr",
+    defaultProposeTasks: false,
+    defaultTaskModelByRuntime: {
+      codex_cli: "gpt-5.4",
+      claude_code: "claude-opus-4-7",
+    },
+    defaultTaskEffortByRuntime: {
+      codex_cli: "medium",
+      claude_code: "low",
+    },
+    supportedAgentRuntimes: ["codex_cli", "claude_code"],
+    providerProfiles: {
+      list: "/api/v1/provider-profiles",
+    },
+    presetCatalog: {
+      enabled: true,
+      templateSaveEnabled: true,
+      list: "/api/presets",
+      detail: "/api/presets/{slug}",
+      expand: "/api/presets/{slug}:expand",
+      saveFromWorkflow: "/api/presets/save-from-workflow",
+    },
+  },
+  features: {
+    temporalDashboard: {
+      temporalTaskEditing: true,
+    },
+  },
+};
+
+const mockPayload: BootPayload = {
+  page: "workflow-start",
+  apiBase: "/api",
+  initialData: {
+    dashboardConfig: mockDashboardConfig,
   },
 };
 
@@ -6519,7 +6579,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(request.payload.task.dependsOn).toEqual(["mm:dep-1"]);
   });
 
-  it("defaults publish mode to none when selecting pr-resolver skills", async () => {
+  it("defaults publish mode to auto when selecting pr-resolver skills", async () => {
     type MockInitialData = {
       dashboardConfig: {
         system: {
@@ -6566,7 +6626,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
-      ).toBe("none");
+      ).toBe("auto");
     });
 
     fireEvent.change(
@@ -6578,11 +6638,11 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
-      ).toBe("none");
+      ).toBe("auto");
     });
   });
 
-  it("defaults publish mode to none when selecting self-publishing fix skills", async () => {
+  it("defaults publish mode to auto when selecting self-publishing fix skills", async () => {
     type MockInitialData = {
       dashboardConfig: {
         system: {
@@ -6621,12 +6681,12 @@ describe.skip("Task Create Entrypoint", () => {
     ) as HTMLSelectElement;
     for (const skillId of ["fix-comments", "fix-ci", "fix-merge-conflicts"]) {
       // Reset the publish mode to "pr" before each iteration so every skill is
-      // independently verified to force the mode back to "none"; otherwise a
+      // independently verified to force the mode back to "auto"; otherwise a
       // bug in a later skill would be masked by the value set by an earlier one.
       fireEvent.change(publishSelect, { target: { value: "pr" } });
       fireEvent.change(skillSelect, { target: { value: skillId } });
       await waitFor(() => {
-        expect(publishSelect.value).toBe("none");
+        expect(publishSelect.value).toBe("auto");
       });
     }
   });
@@ -7640,7 +7700,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
-  it("submits publish mode none when the selected primary skill is pr-resolver", async () => {
+  it("submits publish mode auto when the selected primary skill is pr-resolver", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
@@ -7674,7 +7734,34 @@ describe.skip("Task Create Entrypoint", () => {
       .at(-1);
     const request = JSON.parse(String(executionCall?.[1]?.body));
     expect(request.payload.task.publish).toMatchObject({
-      mode: "none",
+      mode: "auto",
+    });
+  });
+
+  it("submits manually selected publish mode auto", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run the publish-capable workflow." },
+    });
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "auto" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.publish).toMatchObject({
+      mode: "auto",
     });
   });
 
@@ -7684,6 +7771,11 @@ describe.skip("Task Create Entrypoint", () => {
     const publishModeSelect = (await screen.findByLabelText(
       "Publish Mode",
     )) as HTMLSelectElement;
+    expect(
+      Array.from(publishModeSelect.options).some(
+        (option) => option.value === "auto" && option.text === "Auto",
+      ),
+    ).toBe(true);
     expect(
       Array.from(publishModeSelect.options).some(
         (option) =>

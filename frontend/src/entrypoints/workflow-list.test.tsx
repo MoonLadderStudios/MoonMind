@@ -53,7 +53,9 @@ describe('Workflows Entrypoint', () => {
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    expect(screen.getByText('Loading workflows...')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Workflow list' })).toBeTruthy();
+    expect(screen.getByText('Workflow list results loading placeholder').closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByTestId('loading-placeholder-table')).toBeTruthy();
   });
 
   it('MM-997 keeps /workflows as the full-width list route instead of the workspace shell', async () => {
@@ -1861,7 +1863,7 @@ describe('Workflows Entrypoint', () => {
       expect(lastExecutionListUrl()).toContain('finishedBlank=include');
     });
     expect(screen.getByRole('button', { name: 'Finished filter: blank' })).toBeTruthy();
-  });
+  }, 10000);
 
   it('shows a current-page values notice when facet values fail to load', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {

@@ -160,6 +160,10 @@ from moonmind.workflows.temporal.bounded_story_loop import (
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
+from moonmind.workflows.temporal.publish_auto_evidence import (
+    AutoPublishEvidenceError,
+    parse_auto_publish_evidence,
+)
 from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.scheduled_start import temporal_scheduled_start_time
 from moonmind.workflows.temporal.activity_catalog import (
@@ -523,6 +527,7 @@ RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = (
 RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = (
     "run-moonspec-verify-remediation-index-v1"
 )
+RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH = "run-moonspec-remediation-step-skip-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
 # execution begins so every step execution can be traced to the policy values
@@ -1112,7 +1117,7 @@ class MoonMindRunWorkflow:
         self._codex_session_cleared_before_step_attempts: set[
             str | tuple[str, int]
         ] = set()
-        self._trusted_jira_context: dict[str, Any] | None = None
+        self._trusted_issue_context: dict[str, Any] | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
         self._progress_snapshot: dict[str, Any] = {
@@ -4583,14 +4588,58 @@ class MoonMindRunWorkflow:
         inputs = node.get("inputs")
         return inputs if isinstance(inputs, Mapping) else {}
 
-    def _is_moonspec_remediation_step(self, node: Mapping[str, Any]) -> bool:
+    def _node_annotations_mapping(
+        self,
+        node: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
         node_inputs = self._node_inputs_mapping(node)
         annotations = node_inputs.get("annotations") or node.get("annotations")
-        if isinstance(annotations, Mapping):
-            for key in ("jiraOrchestrateRole", "issueImplementRole"):
-                role = str(annotations.get(key) or "").strip().lower()
-                if role == "moonspec-remediation":
-                    return True
+        return annotations if isinstance(annotations, Mapping) else {}
+
+    def _moonspec_step_role(self, node: Mapping[str, Any]) -> str:
+        annotations = self._node_annotations_mapping(node)
+        for key in ("jiraOrchestrateRole", "issueImplementRole"):
+            role = str(annotations.get(key) or "").strip().lower()
+            if role:
+                return role
+        return ""
+
+    @staticmethod
+    def _coerce_positive_int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            return None
+        return coerced if coerced >= 1 else None
+
+    def _moonspec_remediation_attempt_metadata(
+        self,
+        node: Mapping[str, Any],
+    ) -> tuple[int | None, int | None]:
+        annotations = self._node_annotations_mapping(node)
+        attempt = self._coerce_positive_int(
+            annotations.get("moonSpecRemediationAttempt")
+        )
+        max_attempts = self._coerce_positive_int(
+            annotations.get("moonSpecRemediationMaxAttempts")
+        )
+        return attempt, max_attempts
+
+    def _moonspec_remediation_attempt_within_budget(
+        self,
+        node: Mapping[str, Any],
+    ) -> bool:
+        attempt, max_attempts = self._moonspec_remediation_attempt_metadata(node)
+        if attempt is None or max_attempts is None:
+            return True
+        return attempt <= max_attempts
+
+    def _is_moonspec_remediation_step(self, node: Mapping[str, Any]) -> bool:
+        node_inputs = self._node_inputs_mapping(node)
+        if self._moonspec_step_role(node) == "moonspec-remediation":
+            return True
         skill_node = node.get("skill")
         skill_id_from_node = (
             skill_node.get("id") or skill_node.get("name")
@@ -4620,9 +4669,49 @@ class MoonMindRunWorkflow:
         current_index: int,
     ) -> bool:
         for node in ordered_nodes[current_index + 1:]:
-            if self._is_moonspec_remediation_step(node):
+            if self._is_moonspec_remediation_step(
+                node
+            ) and self._moonspec_remediation_attempt_within_budget(node):
                 return True
         return False
+
+    def _moonspec_remediation_loop_skip_reason(
+        self,
+        node: Mapping[str, Any],
+        *,
+        tool_name: str,
+        node_inputs: Mapping[str, Any],
+    ) -> str | None:
+        role = self._moonspec_step_role(node)
+        is_remediation = self._is_moonspec_remediation_step(node)
+        is_verification_gate = (
+            role == "moonspec-verification-gate"
+            and self._is_moonspec_verify_step(
+                tool_name=tool_name,
+                node_inputs=node_inputs,
+            )
+        )
+        if not (is_remediation or is_verification_gate):
+            return None
+
+        attempt, max_attempts = self._moonspec_remediation_attempt_metadata(node)
+        if (
+            attempt is not None
+            and max_attempts is not None
+            and attempt > max_attempts
+        ):
+            return (
+                "Skipped MoonSpec remediation loop step "
+                f"{attempt}; configured maximum is {max_attempts}."
+            )
+
+        verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+        if verdict in _MOONSPEC_GATE_PASSING_VERDICTS:
+            return (
+                "Skipped MoonSpec remediation loop step because verification already "
+                f"passed with verdict {verdict}."
+            )
+        return None
 
     def _extract_moonspec_verify_verdict(
         self,
@@ -5227,19 +5316,39 @@ class MoonMindRunWorkflow:
         if not isinstance(previous_outputs, Mapping):
             return None
         trusted_source = str(previous_outputs.get("trustedSource") or "").strip()
-        if trusted_source != "moonmind.jira.get_issue":
+        context_keys_by_source: dict[str, tuple[str, ...]] = {
+            "moonmind.jira.get_issue": (
+                "jiraIssueKey",
+                "jiraPresetBrief",
+                "presetBrief",
+                "jiraStepInstructions",
+                "artifactPath",
+                "resolvedSourceDesignPath",
+                "sourceResolution",
+                "jiraIssue",
+                "summary",
+            ),
+            "moonmind.github.get_issue": (
+                "repository",
+                "issueNumber",
+                "issueRef",
+                "issueUrl",
+                "githubIssue",
+                "issue",
+                "presetBrief",
+                "artifactPath",
+                "title",
+                "body",
+                "labels",
+                "summary",
+            ),
+        }
+        context_keys = context_keys_by_source.get(trusted_source)
+        if context_keys is None:
             return None
 
         context: dict[str, Any] = {"trustedSource": trusted_source}
-        for key in (
-            "jiraIssueKey",
-            "jiraPresetBrief",
-            "jiraStepInstructions",
-            "resolvedSourceDesignPath",
-            "sourceResolution",
-            "jiraIssue",
-            "summary",
-        ):
+        for key in context_keys:
             value = previous_outputs.get(key)
             if value in (None, "", {}, []):
                 continue
@@ -5272,11 +5381,21 @@ class MoonMindRunWorkflow:
             for key in (
                 "trustedSource",
                 "jiraIssueKey",
+                "repository",
+                "issueNumber",
+                "issueRef",
+                "issueUrl",
                 "summary",
+                "artifactPath",
                 "resolvedSourceDesignPath",
                 "sourceResolution",
                 "jiraPresetBrief",
+                "presetBrief",
                 "jiraStepInstructions",
+                "githubIssue",
+                "issue",
+                "title",
+                "body",
             )
             if key in compact_context
         }
@@ -5307,10 +5426,10 @@ class MoonMindRunWorkflow:
         payload = MoonMindRunWorkflow._trusted_context_payload(context)
         return (
             "MoonMind trusted previous step context:\n"
-            "The following JSON was produced by MoonMind's trusted Jira tool path. "
+            "The following JSON was produced by MoonMind's trusted issue tool path. "
             "Treat it as authoritative for this step. Do not use provider-native "
-            "Jira/Atlassian connectors, web scraping, or guessed issue content to "
-            "replace it.\n"
+            "Jira/Atlassian or GitHub connectors, web scraping, or guessed issue "
+            "content to replace it.\n"
             f"```json\n{payload}\n```"
         )
 
@@ -5337,21 +5456,21 @@ class MoonMindRunWorkflow:
         merged_inputs["instructions"] = previous_context
         return merged_inputs
 
-    def _record_trusted_jira_context(self, outputs: Mapping[str, Any]) -> None:
+    def _record_trusted_issue_context(self, outputs: Mapping[str, Any]) -> None:
         context = self._trusted_previous_outputs_context(outputs)
         if context:
-            self._trusted_jira_context = context
+            self._trusted_issue_context = context
 
-    def _merge_trusted_jira_context(
+    def _merge_trusted_issue_context(
         self,
         previous_outputs: Mapping[str, Any],
     ) -> Mapping[str, Any]:
-        if not self._trusted_jira_context:
+        if not self._trusted_issue_context:
             return previous_outputs
         if self._trusted_previous_outputs_context(previous_outputs):
             return previous_outputs
         merged = dict(previous_outputs)
-        for key, value in self._trusted_jira_context.items():
+        for key, value in self._trusted_issue_context.items():
             merged.setdefault(key, value)
         return merged
 
@@ -7060,6 +7179,10 @@ class MoonMindRunWorkflow:
                 tool.get("name") or tool.get("id") or ""
             ).strip()
             node_id = str(node.get("id") or "unknown")
+            raw_node_inputs = node.get("inputs")
+            original_node_inputs = (
+                dict(raw_node_inputs) if isinstance(raw_node_inputs, Mapping) else {}
+            )
             if self._is_preserved_step(node_id):
                 self._record_preserved_step_terminal_state(node_id, node)
                 preserved_outputs = self._preserved_step_outputs(node_id)
@@ -7072,6 +7195,24 @@ class MoonMindRunWorkflow:
                 and current_step_row.get("status") == "pending"
             ):
                 continue
+            if workflow.patched(RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH):
+                skip_reason = self._moonspec_remediation_loop_skip_reason(
+                    node,
+                    tool_name=tool_name,
+                    node_inputs=original_node_inputs,
+                )
+                if skip_reason:
+                    self._mark_step_terminal(
+                        node_id,
+                        status="skipped",
+                        updated_at=workflow.now(),
+                        summary=skip_reason,
+                        last_error=None,
+                    )
+                    self._summary = skip_reason
+                    self._refresh_step_readiness(updated_at=workflow.now())
+                    self._update_memo()
+                    continue
             handoff_block_reason = (
                 self._jira_orchestrate_external_handoff_block_reason(node)
             )
@@ -7089,7 +7230,6 @@ class MoonMindRunWorkflow:
                 self._refresh_step_readiness(updated_at=workflow.now())
                 self._update_memo()
                 break
-            original_node_inputs = dict(node.get("inputs", {}))
             if tool_type == "skill":
                 await load_registry_snapshot()
             approval_policy = plan_definition.policy.approval_policy
@@ -7144,7 +7284,7 @@ class MoonMindRunWorkflow:
                     node_id,
                     previous_step_outputs,
                 )
-                current_previous_outputs = self._merge_trusted_jira_context(
+                current_previous_outputs = self._merge_trusted_issue_context(
                     current_previous_outputs
                 )
                 if current_previous_outputs:
@@ -8118,7 +8258,7 @@ class MoonMindRunWorkflow:
                 boundary="before_publication",
                 updated_at=workflow.now(),
             )
-            self._record_publish_result(
+            await self._record_publish_result_from_execution(
                 parameters=parameters,
                 execution_result=execution_result,
             )
@@ -8214,7 +8354,7 @@ class MoonMindRunWorkflow:
                 execution_result, "outputs"
             )
             if isinstance(outputs_for_story_output, Mapping):
-                self._record_trusted_jira_context(outputs_for_story_output)
+                self._record_trusted_issue_context(outputs_for_story_output)
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
                 if isinstance(story_output_result, Mapping):
@@ -8305,7 +8445,7 @@ class MoonMindRunWorkflow:
                         node_id="publish-repair",
                         execution_result=execution_result,
                     )
-                    self._record_publish_result(
+                    await self._record_publish_result_from_execution(
                         parameters=parameters,
                         execution_result=execution_result,
                     )
@@ -9499,7 +9639,7 @@ class MoonMindRunWorkflow:
         if not isinstance(value, str):
             return ""
         normalized = value.strip().lower()
-        return normalized if normalized in {"none", "branch", "pr"} else ""
+        return normalized if normalized in {"auto", "none", "branch", "pr"} else ""
 
     def _managed_session_runtime_id(
         self, request: AgentExecutionRequest
@@ -10385,6 +10525,9 @@ class MoonMindRunWorkflow:
             return
 
         publish_mode = self._publish_mode(parameters)
+        if publish_mode == "auto":
+            self._record_auto_publish_result(execution_result)
+            return
         if publish_mode not in {"pr", "branch"}:
             return
 
@@ -10484,6 +10627,148 @@ class MoonMindRunWorkflow:
         if push_status == "pushed" and publish_mode == "branch":
             self._publish_status = "published"
             self._publish_reason = "published branch"
+
+    async def _record_publish_result_from_execution(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+        execution_result: Any,
+    ) -> None:
+        if self._publish_mode(parameters) == "auto":
+            await self._resolve_auto_publish_evidence_ref(execution_result)
+            if (
+                self._publish_status == "failed"
+                and str(self._publish_reason or "").startswith(
+                    "auto_publish_evidence_read_failed:"
+                )
+            ):
+                return
+        self._record_publish_result(
+            parameters=parameters,
+            execution_result=execution_result,
+        )
+
+    async def _resolve_auto_publish_evidence_ref(self, execution_result: Any) -> None:
+        outputs = self._effective_result_outputs(execution_result)
+        if not isinstance(outputs, Mapping):
+            return
+        for key in (
+            "publishResult",
+            "publish_result",
+            "publishEvidence",
+            "publish_evidence",
+            "autoPublishEvidence",
+            "auto_publish_evidence",
+        ):
+            if key in outputs:
+                return
+
+        output_refs = outputs.get("outputRefs") or outputs.get("output_refs")
+        if not isinstance(output_refs, Mapping):
+            return
+        ref = (
+            output_refs.get("publish_result.json")
+            or output_refs.get("publishResult")
+            or output_refs.get("publish_result")
+        )
+        if not isinstance(ref, str) or not ref.strip():
+            return
+
+        evidence_ref = ref.strip()
+        self._publish_context["evidenceRef"] = evidence_ref
+        artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
+        try:
+            evidence_payload = await execute_typed_activity(
+                "artifact.read",
+                ArtifactReadInput(
+                    principal=self._principal(),
+                    artifact_ref=evidence_ref,
+                ),
+                **self._execute_kwargs_for_route(artifact_read_route),
+            )
+        except Exception as exc:
+            self._publish_status = "failed"
+            self._publish_reason = f"auto_publish_evidence_read_failed: {exc}"
+            return
+        self._publish_context["autoPublishEvidence"] = evidence_payload
+
+    def _record_auto_publish_result(self, execution_result: Any) -> None:
+        outputs = self._effective_result_outputs(execution_result)
+        evidence_payload: Any = None
+        if isinstance(outputs, Mapping):
+            for key in (
+                "publishResult",
+                "publish_result",
+                "publishEvidence",
+                "publish_evidence",
+                "autoPublishEvidence",
+                "auto_publish_evidence",
+            ):
+                if key in outputs:
+                    evidence_payload = outputs.get(key)
+                    break
+            if evidence_payload is None:
+                output_refs = outputs.get("outputRefs") or outputs.get("output_refs")
+                if isinstance(output_refs, Mapping):
+                    ref = (
+                        output_refs.get("publish_result.json")
+                        or output_refs.get("publishResult")
+                        or output_refs.get("publish_result")
+                    )
+                    if isinstance(ref, str) and ref.strip():
+                        self._publish_context["evidenceRef"] = ref.strip()
+        if evidence_payload is None:
+            evidence_payload = self._publish_context.get("autoPublishEvidence")
+
+        if evidence_payload is None:
+            self._publish_status = "failed"
+            self._publish_reason = "auto_publish_evidence_missing"
+            return
+
+        try:
+            evidence = parse_auto_publish_evidence(evidence_payload)
+        except AutoPublishEvidenceError as exc:
+            self._publish_status = "failed"
+            self._publish_reason = str(exc)
+            return
+
+        self._publish_context.update(
+            {
+                "mode": "auto",
+                "owner": "agent",
+                "status": evidence.status,
+                "action": evidence.action,
+                "skillId": evidence.skill_id,
+                "repository": evidence.repository,
+                "branch": evidence.branch,
+                "localHead": evidence.local_head,
+                "remoteBranchHead": evidence.remote_branch_head,
+                "remoteVerified": evidence.remote_verified,
+                "pushed": evidence.pushed,
+                "merged": evidence.merged,
+                "prUrl": evidence.pr_url,
+                "blockedReason": evidence.blocked_reason,
+                "verificationCommands": list(evidence.verification_commands),
+            }
+        )
+        if evidence.status == "blocked":
+            self._publish_status = "failed"
+            self._publish_reason = evidence.blocked_reason or "auto_publish_blocked"
+        elif evidence.status == "failed":
+            self._publish_status = "failed"
+            self._publish_reason = evidence.blocked_reason or "auto_publish_failed"
+        elif evidence.status == "no_op_verified":
+            self._publish_status = "not_required"
+            self._publish_reason = "auto publish no-op verified"
+        else:
+            self._publish_status = "published"
+            self._publish_reason = (
+                "auto publish verified merge"
+                if evidence.merged
+                else "auto publish verified push"
+            )
+            if evidence.pr_url:
+                self._pull_request_url = evidence.pr_url
 
     def _report_only_publish_not_required_reason(
         self,
@@ -11596,6 +11881,11 @@ class MoonMindRunWorkflow:
             self._publish_status = "failed"
             self._publish_reason = missing_outcome
             return ("failed", missing_outcome, True)
+
+        if publish_mode == "auto" and self._publish_status is None:
+            self._publish_status = "failed"
+            self._publish_reason = "auto_publish_evidence_missing"
+            return ("failed", self._publish_reason, True)
 
         if publish_mode == "none":
             return (
@@ -14835,6 +15125,24 @@ class MoonMindRunWorkflow:
                         code = "PUBLISH_DISABLED"
                         publish_status = "skipped"
                         publish_reason = "publishing disabled"
+                    elif publish_mode == "auto" and self._publish_status == "published":
+                        if self._publish_context.get("merged") is True:
+                            code = "PUBLISHED_PR"
+                            publish_reason = (
+                                self._publish_reason or "auto publish verified merge"
+                            )
+                        else:
+                            code = "PUBLISHED_BRANCH"
+                            publish_reason = (
+                                self._publish_reason or "auto publish verified push"
+                            )
+                        publish_status = "published"
+                    elif publish_mode == "auto" and self._publish_status == "not_required":
+                        code = "NO_COMMIT"
+                        publish_status = "skipped"
+                        publish_reason = (
+                            self._publish_reason or "auto publish no-op verified"
+                        )
                     elif self._publish_status == "skipped":
                         code = "NO_COMMIT"
                         publish_status = "skipped"
@@ -14843,7 +15151,7 @@ class MoonMindRunWorkflow:
                             or "No repository changes were available to commit or publish."
                         )
                     elif self._publish_status == "not_required":
-                        code = "PUBLISH_DISABLED"
+                        code = "NO_COMMIT" if publish_mode == "auto" else "PUBLISH_DISABLED"
                         publish_status = "skipped"
                         publish_reason = (
                             self._publish_reason or "publish output not required"
@@ -14945,6 +15253,13 @@ class MoonMindRunWorkflow:
                 finish_summary["publish"]["commitCreated"] = False
                 finish_summary["publish"]["branchPushed"] = False
                 finish_summary["publish"]["prUrl"] = None
+            if publish_mode == "auto":
+                finish_summary["publish"]["owner"] = "agent"
+                finish_summary["publish"]["evidenceRequired"] = True
+                if self._publish_context.get("blockedReason"):
+                    finish_summary["publish"]["blockedReason"] = (
+                        self._publish_context.get("blockedReason")
+                    )
             if self._publish_context:
                 finish_summary["publishContext"] = dict(self._publish_context)
                 merge_automation_summary = self._merge_automation_summary_from_context()
@@ -16049,7 +16364,7 @@ class MoonMindRunWorkflow:
             run_id=workflow.info().run_id,
             rows=self._step_ledger_rows,
             prepared_artifact_refs=self._prepared_artifact_refs,
-            server_now=workflow.now(),
+            queried_at=workflow.now(),
         )
         return StepLedgerSnapshotModel.model_validate(snapshot).model_dump(
             by_alias=True,

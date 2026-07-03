@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { marked } from 'marked';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 
 interface SkillItem {
   id: string;
@@ -387,7 +388,13 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
 
             <div className="mt-4 grid gap-2" data-testid="skill-list">
               {skillsQuery.isLoading ? (
-                <p className="text-sm text-slate-500 dark:text-slate-400">Loading skills…</p>
+                <LoadingPlaceholder
+                  surface="skills"
+                  region="catalog"
+                  variant="catalog"
+                  density="compact"
+                  preserveContext
+                />
               ) : skillsQuery.isError ? (
                 <div className="space-y-2">
                   <p className="text-sm text-mm-danger">Failed to load skills.</p>
@@ -492,7 +499,13 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
                 )}
               </div>
             ) : skillsQuery.isLoading ? (
-              <p className="text-sm text-slate-500 dark:text-slate-400">Loading skills…</p>
+              <LoadingPlaceholder
+                surface="skills"
+                region="preview"
+                variant="detail"
+                density="detail-heavy"
+                preserveContext
+              />
             ) : skillsQuery.isError ? (
               <p className="text-sm text-mm-danger">Failed to load skills.</p>
             ) : (

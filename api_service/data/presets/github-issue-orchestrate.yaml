@@ -125,6 +125,7 @@ steps:
     issue_url: '{{ inputs.github_issue.url | default('''') }}'
     brief_artifact_path: artifacts/github-issue-orchestrate-brief.json
     assessment_artifact_path: artifacts/github-issue-orchestrate-assessment.json
+    constraints: '{{ inputs.constraints }}'
 - title: Check GitHub issue blockers before orchestration
   type: tool
   instructions: 'Read artifacts/github-issue-orchestrate-assessment.json (or the recorded
@@ -724,16 +725,18 @@ steps:
     Consume the latest moonspec-verify report, including its Source Document Drift section,
     plus artifacts/doc-discoveries/<feature>.json when present. Apply the moonspec-doc-reconcile
     update gate strictly: edit canonical docs only for definite, evidence-backed discoveries
-    showing the document is functionally wrong, internally inconsistent, or correctly diverged
-    from for verified best-practice reasons. Otherwise report no_update_required; a no-op
-    outcome is a correct result.
+    showing the document is impossible to satisfy as written, unclear, or internally
+    inconsistent. Deliberate divergence from a satisfiable documented approach escalates
+    for an owner decision instead of editing. Otherwise report no_update_required; a
+    no-op outcome is a correct result.
 
 
     If a required update conflicts with the constitution, README, Document Model, Documentation
-    Architecture Standard, module-owned contract policy, or architecture direction, or if
-    ownership is ambiguous between multiple canonical documents, do not edit the document;
-    create the GitHub follow-up issue per the skill and continue. Escalation does not block
-    pull request creation.
+    Architecture Standard, module-owned contract policy, or architecture direction, when ownership
+    is ambiguous between multiple canonical documents, or when the implementation deliberately
+    diverged from a satisfiable documented approach without explicit authorization for that
+    desired-state change, do not edit the document; create the GitHub follow-up issue per the
+    skill and continue. Escalation does not block pull request creation.
 
 
     Write the structured outcome to artifacts/github-issue-orchestrate-doc-reconcile.json
@@ -865,3 +868,4 @@ steps:
       issueNumber: '{{ inputs.github_issue.number }}'
       mode: finalize_after_pr_or_done
       pullRequestArtifactPath: artifacts/github-issue-orchestrate-pr.json
+      verificationArtifactPath: var/artifacts/moonspec-verify/github-issue-orchestrate.json

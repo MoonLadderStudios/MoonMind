@@ -1,0 +1,21 @@
+{
+  "provider": "github",
+  "boundary": "pr_publication_gate",
+  "mode": "recorded_trusted_tool",
+  "tool": "repo.create_pr",
+  "input": {
+    "issueProvider": "github",
+    "issueRef": "MoonLadderStudios/MoonMind#1101",
+    "verifyArtifactPath": "artifacts/issue-implement-verify.json"
+  },
+  "trustedArtifacts": {
+    "verification": {
+      "verdict": "ADDITIONAL_WORK_NEEDED"
+    }
+  },
+  "output": {
+    "status": "BLOCKED",
+    "created": false,
+    "summary": "Pull request creation blocked because verifier verdict is not FULLY_IMPLEMENTED."
+  }
+}

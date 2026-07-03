@@ -86,6 +86,27 @@ describe('Manifests Entrypoint', () => {
     fetchSpy.mockRestore();
   });
 
+  it('renders page-matched loading placeholders for manifest controls and recent runs', () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions?entry=manifest&limit=200') {
+        return new Promise(() => {}) as Promise<Response>;
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    expect(screen.getByRole('heading', { name: 'Manifests' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Run Manifest' })).toBeTruthy();
+    expect(screen.getByText('Manifests recent runs loading placeholder').closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByTestId('loading-placeholder-table')).toBeTruthy();
+  });
+
   it('renders manifest submission and recent runs on the same page', async () => {
     renderWithClient(<ManifestsPage payload={mockPayload} />);
 

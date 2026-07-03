@@ -127,6 +127,7 @@ steps:
       args: {}
       inputs:
         issueKey: "{{ inputs.jira_issue_key }}"
+        artifactPath: artifacts/jira-orchestrate-brief.json
   - title: Classify request and resume point
     instructions: |-
       Use the Jira preset brief for {{ inputs.jira_issue_key }} as the canonical MoonSpec orchestration input.
@@ -460,9 +461,9 @@ steps:
 
       Use the canonical source document recorded in spec.md (Source Document){% if inputs.source_design_path %} or the provided source design path {{ inputs.source_design_path }}{% endif %} as the starting authority candidate. Reconcile by authority scope, not original-source convenience: apply docs/Workflows/MoonSpecDocumentModel.md plus the docs/DocumentationArchitecture.md authority ladder and module-owned contract policy to identify the canonical document that owns each affected claim. The owning canonical doc may be different from the original source doc. If no canonical source candidate under docs/ exists, write the structured no_update_required outcome and continue.
 
-      Consume the latest moonspec-verify report, including its Source Document Drift section, plus artifacts/doc-discoveries/<feature>.json when present. Apply the moonspec-doc-reconcile update gate strictly: edit canonical docs only for definite, evidence-backed discoveries showing the document is functionally wrong, internally inconsistent, or correctly diverged from for verified best-practice reasons. Otherwise report no_update_required; a no-op outcome is a correct result.
+      Consume the latest moonspec-verify report, including its Source Document Drift section, plus artifacts/doc-discoveries/<feature>.json when present. Apply the moonspec-doc-reconcile update gate strictly: edit canonical docs only for definite, evidence-backed discoveries showing the document is impossible to satisfy as written, unclear, or internally inconsistent. Deliberate divergence from a satisfiable documented approach escalates for an owner decision instead of editing. Otherwise report no_update_required; a no-op outcome is a correct result.
 
-      If a required update conflicts with the constitution, README, Document Model, Documentation Architecture Standard, module-owned contract policy, or architecture direction, or if ownership is ambiguous between multiple canonical documents, do not edit the document; create the Jira escalation issue per the skill and continue. Escalation does not block pull request creation.
+      If a required update conflicts with the constitution, README, Document Model, Documentation Architecture Standard, module-owned contract policy, or architecture direction, when ownership is ambiguous between multiple canonical documents, or when the implementation deliberately diverged from a satisfiable documented approach without explicit authorization for that desired-state change, do not edit the document; create the Jira escalation issue per the skill and continue. Escalation does not block pull request creation.
 
       Write the structured outcome to artifacts/jira-orchestrate-doc-reconcile.json with keys action, docPaths, updated, noUpdateRequired, escalated, gateRationale, evidence, and jiraIssue when escalated. Every updated/noUpdateRequired/escalated item must include a reason. Do not commit, push, or create a pull request from this step; any canonical doc edits remain in the working tree so the pull request step publishes them together with the implementation.
     skill:

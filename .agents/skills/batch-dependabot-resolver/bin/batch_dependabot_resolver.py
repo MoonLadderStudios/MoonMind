@@ -592,7 +592,7 @@ def _build_queue_request(
     max_attempts: int,
     inherit_runtime_from_caller: bool = False,
 ) -> dict[str, Any]:
-    publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
+    publish_mode = resolve_publish_mode_for_skill("pr-resolver", "auto")
     runtime_payload: dict[str, Any] = {}
     if runtime.mode:
         runtime_payload["mode"] = runtime.mode

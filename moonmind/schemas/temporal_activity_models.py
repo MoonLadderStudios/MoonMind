@@ -238,7 +238,7 @@ class AgentRuntimeStatusInput(BaseModel):
 class AgentRuntimeFetchResultInput(AgentRuntimeStatusInput):
     """Public input for agent_runtime.fetch_result."""
 
-    publish_mode: Literal["none", "pr", "branch"] = Field(
+    publish_mode: Literal["auto", "none", "pr", "branch"] = Field(
         default="none",
         alias="publishMode",
         validation_alias=AliasChoices("publishMode", "publish_mode"),

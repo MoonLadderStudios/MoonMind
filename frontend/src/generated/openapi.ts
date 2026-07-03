@@ -1628,6 +1628,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/turns/{branch_turn_id}/launch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Launch Checkpoint Branch Turn */
+        post: operations["launch_checkpoint_branch_turn_api_executions__workflow_id__checkpoint_branches__branch_id__turns__branch_turn_id__launch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/continue": {
         parameters: {
             query?: never;
@@ -4147,6 +4164,10 @@ export interface components {
             currentHeadStepExecutionId?: string | null;
             /** Currentheadcheckpointref */
             currentHeadCheckpointRef?: string | null;
+            /** Artifactrefs */
+            artifactRefs?: {
+                [key: string]: unknown;
+            };
             /** Currentheadcommit */
             currentHeadCommit?: string | null;
             /** Pullrequesturl */
@@ -4218,6 +4239,35 @@ export interface components {
             /** Idempotencykey */
             idempotencyKey: string;
         };
+        /** CheckpointBranchTurnLaunchRequest */
+        CheckpointBranchTurnLaunchRequest: {
+            /** Createdstepexecutionid */
+            createdStepExecutionId: string;
+            /** Runtimeagentrunid */
+            runtimeAgentRunId?: string | null;
+            /** Providersessionid */
+            providerSessionId?: string | null;
+            /** Workspacebaseline */
+            workspaceBaseline?: {
+                [key: string]: unknown;
+            };
+            /** Priorevidencerefs */
+            priorEvidenceRefs?: string[];
+            /** Boundedsummaries */
+            boundedSummaries?: {
+                [key: string]: unknown;
+            }[];
+            /** Buildermetadata */
+            builderMetadata?: {
+                [key: string]: unknown;
+            };
+            /** Runtimerequestref */
+            runtimeRequestRef?: string | null;
+            /** Runtimeresultref */
+            runtimeResultRef?: string | null;
+            /** Diagnosticsref */
+            diagnosticsRef?: string | null;
+        };
         /** CheckpointBranchTurnListResponse */
         CheckpointBranchTurnListResponse: {
             /** Items */
@@ -4239,12 +4289,24 @@ export interface components {
             sourceCheckpointRef: string;
             /** Sourcecheckpointdigest */
             sourceCheckpointDigest?: string | null;
+            /** Contextbundleref */
+            contextBundleRef?: string | null;
+            /** Stepexecutionmanifestref */
+            stepExecutionManifestRef?: string | null;
             /** Createdstepexecutionid */
             createdStepExecutionId?: string | null;
+            /** Runtimeagentrunid */
+            runtimeAgentRunId?: string | null;
+            /** Providersessionid */
+            providerSessionId?: string | null;
             /** Idempotencykey */
             idempotencyKey: string;
             /** Status */
             status: string;
+            /** Diagnostics */
+            diagnostics?: {
+                [key: string]: unknown;
+            };
             /**
              * Createdat
              * Format: date-time
@@ -9016,6 +9078,7 @@ export interface components {
             startedAt?: string | null;
             /** Updatedat */
             updatedAt?: string | null;
+            timing?: components["schemas"]["StepTimingModel"] | null;
             /** Summary */
             summary?: string | null;
             /** Runtimechildrefs */
@@ -9141,6 +9204,7 @@ export interface components {
             startedAt?: string | null;
             /** Updatedat */
             updatedAt?: string | null;
+            timing?: components["schemas"]["StepTimingModel"] | null;
             /** Summary */
             summary?: string | null;
             /** Runtimechildrefs */
@@ -9287,14 +9351,11 @@ export interface components {
             executionOrdinal: number;
             /** Startedat */
             startedAt?: string | null;
-            /** Endedat */
-            endedAt?: string | null;
             /**
              * Updatedat
              * Format: date-time
              */
             updatedAt: string;
-            timing?: components["schemas"]["StepTimingModel"] | null;
             /** Summary */
             summary?: string | null;
             /** Checks */
@@ -9310,6 +9371,7 @@ export interface components {
             stepCheckpointRef?: string | null;
             recoveryPreservation?: components["schemas"]["StepLedgerResumePreservationModel"] | null;
             workload?: components["schemas"]["StepLedgerWorkloadModel"] | null;
+            timing?: components["schemas"]["StepTimingModel"] | null;
             /** Lasterror */
             lastError?: string | null;
         };
@@ -9373,7 +9435,7 @@ export interface components {
         };
         /**
          * StepTimingModel
-         * @description User-facing logical-step timing independent from workload timing.
+         * @description Bounded user-facing logical timing for a step or step execution.
          */
         StepTimingModel: {
             /** Startedat */
@@ -9392,6 +9454,11 @@ export interface components {
              * @enum {string}
              */
             precision: "exact" | "live" | "fallback" | "unavailable";
+            /**
+             * Preserved
+             * @default false
+             */
+            preserved: boolean;
         };
         /** StoryDraft */
         StoryDraft: {
@@ -13529,6 +13596,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CheckpointBranchTurnListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    launch_checkpoint_branch_turn_api_executions__workflow_id__checkpoint_branches__branch_id__turns__branch_turn_id__launch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                branch_id: string;
+                branch_turn_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointBranchTurnLaunchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchTurnModel"];
                 };
             };
             /** @description Validation Error */

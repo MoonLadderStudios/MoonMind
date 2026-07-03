@@ -156,6 +156,15 @@ Representative response:
       "attempt": 1,
       "startedAt": "2026-04-04T18:10:00Z",
       "updatedAt": "2026-04-04T18:11:15Z",
+      "timing": {
+        "startedAt": "2026-04-04T18:10:00Z",
+        "endedAt": null,
+        "durationMs": null,
+        "elapsedMs": 75000,
+        "serverNow": "2026-04-04T18:11:15Z",
+        "precision": "live",
+        "preserved": false
+      },
       "summary": "Executing tests in sandbox",
       "checks": [],
       "refs": {
@@ -198,6 +207,7 @@ Required fields:
 | `attempt` | Current attempt number for the run-scoped logical step |
 | `startedAt` | Timestamp for the current attempt start |
 | `updatedAt` | Last meaningful user-visible mutation for the step |
+| `timing` | Logical step timing object for row chips, expanded Timing details, duration bars, and attempt-history display |
 | `summary` | Short bounded operator summary |
 | `checks[]` | Structured review/check verdicts from §9 |
 | `refs` | Child-workflow / workflow-run references from §10 |
@@ -208,6 +218,11 @@ Required fields:
 Rules:
 
 - `logicalStepId` comes from the plan node and must remain stable within that plan
+- `timing` carries `startedAt`, `endedAt`, `durationMs`, `elapsedMs`, `serverNow`, `precision`, and `preserved`
+- `precision: "exact"` means the terminal end and duration come from known step-end timing; `precision: "live"` means active elapsed time as of `serverNow`; `precision: "fallback"` means lifecycle timestamps were used because exact end timing was unavailable; `precision: "unavailable"` means the dashboard must show unavailable, ready, or not-started copy instead of inventing a duration
+- `updatedAt` remains the last user-visible mutation timestamp and must not be treated as the primary terminal end when explicit timing is available
+- `workload.durationSeconds` is runner/workload metadata and is not the logical step duration source for the row timing chip
+- preserved rows keep source-run timing with `timing.preserved: true`; operators see original timing or original timing unavailable, not newly executed work
 - clients must not infer step identity from array position alone
 - `summary` must stay bounded and display-safe
 - `lastError` is a summary only; large error details belong in artifacts

@@ -41,7 +41,7 @@ export interface DataTableProps<T> {
   ariaLabel?: string;
   /** Loading state replaces the body with an accessible loading row. */
   isLoading?: boolean;
-  loadingMessage?: string;
+  loadingMessage?: React.ReactNode;
   /** Error state replaces the body with an accessible error row. */
   isError?: boolean;
   errorMessage?: React.ReactNode;

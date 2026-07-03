@@ -240,7 +240,7 @@ def test_legacy_resolver_idempotency_key_preserves_replay_format() -> None:
 
     assert legacy == "resolver:mm:parent:pr:341:head:abc123"
 
-def test_build_resolver_run_request_uses_pr_resolver_and_publish_none() -> None:
+def test_build_resolver_run_request_uses_pr_resolver_and_publish_auto() -> None:
     request = build_resolver_run_request(
         parent_workflow_id="mm:parent",
         pull_request=_pull_request(),
@@ -251,11 +251,11 @@ def test_build_resolver_run_request_uses_pr_resolver_and_publish_none() -> None:
     assert request["workflow_type"] == "MoonMind.UserWorkflow"
     assert request["initial_parameters"]["priority"] == 10
     assert request["initial_parameters"]["task"]["skill"]["id"] == "pr-resolver"
-    assert request["initial_parameters"]["task"]["publish"]["mode"] == "none"
+    assert request["initial_parameters"]["task"]["publish"]["mode"] == "auto"
     assert request["initial_parameters"]["task"]["tool"]["name"] == "pr-resolver"
     assert request["initial_parameters"]["task"]["tool"]["type"] == "skill"
     assert "version" not in request["initial_parameters"]["task"]["tool"]
-    assert request["initial_parameters"]["publishMode"] == "none"
+    assert request["initial_parameters"]["publishMode"] == "auto"
     assert request["initial_parameters"]["task"]["skill"]["args"]["pr"] == "341"
 
 def test_build_resolver_run_request_pins_parent_provider_profile() -> None:
