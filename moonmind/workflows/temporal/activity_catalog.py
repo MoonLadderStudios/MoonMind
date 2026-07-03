@@ -970,8 +970,9 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 240, heartbeat_timeout_seconds=30),
+            timeouts=TemporalActivityTimeouts(300, 1200, heartbeat_timeout_seconds=120),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
+            heartbeat_required=True,
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.load_session_snapshot",

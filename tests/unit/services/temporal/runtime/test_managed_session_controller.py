@@ -547,6 +547,174 @@ async def test_mm866_docker_enabled_session_launches_agent_with_sidecar(
     )
 
 @pytest.mark.asyncio
+async def test_launch_session_recreates_sidecar_after_name_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={
+            "MOONMIND_URL": "http://api:8000",
+            "MOONMIND_WORKFLOW_DOCKER_MODE": "profiles",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+    sidecar_run_attempts = 0
+    sidecar_name = "moonmind-session-sess-1-docker"
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        nonlocal sidecar_run_attempts
+        del input_text, env
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 0, "", ""
+        if command[:4] == ("docker", "volume", "rm", "-f"):
+            return 0, "", ""
+        if command[:3] == ("docker", "volume", "create"):
+            return 0, command[-1] + "\n", ""
+        if command[:2] == ("docker", "run"):
+            name = command[command.index("--name") + 1]
+            if name == sidecar_name:
+                sidecar_run_attempts += 1
+                if sidecar_run_attempts == 1:
+                    return (
+                        125,
+                        "",
+                        'docker: Error response from daemon: Conflict. '
+                        f'The container name "/{sidecar_name}" is already in use '
+                        'by container "old-sidecar". You have to remove '
+                        "(or rename) that container to be able to reuse that name.",
+                    )
+                return 0, "sidecar-ctr\n", ""
+            if name.endswith("-agent"):
+                return 0, "agent-ctr\n", ""
+        if command[:3] == ("docker", "exec", "-e") and "docker" in command:
+            return 0, '"27.0.0"\n', ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "agent-ctr",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://moonmind-session-sess-1-agent",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    handle = await controller.launch_session(request)
+
+    assert handle.status == "ready"
+    assert sidecar_run_attempts == 2
+    assert commands.count(("docker", "rm", "-f", sidecar_name)) >= 2
+
+@pytest.mark.asyncio
+async def test_launch_session_cleans_up_sidecar_when_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={
+            "MOONMIND_URL": "http://api:8000",
+            "MOONMIND_WORKFLOW_DOCKER_MODE": "profiles",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+    sidecar_name = "moonmind-session-sess-1-docker"
+    agent_name = "moonmind-session-sess-1-agent"
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 0, "", ""
+        if command[:4] == ("docker", "volume", "rm", "-f"):
+            return 0, "", ""
+        if command[:3] == ("docker", "volume", "create"):
+            return 0, command[-1] + "\n", ""
+        if command[:2] == ("docker", "run"):
+            name = command[command.index("--name") + 1]
+            if name == sidecar_name:
+                return 0, "sidecar-ctr\n", ""
+            if name == agent_name:
+                raise asyncio.CancelledError()
+        if command[:3] == ("docker", "exec", "-e") and "docker" in command:
+            return 0, '"27.0.0"\n', ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await controller.launch_session(request)
+
+    assert commands.count(("docker", "rm", "-f", agent_name)) >= 1
+    assert commands.count(("docker", "rm", "-f", sidecar_name)) >= 2
+    assert (
+        "docker",
+        "volume",
+        "rm",
+        "-f",
+        "moonmind-session-sess-1-docker-socket",
+    ) in commands
+    assert (
+        "docker",
+        "volume",
+        "rm",
+        "-f",
+        "moonmind-session-sess-1-docker-graph",
+    ) in commands
+
+@pytest.mark.asyncio
 async def test_mm866_explicit_docker_denial_does_not_inherit_unrestricted_proxy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
