@@ -2914,7 +2914,7 @@ class DockerCodexManagedSessionController:
                     network_name=unrestricted_proxy_network,
                 )
         except asyncio.CancelledError:
-            await _cleanup_failed_launch(container_id or container_name)
+            await asyncio.shield(_cleanup_failed_launch(container_id or container_name))
             raise
         except Exception:
             await _cleanup_failed_launch(container_id or container_name)
@@ -2993,7 +2993,7 @@ class DockerCodexManagedSessionController:
                 extra_env={"MOONMIND_SESSION_CONTAINER_ID": container_id},
             )
         except asyncio.CancelledError:
-            await _cleanup_failed_launch(container_id)
+            await asyncio.shield(_cleanup_failed_launch(container_id))
             raise
         except Exception:
             await _cleanup_failed_launch(container_id)
