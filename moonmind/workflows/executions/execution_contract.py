@@ -65,7 +65,6 @@ _AUTO_PUBLISH_CAPABLE_SKILLS = frozenset(
         "fix-merge-conflicts",
     }
 )
-_SELF_MANAGED_PUBLISH_SKILLS = _AUTO_PUBLISH_CAPABLE_SKILLS
 _NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
     {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}
 )
@@ -877,6 +876,17 @@ def resolve_publish_mode_for_skill(
             "or an agent-owned publishing declaration"
         )
     return publish_mode
+
+
+def _publish_mode_precedence(mode: str) -> int:
+    if mode == "auto":
+        return 3
+    if mode in {"branch", "pr"}:
+        return 2
+    if mode == "none":
+        return 1
+    return 0
+
 
 def _is_resolve_pr_objective(value: object) -> bool:
     """Return True when task instructions target PR resolution behavior."""
@@ -2153,11 +2163,17 @@ class WorkflowExecutionSpec(BaseModel):
         for skill_id in skill_ids:
             if not skill_id or skill_id == "auto":
                 continue
-            resolved_publish_mode = resolve_publish_mode_for_skill(
+            mode = resolve_publish_mode_for_skill(
                 skill_id,
                 requested_publish_mode,
                 allow_repository_publish=allow_repository_publish,
             )
+            if (
+                resolved_publish_mode is None
+                or _publish_mode_precedence(mode)
+                > _publish_mode_precedence(resolved_publish_mode)
+            ):
+                resolved_publish_mode = mode
         if resolved_publish_mode is not None:
             self.publish.mode = resolved_publish_mode
         return self

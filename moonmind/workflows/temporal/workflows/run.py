@@ -8135,7 +8135,7 @@ class MoonMindRunWorkflow:
                 boundary="before_publication",
                 updated_at=workflow.now(),
             )
-            self._record_publish_result(
+            await self._record_publish_result_from_execution(
                 parameters=parameters,
                 execution_result=execution_result,
             )
@@ -8322,7 +8322,7 @@ class MoonMindRunWorkflow:
                         node_id="publish-repair",
                         execution_result=execution_result,
                     )
-                    self._record_publish_result(
+                    await self._record_publish_result_from_execution(
                         parameters=parameters,
                         execution_result=execution_result,
                     )
@@ -10504,6 +10504,70 @@ class MoonMindRunWorkflow:
         if push_status == "pushed" and publish_mode == "branch":
             self._publish_status = "published"
             self._publish_reason = "published branch"
+
+    async def _record_publish_result_from_execution(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+        execution_result: Any,
+    ) -> None:
+        if self._publish_mode(parameters) == "auto":
+            await self._resolve_auto_publish_evidence_ref(execution_result)
+            if (
+                self._publish_status == "failed"
+                and str(self._publish_reason or "").startswith(
+                    "auto_publish_evidence_read_failed:"
+                )
+            ):
+                return
+        self._record_publish_result(
+            parameters=parameters,
+            execution_result=execution_result,
+        )
+
+    async def _resolve_auto_publish_evidence_ref(self, execution_result: Any) -> None:
+        outputs = self._effective_result_outputs(execution_result)
+        if not isinstance(outputs, Mapping):
+            return
+        for key in (
+            "publishResult",
+            "publish_result",
+            "publishEvidence",
+            "publish_evidence",
+            "autoPublishEvidence",
+            "auto_publish_evidence",
+        ):
+            if key in outputs:
+                return
+
+        output_refs = outputs.get("outputRefs") or outputs.get("output_refs")
+        if not isinstance(output_refs, Mapping):
+            return
+        ref = (
+            output_refs.get("publish_result.json")
+            or output_refs.get("publishResult")
+            or output_refs.get("publish_result")
+        )
+        if not isinstance(ref, str) or not ref.strip():
+            return
+
+        evidence_ref = ref.strip()
+        self._publish_context["evidenceRef"] = evidence_ref
+        artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
+        try:
+            evidence_payload = await execute_typed_activity(
+                "artifact.read",
+                ArtifactReadInput(
+                    principal=self._principal(),
+                    artifact_ref=evidence_ref,
+                ),
+                **self._execute_kwargs_for_route(artifact_read_route),
+            )
+        except Exception as exc:
+            self._publish_status = "failed"
+            self._publish_reason = f"auto_publish_evidence_read_failed: {exc}"
+            return
+        self._publish_context["autoPublishEvidence"] = evidence_payload
 
     def _record_auto_publish_result(self, execution_result: Any) -> None:
         outputs = self._effective_result_outputs(execution_result)

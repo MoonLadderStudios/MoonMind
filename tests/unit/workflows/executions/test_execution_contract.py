@@ -1402,6 +1402,29 @@ def test_jira_issue_updater_allows_explicit_repository_publish_modes() -> None:
     assert resolve_publish_mode_for_skill("jira-issue-updater", None) == "none"
 
 
+def test_multi_skill_publish_resolution_preserves_auto_over_none() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {
+                "instructions": "Resolve PR and update Jira.",
+                "skill": {"id": "pr-resolver", "args": {"pr": "2962"}},
+                "steps": [
+                    {
+                        "id": "jira",
+                        "title": "Update Jira",
+                        "instructions": "Move Jira issue.",
+                        "skill": {"id": "jira-issue-updater", "args": {}},
+                    }
+                ],
+            },
+        },
+    )
+
+    assert result["workflow"]["publish"]["mode"] == "auto"
+
+
 def test_jira_orchestrate_preset_context_allows_first_step_skill_pr_publish() -> None:
     result = build_canonical_workflow_view(
         job_type="task",

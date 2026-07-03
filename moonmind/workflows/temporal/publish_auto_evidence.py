@@ -70,16 +70,13 @@ def _bool(payload: Mapping[str, Any], key: str) -> bool:
 
 
 def _commands(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
     if not isinstance(value, list):
         raise AutoPublishEvidenceError(
             "auto publish evidence verificationCommands must be a list"
         )
-    commands = tuple(str(item).strip() for item in value if str(item).strip())
-    if not commands:
-        raise AutoPublishEvidenceError(
-            "auto publish evidence verificationCommands must not be empty"
-        )
-    return commands
+    return tuple(str(item).strip() for item in value if str(item).strip())
 
 
 def parse_auto_publish_evidence(raw: bytes | str | Mapping[str, Any]) -> AutoPublishEvidence:
@@ -147,6 +144,11 @@ def _validate_exact_remote_head(evidence: AutoPublishEvidence) -> None:
 
 
 def _validate_proof(evidence: AutoPublishEvidence) -> None:
+    if evidence.status in {"verified", "no_op_verified"}:
+        if not evidence.verification_commands:
+            raise AutoPublishEvidenceError(
+                "verified auto publish evidence requires verificationCommands"
+            )
     if evidence.status == "blocked":
         if not evidence.blocked_reason:
             raise AutoPublishEvidenceError(

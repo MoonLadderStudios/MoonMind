@@ -87,6 +87,7 @@ def test_parse_auto_publish_evidence_accepts_blocked_publish_unavailable() -> No
                 pushed=False,
                 remoteVerified=False,
                 blockedReason="publish_unavailable",
+                verificationCommands=None,
             )
         ).encode()
     )
@@ -100,6 +101,7 @@ def test_parse_auto_publish_evidence_accepts_blocked_publish_unavailable() -> No
     [
         ({"status": "published"}, "unsupported auto publish status"),
         ({"action": "force_push"}, "unsupported auto publish action"),
+        ({"verificationCommands": None}, "verificationCommands"),
         ({"remoteBranchHead": "def456"}, "localHead must match remoteBranchHead"),
         ({"pushed": False, "merged": False}, "verified evidence must prove"),
         ({"status": "blocked", "blockedReason": None}, "blockedReason"),

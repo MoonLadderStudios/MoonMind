@@ -1,6 +1,5 @@
 import asyncio
 import inspect
-import json
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
 
@@ -2043,6 +2042,48 @@ async def test_auto_publish_missing_evidence_maps_to_publish_stage_failure(
     assert summary["publish"]["status"] == "failed"
     assert summary["publish"]["reason"] == "auto_publish_evidence_missing"
     assert summary["publish"]["owner"] == "agent"
+
+
+@pytest.mark.asyncio
+async def test_auto_publish_evidence_ref_is_loaded_before_recording(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    captured: list[tuple[str, Any]] = []
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> bytes:
+        captured.append((activity_type, payload))
+        assert activity_type == "artifact.read"
+        assert getattr(payload, "artifact_ref", None) == "artifact://publish-result"
+        return json.dumps(_auto_publish_evidence()).encode()
+
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    await mock_run_workflow._record_publish_result_from_execution(
+        parameters={"publishMode": "auto"},
+        execution_result={
+            "outputs": {
+                "outputRefs": {"publish_result.json": "artifact://publish-result"}
+            }
+        },
+    )
+
+    assert captured
+    assert mock_run_workflow._publish_status == "published"
+    assert mock_run_workflow._publish_reason == "auto publish verified push"
+    assert mock_run_workflow._publish_context["evidenceRef"] == (
+        "artifact://publish-result"
+    )
 
 
 def test_record_execution_context_preserves_provider_native_pr_record(
