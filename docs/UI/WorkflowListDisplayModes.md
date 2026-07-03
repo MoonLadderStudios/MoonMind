@@ -58,7 +58,7 @@ export type WorkflowListDisplayMode = 'hidden' | 'sidebar' | 'table';
 export type WorkflowListDisplaySurface =
   | 'workflows-table'
   | 'workflow-detail'
-  | 'workflow-create'
+  | 'workflow-start'
   | 'future-dashboard-surface';
 
 export type WorkflowListSelection = {
@@ -100,7 +100,7 @@ type ResolvedWorkflowListDisplay = {
   effectiveMode: WorkflowListDisplayMode;
   surface: WorkflowListDisplaySurface;
   routeAction: 'none' | 'navigate-workflows' | 'navigate-selected-detail' | 'resolve-first-workflow';
-  primarySurface: 'workflow-detail' | 'workflow-create' | 'workflow-table' | 'empty-workflows';
+  primarySurface: 'workflow-detail' | 'workflow-start' | 'workflow-table' | 'empty-workflows';
   listSurface: 'none' | 'sidebar' | 'table';
 };
 ```
