@@ -113,7 +113,9 @@ from moonmind.workflows.skills.approval_policy import (
     build_feedback_input,
     build_feedback_instruction,
     parse_step_gate_result,
+    recommended_next_actions,
 )
+from moonmind.workflows.skills.tool_plan_contracts import REVIEW_VERDICTS
 from moonmind.workflows.temporal.step_ledger import (
     TERMINAL_STEP_STATUSES,
     build_initial_step_rows,
@@ -335,6 +337,10 @@ _ALREADY_IMPLEMENTED_UNCERTAINTY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _MOONSPEC_GATE_PASSING_VERDICTS = frozenset({"FULLY_IMPLEMENTED"})
+# Bounded budget for re-running a moonspec-verify step whose structured gate
+# output violated the canonical contract (a parse problem, not a verifier
+# judgment). Remediation implement cycles cannot fix malformed JSON.
+_MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS = 2
 _MOONSPEC_GATE_BLOCKING_VERDICTS = frozenset(
     {
         "ADDITIONAL_WORK_NEEDED",
@@ -528,6 +534,10 @@ RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = (
     "run-moonspec-verify-remediation-index-v1"
 )
 RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH = "run-moonspec-remediation-step-skip-v1"
+RUN_MOONSPEC_GATE_CONTRACT_REPAIR_PATCH = "run-moonspec-gate-contract-repair-v1"
+RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
+    "run-moonspec-gate-environment-draft-publish-v1"
+)
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
 # execution begins so every step execution can be traced to the policy values
@@ -943,6 +953,7 @@ class MoonMindRunWorkflow:
         self._plan_blocked_message: Optional[str] = None
         self._moonspec_gate_verdict: Optional[str] = None
         self._moonspec_gate_reason: Optional[str] = None
+        self._moonspec_draft_publication_reason: Optional[str] = None
         self._last_diagnostics_ref: Optional[str] = None
         # Bounded, redacted structured failure diagnostic captured at the
         # failure boundary. Surfaced in reports/run_summary.json and reused by
@@ -4857,6 +4868,47 @@ class MoonMindRunWorkflow:
                     return gate_result_ref
         return None
 
+    def _moonspec_verify_contract_repair_feedback(
+        self,
+        *,
+        execution_result: Any,
+        tool_name: str,
+        node_inputs: Mapping[str, Any],
+    ) -> str | None:
+        """Corrective feedback when a verify step's gate output is malformed.
+
+        Returns text only for moonspec-verify steps whose structured gate
+        payload failed contract validation (invalid/degraded), meaning the
+        gate could not trust the verdict envelope. A ``None`` result means
+        the output is either not a verify step or contract-clean.
+        """
+        if not self._is_moonspec_verify_step(
+            tool_name=tool_name,
+            node_inputs=node_inputs,
+        ):
+            return None
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return None
+        gate_result = self._moonspec_verify_gate_result(outputs)
+        if not (gate_result.invalid or gate_result.degraded):
+            return None
+        detail = gate_result.downgrade_reason or (
+            "the structured verifier JSON was missing or failed contract "
+            "validation"
+        )
+        verdicts = ", ".join(sorted(REVIEW_VERDICTS))
+        next_actions = ", ".join(recommended_next_actions())
+        return (
+            "MoonSpec verify gate contract repair required: "
+            f"{detail}. Rewrite the structured verifier JSON at the "
+            "instructed verify artifact path using only canonical field "
+            f"values (verdict one of: {verdicts}; recommendedNextAction one "
+            f"of: {next_actions}), re-verify against the current workspace "
+            "state, and finish with the Markdown MoonSpec Verification "
+            "Report. Do not modify implementation source in this attempt."
+        )
+
     def _record_moonspec_verify_gate(
         self,
         *,
@@ -4916,6 +4968,8 @@ class MoonMindRunWorkflow:
             "invalid": gate_result.invalid,
             "degraded": gate_result.degraded,
         }
+        if gate_result.downgrade_reason:
+            gate_context["downgradeReason"] = gate_result.downgrade_reason
         gate_result_ref = self._moonspec_verify_gate_result_ref(outputs)
         if gate_result_ref:
             gate_context["gateResultRef"] = gate_result_ref
@@ -5072,14 +5126,20 @@ class MoonMindRunWorkflow:
             return None
         gate_context = self._publish_context.get("moonSpecGate")
         diagnostics_ref = None
+        downgrade_reason = None
         if isinstance(gate_context, Mapping):
             diagnostics_ref = self._coerce_text(
                 gate_context.get("diagnosticsRef"), max_chars=400
+            )
+            downgrade_reason = self._coerce_text(
+                gate_context.get("downgradeReason"), max_chars=700
             )
         parts = [
             "MoonSpec verification did not approve publication",
             f"verdict {verdict}",
         ]
+        if downgrade_reason:
+            parts.append(downgrade_reason)
         if self._moonspec_gate_reason:
             parts.append(self._moonspec_gate_reason)
         if diagnostics_ref:
@@ -5088,6 +5148,11 @@ class MoonMindRunWorkflow:
         return f"{reason}." if reason else None
 
     def _apply_blocking_moonspec_gate_to_publish(self) -> bool:
+        if self._moonspec_draft_publication_reason is not None:
+            # Draft publication (operator policy draft_pr) supersedes the
+            # fail-closed block: the run publishes a draft PR annotated as
+            # verification-incomplete instead of blocking publication.
+            return False
         reason = self._blocking_moonspec_gate_reason()
         if not reason:
             return False
@@ -5096,6 +5161,91 @@ class MoonMindRunWorkflow:
         self._publish_reason = reason
         self._publish_context["publicationBlockedBy"] = "moonspec_verify"
         return True
+
+    @staticmethod
+    def _moonspec_environment_blocked_publish_action() -> str:
+        action = (
+            str(
+                getattr(
+                    settings.workflow,
+                    "moonspec_environment_blocked_publish_action",
+                    "fail",
+                )
+                or "fail"
+            )
+            .strip()
+            .lower()
+        )
+        return action if action in {"fail", "draft_pr"} else "fail"
+
+    def _moonspec_gate_qualifies_for_draft_publish(self) -> bool:
+        """Environment-class gate outcomes eligible for draft publication.
+
+        Qualifying outcomes are verifier-declared environment failures
+        (``BLOCKED``) and ``NO_DETERMINATION`` produced by downgrading a
+        degraded/malformed gate payload. Genuine implementation-gap verdicts
+        (``ADDITIONAL_WORK_NEEDED``, ``FAILED_UNRECOVERABLE``) never qualify.
+        """
+        verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+        if verdict == "BLOCKED":
+            return True
+        if verdict != "NO_DETERMINATION":
+            return False
+        gate_context = self._publish_context.get("moonSpecGate")
+        if not isinstance(gate_context, Mapping):
+            return False
+        return bool(gate_context.get("degraded") or gate_context.get("invalid"))
+
+    def _activate_moonspec_draft_publication(self, gate_reason: str) -> str:
+        summary = (
+            "MoonSpec verification incomplete; publishing draft pull request "
+            f"for operator review. {gate_reason}"
+        )
+        self._moonspec_draft_publication_reason = gate_reason
+        self._attention_required = True
+        gate_context = self._publish_context.get("moonSpecGate")
+        if isinstance(gate_context, dict):
+            gate_context["publicationPolicy"] = (
+                "draft_pr_on_environment_blocked"
+            )
+        self._publish_context["moonSpecDraftPublication"] = {
+            "policy": "draft_pr_on_environment_blocked",
+            "reason": gate_reason,
+        }
+        return summary
+
+    def _moonspec_draft_publication_body_section(self) -> str:
+        gate_context = self._publish_context.get("moonSpecGate")
+        verdict = None
+        diagnostics_ref = None
+        if isinstance(gate_context, Mapping):
+            verdict = self._coerce_text(gate_context.get("verdict"), max_chars=80)
+            diagnostics_ref = self._coerce_text(
+                gate_context.get("diagnosticsRef"), max_chars=400
+            )
+        lines = [
+            "## MoonSpec verification incomplete",
+            "",
+            (
+                "This pull request was opened as a **draft** because MoonSpec "
+                f"verification did not approve publication (verdict "
+                f"{verdict or 'unknown'}) and the operator policy "
+                "`workflow.moonspec_environment_blocked_publish_action` is "
+                "`draft_pr`."
+            ),
+            "",
+        ]
+        reason = self._moonspec_draft_publication_reason
+        if reason:
+            lines.append(f"- Gate outcome: {reason}")
+        if diagnostics_ref:
+            lines.append(f"- Verification report: {diagnostics_ref}")
+        lines.append("")
+        lines.append(
+            "Review the verification evidence before marking this pull "
+            "request ready for review."
+        )
+        return "\n".join(lines)
 
     def _review_gate_budget_metadata(
         self,
@@ -6528,6 +6678,15 @@ class MoonMindRunWorkflow:
         terminal_state = (
             STATE_NO_COMMIT if output_status == "no_commit" else STATE_COMPLETED
         )
+        if self._moonspec_draft_publication_reason is not None:
+            # Draft publication completes the run but requires operator
+            # attention: the verification evidence is incomplete.
+            self._attention_required = True
+            output_message = (
+                "Workflow completed with a draft pull request; MoonSpec "
+                "verification is incomplete and requires operator review. "
+                f"{self._moonspec_draft_publication_reason}"
+            )
         self._close_status = CLOSE_STATUS_COMPLETED
         self._set_state(terminal_state, summary=output_message)
         await self._record_terminal_state(
@@ -7256,6 +7415,7 @@ class MoonMindRunWorkflow:
                     )
             review_retry_count = 0
             consecutive_no_progress_attempts = 0
+            moonspec_contract_repair_attempts = 0
             previous_review_feedback: str | None = None
             previous_review_issues: tuple[Mapping[str, Any], ...] = ()
             result_status: str | None = None
@@ -7892,6 +8052,42 @@ class MoonMindRunWorkflow:
                 if self._cancel_requested:
                     return
 
+                if workflow.patched(RUN_MOONSPEC_GATE_CONTRACT_REPAIR_PATCH):
+                    contract_repair_feedback = (
+                        self._moonspec_verify_contract_repair_feedback(
+                            execution_result=execution_result,
+                            tool_name=tool_name,
+                            node_inputs=node_inputs,
+                        )
+                    )
+                    if (
+                        contract_repair_feedback
+                        and moonspec_contract_repair_attempts
+                        < _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS
+                    ):
+                        moonspec_contract_repair_attempts += 1
+                        self._upsert_step_check(
+                            node_id,
+                            kind="moonspec_gate_contract",
+                            status="failed",
+                            summary=self._bounded_review_summary(
+                                contract_repair_feedback,
+                                fallback=(
+                                    "MoonSpec verify output failed gate "
+                                    "contract validation"
+                                ),
+                            ),
+                            retry_count=moonspec_contract_repair_attempts,
+                            artifact_ref=None,
+                        )
+                        previous_review_feedback = contract_repair_feedback
+                        previous_review_issues = ()
+                        # The repair budget is tracked separately from the
+                        # approval-policy review budget: leave
+                        # current_review_attempt unchanged so a contract
+                        # repair never consumes review-gate attempts.
+                        continue
+
                 if not review_gate_active:
                     accepted_execution = True
                     break
@@ -8304,6 +8500,30 @@ class MoonMindRunWorkflow:
                     if blocking_gate_reason and not bool(
                         continuation_decision.get("continueLoop")
                     ):
+                        if (
+                            workflow.patched(
+                                RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH
+                            )
+                            and self._moonspec_environment_blocked_publish_action()
+                            == "draft_pr"
+                            and self._moonspec_gate_qualifies_for_draft_publish()
+                        ):
+                            draft_summary = (
+                                self._activate_moonspec_draft_publication(
+                                    blocking_gate_reason
+                                )
+                            )
+                            self._summary = draft_summary
+                            self._mark_remaining_plan_steps_skipped(
+                                ordered_nodes=ordered_nodes,
+                                completed_index=index - 1,
+                                summary=draft_summary,
+                            )
+                            self._refresh_step_readiness(
+                                updated_at=workflow.now()
+                            )
+                            self._update_memo()
+                            break
                         self._plan_blocked_message = blocking_gate_reason
                         self._publish_status = "not_required"
                         self._publish_reason = blocking_gate_reason
@@ -8565,6 +8785,12 @@ class MoonMindRunWorkflow:
                     )
                     self._publish_context["branch"] = head_branch
                     self._publish_context["baseRef"] = base_branch
+                    if self._moonspec_draft_publication_reason is not None:
+                        pr_body = (
+                            pr_body.rstrip()
+                            + "\n\n"
+                            + self._moonspec_draft_publication_body_section()
+                        )
                     create_payload = {
                         "repo": self._repo,
                         "head": head_branch,
@@ -8572,6 +8798,8 @@ class MoonMindRunWorkflow:
                         "title": pr_title,
                         "body": pr_body,
                     }
+                    if self._moonspec_draft_publication_reason is not None:
+                        create_payload["draft"] = True
                     try:
                         create_result = await workflow.execute_activity(
                             "repo.create_pr",
@@ -14662,6 +14890,11 @@ class MoonMindRunWorkflow:
         }
         if classification:
             compact["classification"] = classification
+        downgrade_reason = self._coerce_text(
+            gate_context.get("downgradeReason"), max_chars=700
+        )
+        if downgrade_reason:
+            compact["downgradeReason"] = downgrade_reason
         diagnostics_ref = self._coerce_text(
             gate_context.get("diagnosticsRef"), max_chars=400
         )

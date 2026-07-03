@@ -114,6 +114,13 @@ async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -
     assert "MoonSpec verification output contract:" in prepared
     assert "var/artifacts/moonspec-verify/verify-final.json" in prepared
     assert "complete structured verifier JSON" in prepared
+    # The hint must enumerate the enforced vocabularies so the verifier agent
+    # cannot drift into non-canonical values the gate would fail closed on.
+    assert '"FULLY_IMPLEMENTED"' in prepared
+    assert '"BLOCKED"' in prepared
+    assert '"advance"' in prepared
+    assert '"reattempt_current_step"' in prepared
+    assert "create_pull_request" in prepared
 
 
 async def test_codex_skill_payload_rejects_auto_publish_mode() -> None:
@@ -4939,7 +4946,7 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
                     {
                         "schemaVersion": 1,
                         "verdict": "FULLY_IMPLEMENTED",
-                        "recommendedNextAction": "publish",
+                        "recommendedNextAction": "advance",
                         "recoverableInCurrentRuntime": True,
                         "remainingWork": [],
                     }
@@ -5005,6 +5012,84 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
             assert result.metadata["moonSpecVerify"]["gateResultRef"] == (
                 result.metadata["gateResultRef"]
             )
+            assert "contractViolations" not in result.metadata["moonSpecVerify"]
+
+
+async def test_agent_runtime_publish_artifacts_flags_moonspec_contract_violations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace = tmp_path / "workspace"
+            verify_path = workspace / "var/artifacts/moonspec-verify/final.json"
+            verify_path.parent.mkdir(parents=True)
+            # Regression fixture mirroring the observed drift: an approving
+            # verdict paired with a non-canonical recommendedNextAction.
+            verify_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "moonspec-verify.issue_brief.v1",
+                        "verdict": "FULLY_IMPLEMENTED",
+                        "recommendedNextAction": "create_pull_request",
+                        "recoverableInCurrentRuntime": True,
+                        "remainingWork": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run_store = ManagedRunStore(tmp_path / "runs")
+            run_store.save(
+                ManagedRunRecord(
+                    runId="verify-run-2",
+                    agentId="codex_cli",
+                    runtimeId="codex_cli",
+                    status="completed",
+                    startedAt=datetime.now(timezone.utc),
+                    workspacePath=workspace.as_posix(),
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                run_store=run_store,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities,
+                "execution_notify_completion",
+                _skip_notify,
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:verify",
+                    workflow_run_id="child-run-verify-2",
+                ),
+            )
+
+            result = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Completed.",
+                    metadata={
+                        "agentRunId": "verify-run-2",
+                        "verify_artifact_path": (
+                            "var/artifacts/moonspec-verify/final.json"
+                        ),
+                    },
+                )
+            )
+
+            violations = result.metadata["moonSpecVerify"]["contractViolations"]
+            assert any("create_pull_request" in item for item in violations)
 
 
 async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_report_body(

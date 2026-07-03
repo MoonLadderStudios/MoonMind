@@ -559,6 +559,33 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         order=20,
     ),
     SettingRegistryEntry(
+        key="workflow.moonspec_environment_blocked_publish_action",
+        title="MoonSpec Environment-Blocked Publish Action",
+        description=(
+            "Publication behavior when the MoonSpec verification gate stops "
+            "with an environment-class outcome: fail the run (fail closed) or "
+            "publish a draft pull request annotated as verification-incomplete."
+        ),
+        category="Workflow",
+        section="user-workspace",
+        value_type="enum",
+        ui="select",
+        scopes=("workspace",),
+        default_value="fail",
+        settings_path=("workflow", "moonspec_environment_blocked_publish_action"),
+        env_aliases=(
+            "WORKFLOW_MOONSPEC_ENVIRONMENT_BLOCKED_PUBLISH_ACTION",
+            "MOONMIND_MOONSPEC_ENVIRONMENT_BLOCKED_PUBLISH_ACTION",
+        ),
+        apply_mode="next_workflow",
+        options=(
+            ("fail", "Fail the run (fail closed)"),
+            ("draft_pr", "Publish draft PR with attention flag"),
+        ),
+        applies_to=("publishing",),
+        order=21,
+    ),
+    SettingRegistryEntry(
         key="skills.policy_mode",
         title="Skill Policy Mode",
         description="Policy used when resolving workflow skills.",

@@ -77,6 +77,38 @@ async def test_create_pr_success(monkeypatch):
     assert result.url == "https://github.com/o/r/pull/42"
     assert result.head_sha == "abc123"
     assert result.adopted is False
+    _args, kwargs = mock_client.post.call_args
+    assert "draft" not in kwargs["json"]
+
+
+@pytest.mark.asyncio
+async def test_create_pr_draft_flag_reaches_rest_payload(monkeypatch):
+    """draft=True is sent to the GitHub create endpoint."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(
+        return_value=_mock_response(
+            201,
+            {
+                "html_url": "https://github.com/o/r/pull/43",
+                "head": {"sha": "def456"},
+            },
+        )
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("moonmind.workflows.adapters.github_service.httpx.AsyncClient", return_value=mock_client):
+        svc = GitHubService()
+        result = await svc.create_pull_request(
+            repo="o/r", head="feature", base="main", title="T", body="B",
+            draft=True,
+        )
+
+    assert result.created is True
+    _args, kwargs = mock_client.post.call_args
+    assert kwargs["json"]["draft"] is True
 
 
 @pytest.mark.asyncio

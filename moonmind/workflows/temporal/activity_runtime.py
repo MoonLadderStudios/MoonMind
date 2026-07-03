@@ -184,7 +184,14 @@ from moonmind.workflows.skills.skill_registry import (
     create_registry_snapshot,
     parse_skill_registry,
 )
-from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
+from moonmind.workflows.skills.approval_policy import (
+    recommended_next_actions,
+    step_gate_contract_violations,
+)
+from moonmind.workflows.skills.tool_plan_contracts import (
+    REVIEW_VERDICTS,
+    ToolFailure,
+)
 from moonmind.workflows.temporal.activity_catalog import TemporalActivityCatalog
 from moonmind.workflows.temporal.artifacts import (
     ArtifactRef,
@@ -7144,6 +7151,19 @@ class TemporalAgentRuntimeActivities:
                 )
                 return {}
             gate_payload = dict(payload)
+            contract_violations = step_gate_contract_violations(gate_payload)
+            if contract_violations:
+                # Surface violations at the boundary where the verifier JSON
+                # enters MoonMind so the workflow gate can request a bounded
+                # corrective re-verify instead of failing the run on a
+                # malformed-but-possibly-approving payload.
+                gate_payload["contractViolations"] = list(contract_violations)
+                logger.warning(
+                    "MoonSpec verify artifact violates the gate contract "
+                    "(%s): %s",
+                    verify_path,
+                    "; ".join(contract_violations),
+                )
             verify_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",
@@ -8312,11 +8332,20 @@ class TemporalAgentRuntimeActivities:
                 break
         if not verify_artifact_path or verify_artifact_path in instructions:
             return instructions
+        verdict_values = " | ".join(f'"{value}"' for value in sorted(REVIEW_VERDICTS))
+        next_action_values = " | ".join(
+            f'"{value}"' for value in recommended_next_actions()
+        )
         block = (
             "MoonSpec verification output contract:\n"
             f"- Write the complete structured verifier JSON to `{verify_artifact_path}`.\n"
             "- The JSON must include the canonical `verdict`, `recommendedNextAction`, "
             "`recoverableInCurrentRuntime`, and `remainingWork` fields.\n"
+            f"- `verdict` must be exactly one of: {verdict_values}.\n"
+            f"- `recommendedNextAction` must be exactly one of: {next_action_values}. "
+            "Any other value (for example \"create_pull_request\") is a contract "
+            "violation that forces the publication gate to fail closed, discarding "
+            "an otherwise passing verdict.\n"
             "- Still return the Markdown MoonSpec Verification Report in the assistant response."
         )
         return instructions.rstrip() + "\n\n" + block

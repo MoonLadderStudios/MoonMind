@@ -43,6 +43,13 @@
     "section": "user-workspace",
     "type": "enum"
   },
+  "workflow.moonspec_environment_blocked_publish_action": {
+    "scopes": [
+      "workspace"
+    ],
+    "section": "user-workspace",
+    "type": "enum"
+  },
   "workflow.operation_mode": {
     "scopes": [
       "workspace"

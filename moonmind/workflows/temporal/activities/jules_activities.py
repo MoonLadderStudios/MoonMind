@@ -389,6 +389,7 @@ async def repo_create_pr_activity(payload: dict) -> dict:
         base: str = Field(min_length=1)
         title: str = Field(min_length=1)
         body: str = Field(default="")
+        draft: bool = Field(default=False)
 
     try:
         validated = _CreatePRPayload.model_validate(payload)
@@ -410,6 +411,7 @@ async def repo_create_pr_activity(payload: dict) -> dict:
         base=validated.base,
         title=validated.title,
         body=validated.body,
+        draft=validated.draft,
     )
     return result.model_dump(by_alias=True)
 
