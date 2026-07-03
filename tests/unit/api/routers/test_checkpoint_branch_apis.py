@@ -828,14 +828,18 @@ async def test_checkpoint_branch_api_fails_closed_for_invalid_source_provider_bu
         _get_service
     ]()
     record = service.describe_execution.return_value
-    record.parameters["git"].pop("knownRefs")
-    unknown_ref_response = await checkpoint_branch_client.post(
-        "/api/executions/mm:wf-branch/checkpoint-branches",
-        json=_create_payload("mm-1101:missing-known-refs"),
-    )
-    assert unknown_ref_response.status_code == 409
-    assert unknown_ref_response.json()["detail"]["code"] == "unknown_ref"
-    record.parameters["git"]["knownRefs"] = ["feature/mm-1101-source"]
+    original_known_refs = record.parameters["git"].get("knownRefs")
+    record.parameters["git"].pop("knownRefs", None)
+    try:
+        unknown_ref_response = await checkpoint_branch_client.post(
+            "/api/executions/mm:wf-branch/checkpoint-branches",
+            json=_create_payload("mm-1101:missing-known-refs"),
+        )
+        assert unknown_ref_response.status_code == 409
+        assert unknown_ref_response.json()["detail"]["code"] == "unknown_ref"
+    finally:
+        if original_known_refs is not None:
+            record.parameters["git"]["knownRefs"] = original_known_refs
 
     conflict_payload = _create_payload("mm-1091:idempotency-conflict")
     first_conflict = await checkpoint_branch_client.post(
