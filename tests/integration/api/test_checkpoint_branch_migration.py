@@ -10,7 +10,21 @@ import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from api_service.db.models import (
+    Base,
+    TemporalExecutionCanonicalRecord,
+    TemporalWorkflowType,
+    WorkflowCheckpointBranchArtifact,
+)
+from api_service.services.checkpoint_branch_service import (
+    CheckpointBranchService,
+    build_branch_turn_launch_idempotency_key,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -114,3 +128,90 @@ def test_checkpoint_branch_migration_creates_graph_and_idempotency_ledger(
                 ),
                 {"operation_id": uuid4().hex},
             )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_launch_persists_minimum_artifact_refs_without_duplicates(
+    tmp_path,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/launch.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_maker() as session:
+        session.add(
+            TemporalExecutionCanonicalRecord(
+                workflow_id="mm:wf-branch",
+                run_id="run-branch",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                entry="api",
+            )
+        )
+        await session.commit()
+        service = CheckpointBranchService(session)
+        graph = await service.create_branch_graph(
+            {
+                "branchId": "cbr-integration",
+                "source": {
+                    "workflowId": "mm:wf-branch",
+                    "runId": "run-branch",
+                    "logicalStepId": "implement",
+                    "sourceExecutionOrdinal": 2,
+                    "checkpointBoundary": "after_execution",
+                    "checkpointRef": "artifact://checkpoints/after-implement",
+                    "checkpointDigest": "sha256:checkpoint",
+                },
+                "label": "Integration branch",
+                "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "instructionRef": "artifact://instructions/integration",
+                "instructionDigest": "sha256:instructions",
+                "idempotencyKey": "mm-1100:cbr-integration:create",
+            }
+        )
+        turn_id = graph.turns[0].branch_turn_id
+        launch_key = build_branch_turn_launch_idempotency_key(
+            workflow_id="mm:wf-branch",
+            branch_id="cbr-integration",
+            branch_turn_id=turn_id,
+        )
+        launch_args = {
+            "workflow_id": "mm:wf-branch",
+            "branch_id": "cbr-integration",
+            "branch_turn_id": turn_id,
+            "context_bundle_ref": "artifact://context/integration",
+            "step_execution_manifest_ref": "artifact://manifest/integration",
+            "checkpoint_ref": "artifact://checkpoint/integration",
+            "diagnostics_ref": "artifact://diagnostics/integration",
+            "agent_request_ref": "artifact://agent-request/integration",
+            "agent_result_ref": "artifact://agent-result/integration",
+            "created_step_execution_id": (
+                "mm:wf-branch:run-branch:implement:execution:3"
+            ),
+            "idempotency_key": launch_key,
+        }
+
+        await service.launch_turn(**launch_args)
+        await service.launch_turn(**launch_args)
+        await session.commit()
+
+        artifacts = (
+            await session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_turn_id == turn_id
+                )
+            )
+        ).scalars().all()
+
+    await engine.dispose()
+
+    assert sorted(artifact.artifact_kind for artifact in artifacts) == [
+        "input.branch_turn.instructions.md",
+        "output.branch_turn.checkpoint.json",
+        "output.branch_turn.diagnostics.json",
+        "output.branch_turn.step_execution_manifest.json",
+        "runtime.branch_turn.agent_request.json",
+        "runtime.branch_turn.agent_result.json",
+        "runtime.branch_turn.context_bundle.json",
+    ]

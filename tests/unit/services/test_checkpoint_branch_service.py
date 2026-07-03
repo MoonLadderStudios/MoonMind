@@ -20,6 +20,7 @@ from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
     CHECKPOINT_BRANCH_GRAPH_TRACEABILITY_ISSUES,
     SOURCE_TRACEABILITY_ISSUES,
+    build_branch_turn_launch_idempotency_key,
 )
 from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchCreateModel,
@@ -840,6 +841,152 @@ async def test_checkpoint_branch_graph_create_replays_with_padded_idempotency_ke
     assert replayed.branch.branch_id == first.branch.branch_id
     assert replayed.turns[0].branch_turn_id == first.turns[0].branch_turn_id
     assert len(replayed.turns) == 1
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_service_launches_turn_with_context_manifest_and_artifacts(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-launch"),
+            "instructionRef": "artifact://instructions/root",
+            "instructionDigest": "sha256:root",
+            "idempotencyKey": "MM-1100:cbr-launch:create",
+        }
+    )
+    turn_id = graph.turns[0].branch_turn_id
+    launch_key = build_branch_turn_launch_idempotency_key(
+        workflow_id="wf-1",
+        branch_id="cbr-launch",
+        branch_turn_id=turn_id,
+    )
+
+    launched = await service.launch_turn(
+        workflow_id="wf-1",
+        branch_id="cbr-launch",
+        branch_turn_id=turn_id,
+        context_bundle_ref="artifact://context/cbr-launch-turn-1",
+        step_execution_manifest_ref="artifact://manifest/cbr-launch-turn-1",
+        checkpoint_ref="artifact://checkpoint/cbr-launch-turn-1",
+        diagnostics_ref="artifact://diagnostics/cbr-launch-turn-1",
+        agent_request_ref="artifact://agent-request/cbr-launch-turn-1",
+        agent_result_ref="artifact://agent-result/cbr-launch-turn-1",
+        created_step_execution_id="wf-1:run-branch:implement:execution:4",
+        idempotency_key=launch_key,
+    )
+    replayed = await service.launch_turn(
+        workflow_id="wf-1",
+        branch_id="cbr-launch",
+        branch_turn_id=turn_id,
+        context_bundle_ref="artifact://context/cbr-launch-turn-1",
+        step_execution_manifest_ref="artifact://manifest/cbr-launch-turn-1",
+        checkpoint_ref="artifact://checkpoint/cbr-launch-turn-1",
+        diagnostics_ref="artifact://diagnostics/cbr-launch-turn-1",
+        agent_request_ref="artifact://agent-request/cbr-launch-turn-1",
+        agent_result_ref="artifact://agent-result/cbr-launch-turn-1",
+        created_step_execution_id="wf-1:run-branch:implement:execution:4",
+        idempotency_key=launch_key,
+    )
+    await checkpoint_branch_session.commit()
+
+    assert launched.branch_turn_id == turn_id
+    assert replayed.branch_turn_id == turn_id
+    assert replayed.context_bundle_ref == "artifact://context/cbr-launch-turn-1"
+    assert replayed.step_execution_manifest_ref == (
+        "artifact://manifest/cbr-launch-turn-1"
+    )
+    assert replayed.diagnostics["stepExecutionManifestBranch"]["branchId"] == (
+        "cbr-launch"
+    )
+    assert replayed.diagnostics["stepExecutionManifestBranch"]["branchTurnId"] == (
+        turn_id
+    )
+    assert replayed.diagnostics["stepExecutionManifestBranch"]["rootCheckpointRef"] == (
+        "artifact://checkpoint/after"
+    )
+    assert replayed.created_step_execution_id == (
+        "wf-1:run-branch:implement:execution:4"
+    )
+    assert replayed.status == "running"
+
+    stored_graph = await service.read_branch_graph(
+        workflow_id="wf-1", branch_id="cbr-launch"
+    )
+    artifact_kinds = {artifact.artifact_kind for artifact in stored_graph.artifacts}
+    assert {
+        "input.branch_turn.instructions.md",
+        "runtime.branch_turn.context_bundle.json",
+        "runtime.branch_turn.agent_request.json",
+        "runtime.branch_turn.agent_result.json",
+        "output.branch_turn.step_execution_manifest.json",
+        "output.branch_turn.checkpoint.json",
+        "output.branch_turn.diagnostics.json",
+    }.issubset(artifact_kinds)
+    assert len(stored_graph.artifacts) == 7
+    assert stored_graph.branch.current_head_step_execution_id == (
+        "wf-1:run-branch:implement:execution:4"
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_service_rejects_launch_mutation_and_bad_key(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-immutable"),
+            "instructionRef": "artifact://instructions/root",
+            "instructionDigest": "sha256:root",
+            "idempotencyKey": "MM-1100:cbr-immutable:create",
+        }
+    )
+    turn_id = graph.turns[0].branch_turn_id
+
+    with pytest.raises(ValueError, match="branch turn launch idempotency key"):
+        await service.launch_turn(
+            workflow_id="wf-1",
+            branch_id="cbr-immutable",
+            branch_turn_id=turn_id,
+            context_bundle_ref="artifact://context/1",
+            step_execution_manifest_ref="artifact://manifest/1",
+            checkpoint_ref="artifact://checkpoint/1",
+            diagnostics_ref="artifact://diagnostics/1",
+            created_step_execution_id="wf-1:run-branch:implement:execution:5",
+            idempotency_key="MM-1100:cbr-immutable:wrong",
+        )
+
+    launch_key = build_branch_turn_launch_idempotency_key(
+        workflow_id="wf-1",
+        branch_id="cbr-immutable",
+        branch_turn_id=turn_id,
+    )
+    await service.launch_turn(
+        workflow_id="wf-1",
+        branch_id="cbr-immutable",
+        branch_turn_id=turn_id,
+        context_bundle_ref="artifact://context/1",
+        step_execution_manifest_ref="artifact://manifest/1",
+        checkpoint_ref="artifact://checkpoint/1",
+        diagnostics_ref="artifact://diagnostics/1",
+        created_step_execution_id="wf-1:run-branch:implement:execution:5",
+        idempotency_key=launch_key,
+    )
+
+    with pytest.raises(ValueError, match="immutable launch field context_bundle_ref"):
+        await service.launch_turn(
+            workflow_id="wf-1",
+            branch_id="cbr-immutable",
+            branch_turn_id=turn_id,
+            context_bundle_ref="artifact://context/changed",
+            step_execution_manifest_ref="artifact://manifest/1",
+            checkpoint_ref="artifact://checkpoint/1",
+            diagnostics_ref="artifact://diagnostics/1",
+            created_step_execution_id="wf-1:run-branch:implement:execution:5",
+            idempotency_key=launch_key,
+        )
 
 
 def test_checkpoint_branch_graph_traceability_preserves_source_issue() -> None:

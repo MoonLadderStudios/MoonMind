@@ -142,6 +142,86 @@ class CheckpointBranchForkRequest(CheckpointBranchContinueRequest):
     )
 
 
+class CheckpointBranchTurnLaunchRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    created_step_execution_id: str | None = Field(
+        None, alias="createdStepExecutionId", min_length=1, max_length=255
+    )
+    runtime_agent_run_id: str | None = Field(
+        None, alias="runtimeAgentRunId", min_length=1, max_length=255
+    )
+    provider_session_id: str | None = Field(
+        None, alias="providerSessionId", min_length=1, max_length=255
+    )
+    workspace_baseline: dict[str, Any] = Field(
+        default_factory=dict, alias="workspaceBaseline"
+    )
+    prior_evidence_refs: list[str] = Field(
+        default_factory=list, alias="priorEvidenceRefs"
+    )
+    bounded_summaries: list[dict[str, Any]] = Field(
+        default_factory=list, alias="boundedSummaries", max_length=10
+    )
+    builder_metadata: dict[str, Any] = Field(
+        default_factory=dict, alias="builderMetadata"
+    )
+    runtime_request_ref: str | None = Field(
+        None, alias="runtimeRequestRef", min_length=1, max_length=1024
+    )
+    runtime_result_ref: str | None = Field(
+        None, alias="runtimeResultRef", min_length=1, max_length=1024
+    )
+    diagnostics_ref: str | None = Field(
+        None, alias="diagnosticsRef", min_length=1, max_length=1024
+    )
+
+    @field_validator(
+        "created_step_execution_id",
+        "runtime_agent_run_id",
+        "provider_session_id",
+        "runtime_request_ref",
+        "runtime_result_ref",
+        "diagnostics_ref",
+        mode="before",
+    )
+    @classmethod
+    def _strip_text(cls, value: Any) -> str | None:
+        return _optional_text(value)
+
+    @field_validator("prior_evidence_refs", mode="after")
+    @classmethod
+    def _refs_are_bounded(cls, value: list[str]) -> list[str]:
+        refs = [_optional_text(item) for item in value]
+        compact = [item for item in refs if item]
+        if len(compact) != len(value):
+            raise ValueError("priorEvidenceRefs must contain non-empty refs")
+        if len(compact) > 25:
+            raise ValueError("priorEvidenceRefs must be bounded")
+        return compact
+
+    @field_validator("bounded_summaries", mode="after")
+    @classmethod
+    def _summaries_are_bounded(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        for item in value:
+            summary = item.get("summary")
+            if summary is not None and len(str(summary)) > 1200:
+                raise ValueError("boundedSummaries entries must be bounded")
+        return value
+
+    @model_validator(mode="after")
+    def _requires_runtime_evidence(self) -> "CheckpointBranchTurnLaunchRequest":
+        if (
+            not self.created_step_execution_id
+            and not self.runtime_agent_run_id
+            and not self.provider_session_id
+        ):
+            raise ValueError(
+                "launch requires Step Execution or typed runtime continuation evidence"
+            )
+        return self
+
+
 class CheckpointBranchPromoteRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -201,9 +281,16 @@ class CheckpointBranchTurnModel(BaseModel):
     instruction_digest: str = Field(..., alias="instructionDigest")
     source_checkpoint_ref: str = Field(..., alias="sourceCheckpointRef")
     source_checkpoint_digest: str | None = Field(None, alias="sourceCheckpointDigest")
+    context_bundle_ref: str | None = Field(None, alias="contextBundleRef")
+    step_execution_manifest_ref: str | None = Field(
+        None, alias="stepExecutionManifestRef"
+    )
     created_step_execution_id: str | None = Field(None, alias="createdStepExecutionId")
+    runtime_agent_run_id: str | None = Field(None, alias="runtimeAgentRunId")
+    provider_session_id: str | None = Field(None, alias="providerSessionId")
     idempotency_key: str = Field(..., alias="idempotencyKey")
     status: str
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
 
@@ -236,6 +323,7 @@ class CheckpointBranchModel(BaseModel):
     current_head_checkpoint_ref: str | None = Field(
         None, alias="currentHeadCheckpointRef"
     )
+    artifact_refs: dict[str, Any] = Field(default_factory=dict, alias="artifactRefs")
     current_head_commit: str | None = Field(None, alias="currentHeadCommit")
     pull_request_url: str | None = Field(None, alias="pullRequestUrl")
     publish_status: str | None = Field(None, alias="publishStatus")

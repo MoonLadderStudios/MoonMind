@@ -25,7 +25,9 @@ from api_service.db.models import (
     TemporalExecutionOwnerType,
     TemporalWorkflowType,
     WorkflowCheckpointBranch,
+    WorkflowCheckpointBranchArtifact,
     WorkflowCheckpointBranchOperation,
+    WorkflowCheckpointBranchTurn,
 )
 
 
@@ -258,6 +260,155 @@ async def test_checkpoint_branch_api_lists_creates_details_turns_and_is_idempote
     assert detail.json()["branchId"] == branch_id
     assert len(turns.json()["items"]) == 1
     assert branches.json()["items"][0]["branchId"] == branch_id
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_and_replays(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1100:create-launch"),
+    )
+    branch_id = created.json()["branchId"]
+    turns = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
+    )
+    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
+    payload = {
+        "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:3",
+        "workspaceBaseline": {
+            "kind": "git_patch",
+            "baseCommit": "abc123",
+            "patchRef": "artifact://patches/mm-1100",
+        },
+        "priorEvidenceRefs": ["artifact://manifest/previous"],
+        "boundedSummaries": [
+            {"label": "prior attempt", "summary": "Gate failed before launch."}
+        ],
+        "builderMetadata": {"version": "api-test-v1", "digest": "sha256:builder"},
+        "runtimeRequestRef": "artifact://runtime/request/mm-1100",
+        "runtimeResultRef": "artifact://runtime/result/mm-1100",
+        "diagnosticsRef": "artifact://diagnostics/mm-1100",
+    }
+
+    first = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
+        f"{branch_turn_id}/launch",
+        json=payload,
+    )
+    second = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
+        f"{branch_turn_id}/launch",
+        json=payload,
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    body = first.json()
+    assert body["branchTurnId"] == branch_turn_id
+    assert body["status"] == "running"
+    assert body["createdStepExecutionId"] == (
+        "mm:wf-branch:run-branch:implement:execution:3"
+    )
+    assert body["contextBundleRef"].startswith(
+        f"artifact://checkpoint-branch-turns/{branch_turn_id}/context-bundle/"
+    )
+    assert body["stepExecutionManifestRef"].startswith(
+        f"artifact://checkpoint-branch-turns/{branch_turn_id}/step-execution-manifest/"
+    )
+    assert second.json()["contextBundleRef"] == body["contextBundleRef"]
+    assert second.json()["stepExecutionManifestRef"] == body["stepExecutionManifestRef"]
+    assert second.json()["diagnostics"]["launchIdempotencyKey"] == (
+        f"mm:wf-branch:{branch_id}:{branch_turn_id}:launch"
+    )
+
+    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        artifact_rows = (
+            await session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_turn_id == branch_turn_id
+                )
+            )
+        ).scalars().all()
+        operation_rows = (
+            await session.execute(
+                select(WorkflowCheckpointBranchOperation).where(
+                    WorkflowCheckpointBranchOperation.operation
+                    == "checkpoint_branch.turn.launch"
+                )
+            )
+        ).scalars().all()
+
+    assert len(artifact_rows) == 7
+    assert len(operation_rows) == 1
+    assert operation_rows[0].response_payload["contextBundle"]["branch"][
+        "sourceCheckpointRef"
+    ] == "artifact://checkpoints/after-implement"
+    assert "rawLogs" not in operation_rows[0].response_payload["contextBundle"]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_api_rejects_launch_raw_context_and_immutable_mutation(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1100:create-immutable"),
+    )
+    branch_id = created.json()["branchId"]
+    turns = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
+    )
+    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
+
+    raw_context = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
+        f"{branch_turn_id}/launch",
+        json={
+            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
+            "workspaceBaseline": {"kind": "git_ref", "ref": "main"},
+            "boundedSummaries": [{"label": "raw", "rawLogs": "do not persist"}],
+            "diagnosticsRef": "artifact://diagnostics/raw",
+        },
+    )
+    assert raw_context.status_code == 422
+
+    launch_payload = {
+        "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
+        "workspaceBaseline": {"kind": "git_ref", "ref": "main"},
+        "diagnosticsRef": "artifact://diagnostics/immutable",
+    }
+    launched = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
+        f"{branch_turn_id}/launch",
+        json=launch_payload,
+    )
+    assert launched.status_code == 200
+
+    async for session in checkpoint_branch_client._transport.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        turn = (
+            await session.execute(
+                select(WorkflowCheckpointBranchTurn).where(
+                    WorkflowCheckpointBranchTurn.branch_turn_id == branch_turn_id
+                )
+            )
+        ).scalar_one()
+        turn.instruction_ref = "artifact://instructions/changed"
+        await session.commit()
+
+    replay_after_mutation = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
+        f"{branch_turn_id}/launch",
+        json=launch_payload,
+    )
+
+    assert replay_after_mutation.status_code == 409
+    assert replay_after_mutation.json()["detail"]["code"] == "immutable_launch_field"
 
 
 @pytest.mark.asyncio

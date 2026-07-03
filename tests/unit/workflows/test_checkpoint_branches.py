@@ -6,8 +6,11 @@ import pytest
 
 from moonmind.workflows.checkpoint_branches import (
     CHECKPOINT_BRANCH_GIT_BINDING_CONTENT_TYPE,
+    CHECKPOINT_BRANCH_TURN_CONTEXT_BUNDLE_CONTENT_TYPE,
     CHECKPOINT_BRANCH_WORKSPACE_RESTORE_CONTENT_TYPE,
     CheckpointBranchGitBindingError,
+    CheckpointBranchContextBundleError,
+    build_checkpoint_branch_turn_context_bundle,
     generate_checkpoint_branch_name,
     prepare_checkpoint_branch_git_binding,
 )
@@ -249,3 +252,72 @@ def test_prepare_binding_rejects_mismatched_collision() -> None:
         )
 
     assert exc_info.value.failure_code == "git_branch_collision"
+
+
+def test_build_branch_turn_context_bundle_includes_required_refs_only() -> None:
+    bundle = build_checkpoint_branch_turn_context_bundle(
+        {
+            "workflowId": "wf-1",
+            "runId": "run-branch",
+            "logicalStepId": "implement",
+            "executionOrdinal": 3,
+            "branch": {
+                "branchId": "cbr-1",
+                "branchTurnId": "cbt-1",
+                "sourceCheckpointRef": "artifact://checkpoint/after",
+                "parentBranchId": None,
+                "parentTurnId": None,
+                "gitWorkBranch": "mm/wf-1/implement/cbr-1",
+            },
+            "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+            "workspaceBaseline": {
+                "kind": "git_patch",
+                "baseCommit": "abc123",
+                "patchRef": "artifact://patches/1",
+            },
+            "instructionRefs": ["artifact://instructions/1"],
+            "instructionDigests": ["sha256:instructions"],
+            "priorEvidenceRefs": ["artifact://manifest/previous"],
+            "boundedSummaries": [{"label": "prior failure", "summary": "gate failed"}],
+            "builderMetadata": {
+                "version": "test-builder-v1",
+                "digest": "sha256:builder",
+            },
+        }
+    )
+
+    assert bundle["contentType"] == CHECKPOINT_BRANCH_TURN_CONTEXT_BUNDLE_CONTENT_TYPE
+    assert bundle["reason"] == "checkpoint_branch"
+    assert bundle["branch"]["branchId"] == "cbr-1"
+    assert bundle["branch"]["branchTurnId"] == "cbt-1"
+    assert bundle["instructionRefs"] == ["artifact://instructions/1"]
+    assert bundle["priorEvidenceRefs"] == ["artifact://manifest/previous"]
+    assert "rawLogs" not in bundle
+    assert "providerPayload" not in bundle
+
+
+@pytest.mark.parametrize(
+    "forbidden_key",
+    ["rawLogs", "rawDiff", "providerPayload", "credentials", "secret"],
+)
+def test_build_branch_turn_context_bundle_rejects_forbidden_raw_content(
+    forbidden_key: str,
+) -> None:
+    payload = {
+        "workflowId": "wf-1",
+        "runId": "run-branch",
+        "branch": {
+            "branchId": "cbr-1",
+            "branchTurnId": "cbt-1",
+            "sourceCheckpointRef": "artifact://checkpoint/after",
+        },
+        "workspacePolicy": "continue_from_previous_execution",
+        "workspaceBaseline": {"kind": "git_ref", "ref": "main"},
+        "instructionRefs": ["artifact://instructions/1"],
+        "priorEvidenceRefs": [],
+        "builderMetadata": {"version": "test-builder-v1", "digest": "sha256:builder"},
+        forbidden_key: "do not persist this",
+    }
+
+    with pytest.raises(CheckpointBranchContextBundleError, match=forbidden_key):
+        build_checkpoint_branch_turn_context_bundle(payload)
