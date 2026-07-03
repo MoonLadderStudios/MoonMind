@@ -1985,6 +1985,42 @@ async def test_auto_publish_verified_merge_maps_to_published_pr_finish_outcome(
 
 
 @pytest.mark.asyncio
+async def test_auto_publish_verified_merge_accepts_agent_result_metadata(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parameters = {"publishMode": "auto"}
+    evidence = _auto_publish_evidence(
+        skillId="pr-resolver",
+        action="merge",
+        pushed=False,
+        merged=True,
+        remoteVerified=False,
+        remoteBranchHead=None,
+        prUrl="https://github.com/MoonLadderStudios/MoonMind/pull/2970",
+    )
+
+    await mock_run_workflow._record_publish_result_from_execution(
+        parameters=parameters,
+        execution_result=AgentRunResult(metadata={"publishResult": evidence}),
+    )
+
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        mock_run_workflow,
+        parameters=parameters,
+    )
+
+    assert summary["finishOutcome"]["code"] == "PUBLISHED_PR"
+    assert summary["publish"]["status"] == "published"
+    assert summary["publish"]["reason"] == "auto publish verified merge"
+    assert summary["publishContext"]["skillId"] == "pr-resolver"
+    assert summary["publishContext"]["prUrl"] == (
+        "https://github.com/MoonLadderStudios/MoonMind/pull/2970"
+    )
+
+
+@pytest.mark.asyncio
 async def test_auto_publish_no_op_maps_to_no_commit_not_publish_disabled(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
