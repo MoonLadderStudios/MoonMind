@@ -25,6 +25,9 @@ CHECKPOINT_BRANCH_WORKSPACE_RESTORE_CONTENT_TYPE = (
 CHECKPOINT_BRANCH_GIT_BINDING_CONTENT_TYPE = (
     "application/vnd.moonmind.checkpoint-branch.git-binding+json;version=1"
 )
+CHECKPOINT_BRANCH_TURN_CONTEXT_BUNDLE_CONTENT_TYPE = (
+    "application/vnd.moonmind.checkpoint-branch-turn.context-bundle+json;version=1"
+)
 
 CheckpointBranchCreationMode = Literal[
     "from_checkpoint_worktree",
@@ -61,6 +64,30 @@ _PROTECTED_REFS = frozenset(
     }
 )
 _HEX_COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+_FORBIDDEN_CONTEXT_KEYS = frozenset(
+    {
+        "rawlog",
+        "rawlogs",
+        "raw_log",
+        "raw_logs",
+        "rawdiff",
+        "rawdiffs",
+        "raw_diff",
+        "raw_diffs",
+        "providerpayload",
+        "providerpayloads",
+        "provider_payload",
+        "provider_payloads",
+        "credential",
+        "credentials",
+        "secret",
+        "secrets",
+        "token",
+        "tokens",
+        "password",
+        "passwords",
+    }
+)
 
 
 class CheckpointBranchGitBindingInput(BaseModel):
@@ -182,6 +209,136 @@ class CheckpointBranchGitBindingError(ValueError):
     def __init__(self, failure_code: CheckpointBranchBindingFailureCode, message: str):
         super().__init__(message)
         self.failure_code = failure_code
+
+
+class CheckpointBranchContextBundleError(ValueError):
+    """Fail-closed branch-turn context bundle validation error."""
+
+
+def build_checkpoint_branch_turn_context_bundle(
+    raw_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build a ref-only immutable context bundle payload for a branch turn."""
+
+    _reject_forbidden_context_content(raw_context)
+    workflow_id = _required_text(raw_context, "workflowId")
+    run_id = _required_text(raw_context, "runId")
+    branch = _required_mapping(raw_context, "branch")
+    branch_id = _required_text(branch, "branchId")
+    branch_turn_id = _required_text(branch, "branchTurnId")
+    source_checkpoint_ref = _optional_context_text(branch.get("sourceCheckpointRef"))
+    source_state_ref = _optional_context_text(branch.get("sourceStateRef"))
+    source_state_kind = _optional_context_text(branch.get("sourceStateKind"))
+    if not source_checkpoint_ref and not (source_state_kind and source_state_ref):
+        raise CheckpointBranchContextBundleError(
+            "branch context requires sourceCheckpointRef or typed sourceStateRef"
+        )
+    instruction_refs = _required_ref_list(raw_context, "instructionRefs")
+    prior_evidence_refs = _ref_list(raw_context.get("priorEvidenceRefs"))
+    builder_metadata = _required_mapping(raw_context, "builderMetadata")
+    _required_text(builder_metadata, "version")
+    _required_text(builder_metadata, "digest")
+    workspace_baseline = _required_mapping(raw_context, "workspaceBaseline")
+    workspace_policy = _required_text(raw_context, "workspacePolicy")
+
+    bundle = {
+        "contentType": CHECKPOINT_BRANCH_TURN_CONTEXT_BUNDLE_CONTENT_TYPE,
+        "schemaVersion": str(raw_context.get("schemaVersion") or "v1"),
+        "workflowId": workflow_id,
+        "runId": run_id,
+        "logicalStepId": _optional_context_text(raw_context.get("logicalStepId")),
+        "executionOrdinal": raw_context.get("executionOrdinal"),
+        "reason": "checkpoint_branch",
+        "branch": {
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "label": _optional_context_text(branch.get("label")),
+            "sourceCheckpointRef": source_checkpoint_ref,
+            "sourceStateKind": source_state_kind,
+            "sourceStateRef": source_state_ref,
+            "sourceStateDigest": _optional_context_text(branch.get("sourceStateDigest")),
+            "parentBranchId": _optional_context_text(branch.get("parentBranchId")),
+            "parentTurnId": _optional_context_text(branch.get("parentTurnId")),
+            "gitWorkBranch": _optional_context_text(branch.get("gitWorkBranch")),
+        },
+        "taskInputSnapshotRef": _optional_context_text(
+            raw_context.get("taskInputSnapshotRef")
+        ),
+        "planRef": _optional_context_text(raw_context.get("planRef")),
+        "planDigest": _optional_context_text(raw_context.get("planDigest")),
+        "instructionRefs": instruction_refs,
+        "instructionDigests": _ref_list(raw_context.get("instructionDigests")),
+        "workspacePolicy": workspace_policy,
+        "workspaceBaseline": dict(workspace_baseline),
+        "priorEvidenceRefs": prior_evidence_refs,
+        "boundedSummaries": list(raw_context.get("boundedSummaries") or []),
+        "builderMetadata": dict(builder_metadata),
+    }
+    _reject_forbidden_context_content(bundle)
+    return bundle
+
+
+def _reject_forbidden_context_content(value: Any, *, path: str = "") -> None:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            key_text = str(key)
+            normalized = key_text.replace("-", "_").lower()
+            compact = normalized.replace("_", "")
+            if normalized in _FORBIDDEN_CONTEXT_KEYS or compact in _FORBIDDEN_CONTEXT_KEYS:
+                location = f"{path}.{key_text}" if path else key_text
+                raise CheckpointBranchContextBundleError(
+                    f"branch context cannot contain forbidden raw content key {location}"
+                )
+            _reject_forbidden_context_content(
+                child, path=f"{path}.{key_text}" if path else key_text
+            )
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            _reject_forbidden_context_content(child, path=f"{path}[{index}]")
+
+
+def _required_mapping(value: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    candidate = value.get(key)
+    if not isinstance(candidate, Mapping):
+        raise CheckpointBranchContextBundleError(
+            f"branch context requires object field {key}"
+        )
+    return candidate
+
+
+def _required_text(value: Mapping[str, Any], key: str) -> str:
+    candidate = _optional_context_text(value.get(key))
+    if candidate is None:
+        raise CheckpointBranchContextBundleError(
+            f"branch context requires text field {key}"
+        )
+    return candidate
+
+
+def _optional_context_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    candidate = str(value).strip()
+    return candidate or None
+
+
+def _ref_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise CheckpointBranchContextBundleError("branch context refs must be a list")
+    refs = [_optional_context_text(item) for item in value]
+    return [item for item in refs if item is not None]
+
+
+def _required_ref_list(value: Mapping[str, Any], key: str) -> list[str]:
+    refs = _ref_list(value.get(key))
+    if not refs:
+        raise CheckpointBranchContextBundleError(
+            f"branch context requires at least one ref in {key}"
+        )
+    return refs
 
 
 def generate_checkpoint_branch_name(

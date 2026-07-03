@@ -49,6 +49,10 @@ from api_service.db.models import (
     WorkflowCheckpointBranchTurn,
 )
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
+from api_service.services.checkpoint_branch_service import (
+    CheckpointBranchService,
+    build_branch_turn_launch_idempotency_key,
+)
 from moonmind.config.settings import settings
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
@@ -122,12 +126,17 @@ from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchModel,
     CheckpointBranchPromoteRequest,
     CheckpointBranchPublishRequest,
+    CheckpointBranchTurnLaunchRequest,
     CheckpointBranchTurnListResponse,
     CheckpointBranchTurnModel,
     CheckpointListResponse,
     CheckpointSummaryModel,
 )
-from moonmind.workflows.checkpoint_branches import CheckpointBranchGitBindingError
+from moonmind.workflows.checkpoint_branches import (
+    CheckpointBranchGitBindingError,
+    CheckpointBranchContextBundleError,
+    build_checkpoint_branch_turn_context_bundle,
+)
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
@@ -824,6 +833,87 @@ def _branch_to_model(branch: WorkflowCheckpointBranch) -> CheckpointBranchModel:
 
 def _turn_to_model(turn: WorkflowCheckpointBranchTurn) -> CheckpointBranchTurnModel:
     return CheckpointBranchTurnModel.model_validate(turn)
+
+
+def _branch_turn_immutable_snapshot(
+    turn: WorkflowCheckpointBranchTurn,
+) -> dict[str, Any]:
+    return {
+        "instructionRef": turn.instruction_ref,
+        "instructionDigest": turn.instruction_digest,
+        "sourceCheckpointRef": turn.source_checkpoint_ref,
+        "sourceCheckpointDigest": turn.source_checkpoint_digest,
+        "sourceStateKind": turn.source_state_kind,
+        "sourceStateRef": turn.source_state_ref,
+        "sourceStateDigest": turn.source_state_digest,
+        "workspacePolicy": turn.workspace_policy,
+        "runtimeContextPolicy": turn.runtime_context_policy,
+    }
+
+
+def _require_branch_turn_immutable_snapshot(
+    turn: WorkflowCheckpointBranchTurn,
+    snapshot: Mapping[str, Any] | None,
+) -> None:
+    if not snapshot:
+        return
+    current = _branch_turn_immutable_snapshot(turn)
+    for key, expected in snapshot.items():
+        if current.get(key) != expected:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "immutable_launch_field",
+                    "field": key,
+                },
+            )
+
+
+def _branch_turn_artifact_ref(
+    *,
+    branch_turn_id: str,
+    artifact_name: str,
+    payload_digest: str,
+) -> str:
+    return (
+        f"artifact://checkpoint-branch-turns/{branch_turn_id}/"
+        f"{artifact_name}/{payload_digest.removeprefix('sha256:')}.json"
+    )
+
+
+def _branch_turn_launch_manifest_payload(
+    *,
+    workflow_id: str,
+    branch: WorkflowCheckpointBranch,
+    turn: WorkflowCheckpointBranchTurn,
+    payload: CheckpointBranchTurnLaunchRequest,
+    context_bundle_ref: str,
+) -> dict[str, Any]:
+    return {
+        "workflowId": workflow_id,
+        "runId": branch.source_run_id,
+        "logicalStepId": branch.logical_step_id,
+        "executionOrdinal": branch.source_execution_ordinal,
+        "stepExecutionId": payload.created_step_execution_id,
+        "reason": "checkpoint_branch",
+        "status": "running",
+        "branch": {
+            "branchId": branch.branch_id,
+            "branchTurnId": turn.branch_turn_id,
+            "rootCheckpointRef": turn.source_checkpoint_ref,
+            "sourceStateKind": turn.source_state_kind,
+            "sourceStateRef": turn.source_state_ref,
+            "sourceStateDigest": turn.source_state_digest,
+            "parentBranchId": branch.parent_branch_id,
+            "parentTurnId": turn.parent_turn_id or branch.parent_turn_id,
+            "gitWorkBranch": branch.git_work_branch or turn.git_work_branch,
+        },
+        "inputs": {
+            "instructionRef": turn.instruction_ref,
+            "instructionDigest": turn.instruction_digest,
+            "contextBundleRef": context_bundle_ref,
+        },
+    }
 
 
 def _is_protected_ref(ref: str | None) -> bool:
@@ -11307,6 +11397,193 @@ async def list_checkpoint_branch_turns(
     return CheckpointBranchTurnListResponse(
         items=[_turn_to_model(turn) for turn in result.scalars().all()]
     )
+
+
+@router.post(
+    "/{workflow_id}/checkpoint-branches/{branch_id}/turns/{branch_turn_id}/launch",
+    response_model=CheckpointBranchTurnModel,
+)
+async def launch_checkpoint_branch_turn(
+    workflow_id: str,
+    branch_id: str,
+    branch_turn_id: str,
+    payload: CheckpointBranchTurnLaunchRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchTurnModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    branch = await _load_checkpoint_branch(
+        session, workflow_id=workflow_id, branch_id=branch_id
+    )
+    turn_result = await session.execute(
+        select(WorkflowCheckpointBranchTurn).where(
+            WorkflowCheckpointBranchTurn.branch_turn_id == branch_turn_id,
+            WorkflowCheckpointBranchTurn.branch_id == branch.branch_id,
+        )
+    )
+    turn = turn_result.scalar_one_or_none()
+    if turn is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "checkpoint_branch_turn_not_found"},
+        )
+    launch_key = build_branch_turn_launch_idempotency_key(
+        workflow_id=workflow_id,
+        branch_id=branch.branch_id,
+        branch_turn_id=turn.branch_turn_id,
+    )
+    request_digest = _scoped_operation_digest(
+        payload,
+        scope={
+            "branchId": branch.branch_id,
+            "branchTurnId": turn.branch_turn_id,
+            "operation": "checkpoint_branch.turn.launch",
+        },
+    )
+    existing_op = (
+        await session.execute(
+            select(WorkflowCheckpointBranchOperation).where(
+                WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+                WorkflowCheckpointBranchOperation.idempotency_key == launch_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing_op is not None:
+        if (
+            existing_op.operation != "checkpoint_branch.turn.launch"
+            or existing_op.branch_id != branch.branch_id
+            or existing_op.branch_turn_id != turn.branch_turn_id
+            or existing_op.request_digest != request_digest
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "idempotency_key_conflict"},
+            )
+        _require_branch_turn_immutable_snapshot(
+            turn,
+            existing_op.response_payload.get("immutableLaunchFields"),
+        )
+        return _turn_to_model(turn)
+
+    context_payload = {
+        "workflowId": workflow_id,
+        "runId": branch.source_run_id,
+        "logicalStepId": branch.logical_step_id,
+        "executionOrdinal": branch.source_execution_ordinal,
+        "branch": {
+            "branchId": branch.branch_id,
+            "branchTurnId": turn.branch_turn_id,
+            "sourceCheckpointRef": turn.source_checkpoint_ref,
+            "sourceStateKind": turn.source_state_kind,
+            "sourceStateRef": turn.source_state_ref,
+            "sourceStateDigest": turn.source_state_digest,
+            "parentBranchId": branch.parent_branch_id,
+            "parentTurnId": turn.parent_turn_id or branch.parent_turn_id,
+            "gitWorkBranch": branch.git_work_branch or turn.git_work_branch,
+        },
+        "workspacePolicy": turn.workspace_policy,
+        "workspaceBaseline": payload.workspace_baseline
+        or {
+            "kind": "checkpoint_ref",
+            "checkpointRef": turn.source_checkpoint_ref,
+        },
+        "instructionRefs": [turn.instruction_ref],
+        "instructionDigests": [turn.instruction_digest],
+        "priorEvidenceRefs": payload.prior_evidence_refs,
+        "boundedSummaries": payload.bounded_summaries,
+        "builderMetadata": payload.builder_metadata
+        or {
+            "version": "checkpoint-branch-launch-api-v1",
+            "digest": "sha256:checkpoint-branch-launch-api-v1",
+        },
+    }
+    try:
+        context_bundle = build_checkpoint_branch_turn_context_bundle(context_payload)
+    except CheckpointBranchContextBundleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "invalid_branch_turn_context", "reason": str(exc)},
+        ) from exc
+    context_digest = _operation_digest(context_bundle)
+    context_bundle_ref = _branch_turn_artifact_ref(
+        branch_turn_id=turn.branch_turn_id,
+        artifact_name="context-bundle",
+        payload_digest=context_digest,
+    )
+    manifest_payload = _branch_turn_launch_manifest_payload(
+        workflow_id=workflow_id,
+        branch=branch,
+        turn=turn,
+        payload=payload,
+        context_bundle_ref=context_bundle_ref,
+    )
+    manifest_digest = _operation_digest(manifest_payload)
+    manifest_ref = _branch_turn_artifact_ref(
+        branch_turn_id=turn.branch_turn_id,
+        artifact_name="step-execution-manifest",
+        payload_digest=manifest_digest,
+    )
+    diagnostics_ref = (
+        payload.diagnostics_ref
+        or _branch_turn_artifact_ref(
+            branch_turn_id=turn.branch_turn_id,
+            artifact_name="diagnostics",
+            payload_digest=_operation_digest(
+                {
+                    "workflowId": workflow_id,
+                    "branchId": branch.branch_id,
+                    "branchTurnId": turn.branch_turn_id,
+                    "launchIdempotencyKey": launch_key,
+                }
+            ),
+        )
+    )
+    try:
+        launched = await CheckpointBranchService(session).launch_turn(
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            branch_turn_id=turn.branch_turn_id,
+            context_bundle_ref=context_bundle_ref,
+            step_execution_manifest_ref=manifest_ref,
+            checkpoint_ref=None,
+            diagnostics_ref=diagnostics_ref,
+            idempotency_key=launch_key,
+            created_step_execution_id=payload.created_step_execution_id,
+            runtime_agent_run_id=payload.runtime_agent_run_id,
+            provider_session_id=payload.provider_session_id,
+            agent_request_ref=payload.runtime_request_ref,
+            agent_result_ref=payload.runtime_result_ref,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "branch_turn_launch_rejected", "reason": str(exc)},
+        ) from exc
+
+    session.add(
+        WorkflowCheckpointBranchOperation(
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            branch_turn_id=turn.branch_turn_id,
+            operation="checkpoint_branch.turn.launch",
+            idempotency_key=launch_key,
+            request_digest=request_digest,
+            response_payload={
+                "branchId": branch.branch_id,
+                "branchTurnId": turn.branch_turn_id,
+                "contextBundleRef": context_bundle_ref,
+                "stepExecutionManifestRef": manifest_ref,
+                "diagnosticsRef": diagnostics_ref,
+                "contextBundle": context_bundle,
+                "manifest": manifest_payload,
+                "immutableLaunchFields": _branch_turn_immutable_snapshot(launched),
+            },
+        )
+    )
+    await session.commit()
+    await session.refresh(launched)
+    return _turn_to_model(launched)
 
 
 async def _record_branch_turn_operation(

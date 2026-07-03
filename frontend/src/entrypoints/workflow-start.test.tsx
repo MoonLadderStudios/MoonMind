@@ -100,55 +100,115 @@ describe("buildEditParametersPatch", () => {
   });
 });
 
-const mockPayload: BootPayload = {
-  page: "workflow-start",
-  apiBase: "/api",
-  initialData: {
-    dashboardConfig: {
-      sources: {
-        temporal: {
-          create: "/api/executions",
-          artifactCreate: "/api/artifacts",
-        },
-        github: {
-          branches: "/api/github/branches?repository={repository}",
-          issues: "/api/github/issues?repository={repository}&q={query}",
-        },
-      },
-      system: {
-        defaultRepository: "MoonLadderStudios/MoonMind",
-        defaultAgentRuntime: "codex_cli",
-        defaultTaskModel: "gpt-5.4",
-        defaultTaskEffort: "medium",
-        defaultPublishMode: "pr",
-        defaultProposeTasks: false,
-        defaultTaskModelByRuntime: {
-          codex_cli: "gpt-5.4",
-          claude_code: "claude-opus-4-7",
-        },
-        defaultTaskEffortByRuntime: {
-          codex_cli: "medium",
-          claude_code: "low",
-        },
-        supportedAgentRuntimes: ["codex_cli", "claude_code"],
-        providerProfiles: {
-          list: "/api/v1/provider-profiles",
-        },
-        presetCatalog: {
-          enabled: true,
-          templateSaveEnabled: true,
-          list: "/api/presets",
-          detail: "/api/presets/{slug}",
-          expand: "/api/presets/{slug}:expand",
-          saveFromWorkflow: "/api/presets/save-from-workflow",
-        },
-      },
+describe("WorkflowStartPage loading placeholders", () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/workflows/new?editExecutionId=mm%3Aloading-draft",
+    );
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/executions/mm%3Aloading-draft")) {
+        return new Promise(() => {}) as Promise<Response>;
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("renders a create-flow placeholder while loading an editable execution draft", () => {
+    const dashboardConfig = {
+      ...mockDashboardConfig,
       features: {
         temporalDashboard: {
           temporalTaskEditing: true,
         },
       },
+    };
+
+    renderWithClient(
+      <WorkflowStartPage
+        payload={{
+          ...mockPayload,
+          initialData: {
+            dashboardConfig,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    expect(screen.getByText("Workflow start editable draft loading placeholder").closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByTestId("loading-placeholder-form-controls")).toBeTruthy();
+  });
+});
+
+const mockDashboardConfig = {
+  sources: {
+    temporal: {
+      create: "/api/executions",
+      artifactCreate: "/api/artifacts",
     },
+    github: {
+      branches: "/api/github/branches?repository={repository}",
+      issues: "/api/github/issues?repository={repository}&q={query}",
+    },
+  },
+  system: {
+    defaultRepository: "MoonLadderStudios/MoonMind",
+    defaultAgentRuntime: "codex_cli",
+    defaultTaskModel: "gpt-5.4",
+    defaultTaskEffort: "medium",
+    defaultPublishMode: "pr",
+    defaultProposeTasks: false,
+    defaultTaskModelByRuntime: {
+      codex_cli: "gpt-5.4",
+      claude_code: "claude-opus-4-7",
+    },
+    defaultTaskEffortByRuntime: {
+      codex_cli: "medium",
+      claude_code: "low",
+    },
+    supportedAgentRuntimes: ["codex_cli", "claude_code"],
+    providerProfiles: {
+      list: "/api/v1/provider-profiles",
+    },
+    presetCatalog: {
+      enabled: true,
+      templateSaveEnabled: true,
+      list: "/api/presets",
+      detail: "/api/presets/{slug}",
+      expand: "/api/presets/{slug}:expand",
+      saveFromWorkflow: "/api/presets/save-from-workflow",
+    },
+  },
+  features: {
+    temporalDashboard: {
+      temporalTaskEditing: true,
+    },
+  },
+};
+
+const mockPayload: BootPayload = {
+  page: "workflow-start",
+  apiBase: "/api",
+  initialData: {
+    dashboardConfig: mockDashboardConfig,
   },
 };
 

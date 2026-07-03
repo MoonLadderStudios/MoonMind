@@ -1,4 +1,5 @@
 import { DataTable } from '../components/tables/DataTable';
+import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
@@ -442,7 +443,15 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
           ariaLabel="Recent manifest runs"
           data={filteredRuns}
           isLoading={isLoading}
-          loadingMessage="Loading manifest jobs..."
+          loadingMessage={
+            <LoadingPlaceholder
+              surface="manifests"
+              region="recent runs"
+              variant="table"
+              density="compact"
+              preserveContext
+            />
+          }
           isError={isError}
           errorMessage={(error as Error | null)?.message ?? 'Failed to load manifest jobs.'}
           columns={[

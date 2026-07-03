@@ -213,6 +213,18 @@ describe("SchedulesPage", () => {
     vi.mocked(navigateTo).mockReset();
   });
 
+  it("renders page-matched loading placeholders for schedule summary and table regions", () => {
+    fetchSpy.mockReturnValue(new Promise(() => {}) as Promise<Response>);
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(screen.getByRole("heading", { name: "Recurring Schedules" })).toBeTruthy();
+    expect(screen.getByText("Schedules summary loading placeholder").closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByText("Schedules list loading placeholder").closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByTestId("loading-placeholder-metric-strip")).toBeTruthy();
+    expect(screen.getByTestId("loading-placeholder-table")).toBeTruthy();
+  });
+
   it("renders streamlined schedule status, target, cadence, and policy columns", async () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 

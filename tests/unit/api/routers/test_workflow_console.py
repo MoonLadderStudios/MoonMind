@@ -422,9 +422,11 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         f"/workflows/mm:{uuid4()}",
         "/workflows/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
         "/workflows/mm:workflow-123",
+        "/workflows/mm:workflow-123/chat",
         "/workflows/mm:workflow-123/steps",
         "/workflows/mm:workflow-123/artifacts",
         "/workflows/mm:workflow-123/runs",
+        "/workflows/mm:workflow-123/debug",
     ):
         response = client.get(path)
         assert response.status_code == 200
@@ -592,7 +594,8 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     assert detail["code"] == "dashboard_route_not_found"
     assert detail["message"] == (
         "Workflow console route was not found. Use /workflows, /workflows/new, "
-        "/workflows/{workflowId}, /workflows/{workflowId}/steps, "
+        "/workflows/{workflowId}, /workflows/{workflowId}/chat, "
+        "/workflows/{workflowId}/overview, /workflows/{workflowId}/steps, "
         "/workflows/{workflowId}/artifacts, /workflows/{workflowId}/runs, "
         "or /workflows/{workflowId}/debug."
     )

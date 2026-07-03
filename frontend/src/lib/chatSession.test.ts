@@ -110,6 +110,24 @@ describe('chat session observability projection for MM-1013', () => {
     });
   });
 
+  it('preserves split row identity so multiline chat rows are not deduped by sequence', () => {
+    const state = projectChatSessionBlocks([
+      { ...row(1, 'assistant_message_delta', 'first', { responseId: 'resp-1' }), id: '1-0-assistant_message_delta' },
+      { ...row(1, 'assistant_message_delta', 'second', { responseId: 'resp-1' }), id: '1-1-assistant_message_delta' },
+      { ...row(1, 'assistant_message_delta', 'third', { responseId: 'resp-1' }), id: '1-2-assistant_message_delta' },
+    ]);
+
+    expect(state.blocks).toHaveLength(1);
+    const [block] = state.blocks;
+    expect(block).toMatchObject({
+      kind: 'assistant',
+      text: 'firstsecondthird',
+      sequenceStart: 1,
+      sequenceEnd: 1,
+    });
+    expect(block?.sourceEventIds).toHaveLength(3);
+  });
+
   it('keeps tool blocks turn-aware when response ids are not available', () => {
     const state = projectChatSessionBlocks([
       { ...row(1, 'tool_call_started', 'Running pytest', { callId: 'call-1', toolName: 'pytest' }), turnId: 'turn-1' },
@@ -219,6 +237,61 @@ describe('chat session observability projection for MM-1013', () => {
       sequenceStart: 10,
       sequenceEnd: 10,
       metadata: expect.objectContaining({ reconciledFromOptimisticKey: 'client-msg-1' }),
+    });
+  });
+
+  it('appends pending optimistic follow-ups after durable history', () => {
+    const state = projectChatSessionBlocks(
+      [
+        row(1, 'user_message_submitted', 'Start', { turnIndex: 0 }),
+        row(2, 'assistant_message_completed', 'Ready', { responseId: 'resp-1', turnIndex: 0 }),
+      ],
+      '',
+      [
+        {
+          key: 'client-msg-2',
+          agentRunId: 'agent-run-mm-1013',
+          sessionId: 'sess-1',
+          sessionEpoch: 3,
+          turnIndex: 1,
+          text: 'Continue',
+        },
+      ],
+    );
+
+    expect(state.blocks.map((block) => [block.kind, block.text])).toEqual([
+      ['user', 'Start'],
+      ['assistant', 'Ready'],
+      ['user', 'Continue'],
+    ]);
+  });
+
+  it('does not duplicate an optimistic message once durable history contains its client key', () => {
+    const state = projectChatSessionBlocks(
+      [
+        row(10, 'user_message_submitted', 'Continue', {
+          optimisticKey: 'client-msg-2',
+          turnIndex: 1,
+        }),
+      ],
+      '',
+      [
+        {
+          key: 'client-msg-2',
+          agentRunId: 'agent-run-mm-1013',
+          sessionId: 'sess-1',
+          sessionEpoch: 3,
+          turnIndex: 1,
+          text: 'Continue',
+        },
+      ],
+    );
+
+    expect(state.blocks).toHaveLength(1);
+    expect(state.blocks[0]).toMatchObject({
+      kind: 'user',
+      text: 'Continue',
+      sequenceStart: 10,
     });
   });
 });
