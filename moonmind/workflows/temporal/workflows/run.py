@@ -16062,6 +16062,7 @@ class MoonMindRunWorkflow:
             run_id=workflow.info().run_id,
             rows=self._step_ledger_rows,
             prepared_artifact_refs=self._prepared_artifact_refs,
+            queried_at=workflow.now(),
         )
         return StepLedgerSnapshotModel.model_validate(snapshot).model_dump(
             by_alias=True,

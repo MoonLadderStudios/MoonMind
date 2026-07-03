@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Mapping
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 ACTIVE_STEP_STATUSES = ("executing", "reviewing", "awaiting_external")
@@ -32,7 +32,13 @@ def _parse_step_datetime(value: Any) -> datetime | None:
 def _step_duration_ms(started_at: datetime | None, ended_at: datetime | None) -> int | None:
     if started_at is None or ended_at is None:
         return None
-    return max(0, int((ended_at - started_at).total_seconds() * 1000))
+    started = started_at
+    ended = ended_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if ended.tzinfo is None:
+        ended = ended.replace(tzinfo=timezone.utc)
+    return max(0, int((ended - started).total_seconds() * 1000))
 
 
 def _step_timing_payload(
@@ -513,11 +519,19 @@ def build_step_ledger_snapshot(
     run_id: str,
     rows: list[dict[str, Any]],
     prepared_artifact_refs: list[str] | None = None,
+    queried_at: datetime | None = None,
 ) -> dict[str, Any]:
     normalized_rows = deepcopy(rows)
     for row in normalized_rows:
         updated_at = _parse_step_datetime(row.get("updatedAt"))
-        if updated_at is not None:
+        status = _normalize_replayed_step_status(row.get("status"))
+        if (
+            status in ACTIVE_STEP_STATUSES
+            and row.get("startedAt") is not None
+            and (queried_at is not None or updated_at is not None)
+        ):
+            refresh_step_timing(row, updated_at=queried_at or updated_at)
+        elif row.get("timing") is None and updated_at is not None:
             refresh_step_timing(row, updated_at=updated_at)
     return {
         "workflowId": workflow_id,
@@ -869,6 +883,7 @@ def update_step_row(
     for row in rows:
         if row.get("logicalStepId") != logical_step_id:
             continue
+        previous_status = _normalize_replayed_step_status(row.get("status"))
         if status is not None:
             row["status"] = status
         if increment_attempt:
@@ -913,11 +928,18 @@ def update_step_row(
             row["artifacts"] = merged_artifacts
         if workload is not _UNSET:
             row["workload"] = dict(workload) if isinstance(workload, Mapping) else None
-        if _normalize_replayed_step_status(status) in TERMINAL_STEP_STATUSES:
+        normalized_status = _normalize_replayed_step_status(row.get("status"))
+        if normalized_status in TERMINAL_STEP_STATUSES:
             row["waitingReason"] = None
             row["attentionRequired"] = False
         row["updatedAt"] = updated_at.isoformat()
-        refresh_step_timing(row, updated_at=updated_at)
+        should_refresh_timing = (
+            normalized_status not in TERMINAL_STEP_STATUSES
+            or previous_status not in TERMINAL_STEP_STATUSES
+            or row.get("timing") is None
+        )
+        if should_refresh_timing:
+            refresh_step_timing(row, updated_at=updated_at)
         return row
     raise KeyError(f"Unknown logical step id: {logical_step_id}")
 

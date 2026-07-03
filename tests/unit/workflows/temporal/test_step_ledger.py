@@ -17,6 +17,7 @@ from moonmind.statuses.step_ledger import step_execution_to_ledger_status
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
+    build_step_ledger_snapshot,
     mark_step_execution_manifest_evidence,
     mark_step_checkpoint_evidence,
     materialize_preserved_steps,
@@ -262,6 +263,79 @@ def test_update_step_row_adds_live_and_terminal_timing() -> None:
     }
 
 
+def test_update_step_row_normalizes_naive_and_aware_timing() -> None:
+    started_at = datetime(2026, 4, 7, 12, 0)
+    completed_at = datetime(2026, 4, 7, 12, 1, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "run-tests",
+                "tool": {"type": "skill", "name": "repo.test"},
+                "inputs": {"title": "Run tests"},
+            }
+        ],
+        dependency_map={"run-tests": []},
+        updated_at=started_at,
+    )
+
+    update_step_row(
+        rows,
+        "run-tests",
+        updated_at=started_at,
+        status="executing",
+        set_started_at=True,
+    )
+    completed = update_step_row(
+        rows,
+        "run-tests",
+        updated_at=completed_at,
+        status="completed",
+    )
+
+    assert completed["timing"]["durationMs"] == 60000
+
+
+def test_update_step_row_preserves_terminal_timing_for_metadata_updates() -> None:
+    started_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    completed_at = datetime(2026, 4, 7, 12, 1, tzinfo=UTC)
+    metadata_at = datetime(2026, 4, 7, 12, 3, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "run-tests",
+                "tool": {"type": "skill", "name": "repo.test"},
+                "inputs": {"title": "Run tests"},
+            }
+        ],
+        dependency_map={"run-tests": []},
+        updated_at=started_at,
+    )
+    update_step_row(
+        rows,
+        "run-tests",
+        updated_at=started_at,
+        status="executing",
+        set_started_at=True,
+    )
+    completed = update_step_row(
+        rows,
+        "run-tests",
+        updated_at=completed_at,
+        status="completed",
+    )
+    original_timing = dict(completed["timing"])
+
+    updated = update_step_row(
+        rows,
+        "run-tests",
+        updated_at=metadata_at,
+        artifacts={"stepExecutionManifestRef": "artifact://manifest/terminal"},
+    )
+
+    assert updated["updatedAt"] == metadata_at.isoformat()
+    assert updated["timing"] == original_timing
+
+
 def test_materialize_preserved_steps_keeps_original_timing() -> None:
     created_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
     resumed_at = datetime(2026, 4, 7, 13, 0, tzinfo=UTC)
@@ -312,6 +386,72 @@ def test_materialize_preserved_steps_keeps_original_timing() -> None:
         "precision": "fallback",
         "preserved": True,
     }
+
+
+def test_snapshot_preserves_preserved_step_source_timing() -> None:
+    resumed_at = datetime(2026, 4, 7, 13, 0, tzinfo=UTC)
+    queried_at = datetime(2026, 4, 7, 13, 30, tzinfo=UTC)
+    source_started = datetime(2026, 4, 7, 11, 58, tzinfo=UTC)
+    source_ended = datetime(2026, 4, 7, 12, 0, 14, tzinfo=UTC)
+    row = {
+        "logicalStepId": "plan",
+        "status": "completed",
+        "startedAt": source_started.isoformat(),
+        "updatedAt": resumed_at.isoformat(),
+        "preservedFrom": {"workflowId": "source", "runId": "run"},
+        "timing": {
+            "startedAt": source_started.isoformat(),
+            "endedAt": source_ended.isoformat(),
+            "durationMs": 134000,
+            "elapsedMs": 134000,
+            "serverNow": resumed_at.isoformat(),
+            "precision": "fallback",
+            "preserved": True,
+        },
+    }
+
+    snapshot = build_step_ledger_snapshot(
+        workflow_id="wf",
+        run_id="run",
+        rows=[row],
+        queried_at=queried_at,
+    )
+
+    assert snapshot["steps"][0]["timing"]["endedAt"] == source_ended.isoformat()
+    assert snapshot["steps"][0]["timing"]["durationMs"] == 134000
+    assert snapshot["steps"][0]["timing"]["serverNow"] == resumed_at.isoformat()
+
+
+def test_snapshot_advances_active_timing_with_query_time() -> None:
+    started_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    mutation_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    queried_at = datetime(2026, 4, 7, 12, 5, tzinfo=UTC)
+    row = {
+        "logicalStepId": "implement",
+        "status": "executing",
+        "startedAt": started_at.isoformat(),
+        "updatedAt": mutation_at.isoformat(),
+        "timing": {
+            "startedAt": started_at.isoformat(),
+            "endedAt": None,
+            "durationMs": None,
+            "elapsedMs": 0,
+            "serverNow": mutation_at.isoformat(),
+            "precision": "live",
+            "preserved": False,
+        },
+    }
+
+    snapshot = build_step_ledger_snapshot(
+        workflow_id="wf",
+        run_id="run",
+        rows=[row],
+        queried_at=queried_at,
+    )
+
+    assert snapshot["steps"][0]["timing"]["elapsedMs"] == 300000
+    assert snapshot["steps"][0]["timing"]["serverNow"] == queried_at.isoformat()
+
 
 def test_progress_summary_prefers_active_step_title_and_counts_statuses() -> None:
     updated_at = datetime(2026, 4, 7, 12, 5, tzinfo=UTC)

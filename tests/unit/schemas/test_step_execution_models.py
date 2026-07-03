@@ -21,6 +21,7 @@ from moonmind.schemas.temporal_models import (
     ExecutionProgressModel,
     RecoveryCheckpointPreservedStepModel,
     RecoveryEligibilityDiagnosticModel,
+    StepExecutionProjectionModel,
     StepEvidenceSummaryModel,
 )
 
@@ -122,6 +123,29 @@ def test_manifest_accepts_legacy_persisted_status_tokens() -> None:
     )
 
     assert manifest.status == "running"
+
+
+def test_step_execution_projection_timing_normalizes_legacy_running_status() -> None:
+    started_at = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
+    updated_at = datetime(2026, 5, 17, 12, 2, tzinfo=UTC)
+
+    projection = StepExecutionProjectionModel.model_validate(
+        {
+            "manifestArtifactRef": "artifact://manifest/1",
+            "stepExecutionId": "wf-1:run-1:implement:execution:1",
+            "workflowId": "wf-1",
+            "runId": "run-1",
+            "logicalStepId": "implement",
+            "executionOrdinal": 1,
+            "status": "running",
+            "startedAt": started_at,
+            "updatedAt": updated_at,
+        }
+    )
+
+    assert projection.timing is not None
+    assert projection.timing.elapsed_ms == 120000
+    assert projection.timing.precision == "live"
 
 
 def test_execution_progress_model_normalizes_legacy_progress_fields() -> None:

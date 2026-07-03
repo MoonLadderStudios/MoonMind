@@ -25,7 +25,10 @@ from moonmind.statuses.step_execution import (
     StepExecutionStatus,
     StepExecutionTerminalDisposition,
 )
-from moonmind.statuses.step_ledger import StepLedgerStatusValue
+from moonmind.statuses.step_ledger import (
+    StepLedgerStatusValue,
+    step_execution_to_ledger_status,
+)
 from moonmind.statuses.temporal_status import TemporalStatusValue
 
 SUPPORTED_WORKFLOW_TYPES = (
@@ -2898,8 +2901,11 @@ def _fallback_step_timing_payload(
     started_at: datetime | None,
     updated_at: datetime | None,
     preserved: bool = False,
+    status_source: Literal["ledger", "step_execution"] = "ledger",
 ) -> dict[str, Any]:
     normalized_status = str(status or "").strip()
+    if status_source == "step_execution" and normalized_status:
+        normalized_status = step_execution_to_ledger_status(normalized_status).value
     if normalized_status in _ACTIVE_STEP_TIMING_STATUSES and started_at is not None:
         elapsed_ms = _duration_ms_between(started_at, updated_at)
         return {
@@ -3069,6 +3075,7 @@ class StepExecutionProjectionModel(BaseModel):
                     status=self.status,
                     started_at=self.started_at,
                     updated_at=self.updated_at,
+                    status_source="step_execution",
                 )
             )
         return self

@@ -7718,14 +7718,14 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                   </button>
                   {stepTimelineVisible ? <StepDurationTimeline rows={stepsQuery.data.steps} /> : null}
                   <div className="step-tl-list">
-                    {stepsQuery.data.steps.map((row, idx) => {
+                    {(() => {
                       const maxDurationMs = Math.max(
                         0,
                         ...stepsQuery.data.steps
                           .map((item) => rowTimingValueMs(item))
                           .filter((value): value is number => value !== null),
                       );
-                      return (
+                      return stepsQuery.data.steps.map((row, idx) => (
                         <StepLedgerRowCard
                           key={row.logicalStepId}
                           apiBase={payload.apiBase}
@@ -7743,8 +7743,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                           maxDurationMs={maxDurationMs}
                           routes={agentRunRoutes}
                         />
-                      );
-                    })}
+                      ));
+                    })()}
                   </div>
                 </>
               ) : (
