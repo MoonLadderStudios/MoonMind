@@ -79,7 +79,11 @@ async def test_prepare_checkpoint_branch_workspace_persists_binding_and_artifact
 
     result = await prepare_checkpoint_branch_workspace(
         session=session,
-        binding_input=_binding_input(),
+        binding_input=_binding_input(
+            headCommit="def5678",
+            patchRef="artifact://patches/checkpoint.patch",
+            pullRequestUrl="https://github.test/moon/mind/pull/1",
+        ),
         known_refs={"feature/mm-1087-source"},
         current_ref="feature/mm-1087-source",
         instruction_ref="artifact://MM-1090/input.branch_turn.instructions.md",
@@ -133,7 +137,14 @@ async def test_prepare_checkpoint_branch_workspace_persists_binding_and_artifact
     assert binding is not None
     assert binding.work_branch == result.git_work_branch
     assert binding.branch_id != binding.work_branch
+    assert binding.head_commit == "def5678"
+    assert binding.patch_ref == "artifact://patches/checkpoint.patch"
+    assert binding.pull_request_url == "https://github.test/moon/mind/pull/1"
     assert binding.binding_metadata["gitBindingArtifact"] == result.git_binding_ref
+    assert binding.binding_metadata["ownership"]["idempotencyKey"] == (
+        "MM-1090:MM-1087:checkpoint"
+    )
+    assert binding.binding_metadata["workspaceBaseline"]["baseCommit"] == "abc1234"
 
     artifacts = (
         await session.execute(select(WorkflowCheckpointBranchArtifact))
@@ -212,6 +223,53 @@ async def test_prepare_checkpoint_branch_workspace_validates_input_before_query(
     assert exc_info.value.failure_code == "invalid_binding"
 
 
+@pytest.mark.parametrize(
+    ("overrides", "failure_code"),
+    [
+        ({"resolvedBaseCommit": "def5678"}, "git_base_commit_mismatch"),
+        (
+            {
+                "creationMode": "fresh_from_source_branch",
+                "workspacePolicy": "restore_pre_execution",
+            },
+            "workspace_policy_incompatible",
+        ),
+        (
+            {
+                "creationMode": "external_provider_state",
+                "workspacePolicy": "continue_from_previous_execution",
+                "providerWorkspaceRef": "provider://workspace/123",
+            },
+            "provider_continuation_unsupported",
+        ),
+    ],
+)
+async def test_prepare_checkpoint_branch_workspace_fails_before_artifacts_for_unsafe_launch(
+    session: AsyncSession,
+    overrides: dict[str, object],
+    failure_code: str,
+) -> None:
+    async def write_artifact(
+        artifact_kind: str,
+        payload: Mapping[str, Any],
+        content_type: str,
+    ) -> tuple[str, None]:
+        raise AssertionError("unsafe input must fail before artifact emission")
+
+    with pytest.raises(CheckpointBranchGitBindingError) as exc_info:
+        await prepare_checkpoint_branch_workspace(
+            session=session,
+            binding_input=_binding_input(**overrides),
+            known_refs={"feature/mm-1087-source"},
+            current_ref="feature/mm-1087-source",
+            instruction_ref="artifact://MM-1090/input.branch_turn.instructions.md",
+            instruction_digest="sha256:instructions",
+            artifact_writer=write_artifact,
+        )
+
+    assert exc_info.value.failure_code == failure_code
+
+
 async def test_existing_bindings_match_repository_case_insensitively(
     session: AsyncSession,
 ) -> None:
@@ -229,9 +287,21 @@ async def test_existing_bindings_match_repository_case_insensitively(
             branch_id="cbr_MM-1090",
             repository="MoonLadderStudios/MoonMind",
             base_branch="feature/mm-1087-source",
+            base_commit="abc1234",
             work_branch="mm/mm-1087/implement/cp-12345678/cbr-mm-1090",
             workspace_policy="apply_previous_execution_diff_to_clean_baseline",
             creation_mode="from_checkpoint_patch",
+            binding_metadata={
+                "ownership": {
+                    "idempotencyKey": "MM-1090:MM-1087:checkpoint",
+                    "baseBranch": "feature/mm-1087-source",
+                    "baseCommit": "abc1234",
+                    "workspacePolicy": (
+                        "apply_previous_execution_diff_to_clean_baseline"
+                    ),
+                    "creationMode": "from_checkpoint_patch",
+                }
+            },
         )
     )
     await session.flush()
@@ -242,6 +312,10 @@ async def test_existing_bindings_match_repository_case_insensitively(
     )
 
     assert "mm/mm-1087/implement/cp-12345678/cbr-mm-1090" in bindings
+    assert (
+        bindings["mm/mm-1087/implement/cp-12345678/cbr-mm-1090"]["idempotencyKey"]
+        == "MM-1090:MM-1087:checkpoint"
+    )
 
 
 async def test_prepare_checkpoint_branch_workspace_rejects_mismatched_turn_reuse(
@@ -275,7 +349,7 @@ async def test_prepare_checkpoint_branch_workspace_rejects_mismatched_turn_reuse
             artifact_writer=write_artifact,
         )
 
-    assert exc_info.value.failure_code == "invalid_binding"
+    assert exc_info.value.failure_code == "git_branch_collision"
 
 
 async def test_prepare_checkpoint_branch_workspace_rejects_mismatched_collision(

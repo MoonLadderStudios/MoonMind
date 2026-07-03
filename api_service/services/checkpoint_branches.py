@@ -147,9 +147,18 @@ async def _existing_bindings_by_work_branch(
     )
     bindings: dict[str, dict[str, str]] = {}
     for binding in result.scalars():
+        metadata = dict(binding.binding_metadata or {})
+        ownership = dict(metadata.get("ownership") or {})
         bindings[binding.work_branch] = {
             "productBranchId": binding.branch_id,
             "repository": binding.repository,
+            "idempotencyKey": str(ownership.get("idempotencyKey") or ""),
+            "baseBranch": str(ownership.get("baseBranch") or binding.base_branch),
+            "baseCommit": str(ownership.get("baseCommit") or binding.base_commit or ""),
+            "workspacePolicy": str(
+                ownership.get("workspacePolicy") or binding.workspace_policy
+            ),
+            "creationMode": str(ownership.get("creationMode") or binding.creation_mode),
         }
     return bindings
 
@@ -230,6 +239,14 @@ async def _persist_prepared_checkpoint_branch(
         "binding": prepared.git_binding_payload,
         "workspaceRestoreArtifact": workspace_restore_ref,
         "gitBindingArtifact": git_binding_ref,
+        "workspaceBaseline": prepared.git_binding_payload.get("workspaceBaseline"),
+        "ownership": {
+            "idempotencyKey": binding.idempotency_key,
+            "baseBranch": binding.base_branch,
+            "baseCommit": binding.base_commit,
+            "workspacePolicy": str(binding.workspace_policy),
+            "creationMode": str(binding.creation_mode),
+        },
     }
     if git_binding is None:
         git_binding = WorkflowCheckpointBranchGitBinding(
@@ -240,6 +257,9 @@ async def _persist_prepared_checkpoint_branch(
             work_branch=binding.work_branch,
             worktree_ref=binding.worktree_ref,
             provider_workspace_ref=binding.provider_workspace_ref,
+            head_commit=binding.head_commit,
+            patch_ref=binding.patch_ref,
+            pull_request_url=binding.pull_request_url,
             workspace_policy=str(binding.workspace_policy),
             creation_mode=str(binding.creation_mode),
             publish_status=binding.publish_status,
@@ -253,6 +273,9 @@ async def _persist_prepared_checkpoint_branch(
         git_binding.work_branch = binding.work_branch
         git_binding.worktree_ref = binding.worktree_ref
         git_binding.provider_workspace_ref = binding.provider_workspace_ref
+        git_binding.head_commit = binding.head_commit
+        git_binding.patch_ref = binding.patch_ref
+        git_binding.pull_request_url = binding.pull_request_url
         git_binding.workspace_policy = str(binding.workspace_policy)
         git_binding.creation_mode = str(binding.creation_mode)
         git_binding.binding_metadata = binding_metadata
