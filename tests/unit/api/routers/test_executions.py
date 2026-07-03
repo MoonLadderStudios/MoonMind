@@ -9639,6 +9639,15 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
         "sessionId": "session-1",
         "sessionEpoch": 4,
     }
+    assert payload["steps"][0]["timing"] == {
+        "startedAt": "2026-04-08T12:00:00Z",
+        "endedAt": None,
+        "durationMs": None,
+        "elapsedMs": 60000,
+        "serverNow": "2026-04-08T12:01:00Z",
+        "precision": "live",
+        "preserved": False,
+    }
 
 def test_get_execution_steps_enriches_missing_agent_run_ids_once() -> None:
     app = FastAPI()
@@ -9900,6 +9909,15 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
     )
     assert payload["stepExecutions"][1]["gitDisposition"] == "candidate"
     assert payload["stepExecutions"][1]["qualityGateVerdict"] == "passed"
+    assert payload["stepExecutions"][1]["timing"] == {
+        "startedAt": "2026-05-19T10:00:00Z",
+        "endedAt": "2026-05-19T10:01:00Z",
+        "durationMs": 60000,
+        "elapsedMs": 60000,
+        "serverNow": "2026-05-19T10:01:00Z",
+        "precision": "fallback",
+        "preserved": False,
+    }
     assert "summary" not in payload["stepExecutions"][1]["outputRefs"]
     assert artifact_service.read.await_args_list[0] == call(
         artifact_id="art-attempt-1",

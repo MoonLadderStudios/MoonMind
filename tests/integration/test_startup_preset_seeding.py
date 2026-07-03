@@ -284,7 +284,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert jira_implement_steps[1] == "auto"
         assert jira_implement_steps[2] == "jira.check_blockers"
         assert jira_implement_steps[-1] == "jira-issue-updater"
-        assert len(jira_implement_steps) == 10
+        assert len(jira_implement_steps) == 20
         implement_step_titles = [step["title"] for step in expanded_steps]
         assert implement_step_titles[0] == "Load Jira preset brief"
         assert implement_step_titles[1] == "Assess existing implementation state"
@@ -292,13 +292,17 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert implement_step_titles[3] == "Move Jira issue to In Progress"
         assert "Implement the issue" in implement_step_titles
         assert "Verify implementation" in implement_step_titles
-        assert "Remediate verification gaps" in implement_step_titles
-        assert "Verify remediation" in implement_step_titles
+        assert "Remediate verification gaps 1 of 6" in implement_step_titles
+        assert "Verify remediation 6 of 6" in implement_step_titles
         assert "Create pull request" in implement_step_titles
         assert implement_step_titles[-1] == "Finalize Jira status"
         implement_brief_step = expanded_steps[0]
         assert implement_brief_step["type"] == "tool"
         assert implement_brief_step["tool"]["id"] == "jira.load_preset_brief"
+        assert implement_brief_step["tool"]["inputs"] == {
+            "issueKey": "MM-999",
+            "artifactPath": "artifacts/jira-implement-brief.json",
+        }
         implement_assessment_step = expanded_steps[1]
         assert implement_assessment_step["title"] == "Assess existing implementation state"
         implement_blocker_step = expanded_steps[2]
@@ -374,25 +378,25 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         remediation_step = next(
             step
             for step in expanded_steps
-            if step["title"] == "Remediate verification gaps"
+            if step["title"] == "Remediate verification gaps 1 of 6"
         )
         assert remediation_step["annotations"] == {
             "issueImplementRole": "moonspec-remediation",
             "moonSpecRemediationAttempt": 1,
-            "moonSpecRemediationMaxAttempts": 1,
+            "moonSpecRemediationMaxAttempts": 6,
         }
         verify_remediation_step = next(
             step
             for step in expanded_steps
-            if step["title"] == "Verify remediation"
+            if step["title"] == "Verify remediation 6 of 6"
         )
         assert verify_remediation_step["skill"]["args"]["verify_artifact_path"] == (
             "artifacts/jira-implement-verify.json"
         )
         assert verify_remediation_step["annotations"] == {
             "issueImplementRole": "moonspec-verification-gate",
-            "moonSpecRemediationAttempt": 1,
-            "moonSpecRemediationMaxAttempts": 1,
+            "moonSpecRemediationAttempt": 6,
+            "moonSpecRemediationMaxAttempts": 6,
             "moonSpecFinalRemediationGate": True,
         }
         assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
@@ -550,6 +554,22 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             assert github_downstream_step["githubOrchestration"]["traceability"] == {
                 "sourceIssueKey": "{{ inputs.source_issue_key }}"
             }
+
+        result = await session.execute(
+            select(Preset)
+            .where(
+                Preset.slug == "github-issue-orchestrate",
+                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_ref.is_(None),
+            )
+        )
+        github_orchestrate_template = result.scalar_one_or_none()
+        assert github_orchestrate_template is not None
+        final_status_step = github_orchestrate_template.steps[-1]
+        assert final_status_step["tool"]["id"] == "github.update_issue_status"
+        assert final_status_step["tool"]["inputs"]["verificationArtifactPath"] == (
+            "var/artifacts/moonspec-verify/github-issue-orchestrate.json"
+        )
 
         result = await session.execute(
             select(Preset)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Mapping
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 ACTIVE_STEP_STATUSES = ("executing", "reviewing", "awaiting_external")
@@ -16,6 +16,81 @@ LEGACY_STEP_STATUS_ALIASES = {
     "succeeded": "completed",
 }
 _UNSET = object()
+
+
+def _parse_step_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _step_duration_ms(started_at: datetime | None, ended_at: datetime | None) -> int | None:
+    if started_at is None or ended_at is None:
+        return None
+    started = started_at
+    ended = ended_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if ended.tzinfo is None:
+        ended = ended.replace(tzinfo=timezone.utc)
+    return max(0, int((ended - started).total_seconds() * 1000))
+
+
+def _step_timing_payload(
+    *,
+    status: Any,
+    started_at: Any,
+    updated_at: datetime,
+    preserved: bool = False,
+) -> dict[str, Any]:
+    started = _parse_step_datetime(started_at)
+    normalized_status = _normalize_replayed_step_status(status)
+    updated_at_iso = updated_at.isoformat()
+    if normalized_status in ACTIVE_STEP_STATUSES and started is not None:
+        elapsed_ms = _step_duration_ms(started, updated_at)
+        return {
+            "startedAt": started.isoformat(),
+            "endedAt": None,
+            "durationMs": None,
+            "elapsedMs": elapsed_ms,
+            "serverNow": updated_at_iso,
+            "precision": "live" if elapsed_ms is not None else "unavailable",
+            "preserved": preserved,
+        }
+    if normalized_status in TERMINAL_STEP_STATUSES and started is not None:
+        duration_ms = _step_duration_ms(started, updated_at)
+        return {
+            "startedAt": started.isoformat(),
+            "endedAt": updated_at_iso if duration_ms is not None else None,
+            "durationMs": duration_ms,
+            "elapsedMs": duration_ms,
+            "serverNow": updated_at_iso,
+            "precision": "fallback" if duration_ms is not None else "unavailable",
+            "preserved": preserved,
+        }
+    return {
+        "startedAt": started.isoformat() if started is not None else None,
+        "endedAt": None,
+        "durationMs": None,
+        "elapsedMs": None,
+        "serverNow": updated_at_iso,
+        "precision": "unavailable",
+        "preserved": preserved,
+    }
+
+
+def refresh_step_timing(row: dict[str, Any], *, updated_at: datetime) -> None:
+    row["timing"] = _step_timing_payload(
+        status=row.get("status"),
+        started_at=row.get("startedAt"),
+        updated_at=updated_at,
+        preserved=isinstance(row.get("preservedFrom"), Mapping),
+    )
 
 def _normalize_replayed_step_status(status: Any) -> str:
     value = str(status or "").strip()
@@ -423,6 +498,11 @@ def build_initial_step_rows(
                 "executionOrdinal": 0,
                 "startedAt": None,
                 "updatedAt": updated_at_iso,
+                "timing": _step_timing_payload(
+                    status="ready" if not depends_on else "pending",
+                    started_at=None,
+                    updated_at=updated_at,
+                ),
                 "summary": None,
                 "checks": [],
                 "refs": default_step_refs(),
@@ -439,13 +519,26 @@ def build_step_ledger_snapshot(
     run_id: str,
     rows: list[dict[str, Any]],
     prepared_artifact_refs: list[str] | None = None,
+    queried_at: datetime | None = None,
 ) -> dict[str, Any]:
+    normalized_rows = deepcopy(rows)
+    for row in normalized_rows:
+        updated_at = _parse_step_datetime(row.get("updatedAt"))
+        status = _normalize_replayed_step_status(row.get("status"))
+        if (
+            status in ACTIVE_STEP_STATUSES
+            and row.get("startedAt") is not None
+            and (queried_at is not None or updated_at is not None)
+        ):
+            refresh_step_timing(row, updated_at=queried_at or updated_at)
+        elif row.get("timing") is None and updated_at is not None:
+            refresh_step_timing(row, updated_at=updated_at)
     return {
         "workflowId": workflow_id,
         "runId": run_id,
         "runScope": "latest",
         "preparedArtifactRefs": list(prepared_artifact_refs or []),
-        "steps": deepcopy(rows),
+        "steps": normalized_rows,
     }
 
 
@@ -541,6 +634,38 @@ def materialize_preserved_steps(
             "logicalStepId": logical_step_id,
             "executionOrdinal": source_execution_ordinal,
         }
+        source_started_at = (
+            preserved.get("startedAt")
+            or preserved.get("started_at")
+            or row.get("startedAt")
+        )
+        source_updated_at = (
+            preserved.get("endedAt")
+            or preserved.get("ended_at")
+            or preserved.get("updatedAt")
+            or preserved.get("updated_at")
+        )
+        row["startedAt"] = (
+            _parse_step_datetime(source_started_at).isoformat()
+            if _parse_step_datetime(source_started_at)
+            else None
+        )
+        source_ended = _parse_step_datetime(source_updated_at)
+        if source_ended is not None:
+            row["timing"] = _step_timing_payload(
+                status=row.get("status"),
+                started_at=row.get("startedAt"),
+                updated_at=source_ended,
+                preserved=True,
+            )
+            row["timing"]["serverNow"] = updated_at.isoformat()
+        else:
+            row["timing"] = _step_timing_payload(
+                status=row.get("status"),
+                started_at=row.get("startedAt"),
+                updated_at=updated_at,
+                preserved=True,
+            )
         dependency_inputs = preserved.get("dependencyInputs") or preserved.get(
             "dependency_inputs"
         )
@@ -758,6 +883,7 @@ def update_step_row(
     for row in rows:
         if row.get("logicalStepId") != logical_step_id:
             continue
+        previous_status = _normalize_replayed_step_status(row.get("status"))
         if status is not None:
             row["status"] = status
         if increment_attempt:
@@ -802,10 +928,18 @@ def update_step_row(
             row["artifacts"] = merged_artifacts
         if workload is not _UNSET:
             row["workload"] = dict(workload) if isinstance(workload, Mapping) else None
-        if _normalize_replayed_step_status(status) in TERMINAL_STEP_STATUSES:
+        normalized_status = _normalize_replayed_step_status(row.get("status"))
+        if normalized_status in TERMINAL_STEP_STATUSES:
             row["waitingReason"] = None
             row["attentionRequired"] = False
         row["updatedAt"] = updated_at.isoformat()
+        should_refresh_timing = (
+            normalized_status not in TERMINAL_STEP_STATUSES
+            or previous_status not in TERMINAL_STEP_STATUSES
+            or row.get("timing") is None
+        )
+        if should_refresh_timing:
+            refresh_step_timing(row, updated_at=updated_at)
         return row
     raise KeyError(f"Unknown logical step id: {logical_step_id}")
 

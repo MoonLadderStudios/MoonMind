@@ -628,8 +628,13 @@ def _story_description(story: Mapping[str, Any]) -> str:
 def _normalized_story_token(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", _string(value).lower()).strip("_")
 
-def _story_jira_creation(story: Mapping[str, Any]) -> dict[str, Any]:
-    value = story.get("jiraCreation") or story.get("jira_creation")
+def _story_issue_creation(story: Mapping[str, Any]) -> dict[str, Any]:
+    value = (
+        story.get("issueCreation")
+        or story.get("issue_creation")
+        or story.get("jiraCreation")
+        or story.get("jira_creation")
+    )
     return dict(value) if isinstance(value, Mapping) else {}
 
 def _story_implementation_status(story: Mapping[str, Any]) -> str:
@@ -639,10 +644,12 @@ def _story_implementation_status(story: Mapping[str, Any]) -> str:
         or story.get("status")
     )
 
-def _story_jira_creation_action(story: Mapping[str, Any]) -> str:
-    jira_creation = _story_jira_creation(story)
+def _story_issue_creation_action(story: Mapping[str, Any]) -> str:
+    issue_creation = _story_issue_creation(story)
     action = _normalized_story_token(
-        jira_creation.get("action")
+        issue_creation.get("action")
+        or story.get("issueCreationAction")
+        or story.get("issue_creation_action")
         or story.get("jiraCreationAction")
         or story.get("jira_creation_action")
     )
@@ -657,10 +664,12 @@ def _story_jira_creation_action(story: Mapping[str, Any]) -> str:
         return STORY_JIRA_ACTION_MANUAL_REVIEW
     return STORY_JIRA_ACTION_CREATE_ISSUE
 
-def _story_jira_creation_reason(story: Mapping[str, Any]) -> str:
-    jira_creation = _story_jira_creation(story)
+def _story_issue_creation_reason(story: Mapping[str, Any]) -> str:
+    issue_creation = _story_issue_creation(story)
     return _string(
-        jira_creation.get("reason")
+        issue_creation.get("reason")
+        or story.get("issueCreationReason")
+        or story.get("issue_creation_reason")
         or story.get("jiraCreationReason")
         or story.get("jira_creation_reason")
     )
@@ -776,9 +785,10 @@ def _story_reconciliation_record(
         "storyIndex": index,
         "summary": _story_summary(story, index=index),
         "implementationStatus": _story_implementation_status(story),
+        "issueCreationAction": action,
         "jiraCreationAction": action,
     }
-    reason = _story_jira_creation_reason(story)
+    reason = _story_issue_creation_reason(story)
     if reason:
         record["reason"] = reason
     evidence = _story_implemented_evidence(story)
@@ -786,7 +796,7 @@ def _story_reconciliation_record(
         record["implementedEvidence"] = evidence
     return record
 
-def _reconcile_stories_for_jira_creation(
+def _reconcile_stories_for_issue_creation(
     stories: Sequence[Mapping[str, Any]],
 ) -> tuple[
     list[dict[str, Any]],
@@ -800,7 +810,7 @@ def _reconcile_stories_for_jira_creation(
     partial_adjusted: list[dict[str, Any]] = []
 
     for index, story in enumerate(stories, start=1):
-        action = _story_jira_creation_action(story)
+        action = _story_issue_creation_action(story)
         status = _story_implementation_status(story)
         if action in STORY_JIRA_SKIP_ACTIONS or (
             status == STORY_IMPLEMENTATION_STATUS_FULLY_IMPLEMENTED
@@ -832,7 +842,7 @@ def _reconcile_stories_for_jira_creation(
                 blocked_record.setdefault(
                     "reason",
                     "Partially implemented stories require remainingWork before "
-                    "Jira creation can safely narrow the issue scope.",
+                    "issue creation can safely narrow the issue scope.",
                 )
                 blocked.append(blocked_record)
                 continue
@@ -1359,7 +1369,7 @@ def _downstream_task_payload(
         f"{claim_line}"
         f"Original brief reference: {source_brief_ref or 'not provided'}.\n\n"
         f"Use the existing {preset_label} workflow for this Jira issue. "
-        "Do not run implementation inline inside the breakdown task."
+        "Do not run implementation inline inside the breakdown workflow."
     )
     runtime = _mapping(task_payload.get("runtime"))
     publish = _mapping(task_payload.get("publish"))
@@ -1812,7 +1822,7 @@ def _github_downstream_workflow_payload(
         f"{claim_line}"
         f"Original brief reference: {source_brief_ref or 'not provided'}.\n\n"
         f"Use the existing {preset_label} workflow for this GitHub issue. "
-        "Do not run implementation inline inside the breakdown task."
+        "Do not run implementation inline inside the breakdown workflow."
     )
     runtime = _mapping(task_payload.get("runtime"))
     publish = _mapping(task_payload.get("publish"))
@@ -2742,7 +2752,7 @@ async def create_jira_issues_from_stories(
         skipped_stories,
         blocked_stories,
         partial_stories_adjusted,
-    ) = _reconcile_stories_for_jira_creation(stories)
+    ) = _reconcile_stories_for_issue_creation(stories)
     if not stories:
         return _jira_noop_result(
             original_story_count=original_story_count,
@@ -3283,7 +3293,7 @@ async def create_github_issues_from_stories(
         skipped_stories,
         blocked_stories,
         partial_stories_adjusted,
-    ) = _reconcile_stories_for_jira_creation(stories)
+    ) = _reconcile_stories_for_issue_creation(stories)
     if not stories:
         return _github_noop_result(
             original_story_count=original_story_count,
@@ -3807,6 +3817,13 @@ async def load_jira_preset_brief(
         preset_brief=preset_brief,
     )
     resolved_source_path = _string(source_resolution.get("selectedPath"))
+    artifact_path = _first_string(
+        inputs.get("artifactPath"),
+        inputs.get("artifact_path"),
+        inputs.get("briefArtifactPath"),
+        inputs.get("brief_artifact_path"),
+        "artifacts/jira-implement-brief.json",
+    )
 
     summary_text = f"Loaded Jira preset brief for {resolved_key} from trusted Jira data."
     if resolved_source_path:
@@ -3818,7 +3835,9 @@ async def load_jira_preset_brief(
         "trustedSource": "moonmind.jira.get_issue",
         "jiraIssueKey": resolved_key,
         "jiraPresetBrief": preset_brief,
+        "presetBrief": preset_brief,
         "jiraStepInstructions": step_instructions,
+        "artifactPath": artifact_path,
         "sourceResolution": source_resolution,
         "jiraIssue": {
             "key": resolved_key,
@@ -4131,23 +4150,7 @@ def _assessment_verdict_from_artifact(
     return verdict, True
 
 
-def _github_status_verification_verdict_from_artifact(
-    inputs: Mapping[str, Any],
-    context: Mapping[str, Any] | None,
-) -> tuple[str, bool]:
-    artifact_path = _string(
-        inputs.get("verificationArtifactPath")
-        or inputs.get("verification_artifact_path")
-    )
-    if not artifact_path:
-        return "", True
-    payload = _local_json_artifact_from_path(
-        artifact_path=artifact_path,
-        inputs=inputs,
-        context=context,
-    )
-    if payload is None:
-        return "", False
+def _verification_verdict_from_payload(payload: Mapping[str, Any]) -> str:
     for key in (
         "verdict",
         "gateVerdict",
@@ -4159,8 +4162,110 @@ def _github_status_verification_verdict_from_artifact(
     ):
         verdict = _string(payload.get(key)).upper()
         if verdict:
-            return verdict, True
-    return "", True
+            return verdict
+    return ""
+
+
+def _github_status_previous_outputs(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    input_previous_outputs = _mapping(
+        inputs.get("previousOutputs") or inputs.get("previous_outputs")
+    )
+    context_previous_outputs = _mapping(
+        (context or {}).get("previousOutputs")
+        or (context or {}).get("previous_outputs")
+    )
+    previous_outputs: dict[str, Any] = {}
+    previous_outputs.update(context_previous_outputs)
+    previous_outputs.update(input_previous_outputs)
+    return previous_outputs
+
+
+def _github_status_verification_payload_from_previous_outputs(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    previous_outputs = _github_status_previous_outputs(inputs, context)
+    candidates = [
+        inputs.get("verificationPayload"),
+        inputs.get("verification_payload"),
+        inputs.get("moonSpecVerify"),
+        inputs.get("moonspec_verify"),
+        previous_outputs.get("moonSpecVerify"),
+        previous_outputs.get("moonspecVerify"),
+        previous_outputs.get("moonspec_verify"),
+    ]
+    metadata = _mapping(previous_outputs.get("metadata"))
+    candidates.extend(
+        [
+            metadata.get("moonSpecVerify"),
+            metadata.get("moonspecVerify"),
+            metadata.get("moonspec_verify"),
+        ]
+    )
+    for candidate in candidates:
+        payload = _mapping(candidate)
+        if payload:
+            return payload
+    return None
+
+
+def _github_status_verification_ref_from_previous_outputs(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> str:
+    previous_outputs = _github_status_previous_outputs(inputs, context)
+    metadata = _mapping(previous_outputs.get("metadata"))
+    return _first_string(
+        inputs.get("verificationArtifactRef"),
+        inputs.get("verification_artifact_ref"),
+        inputs.get("moonSpecVerifyArtifactRef"),
+        inputs.get("moonspec_verify_artifact_ref"),
+        previous_outputs.get("moonSpecVerifyArtifactRef"),
+        previous_outputs.get("moonspecVerifyArtifactRef"),
+        previous_outputs.get("moonspec_verify_artifact_ref"),
+        previous_outputs.get("gateResultRef"),
+        previous_outputs.get("gate_result_ref"),
+        metadata.get("moonSpecVerifyArtifactRef"),
+        metadata.get("moonspecVerifyArtifactRef"),
+        metadata.get("moonspec_verify_artifact_ref"),
+        metadata.get("gateResultRef"),
+        metadata.get("gate_result_ref"),
+    )
+
+
+def _github_status_verification_verdict(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[str, bool]:
+    artifact_path = _string(
+        inputs.get("verificationArtifactPath")
+        or inputs.get("verification_artifact_path")
+    )
+    if artifact_path:
+        payload = _local_json_artifact_from_path(
+            artifact_path=artifact_path,
+            inputs=inputs,
+            context=context,
+        )
+        if payload is not None:
+            return _verification_verdict_from_payload(payload), True
+
+    payload = _github_status_verification_payload_from_previous_outputs(
+        inputs,
+        context,
+    )
+    if payload is not None:
+        return _verification_verdict_from_payload(payload), True
+
+    if _github_status_verification_ref_from_previous_outputs(inputs, context):
+        return "", False
+
+    if not artifact_path:
+        return "", True
+    return "", False
 
 
 def _github_status_pull_request_url(
@@ -4222,8 +4327,20 @@ async def update_github_issue_status(
     pull_request_url = _github_status_pull_request_url(inputs, _context)
     if mode == "finalize_after_pr_or_done":
         if pull_request_url:
+            if not (
+                inputs.get("verificationArtifactPath")
+                or inputs.get("verification_artifact_path")
+            ):
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "decision": "blocked",
+                        "summary": "GitHub issue Code Review update requires a verification artifact path.",
+                    },
+                )
             verification_verdict, verification_available = (
-                _github_status_verification_verdict_from_artifact(inputs, _context)
+                _github_status_verification_verdict(inputs, _context)
             )
             if not verification_available:
                 return ToolResult(

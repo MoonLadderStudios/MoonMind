@@ -9016,6 +9016,7 @@ export interface components {
             startedAt?: string | null;
             /** Updatedat */
             updatedAt?: string | null;
+            timing?: components["schemas"]["StepTimingModel"] | null;
             /** Summary */
             summary?: string | null;
             /** Runtimechildrefs */
@@ -9141,6 +9142,7 @@ export interface components {
             startedAt?: string | null;
             /** Updatedat */
             updatedAt?: string | null;
+            timing?: components["schemas"]["StepTimingModel"] | null;
             /** Summary */
             summary?: string | null;
             /** Runtimechildrefs */
@@ -9307,6 +9309,7 @@ export interface components {
             stepCheckpointRef?: string | null;
             recoveryPreservation?: components["schemas"]["StepLedgerResumePreservationModel"] | null;
             workload?: components["schemas"]["StepLedgerWorkloadModel"] | null;
+            timing?: components["schemas"]["StepTimingModel"] | null;
             /** Lasterror */
             lastError?: string | null;
         };
@@ -9367,6 +9370,33 @@ export interface components {
             } | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * StepTimingModel
+         * @description Bounded user-facing logical timing for a step or step execution.
+         */
+        StepTimingModel: {
+            /** Startedat */
+            startedAt?: string | null;
+            /** Endedat */
+            endedAt?: string | null;
+            /** Durationms */
+            durationMs?: number | null;
+            /** Elapsedms */
+            elapsedMs?: number | null;
+            /** Servernow */
+            serverNow?: string | null;
+            /**
+             * Precision
+             * @default unavailable
+             * @enum {string}
+             */
+            precision: "exact" | "live" | "fallback" | "unavailable";
+            /**
+             * Preserved
+             * @default false
+             */
+            preserved: boolean;
         };
         /** StoryDraft */
         StoryDraft: {

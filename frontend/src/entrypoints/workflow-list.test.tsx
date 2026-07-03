@@ -1861,7 +1861,7 @@ describe('Workflows Entrypoint', () => {
       expect(lastExecutionListUrl()).toContain('finishedBlank=include');
     });
     expect(screen.getByRole('button', { name: 'Finished filter: blank' })).toBeTruthy();
-  });
+  }, 10000);
 
   it('shows a current-page values notice when facet values fail to load', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {

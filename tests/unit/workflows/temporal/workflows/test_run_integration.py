@@ -2720,6 +2720,72 @@ def test_moonspec_verify_gate_detects_remaining_remediation_budget(
     )
 
 
+def test_moonspec_verify_gate_ignores_remediation_steps_over_budget(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    ordered_nodes = [
+        {
+            "id": "verify-1",
+            "inputs": {
+                "title": "Verify remediation 1 of 1",
+                "selectedSkill": "moonspec-verify",
+            },
+        },
+        {
+            "id": "remediate-2",
+            "annotations": {
+                "jiraOrchestrateRole": "moonspec-remediation",
+                "moonSpecRemediationAttempt": 2,
+                "moonSpecRemediationMaxAttempts": 1,
+            },
+            "skill": {"id": "moonspec-implement"},
+            "inputs": {"title": "Remediate verification gaps 2 of 1"},
+        },
+    ]
+
+    assert not mock_run_workflow._has_remaining_moonspec_remediation_step(
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    reason = mock_run_workflow._moonspec_remediation_loop_skip_reason(
+        ordered_nodes[1],
+        tool_name="auto",
+        node_inputs=ordered_nodes[1]["inputs"],
+    )
+    assert reason == (
+        "Skipped MoonSpec remediation loop step 2; configured maximum is 1."
+    )
+
+
+def test_moonspec_verify_gate_skips_loop_steps_after_passing_verdict(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    verify_node = {
+        "id": "verify-remediation-2",
+        "annotations": {
+            "issueImplementRole": "moonspec-verification-gate",
+            "moonSpecRemediationAttempt": 2,
+            "moonSpecRemediationMaxAttempts": 6,
+        },
+        "inputs": {
+            "title": "Verify remediation 2 of 6",
+            "selectedSkill": "moonspec-verify",
+        },
+    }
+    mock_run_workflow._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+
+    reason = mock_run_workflow._moonspec_remediation_loop_skip_reason(
+        verify_node,
+        tool_name="auto",
+        node_inputs=verify_node["inputs"],
+    )
+
+    assert reason == (
+        "Skipped MoonSpec remediation loop step because verification already "
+        "passed with verdict FULLY_IMPLEMENTED."
+    )
+
+
 def test_moonspec_verify_gate_detects_issue_implement_remediation_role(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
