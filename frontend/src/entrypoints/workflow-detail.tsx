@@ -4,9 +4,12 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type Dispatch,
+  type KeyboardEvent,
   type ReactNode,
   type Ref,
   type RefObject,
+  type SetStateAction,
 } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Anser from 'anser';
@@ -61,6 +64,12 @@ import {
   isRemediationEligibleTarget,
   type WorkflowActionMenuItem,
 } from '../lib/workflowActions';
+import {
+  projectChatSessionBlocks,
+  type ChatBlock as ProjectedChatBlock,
+  type OptimisticUserMessage,
+  type RunObservabilityEventRow,
+} from '../lib/chatSession';
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number; detail?: number; events?: number };
@@ -298,7 +307,7 @@ function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolea
   return config?.features?.liveLogsStructuredHistoryEnabled !== false;
 }
 
-type WorkflowDetailSubroute = 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
+type WorkflowDetailSubroute = 'chat' | 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
 type SegmentedNavItem<T extends string> = {
   value: T;
   label: string;
@@ -310,8 +319,8 @@ type WorkflowDialogKind =
   | 'send-message';
 
 function workflowDetailSubrouteFromPath(pathname: string): WorkflowDetailSubroute {
-  const match = pathname.match(/^\/workflows\/[^/]+(?:\/(steps|artifacts|runs|debug))?$/);
-  return (match?.[1] as WorkflowDetailSubroute) || 'overview';
+  const match = pathname.match(/^\/workflows\/[^/]+(?:\/(chat|overview|steps|artifacts|runs|debug))?$/);
+  return (match?.[1] as WorkflowDetailSubroute) || 'chat';
 }
 
 function workflowDetailSubrouteHref(
@@ -319,7 +328,7 @@ function workflowDetailSubrouteHref(
   subroute: WorkflowDetailSubroute,
   search: URLSearchParams,
 ): string {
-  const suffix = subroute === 'overview' ? '' : `/${subroute}`;
+  const suffix = subroute === 'chat' ? '' : `/${subroute}`;
   const query = search.toString();
   return `/workflows/${encodeURIComponent(workflowId)}${suffix}${query ? `?${query}` : ''}`;
 }
@@ -701,6 +710,7 @@ function detailStringValue(...values: unknown[]): string {
 }
 
 const PUBLISH_MODE_LABELS: Record<string, string> = {
+  auto: 'Auto',
   pr_with_merge_automation: 'PR with Merge Automation',
   pr: 'PR',
   branch: 'Branch',
@@ -2844,199 +2854,50 @@ function mapEventsToTimelineRows(
   return payload.events.flatMap((event) => eventToTimelineRows(event));
 }
 
-type ChatBlockBase = {
-  id: string;
-  rows: TimelineRow[];
-  timestamp: string | null;
-  turnId: string | null;
-};
-
-type ChatToolOutput = {
-  id: string;
-  text: string;
-  kind: string | null;
-};
-
-type ChatBlock =
-  | (ChatBlockBase & { type: 'user' | 'assistant' | 'boundary' | 'status'; text: string })
-  | (ChatBlockBase & {
-      type: 'tool';
-      title: string;
-      status: 'running' | 'completed' | 'failed';
-      outputs: ChatToolOutput[];
-    })
-  | (ChatBlockBase & {
-      type: 'approval';
-      text: string;
-      status: 'pending' | 'granted' | 'denied' | 'resolved';
-    });
-
-type ChatSessionReducerState = {
-  blocks: ChatBlock[];
-  latestToolBlockIdByKey: Map<string, string>;
-  latestToolBlockIdByTurn: Map<string, string>;
-  latestApprovalBlockIdByKey: Map<string, string>;
-  latestApprovalBlockId: string | null;
-};
-
-function emptyChatSessionReducerState(): ChatSessionReducerState {
-  return {
-    blocks: [],
-    latestToolBlockIdByKey: new Map(),
-    latestToolBlockIdByTurn: new Map(),
-    latestApprovalBlockIdByKey: new Map(),
-    latestApprovalBlockId: null,
-  };
-}
-
-function chatMetadataString(row: TimelineRow, ...keys: string[]): string {
-  return metadataString(row.metadata, ...keys);
-}
-
-function toolCorrelationKey(row: TimelineRow): string | null {
-  const explicit = chatMetadataString(row, 'toolCallId', 'tool_call_id', 'callId', 'call_id', 'requestId', 'request_id');
-  if (explicit) return explicit;
-  const name = chatMetadataString(row, 'toolName', 'tool_name', 'name');
-  if (name && row.turnId) return `${row.turnId}:${name}`;
-  return row.turnId;
-}
-
-function approvalCorrelationKey(row: TimelineRow): string | null {
-  const explicit = chatMetadataString(row, 'approvalRequestId', 'approval_request_id', 'requestId', 'request_id', 'interventionId', 'intervention_id');
-  if (explicit) return explicit;
-  return row.turnId;
-}
-
-function replaceChatBlock(blocks: ChatBlock[], id: string, updater: (block: ChatBlock) => ChatBlock): ChatBlock[] {
-  return blocks.map((block) => (block.id === id ? updater(block) : block));
-}
-
-function appendChatBlock(state: ChatSessionReducerState, block: ChatBlock): ChatSessionReducerState {
-  return {
-    ...state,
-    blocks: [...state.blocks, block],
-  };
-}
-
-function chatSessionReducer(state: ChatSessionReducerState, row: TimelineRow): ChatSessionReducerState {
-  if (row.rowType === 'fallback' || row.rowType === 'output' || row.rowType === 'system') {
-    return state;
-  }
-
-  if (row.rowType === 'tool') {
-    const key = toolCorrelationKey(row);
-    const turnKey = row.turnId ?? row.activeTurnId;
-    const previousBlockId =
-      (key ? state.latestToolBlockIdByKey.get(key) : null)
-      ?? (turnKey && row.kind !== 'tool_call_started' ? state.latestToolBlockIdByTurn.get(turnKey) : null);
-
-    if (row.kind === 'tool_call_output' && previousBlockId) {
-      return {
-        ...state,
-        blocks: replaceChatBlock(state.blocks, previousBlockId, (block) => {
-          if (block.type !== 'tool') return block;
-          return {
-            ...block,
-            rows: [...block.rows, row],
-            outputs: [...block.outputs, { id: row.id, text: row.text, kind: row.kind }],
-          };
-        }),
-      };
-    }
-
-    if ((row.kind === 'tool_call_completed' || row.kind === 'tool_call_failed') && previousBlockId) {
-      return {
-        ...state,
-        blocks: replaceChatBlock(state.blocks, previousBlockId, (block) => {
-          if (block.type !== 'tool') return block;
-          return {
-            ...block,
-            rows: [...block.rows, row],
-            status: row.kind === 'tool_call_failed' ? 'failed' : 'completed',
-          };
-        }),
-      };
-    }
-
-    const block: ChatBlock = {
-      id: `chat-tool-${row.id}`,
-      type: 'tool',
-      rows: [row],
+function timelineRowsToObservabilityRows(rows: TimelineRow[]): RunObservabilityEventRow[] {
+  return rows
+    .filter((row) => row.rowType !== 'fallback' && row.rowType !== 'output' && row.rowType !== 'system')
+    .map((row) => ({
+      id: row.id,
+      runId: null,
+      agentRunId: null,
+      sequence: row.sequence,
       timestamp: row.timestamp,
-      turnId: row.turnId,
-      title: chatMetadataString(row, 'toolName', 'tool_name', 'name') || row.text || 'Tool call',
-      status: row.kind === 'tool_call_failed' ? 'failed' : row.kind === 'tool_call_completed' ? 'completed' : 'running',
-      outputs: row.kind === 'tool_call_output' ? [{ id: row.id, text: row.text, kind: row.kind }] : [],
-    };
-    const nextState = appendChatBlock(state, block);
-    if (key) nextState.latestToolBlockIdByKey = new Map(nextState.latestToolBlockIdByKey).set(key, block.id);
-    if (turnKey) nextState.latestToolBlockIdByTurn = new Map(nextState.latestToolBlockIdByTurn).set(turnKey, block.id);
-    return nextState;
-  }
-
-  if (row.rowType === 'approval') {
-    const key = approvalCorrelationKey(row);
-    const previousBlockId = key ? state.latestApprovalBlockIdByKey.get(key) : state.latestApprovalBlockId;
-    const resolvedStatus =
-      row.kind === 'approval_granted'
-        ? 'granted'
-        : row.kind === 'approval_denied'
-          ? 'denied'
-          : row.kind === 'approval_resolved' || row.kind === 'intervention_resolved'
-            ? 'resolved'
-            : null;
-
-    if (resolvedStatus && previousBlockId) {
-      return {
-        ...state,
-        blocks: replaceChatBlock(state.blocks, previousBlockId, (block) => {
-          if (block.type !== 'approval') return block;
-          return {
-            ...block,
-            rows: [...block.rows, row],
-            text: block.text || row.text,
-            status: resolvedStatus,
-          };
-        }),
-      };
-    }
-
-    const block: ChatBlock = {
-      id: `chat-approval-${row.id}`,
-      type: 'approval',
-      rows: [row],
-      timestamp: row.timestamp,
-      turnId: row.turnId,
+      stream: row.stream,
       text: row.text,
-      status: resolvedStatus ?? 'pending',
-    };
-    const nextState = appendChatBlock(state, block);
-    if (key) nextState.latestApprovalBlockIdByKey = new Map(nextState.latestApprovalBlockIdByKey).set(key, block.id);
-    nextState.latestApprovalBlockId = block.id;
-    return nextState;
-  }
-
-  const blockType =
-    row.rowType === 'user'
-      ? 'user'
-      : row.rowType === 'assistant'
-        ? 'assistant'
-        : row.rowType === 'boundary'
-          ? 'boundary'
-          : 'status';
-
-  return appendChatBlock(state, {
-    id: `chat-${blockType}-${row.id}`,
-    type: blockType,
-    rows: [row],
-    timestamp: row.timestamp,
-    turnId: row.turnId,
-    text: row.text,
-  });
+      kind: row.kind,
+      sessionId: row.sessionId,
+      sessionEpoch: row.sessionEpoch,
+      turnId: row.turnId,
+      activeTurnId: row.activeTurnId,
+      metadata: row.metadata,
+    }));
 }
 
-export function reduceTimelineRowsToChatBlocks(rows: TimelineRow[]): ChatBlock[] {
-  return rows.reduce(chatSessionReducer, emptyChatSessionReducerState()).blocks;
+function optimisticMessagesToChatSeeds(
+  agentRunId: string,
+  messages: OptimisticChatSessionMessage[],
+): OptimisticUserMessage[] {
+  return messages.map((message) => ({
+    key: message.clientEventKey,
+    agentRunId,
+    text: message.message,
+    sessionId: message.sessionId,
+    sessionEpoch: message.sessionEpoch,
+    timestamp: undefined,
+  }));
+}
+
+export function reduceTimelineRowsToChatBlocks(
+  rows: TimelineRow[],
+  agentRunId = '',
+  optimisticMessages: OptimisticChatSessionMessage[] = [],
+): ProjectedChatBlock[] {
+  return projectChatSessionBlocks(
+    timelineRowsToObservabilityRows(rows),
+    agentRunId,
+    optimisticMessagesToChatSeeds(agentRunId, optimisticMessages),
+  ).blocks;
 }
 
 function deriveSessionSnapshotFromEvent(
@@ -3591,37 +3452,92 @@ function renderTimelineRow(
   );
 }
 
-function chatBlockLabel(block: ChatBlock): string {
-  const firstRow = block.rows[0];
-  const treatmentLabel = firstRow ? getTimelineRowTreatmentLabel(firstRow) : null;
-  if (treatmentLabel) return treatmentLabel;
-  if (block.type === 'user') return 'User';
-  if (block.type === 'assistant') return 'Assistant';
-  if (block.type === 'tool') return 'Tool';
-  if (block.type === 'approval') return 'Approval';
-  if (block.type === 'boundary') return 'Session boundary';
+function chatBlockLabel(block: ProjectedChatBlock): string {
+  if (block.kind === 'user') return 'User';
+  if (block.kind === 'assistant') return 'Assistant';
+  if (block.kind === 'tool') return 'Tool';
+  if (block.kind === 'approval') return 'Approval';
+  if (block.kind === 'boundary') return 'Session boundary';
+  if (block.kind === 'error') return 'Error';
+  if (block.kind === 'system') return 'System';
   return 'Status';
 }
 
-function chatBlockKindLabel(block: ChatBlock): string | null {
-  const kind = block.rows.at(-1)?.kind;
+function chatBlockKindLabel(block: ProjectedChatBlock): string | null {
+  const kind = chatBlockSourceKind(block)
+    ?? (typeof block.status === 'string'
+      ? block.status
+      : null);
   return kind ? kind.replaceAll('_', ' ') : null;
 }
 
-function chatBlockArtifactLinks(block: ChatBlock, apiBase: string): TimelineArtifactLink[] {
-  const links = block.rows.flatMap((row) => buildTimelineArtifactLinks(row, apiBase));
-  const seen = new Set<string>();
-  return links.filter((link) => {
-    if (seen.has(link.key)) return false;
-    seen.add(link.key);
-    return true;
-  });
+function chatBlockStatus(block: ProjectedChatBlock): string {
+  return block.status || chatBlockSourceKind(block) || block.kind;
 }
 
-function renderChatBlock(block: ChatBlock, wrapLines: boolean, apiBase: string): ReactNode {
+function chatBlockRowType(block: ProjectedChatBlock): string {
+  const sourceKind = chatBlockSourceKind(block);
+  if (sourceKind && sourceKind.endsWith('_published')) return 'publication';
+  if (sourceKind === 'turn_started' || sourceKind === 'turn_completed') return 'turn';
+  if (sourceKind === 'turn_failed' || sourceKind === 'turn_interrupted') return 'turn-failure';
+  return block.kind;
+}
+
+function chatBlockSourceKind(block: ProjectedChatBlock): string | null {
+  if (typeof block.metadata?.sourceKind === 'string') {
+    return block.metadata.sourceKind;
+  }
+  for (const eventId of block.sourceEventIds) {
+    const seqMatch = eventId.match(/:seq:\d+:([^:]+)$/);
+    if (seqMatch?.[1]) return seqMatch[1];
+    const kindMatch = eventId.match(/^[^:]+:([^:]+):/);
+    if (kindMatch?.[1] && kindMatch[1] !== 'seq') return kindMatch[1];
+  }
+  return null;
+}
+
+function chatBlockArtifactLinks(block: ProjectedChatBlock, apiBase: string): TimelineArtifactLink[] {
+  const metadata = block.metadata ?? {};
+  const sourceKind = chatBlockSourceKind(block);
+  const links: TimelineArtifactLink[] = [];
+  const seen = new Set<string>();
+  const addLink = (label: string, value: unknown) => {
+    const artifactId = coerceArtifactRef(value);
+    if (!artifactId) return;
+    const key = `${label}:${artifactId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    links.push({
+      key,
+      label,
+      href: buildArtifactDownloadHref(apiBase, artifactId),
+    });
+  };
+
+  if (sourceKind === 'summary_published') {
+    addLink('Open summary artifact', metadata.summaryRef ?? metadata.artifactRef);
+  }
+  if (sourceKind === 'checkpoint_published') {
+    addLink('Open checkpoint artifact', metadata.checkpointRef ?? metadata.artifactRef);
+  }
+  if (sourceKind === 'session_cleared' || sourceKind === 'session_reset_boundary') {
+    addLink(
+      'Open control event artifact',
+      metadata.controlEventRef ?? (sourceKind === 'session_cleared' ? metadata.artifactRef : null),
+    );
+    addLink(
+      'Open reset boundary artifact',
+      metadata.resetBoundaryRef ?? (sourceKind === 'session_reset_boundary' ? metadata.artifactRef : null),
+    );
+  }
+
+  return links;
+}
+
+function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase: string): ReactNode {
   const className = [
     'chat-session-block',
-    `chat-session-block-${block.type}`,
+    `chat-session-block-${block.kind}`,
     wrapLines ? 'is-wrapped' : 'is-unwrapped',
   ].join(' ');
   const roleLabel = chatBlockLabel(block);
@@ -3629,90 +3545,64 @@ function renderChatBlock(block: ChatBlock, wrapLines: boolean, apiBase: string):
   const displayKindLabel = kindLabel && kindLabel.toLowerCase() !== roleLabel.toLowerCase() ? kindLabel : null;
   const artifactLinks = chatBlockArtifactLinks(block, apiBase);
 
-  if (block.type === 'tool') {
+  if (block.kind === 'tool') {
     return (
       <div key={block.id} className={className} data-chat-block-type="tool">
         <div className="chat-session-block-heading">
           <span className="chat-session-role-label">{roleLabel}</span>
-          <span className={`chat-session-status-chip chat-session-status-${block.status}`}>{block.status}</span>
-          {displayKindLabel ? <span className="chat-session-kind-chip">{displayKindLabel}</span> : null}
+          <span className={`chat-session-status-chip chat-session-status-${chatBlockStatus(block)}`}>
+            {chatBlockStatus(block)}
+          </span>
+          {block.toolName ? <span className="chat-session-kind-chip">{block.toolName}</span> : null}
+          {displayKindLabel && displayKindLabel !== block.toolName ? (
+            <span className="chat-session-kind-chip">{displayKindLabel}</span>
+          ) : null}
         </div>
         <div
           className="chat-session-block-text"
-          data-kind={block.rows[0]?.kind ?? undefined}
+          data-kind={chatBlockSourceKind(block) ?? undefined}
           data-row-type="tool"
         >
-          {block.title}
+          {block.text || block.toolName || 'Tool call'}
         </div>
-        {block.rows.length > 1 ? (
-          <div className="chat-session-tool-events">
-            {block.rows
-              .filter((row) => row.kind !== 'tool_call_output' && row.id !== block.rows[0]?.id)
-              .map((row) => (
-                <div
-                  key={row.id}
-                  className="chat-session-tool-event"
-                  data-kind={row.kind ?? undefined}
-                  data-row-type="tool"
-                >
-                  {getTimelineRowTreatmentLabel(row) ? (
-                    <span className="chat-session-kind-chip">{getTimelineRowTreatmentLabel(row)}</span>
-                  ) : null}
-                  <span>{row.text}</span>
-                </div>
-              ))}
-          </div>
-        ) : null}
-        {block.outputs.length > 0 ? (
-          <details className="chat-session-tool-output" open={block.status !== 'running'}>
-            <summary>
-              <span>Tool output</span> <span>({block.outputs.length})</span>
-            </summary>
-            <div className="chat-session-tool-output-body">
-              {block.outputs.map((output) => (
-                <pre key={output.id} data-kind={output.kind ?? undefined} data-row-type="tool">{output.text}</pre>
-              ))}
-            </div>
-          </details>
-        ) : null}
         <TimelineArtifactLinks links={artifactLinks} />
       </div>
     );
   }
 
-  if (block.type === 'approval') {
+  if (block.kind === 'approval') {
     return (
       <div key={block.id} className={className} data-chat-block-type="approval">
         <div className="chat-session-block-heading">
           <span className="chat-session-role-label">{roleLabel}</span>
-          <span className={`chat-session-status-chip chat-session-status-${block.status}`}>{block.status}</span>
+          <span className={`chat-session-status-chip chat-session-status-${chatBlockStatus(block)}`}>
+            {chatBlockStatus(block)}
+          </span>
           {displayKindLabel ? <span className="chat-session-kind-chip">{displayKindLabel}</span> : null}
         </div>
         <div
           className="chat-session-block-text"
-          data-kind={block.rows[0]?.kind ?? undefined}
+          data-kind={chatBlockSourceKind(block) ?? undefined}
           data-row-type="approval"
         >
           {block.text}
         </div>
-        {block.rows.length > 1 ? (
-          <div className="chat-session-resolution-text">{block.rows.at(-1)?.text}</div>
-        ) : null}
         <TimelineArtifactLinks links={artifactLinks} />
       </div>
     );
   }
 
   return (
-    <div key={block.id} className={className} data-chat-block-type={block.type}>
+    <div key={block.id} className={className} data-chat-block-type={block.kind}>
       <div className="chat-session-block-heading">
         <span className="chat-session-role-label">{roleLabel}</span>
+        {block.sourceEventIds.length === 0 ? <span className="chat-session-kind-chip">pending</span> : null}
         {displayKindLabel ? <span className="chat-session-kind-chip">{displayKindLabel}</span> : null}
       </div>
       <div
         className="chat-session-block-text"
-        data-kind={block.rows[0]?.kind ?? undefined}
-        data-row-type={block.rows[0]?.rowType}
+        data-kind={chatBlockSourceKind(block) ?? undefined}
+        data-row-type={chatBlockRowType(block)}
       >
         {block.text}
       </div>
@@ -3728,11 +3618,47 @@ function ChatSessionView({
   wrapLines,
 }: {
   apiBase: string;
-  chatBlocks: ChatBlock[];
+  chatBlocks: ProjectedChatBlock[];
   rows: TimelineRow[];
   wrapLines: boolean;
 }) {
   const hasFallbackRows = rows.some((row) => row.rowType === 'fallback' || row.rowType === 'output');
+  const blockListRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const scrollFrameRef = useRef<number | null>(null);
+  const lastBlockSignature = chatBlocks.length > 0
+    ? `${chatBlocks.at(-1)?.id}:${chatBlocks.at(-1)?.text}`
+    : 'empty';
+
+  const updateStickToBottom = () => {
+    if (scrollFrameRef.current !== null) return;
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const element = blockListRef.current;
+      if (!element) return;
+      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+      shouldStickToBottomRef.current = distanceFromBottom <= 48;
+    });
+  };
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current);
+    }
+  }, []);
+
+  const scrollToBottom = () => {
+    const element = blockListRef.current;
+    if (!element) return;
+    window.requestAnimationFrame(() => {
+      element.scrollTop = element.scrollHeight;
+    });
+  };
+
+  useEffect(() => {
+    if (!shouldStickToBottomRef.current) return;
+    scrollToBottom();
+  }, [lastBlockSignature]);
 
   return (
     <div className="chat-session-view" aria-label="Chat session projection">
@@ -3750,8 +3676,13 @@ function ChatSessionView({
           Structured chat projection is unavailable for these rows. Use Raw Timeline for durable history.
         </div>
       ) : (
-        <div className="chat-session-blocks">
-          {chatBlocks.map((block) => renderChatBlock(block, wrapLines, apiBase))}
+        <div
+          ref={blockListRef}
+          className="chat-session-blocks"
+          data-testid="chat-session-blocks"
+          onScroll={updateStickToBottom}
+        >
+          {chatBlocks.map((block, index) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase))}
         </div>
       )}
     </div>
@@ -4677,6 +4608,7 @@ function LiveLogsPanel({
   routes,
   sessionTimelineEnabled,
   structuredHistoryEnabled,
+  optimisticMessages = [],
 }: {
   apiBase: string;
   agentRunId: string;
@@ -4689,6 +4621,7 @@ function LiveLogsPanel({
   routes: AgentRunRouteTemplates;
   sessionTimelineEnabled: boolean;
   structuredHistoryEnabled: boolean;
+  optimisticMessages?: OptimisticChatSessionMessage[];
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
@@ -4703,7 +4636,10 @@ function LiveLogsPanel({
   const isTerminalRef = useRef(isTerminal);
   const [sessionSnapshot, setSessionSnapshot] = useState<SessionSnapshot | null>(null);
   const [rawTimelineExpanded, setRawTimelineExpanded] = useState(false);
-  const chatBlocks = useMemo(() => reduceTimelineRowsToChatBlocks(logContent), [logContent]);
+  const chatBlocks = useMemo(
+    () => reduceTimelineRowsToChatBlocks(logContent, agentRunId, optimisticMessages),
+    [agentRunId, logContent, optimisticMessages],
+  );
 
   // Keep isTerminalRef current so the onerror handler always sees the latest value.
   useEffect(() => {
@@ -5410,6 +5346,9 @@ function SessionContinuityPanel({
   isTerminal,
   invalidateWorkflowDetail,
   routes,
+  optimisticMessages,
+  setOptimisticMessages,
+  compact = false,
 }: {
   apiBase: string;
   agentRunId: string;
@@ -5417,6 +5356,9 @@ function SessionContinuityPanel({
   isTerminal: boolean;
   invalidateWorkflowDetail: () => void;
   routes: AgentRunRouteTemplates;
+  optimisticMessages: OptimisticChatSessionMessage[];
+  setOptimisticMessages: Dispatch<SetStateAction<OptimisticChatSessionMessage[]>>;
+  compact?: boolean;
 }) {
   const queryClient = useQueryClient();
   const canPollSessionCapabilities = isCodexManagedRuntime(targetRuntime);
@@ -5445,7 +5387,6 @@ function SessionContinuityPanel({
   const sessionId = sessionSnapshot?.sessionId ?? null;
   const [followUpMessage, setFollowUpMessage] = useState('');
   const [panelError, setPanelError] = useState<string | null>(null);
-  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticChatSessionMessage[]>([]);
   const optimisticMessageSequenceRef = useRef(0);
 
   const projectionQuery = useQuery({
@@ -5593,6 +5534,19 @@ function SessionContinuityPanel({
   const canClearSession = Boolean(sessionId && interventionCapabilities.clearSession && !isTerminal);
   const canInterruptTurn = Boolean(sessionId && interventionCapabilities.interruptTurn && !isTerminal);
   const canCancelSession = Boolean(sessionId && interventionCapabilities.cancelSession && !isTerminal);
+  const unavailableReason = (capabilityAvailable: boolean, actionLabel: string) => {
+    if (busy) return 'Session control request in progress.';
+    if (isTerminal) return `${actionLabel} unavailable because this workflow is terminal.`;
+    if (!sessionId) return `${actionLabel} unavailable because the managed session is unavailable.`;
+    if (!capabilityAvailable) return `${actionLabel} is not supported for this session.`;
+    return null;
+  };
+  const sendDisabledReason = followUpMessage.trim()
+    ? unavailableReason(canSendFollowUp, 'Follow-up')
+    : (canSendFollowUp ? 'Enter a message to send a follow-up.' : unavailableReason(canSendFollowUp, 'Follow-up'));
+  const clearDisabledReason = unavailableReason(canClearSession, 'Clear / Reset');
+  const interruptDisabledReason = unavailableReason(canInterruptTurn, 'Interrupt turn');
+  const cancelDisabledReason = unavailableReason(canCancelSession, 'Cancel session');
 
   const submitFollowUp = () => {
     const message = followUpMessage.trim();
@@ -5633,13 +5587,71 @@ function SessionContinuityPanel({
     });
   };
 
+  const stopActiveTurn = () => {
+    if (busy || isTerminal) return;
+    if (canInterruptTurn) {
+      interruptTurn();
+      return;
+    }
+    if (canCancelSession) {
+      cancelSession();
+    }
+  };
+
+  const handleFollowUpKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Escape') return;
+    if (!canInterruptTurn && !canCancelSession) return;
+    event.preventDefault();
+    stopActiveTurn();
+  };
+
+  const renderControlButton = ({
+    label,
+    className,
+    disabledReason,
+    onClick,
+    hiddenWhenUnavailable = false,
+  }: {
+    label: string;
+    className: string;
+    disabledReason: string | null;
+    onClick: () => void;
+    hiddenWhenUnavailable?: boolean;
+  }) => {
+    const disabled = Boolean(disabledReason);
+    if (!compact && hiddenWhenUnavailable && disabled) return null;
+    return (
+      <span className="chat-session-control-action">
+        <button
+          type="button"
+          className={className}
+          disabled={disabled}
+          onClick={onClick}
+          aria-describedby={disabled ? `session-control-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-reason` : undefined}
+        >
+          {label}
+        </button>
+        {disabled && compact ? (
+          <span
+            id={`session-control-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-reason`}
+            className="chat-session-disabled-reason"
+          >
+            {disabledReason}
+          </span>
+        ) : null}
+      </span>
+    );
+  };
+
   return (
-    <section className="stack">
+    <section className={`stack ${compact ? 'chat-session-controls' : ''}`}>
       <div>
-        <h3>Session Continuity</h3>
-        <p className="small">
-          Continuity artifacts are durable evidence and drill-down for this session.
-        </p>
+        <h3>{compact ? 'Session Controls' : 'Session Continuity'}</h3>
+        {!compact ? (
+          <p className="small">
+            Continuity artifacts are durable evidence and drill-down for this session.
+          </p>
+        ) : null}
         <p className="small">
           Session <code>{projection.session_id}</code> — Epoch {projection.session_epoch}
         </p>
@@ -5647,14 +5659,14 @@ function SessionContinuityPanel({
 
       {panelError ? <div className="notice error">{panelError}</div> : null}
 
-      <div className="grid-2">
+      {!compact ? <div className="grid-2">
         <Card label="Session ID">
           <code className="text-xs break-all">{projection.session_id}</code>
         </Card>
         <Card label="Current Epoch">{projection.session_epoch}</Card>
-      </div>
+      </div> : null}
 
-      {latestBadges.length > 0 ? (
+      {!compact && latestBadges.length > 0 ? (
         <div className="actions">
           {latestBadges.map(([label, artifactId]) => (
             <span key={`${label}-${artifactId}`} className="card">
@@ -5664,7 +5676,7 @@ function SessionContinuityPanel({
         </div>
       ) : null}
 
-      {sessionResources.length > 0 ? (
+      {!compact && sessionResources.length > 0 ? (
         <div className="stack">
           <h4>Resource Evidence</h4>
           <div className="grid-2">
@@ -5696,7 +5708,7 @@ function SessionContinuityPanel({
         </div>
       ) : null}
 
-      <div className="stack">
+      {!compact ? <div className="stack">
         {projection.grouped_artifacts.map((group) => (
           <div key={group.group_key} className="card">
             <strong>{group.title}</strong>
@@ -5713,7 +5725,7 @@ function SessionContinuityPanel({
             </div>
           </div>
         ))}
-      </div>
+      </div> : null}
 
       <div className="stack">
         {optimisticMessages.length > 0 ? (
@@ -5740,51 +5752,46 @@ function SessionContinuityPanel({
           id="session-follow-up"
           value={followUpMessage}
           onChange={(event) => setFollowUpMessage(event.target.value)}
+          onKeyDown={handleFollowUpKeyDown}
           rows={3}
           placeholder="Send a follow-up turn to the managed Codex session."
           disabled={busy || !canSendFollowUp}
+          aria-describedby={sendDisabledReason && (busy || !canSendFollowUp) ? 'session-follow-up-disabled-reason' : undefined}
         />
-        <div className="actions">
-          {canSendFollowUp ? (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy || !followUpMessage.trim()}
-              onClick={submitFollowUp}
-            >
-              Send follow-up
-            </button>
-          ) : null}
-          {canClearSession ? (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={clearSession}
-            >
-              Clear / Reset
-            </button>
-          ) : null}
-          {canInterruptTurn ? (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={interruptTurn}
-            >
-              Interrupt turn
-            </button>
-          ) : null}
-          {canCancelSession ? (
-            <button
-              type="button"
-              className="queue-action queue-action-danger"
-              disabled={busy}
-              onClick={cancelSession}
-            >
-              Cancel session
-            </button>
-          ) : null}
+        {sendDisabledReason && (busy || !canSendFollowUp) ? (
+          <p id="session-follow-up-disabled-reason" className="chat-session-disabled-reason">
+            {sendDisabledReason}
+          </p>
+        ) : null}
+        <div className="actions chat-session-control-actions">
+          {renderControlButton({
+            label: 'Send follow-up',
+            className: 'secondary',
+            disabledReason: busy || !followUpMessage.trim() || !canSendFollowUp ? sendDisabledReason : null,
+            onClick: submitFollowUp,
+            hiddenWhenUnavailable: true,
+          })}
+          {renderControlButton({
+            label: 'Clear / Reset',
+            className: 'secondary',
+            disabledReason: clearDisabledReason,
+            onClick: clearSession,
+            hiddenWhenUnavailable: true,
+          })}
+          {renderControlButton({
+            label: 'Interrupt turn',
+            className: 'secondary',
+            disabledReason: interruptDisabledReason,
+            onClick: interruptTurn,
+            hiddenWhenUnavailable: true,
+          })}
+          {renderControlButton({
+            label: 'Cancel session',
+            className: 'queue-action queue-action-danger',
+            disabledReason: cancelDisabledReason,
+            onClick: cancelSession,
+            hiddenWhenUnavailable: true,
+          })}
         </div>
       </div>
     </section>
@@ -6329,6 +6336,7 @@ function WorkflowDetailSubrouteNav({
   runCount?: number | null;
 }) {
   const items: Array<SegmentedNavItem<WorkflowDetailSubroute>> = [
+    { value: 'chat', label: 'Chat', href: workflowDetailSubrouteHref(workflowId, 'chat', search) },
     { value: 'overview', label: 'Overview', href: workflowDetailSubrouteHref(workflowId, 'overview', search) },
     {
       value: 'steps',
@@ -6502,7 +6510,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const currentPathname = window.location.pathname;
   const currentSearch = window.location.search;
   const workflowIdMatch = currentPathname.match(
-    /^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?$/,
+    /^\/workflows\/([^/]+)(?:\/(?:chat|overview|steps|artifacts|runs|debug))?$/,
   );
   const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
@@ -6526,6 +6534,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     }
   });
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
+  const [chatOptimisticMessages, setChatOptimisticMessages] = useState<OptimisticChatSessionMessage[]>([]);
   const [stepTimelineVisible, setStepTimelineVisible] = useState(false);
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
   const [remediationMode, setRemediationMode] = useState(DEFAULT_REMEDIATION_MODE);
@@ -6610,6 +6619,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const missingAgentRunState = execution && !resolvedAgentRunId ? inferMissingAgentRunState(execution) : null;
 
+  const chatTabActive = detailSubroute === 'chat';
   const stepsTabActive = detailSubroute === 'steps';
   const artifactsTabActive = detailSubroute === 'artifacts';
   const overviewTabActive = detailSubroute === 'overview';
@@ -7411,6 +7421,54 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             ) : null}
           </div>
 
+          {chatTabActive ? (
+            <section className="stack td-chat-region td-evidence-region" aria-label="Workflow chat">
+              <div>
+                <h3>Workflow Chat</h3>
+                <p className="small">
+                  Session transcript, live runtime events, and eligible operator controls for this workflow.
+                </p>
+              </div>
+              {logStreamingEnabled ? (
+                resolvedAgentRunId ? (
+                  <>
+                    {showAgentRunAttachNotice ? (
+                      <p className="small">Waiting for managed runtime launch to create live logs.</p>
+                    ) : null}
+                    <LiveLogsPanel
+                      apiBase={payload.apiBase}
+                      agentRunId={resolvedAgentRunId}
+                      isTerminal={isTerminalExecution}
+                      autoExpand
+                      disclosure={false}
+                      routes={agentRunRoutes}
+                      sessionTimelineEnabled={sessionTimelineEnabled}
+                      structuredHistoryEnabled={structuredHistoryEnabled}
+                      optimisticMessages={chatOptimisticMessages}
+                    />
+                  </>
+                ) : (
+                  <p className="small">{missingAgentRunState ? renderMissingAgentRunCopy(missingAgentRunState) : 'Waiting for managed runtime launch to create live logs.'}</p>
+                )
+              ) : (
+                <p className="small">Live log streaming is disabled for this dashboard.</p>
+              )}
+              {resolvedAgentRunId && actionsOn ? (
+                <SessionContinuityPanel
+                  apiBase={payload.apiBase}
+                  agentRunId={resolvedAgentRunId}
+                  targetRuntime={execution.targetRuntime}
+                  isTerminal={isTerminalExecution}
+                  invalidateWorkflowDetail={invalidate}
+                  routes={agentRunRoutes}
+                  optimisticMessages={chatOptimisticMessages}
+                  setOptimisticMessages={setChatOptimisticMessages}
+                  compact
+                />
+              ) : null}
+            </section>
+          ) : null}
+
           {overviewTabActive && shouldShowRuntimeCommand ? (
             <RuntimeCommandDetail command={runtimeCommand} />
           ) : null}
@@ -7570,7 +7628,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 {runSummary.publish ? (
                   <>
                     <Fact label="Publish Status">{formatStatusLabel(runSummary.publish.status)}</Fact>
-                    <Fact label="Publish Mode">{runSummary.publish.mode || '—'}</Fact>
+                    <Fact label="Publish Mode">{formatPublishModeLabel(runSummary.publish.mode) || '—'}</Fact>
                   </>
                 ) : null}
               </FlatFactGrid>
@@ -8036,6 +8094,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               isTerminal={isTerminalExecution}
               invalidateWorkflowDetail={invalidate}
               routes={agentRunRoutes}
+              optimisticMessages={chatOptimisticMessages}
+              setOptimisticMessages={setChatOptimisticMessages}
             />
           ) : null}
 

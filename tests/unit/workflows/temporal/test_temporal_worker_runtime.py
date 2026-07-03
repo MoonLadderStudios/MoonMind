@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     _build_deployment_update_executor,
     _enforce_codex_config_for_managed_fleet,
     _expand_preset_for_child_run,
+    _publish_mode_agent_instructions,
     _persist_child_run_task_input_snapshot,
     _build_runtime_planner,
     _build_runtime_activities,
@@ -78,6 +79,24 @@ class _FakeTaskInputSnapshotArtifactService:
     async def write_complete(self, **kwargs):
         self.write_calls.append(kwargs)
         return SimpleNamespace(artifact_id="art_task_snapshot_1")
+
+
+def test_publish_mode_agent_instructions_distinguish_auto_none_and_managed() -> None:
+    """Publish instruction source: docs/Workflows/WorkflowPublishing.md."""
+
+    auto = _publish_mode_agent_instructions("auto")
+    assert "Publishing is in auto mode" in auto
+    assert "artifacts/publish_result.json" in auto
+    assert "commit, push, or merge only when required by the selected skill" in auto
+
+    none = _publish_mode_agent_instructions("none")
+    assert "Do NOT commit or push" in none
+    assert "Publishing is disabled" in none
+
+    managed = _publish_mode_agent_instructions("pr")
+    assert "commit your work" in managed
+    assert "Do NOT push or create a pull request" in managed
+    assert _publish_mode_agent_instructions("branch") == managed
 
 
 def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(

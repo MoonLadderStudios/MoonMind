@@ -545,13 +545,14 @@ artifact refs so Jira creation does not depend on a protected branch push. It is
 not the default path for ambiguous Jira requests.
 
 When a breakdown has been reconciled against the current repository
-implementation, `story.create_jira_issues` honors per-story `jiraCreation`
-metadata. Stories marked `jiraCreation.action = "skip"` or
+implementation, `story.create_jira_issues` honors per-story provider-neutral
+`issueCreation` metadata, with `jiraCreation` accepted as a legacy alias for
+existing Jira handoffs. Stories marked `issueCreation.action = "skip"` or
 `implementationStatus = "fully_implemented"` do not create Jira issues. Stories
-marked `jiraCreation.action = "manual_review"` or
+marked `issueCreation.action = "manual_review"` or
 `implementationStatus = "unverifiable"` are reported as blocked manual-review
 items and do not create Jira issues. Stories marked
-`jiraCreation.action = "create_remaining_work_issue"` or
+`issueCreation.action = "create_remaining_work_issue"` or
 `implementationStatus = "partially_implemented"` create Jira issues from their
 `remainingWork` payload while preserving original story traceability. The output
 reports `skippedStories`, `blockedStories`, and `partialStoriesAdjusted` so
@@ -582,7 +583,10 @@ reconciliation semantics as `story.create_jira_issues`, but creates GitHub
 issues through the trusted GitHub integration. It preserves source
 path/title/section/claim/source issue traceability in each GitHub issue body and
 returns stable `github.issueMappings` for downstream workflow creation. GitHub
-issue dependency output is conservative: the tool reports
+breakdown presets treat `source_issue_key` as traceability-only; the source
+content must come from the Source Document Path, inline Workflow Instructions,
+or a trusted story breakdown artifact. GitHub issue dependency output is
+conservative: the tool supports only
 `dependencyMode = "none"` and `dependencyCount = 0` unless a trusted GitHub API
 operation has actually established a dependency relationship.
 

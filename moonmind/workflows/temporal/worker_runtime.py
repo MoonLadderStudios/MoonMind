@@ -2077,6 +2077,15 @@ def _build_runtime_planner():
                 )
                 if _jira_agent_skill_selected(selected_skill_name):
                     expanded_inputs["publishMode"] = "none"
+                expanded_publish_mode = str(
+                    expanded_inputs.get("publishMode") or ""
+                ).strip().lower()
+                if expanded_publish_mode in {"auto", "none"}:
+                    expanded_inputs["instructions"] = (
+                        str(expanded_inputs.get("instructions") or "")
+                        + "\n\n"
+                        + _publish_mode_agent_instructions(expanded_publish_mode)
+                    )
                 step_id = f"node-{idx + 1}"
                 nodes.append({
                     "id": step_id,
@@ -2122,6 +2131,13 @@ def _build_runtime_planner():
             if is_story_output_tool:
                 node_inputs.pop("selectedSkill", None)
                 node_inputs["publishMode"] = "none"
+            node_publish_mode = str(node_inputs.get("publishMode") or "").strip().lower()
+            if node_publish_mode in {"auto", "none"} and not is_story_output_tool:
+                node_inputs["instructions"] = (
+                    str(node_inputs.get("instructions") or "")
+                    + "\n\n"
+                    + _publish_mode_agent_instructions(node_publish_mode)
+                )
             nodes.append({
                 "id": node_id,
                 "tool": {
@@ -2198,10 +2214,8 @@ def _build_runtime_planner():
                     )
                 ):
                     publish_inputs["publishMode"] = "branch"
-                commit_suffix = (
-                    "\n\nAfter completing the changes above, commit your work "
-                    "(`git add -A && git commit -m '<summary>'`). "
-                    "Do NOT push or create a pull request — that is handled automatically."
+                commit_suffix = "\n\n" + _publish_mode_agent_instructions(
+                    publish_inputs.get("publishMode")
                 )
                 publish_inputs["instructions"] = (
                     publish_inputs["instructions"] + commit_suffix
@@ -2223,6 +2237,24 @@ def _build_runtime_planner():
         }
 
     return _runtime_planner
+
+
+def _publish_mode_agent_instructions(publish_mode: object) -> str:
+    mode = str(publish_mode or "none").strip().lower()
+    if mode == "auto":
+        return (
+            "Publishing is in auto mode. Determine the correct publish action "
+            "for this task. You may commit, push, or merge only when required "
+            "by the selected skill. Write artifacts/publish_result.json proving "
+            "the outcome before reporting success."
+        )
+    if mode in {"branch", "pr"}:
+        return (
+            "After completing the changes above, commit your work "
+            "(`git add -A && git commit -m '<summary>'`). "
+            "Do NOT push or create a pull request - that is handled automatically."
+        )
+    return "Do NOT commit or push. Publishing is disabled for this task."
 
 def _csv_env_tuple(value: str | None) -> tuple[str, ...]:
     if value is None:

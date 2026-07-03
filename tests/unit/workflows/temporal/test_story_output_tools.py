@@ -309,6 +309,107 @@ async def test_update_github_issue_status_blocks_code_review_without_verificatio
 
 
 @pytest.mark.asyncio
+async def test_update_github_issue_status_blocks_code_review_without_verification_artifact_path(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert "verification artifact path" in result.outputs["summary"]
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_uses_previous_verification_payload(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "verificationArtifactPath": str(tmp_path / "workspace-only-verify.json"),
+        },
+        {
+            "previousOutputs": {
+                "moonSpecVerify": {
+                    "verdict": "FULLY_IMPLEMENTED",
+                    "gateResultRef": "art_verify",
+                },
+                "moonSpecVerifyArtifactRef": "art_verify",
+            }
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert "mode code_review" in result.outputs["summary"]
+    assert service.token_requests == [
+        "MoonLadderStudios/MoonMind",
+        "MoonLadderStudios/MoonMind",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_blocks_code_review_for_malformed_verification_artifact(
+    tmp_path,
+):
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    verify_artifact = tmp_path / "verify.json"
+    verify_artifact.write_text('{"verdict": ', encoding="utf-8")
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "verificationArtifactPath": str(verify_artifact),
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert "verification artifact" in result.outputs["summary"]
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
 async def test_update_github_issue_status_blocks_code_review_until_fully_implemented(
     tmp_path,
 ):
@@ -418,6 +519,50 @@ async def test_create_jira_issues_skips_completed_and_blocks_unverifiable_storie
     assert result.outputs["storyOutput"]["blockedStories"][0]["storyId"] == "STORY-002"
     assert result.outputs["jira"]["issueMappings"] == []
     assert service.requests == []
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_accepts_provider_neutral_issue_creation():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {"projectKey": "MM", "issueTypeId": "10001"},
+            },
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "Already complete through neutral contract",
+                    "implementationStatus": "fully_implemented",
+                    "issueCreation": {
+                        "action": "skip",
+                        "reason": "Already implemented.",
+                    },
+                },
+                {
+                    "id": "STORY-002",
+                    "summary": "Create through neutral contract",
+                    "description": "Create a Jira issue from issueCreation.",
+                    "issueCreation": {"action": "create_issue"},
+                },
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    assert result.outputs["storyOutput"]["skippedStories"][0]["issueCreationAction"] == (
+        "skip"
+    )
+    assert result.outputs["storyOutput"]["skippedStories"][0]["jiraCreationAction"] == (
+        "skip"
+    )
+    assert [request.summary for request in service.requests] == [
+        "Create through neutral contract"
+    ]
+
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_narrows_partially_implemented_story_to_remaining_work():
@@ -640,6 +785,55 @@ async def test_create_github_issues_from_reconciled_story_breakdown():
 
 
 @pytest.mark.asyncio
+async def test_create_github_issues_prefers_provider_neutral_issue_creation():
+    service = _FakeGitHubService()
+
+    result = await create_github_issues_from_stories(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "Already complete through issueCreation",
+                    "implementationStatus": "fully_implemented",
+                    "issueCreation": {
+                        "action": "skip",
+                        "reason": "Already implemented.",
+                    },
+                    "jiraCreation": {
+                        "action": "create_issue",
+                        "reason": "Legacy alias should not override issueCreation.",
+                    },
+                },
+                {
+                    "id": "STORY-002",
+                    "summary": "Create this story",
+                    "description": "Needs a GitHub issue.",
+                    "issueCreation": {"action": "create_issue"},
+                },
+            ],
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "github_created"
+    assert result.outputs["storyOutput"]["skippedStories"] == [
+        {
+            "storyId": "STORY-001",
+            "storyIndex": 1,
+            "summary": "Already complete through issueCreation",
+            "implementationStatus": "fully_implemented",
+            "issueCreationAction": "skip",
+            "jiraCreationAction": "skip",
+            "reason": "Already implemented.",
+        }
+    ]
+    assert [request["title"] for request in service.create_issue_requests] == [
+        "Create this story"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_create_github_issues_narrows_partial_story_to_remaining_work():
     service = _FakeGitHubService()
 
@@ -797,6 +991,8 @@ async def test_create_github_issue_workflows_from_issue_mappings():
     assert workflow["inputs"]["github_issue_ref"] == "MoonLadderStudios/MoonMind#11"
     assert "Source issue: MM-1063." in workflow["instructions"]
     assert "Source canonical claim IDs: DESIGN-REQ-007." in workflow["instructions"]
+    assert "breakdown task" not in workflow["instructions"]
+    assert "breakdown workflow" in workflow["instructions"]
 
 
 @pytest.mark.asyncio
