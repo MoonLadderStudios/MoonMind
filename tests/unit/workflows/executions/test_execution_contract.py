@@ -10,6 +10,7 @@ from moonmind.workflows.executions.execution_contract import (
     build_runtime_command_preview_config,
     CanonicalWorkflowExecutionPayload,
     ResumeFromFailedStepRef,
+    SUPPORTED_PUBLISH_MODES,
     reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
     strip_workflow_capability_identity_versions,
@@ -1260,25 +1261,53 @@ def test_jira_side_effect_skills_reject_repository_publish_modes(
         "fix-merge-conflicts",
     ],
 )
-def test_self_managed_publish_skills_force_none(skill_id: str) -> None:
-    assert resolve_publish_mode_for_skill(skill_id, None) == "none"
-    assert resolve_publish_mode_for_skill(skill_id, "none") == "none"
+def test_auto_publish_capable_skills_resolve_to_auto(skill_id: str) -> None:
+    """Auto publishing contract source: docs/Workflows/WorkflowPublishing.md."""
+
+    assert "auto" in SUPPORTED_PUBLISH_MODES
+    assert resolve_publish_mode_for_skill(skill_id, None) == "auto"
+    assert resolve_publish_mode_for_skill(skill_id, "auto") == "auto"
+    diagnostics: list[dict[str, object]] = []
+    assert (
+        resolve_publish_mode_for_skill(
+            skill_id,
+            "none",
+            diagnostics=diagnostics,
+        )
+        == "auto"
+    )
+    assert diagnostics == [
+        {
+            "code": "legacy_auto_publish_none_normalized",
+            "skillId": skill_id,
+            "requestedMode": "none",
+            "resolvedMode": "auto",
+            "message": (
+                f"Legacy publish.mode='none' for auto-publish-capable skill "
+                f"'{skill_id}' was normalized to 'auto'."
+            ),
+        }
+    ]
     with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill(skill_id, "pr")
+
+
+def test_non_capable_skill_rejects_auto_publish_mode() -> None:
+    with pytest.raises(WorkflowContractError, match="auto-publish-capable"):
+        resolve_publish_mode_for_skill("ordinary-skill", "auto")
 
 
 @pytest.mark.parametrize(
     "skill_id",
     ["fix-comments", "fix-ci", "fix-merge-conflicts"],
 )
-def test_codex_skill_payload_defaults_self_managed_publish_to_none(
+def test_codex_skill_payload_defaults_auto_publish_capable_skill_to_auto(
     skill_id: str,
 ) -> None:
-    """codex_skill submissions that omit publishMode must default to ``none``.
+    """codex_skill submissions that omit publishMode must default to ``auto``.
 
-    Regression for the legacy payload path materializing the default ``pr`` mode
-    before the self-managed resolver runs, which incorrectly rejected the
-    request even though the omitted mode should resolve to ``none``.
+    The legacy payload path must preserve omitted publish mode until the
+    selected-skill resolver can apply the auto publishing contract.
     """
 
     result = build_canonical_workflow_view(
@@ -1292,7 +1321,7 @@ def test_codex_skill_payload_defaults_self_managed_publish_to_none(
         },
     )
 
-    assert result["workflow"]["publish"]["mode"] == "none"
+    assert result["workflow"]["publish"]["mode"] == "auto"
 
 
 def test_canonical_workflow_view_strips_capability_identity_versions() -> None:

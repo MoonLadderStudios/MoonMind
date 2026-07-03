@@ -2,6 +2,11 @@
 name: fix-merge-conflicts
 description: Sync the branch with the latest `origin/main`, merge `origin/main`, resolve conflicts end-to-end, then commit and push the current branch.
 metadata:
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
   required-capabilities:
     - git
 ---
@@ -70,6 +75,10 @@ fi
 6. Commit and push.
 - If the merge was a fast-forward, no merge commit is created. Commit any other local changes before pushing.
 - Push current branch: `git push`
+- After push, record local `HEAD` with `git rev-parse HEAD` and verify the exact same SHA is visible on the remote branch with `git ls-remote origin refs/heads/<current-branch>` or an equivalent trusted GitHub path.
+- If there was nothing to commit, still verify the current local `HEAD` exactly matches the remote branch head.
+- If push or remote verification is unavailable, write `artifacts/publish_result.json` with `schemaVersion=moonmind.publish.auto.v1`, `mode=auto`, `owner=agent`, `status=blocked`, `action=none`, `blockedReason=publish_unavailable`, and the available repository/branch/head fields; then stop as blocked with reason `publish_unavailable`. Do not report success.
+- On successful push or verified no-op, write `artifacts/publish_result.json` proving the exact remote head verification.
 
 ## Output
 
@@ -77,4 +86,4 @@ Provide:
 - Resolved file list.
 - Whether `git merge origin/main` was clean, fast-forward, or conflicting.
 - Verification performed (or what was skipped).
-- Commit hash and pushed branch.
+- Commit hash or verified no-op `HEAD` hash, plus pushed/verified branch.

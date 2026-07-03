@@ -2,6 +2,11 @@
 name: pr-resolver
 description: Master orchestrator to resolve a PR by diagnosing state and delegating to specialized skills.
 metadata:
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
   required-skills: "fix-comments fix-ci fix-merge-conflicts"
   required-capabilities:
     - git

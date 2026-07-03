@@ -1,27 +1,51 @@
 # Workflow Publishing
 
-Workflow publishing controls how agent-produced changes reach the repository after execution. The `publishMode` field on a Workflow Execution determines whether changes are committed only, pushed to a branch, or turned into a pull request.
+Workflow publishing controls how agent-produced changes reach the repository after execution. The `publishMode` field on a Workflow Execution determines whether publishing is disabled, owned by an auto-publish-capable agent skill, committed for MoonMind-managed branch publishing, or committed for MoonMind-managed pull-request publishing.
 
 ## Publish Modes
 
 | Mode     | Behavior |
 |----------|----------|
+| `auto`   | Agent-owned publishing. The selected skill decides whether to no-op, commit, push, merge, or block, and must write `artifacts/publish_result.json` evidence. |
 | `none`   | No publishing. Changes remain in the agent's workspace only. |
 | `branch` | Changes are committed and pushed to the selected branch on the remote. |
 | `pr`     | Changes are committed, pushed to a work branch, and a pull request is created against the base branch. |
+
+### `auto`
+
+Auto mode is the canonical mode for skills that own repository side effects inside the managed runtime. Initial auto-publish-capable skills are `pr-resolver`, `batch-pr-resolver`, `batch-dependabot-resolver`, `batch-workflows`, `fix-comments`, `fix-ci`, and `fix-merge-conflicts`.
+
+Resolution rules:
+
+- Omitted publish mode resolves to `auto` for auto-publish-capable skills.
+- Explicit `auto` resolves to `auto` for auto-publish-capable skills.
+- Legacy explicit `none` for a known auto-publish-capable skill resolves to `auto` with a compatibility diagnostic.
+- `branch` and `pr` are invalid for auto-publish-capable skills unless that skill explicitly opts into MoonMind-managed publishing.
+- `auto` is invalid for tasks that do not declare agent-owned publishing capability.
+
+Every successful auto run must produce `artifacts/publish_result.json` with `schemaVersion = "moonmind.publish.auto.v1"`, `mode = "auto"`, `owner = "agent"`, the selected skill id, status, action, repository, branch, local and remote head fields, remote verification status, push/merge booleans, optional PR URL, optional blocked reason, and verification commands.
+
+Allowed status values are `verified`, `no_op_verified`, `blocked`, and `failed`. Allowed action values are `none`, `commit`, `push`, `merge`, `commit_and_push`, and `push_and_merge`.
+
+Successful auto evidence must prove one of:
+
+- exact local `HEAD` is visible on the remote branch;
+- the pull request was merged;
+- no repository change was needed and local `HEAD` was verified against the remote branch.
+
+Finish outcome mapping is evidence-driven:
+
+- verified merge -> `PUBLISHED_PR` with `publish.mode = auto` and `publish.owner = agent`;
+- verified push -> `PUBLISHED_BRANCH` with `publish.mode = auto` and `publish.owner = agent`;
+- verified no-op -> `NO_COMMIT`, not `PUBLISH_DISABLED`;
+- blocked or failed evidence -> publish-stage failure/block;
+- missing evidence -> publish-stage failure with `auto_publish_evidence_missing`.
 
 ### `none`
 
 The agent runs in its workspace but no git operations occur after completion. Useful for read-only Workflow Executions (analysis, diagnostics, research) or for Workflow Executions with side effects other than a final publish action.
 
-Some self-managed skills own their own repository side effects while requiring
-MoonMind publish mode `none`. Standalone `pr-resolver` is the canonical case:
-it resolves and merges an existing pull request from inside the managed runtime.
-For these runs, an explicit PR selector in `inputs.pr` or `inputs.branch` is
-preferred. When the create-form single `git.branch` field names a non-default
-branch, MoonMind may use that branch as the resolver's PR selector; common
-default/base branch names such as `main` and `master` remain invalid as implicit
-resolver selectors.
+`none` is reserved for true publish-disabled behavior. `PUBLISH_DISABLED` finish summaries are valid only for resolved `publish.mode = "none"`.
 
 ### `branch`
 
@@ -247,7 +271,17 @@ steps skipped rather than creating a pull request with known incomplete work.
 
 ### Agent Instructions
 
-Agents receive a commit-only instruction:
+Agents receive instructions based on the resolved publish mode.
+
+For `auto`:
+
+> Publishing is in auto mode. Determine the correct publish action for this task. You may commit, push, or merge only when required by the selected skill. Write artifacts/publish_result.json proving the outcome before reporting success.
+
+For `none`:
+
+> Do NOT commit or push. Publishing is disabled for this task.
+
+For MoonMind-managed `branch` and `pr`, agents receive a commit-only instruction:
 
 > After completing the changes above, commit your work (`git add -A && git commit -m '<summary>'`). Do NOT push or create a pull request — that is handled automatically.
 

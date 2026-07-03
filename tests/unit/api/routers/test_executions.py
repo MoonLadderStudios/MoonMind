@@ -4549,7 +4549,7 @@ def test_create_task_shaped_execution_rejects_falsy_non_string_publish_mode(
 
     assert response.status_code == 422
     assert response.json()["detail"]["message"] == (
-        "publish.mode must be one of: branch, none, pr"
+        "publish.mode must be one of: auto, branch, none, pr"
     )
     service.create_execution.assert_not_awaited()
 

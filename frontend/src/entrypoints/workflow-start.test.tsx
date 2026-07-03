@@ -6519,7 +6519,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(request.payload.task.dependsOn).toEqual(["mm:dep-1"]);
   });
 
-  it("defaults publish mode to none when selecting pr-resolver skills", async () => {
+  it("defaults publish mode to auto when selecting pr-resolver skills", async () => {
     type MockInitialData = {
       dashboardConfig: {
         system: {
@@ -6566,7 +6566,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
-      ).toBe("none");
+      ).toBe("auto");
     });
 
     fireEvent.change(
@@ -6578,11 +6578,11 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
-      ).toBe("none");
+      ).toBe("auto");
     });
   });
 
-  it("defaults publish mode to none when selecting self-publishing fix skills", async () => {
+  it("defaults publish mode to auto when selecting self-publishing fix skills", async () => {
     type MockInitialData = {
       dashboardConfig: {
         system: {
@@ -6621,12 +6621,12 @@ describe.skip("Task Create Entrypoint", () => {
     ) as HTMLSelectElement;
     for (const skillId of ["fix-comments", "fix-ci", "fix-merge-conflicts"]) {
       // Reset the publish mode to "pr" before each iteration so every skill is
-      // independently verified to force the mode back to "none"; otherwise a
+      // independently verified to force the mode back to "auto"; otherwise a
       // bug in a later skill would be masked by the value set by an earlier one.
       fireEvent.change(publishSelect, { target: { value: "pr" } });
       fireEvent.change(skillSelect, { target: { value: skillId } });
       await waitFor(() => {
-        expect(publishSelect.value).toBe("none");
+        expect(publishSelect.value).toBe("auto");
       });
     }
   });
@@ -7640,7 +7640,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
-  it("submits publish mode none when the selected primary skill is pr-resolver", async () => {
+  it("submits publish mode auto when the selected primary skill is pr-resolver", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest(
@@ -7674,7 +7674,7 @@ describe.skip("Task Create Entrypoint", () => {
       .at(-1);
     const request = JSON.parse(String(executionCall?.[1]?.body));
     expect(request.payload.task.publish).toMatchObject({
-      mode: "none",
+      mode: "auto",
     });
   });
 
@@ -7684,6 +7684,11 @@ describe.skip("Task Create Entrypoint", () => {
     const publishModeSelect = (await screen.findByLabelText(
       "Publish Mode",
     )) as HTMLSelectElement;
+    expect(
+      Array.from(publishModeSelect.options).some(
+        (option) => option.value === "auto" && option.text === "Auto",
+      ),
+    ).toBe(true);
     expect(
       Array.from(publishModeSelect.options).some(
         (option) =>

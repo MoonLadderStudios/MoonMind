@@ -2,6 +2,11 @@
 name: fix-comments
 description: Resolve GitHub PR feedback end-to-end for the branch you are on. Use when you need to fetch all comments on the branch PR, evaluate whether each comment still applies, decide whether it should be addressed, implement fixes, run compile/tests with retry-on-failure, then commit and push the result.
 metadata:
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
   required-capabilities:
     - git
     - gh
@@ -77,7 +82,7 @@ If no constraints are provided, default to addressing all applicable feedback.
 - If tracked or untracked code/documentation changes exist outside ignored artifacts, commit with a clear message (default: `Address PR feedback for #<number>`).
 - Push the current branch after committing.
 - If there was nothing to commit, still prove the current branch is published: verify the exact local `HEAD` SHA is visible on the remote PR branch using `gh pr view`, `git ls-remote`, or an equivalent GitHub connector path.
-- After any push or no-op verification, re-check that the remote PR branch head SHA equals local `HEAD`. If push or remote verification is unavailable, write `var/pr_resolver/result.json` with `status=blocked`, `merge_outcome=blocked`, `mergeAutomationDisposition=manual_review`, `reason=publish_unavailable`, `final_reason=publish_unavailable`, and `next_step=manual_review`; then stop as blocked with reason `publish_unavailable`. Do not report success.
+- After any push or no-op verification, re-check that the remote PR branch head SHA equals local `HEAD`. If push or remote verification is unavailable, write `artifacts/publish_result.json` with `schemaVersion=moonmind.publish.auto.v1`, `mode=auto`, `owner=agent`, `status=blocked`, `action=none`, `blockedReason=publish_unavailable`, and the available repository/branch/head fields; then stop as blocked with reason `publish_unavailable`. Do not report success.
 
 ## Output
 

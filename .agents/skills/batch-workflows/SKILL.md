@@ -2,6 +2,11 @@
 name: batch-workflows
 description: Resolve Jira issues by project/status and enqueue one child MoonMind workflow per target using a selected run capability, inherited runtime, and a shared advanced publish policy.
 metadata:
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+    verifyRemoteHead: exact
   required-capabilities:
     - git
     - jira

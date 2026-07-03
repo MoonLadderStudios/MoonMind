@@ -46,7 +46,7 @@ SUPPORTED_EXECUTION_RUNTIMES = {
     "claude_code",
     "jules",
 }
-SUPPORTED_PUBLISH_MODES = {"none", "branch", "pr"}
+SUPPORTED_PUBLISH_MODES = {"auto", "none", "branch", "pr"}
 _SECRET_REF_MOUNT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _SECRET_REF_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SECRET_REF_FIELD_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -54,7 +54,7 @@ _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 _PROPOSAL_POLICY_TARGETS = ("workflow_repo", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
-_SELF_MANAGED_PUBLISH_SKILLS = frozenset(
+_AUTO_PUBLISH_CAPABLE_SKILLS = frozenset(
     {
         "pr-resolver",
         "batch-pr-resolver",
@@ -65,6 +65,7 @@ _SELF_MANAGED_PUBLISH_SKILLS = frozenset(
         "fix-merge-conflicts",
     }
 )
+_SELF_MANAGED_PUBLISH_SKILLS = _AUTO_PUBLISH_CAPABLE_SKILLS
 _NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
     {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}
 )
@@ -766,10 +767,29 @@ def _normalize_publish_mode(value: object) -> str:
 def _normalize_skill_id(value: object) -> str:
     return (_clean_optional_str(value) or "").lower()
 
+def is_auto_publish_capable_skill(skill_id: object) -> bool:
+    """Return True when the selected skill owns auto publish evidence/actions."""
+
+    return _normalize_skill_id(skill_id) in _AUTO_PUBLISH_CAPABLE_SKILLS
+
+
 def is_self_managed_publish_skill(skill_id: object) -> bool:
     """Return True when the selected skill handles commit/push/merge directly."""
 
-    return _normalize_skill_id(skill_id) in _SELF_MANAGED_PUBLISH_SKILLS
+    return is_auto_publish_capable_skill(skill_id)
+
+
+def _auto_publish_legacy_none_diagnostic(skill_id: str) -> dict[str, object]:
+    return {
+        "code": "legacy_auto_publish_none_normalized",
+        "skillId": skill_id,
+        "requestedMode": "none",
+        "resolvedMode": "auto",
+        "message": (
+            f"Legacy publish.mode='none' for auto-publish-capable skill "
+            f"'{skill_id}' was normalized to 'auto'."
+        ),
+    }
 
 def is_non_repository_side_effect_skill(skill_id: object) -> bool:
     """Return True when the selected skill performs side effects outside git publish."""
@@ -806,21 +826,36 @@ def resolve_publish_mode_for_skill(
     requested_mode: object,
     *,
     allow_repository_publish: bool = False,
+    diagnostics: list[dict[str, object]] | None = None,
 ) -> str:
     """Resolve publish mode for a skill while enforcing skill publish constraints."""
 
     normalized_skill_id = _normalize_skill_id(skill_id)
-    is_self_managed = is_self_managed_publish_skill(normalized_skill_id)
+    is_auto_publish_capable = is_auto_publish_capable_skill(normalized_skill_id)
     is_non_repository = is_non_repository_side_effect_skill(normalized_skill_id)
-    if is_self_managed:
+    if is_auto_publish_capable:
         if requested_mode is None:
-            return "none"
+            return "auto"
         publish_mode = _normalize_publish_mode(requested_mode)
-        if publish_mode != "none":
+        if publish_mode == "auto":
+            return "auto"
+        if publish_mode == "none":
+            if diagnostics is not None:
+                diagnostics.append(
+                    _auto_publish_legacy_none_diagnostic(normalized_skill_id)
+                )
+            return "auto"
+        if publish_mode in {"branch", "pr"} and allow_repository_publish:
+            return publish_mode
+        if publish_mode in {"branch", "pr"}:
             raise WorkflowContractError(
-                f"task.publish.mode must be 'none' when using skill '{normalized_skill_id}'"
+                "task.publish.mode must be 'auto' when using auto-publish-capable "
+                f"skill '{normalized_skill_id}'"
             )
-        return "none"
+        raise WorkflowContractError(
+            f"task.publish.mode '{publish_mode}' is not supported for skill "
+            f"'{normalized_skill_id}'"
+        )
     if is_non_repository:
         if requested_mode is None:
             return "none"
@@ -836,6 +871,11 @@ def resolve_publish_mode_for_skill(
             )
         return "none"
     publish_mode = _normalize_publish_mode(requested_mode)
+    if publish_mode == "auto":
+        raise WorkflowContractError(
+            "task.publish.mode='auto' requires an auto-publish-capable skill "
+            "or an agent-owned publishing declaration"
+        )
     return publish_mode
 
 def _is_resolve_pr_objective(value: object) -> bool:
@@ -1091,7 +1131,11 @@ class WorkflowSkillSelection(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    id: str = Field("auto", alias="id")
+    id: str = Field(
+        "auto",
+        alias="id",
+        validation_alias=AliasChoices("id", "name"),
+    )
     args: dict[str, Any] = Field(default_factory=dict, alias="args")
     required_capabilities: list[str] | None = Field(
         None,
@@ -2105,12 +2149,17 @@ class WorkflowExecutionSpec(BaseModel):
         requested_publish_mode = self.publish.mode if (
             allow_repository_publish or "mode" in self.publish.model_fields_set
         ) else None
+        resolved_publish_mode: str | None = None
         for skill_id in skill_ids:
-            resolve_publish_mode_for_skill(
+            if not skill_id or skill_id == "auto":
+                continue
+            resolved_publish_mode = resolve_publish_mode_for_skill(
                 skill_id,
                 requested_publish_mode,
                 allow_repository_publish=allow_repository_publish,
             )
+        if resolved_publish_mode is not None:
+            self.publish.mode = resolved_publish_mode
         return self
 
     @model_validator(mode="after")
@@ -2592,7 +2641,7 @@ def build_canonical_workflow_view(
         workflow_payload["publish"] = publish_node
     skill_node = workflow_payload.get("skill") or {}
     skill = skill_node if isinstance(skill_node, Mapping) else {}
-    skill_id = skill.get("id")
+    skill_id = skill.get("id") or skill.get("name")
     publish_mode = resolve_publish_mode_for_skill(
         skill_id,
         publish_mode_candidate,
@@ -3030,7 +3079,7 @@ def build_workflow_stage_plan(canonical_payload: Mapping[str, Any]) -> list[str]
     # legacy_run contract — stage identifier values are persisted in workflow
     # state/history and rename at the MoonMind.UserWorkflow v2 cutover (MM-730).
     stages = ["moonmind.task.prepare", "moonmind.task.execute"]
-    if publish_mode != "none":
+    if publish_mode in {"branch", "pr"}:
         stages.append("moonmind.task.publish")
     return stages
 
@@ -3054,6 +3103,7 @@ __all__ = [
     "allows_repository_publish_for_skill_context",
     "has_attachment_mutation_fields",
     "is_non_repository_side_effect_skill",
+    "is_auto_publish_capable_skill",
     "is_self_managed_publish_skill",
     "normalize_queue_job_payload",
     "resolve_publish_mode_for_skill",

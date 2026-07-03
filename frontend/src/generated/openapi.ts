@@ -4054,7 +4054,7 @@ export interface components {
              * @default none
              * @enum {string}
              */
-            publishMode: "none" | "branch" | "pull_request";
+            publishMode: "auto" | "none" | "branch" | "pull_request";
             /** Idempotencykey */
             idempotencyKey: string;
             /** Gitworkbranch */
