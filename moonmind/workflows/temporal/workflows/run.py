@@ -316,6 +316,7 @@ _DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
         "summaryRef",
     }
 )
+RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v1"
 _REPORT_ONLY_PUBLISH_TYPES = frozenset({"security_pentest_report"})
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset(
@@ -8913,6 +8914,23 @@ class MoonMindRunWorkflow:
             return result
         return None
 
+    def _effective_result_metadata(self, result: Any) -> Mapping[str, Any] | None:
+        metadata = self._get_from_result(result, "metadata")
+        return metadata if isinstance(metadata, Mapping) else None
+
+    def _auto_publish_evidence_sources(self, result: Any) -> list[Mapping[str, Any]]:
+        sources: list[Mapping[str, Any]] = []
+        outputs = self._effective_result_outputs(result)
+        metadata = (
+            self._effective_result_metadata(result)
+            if workflow.patched(RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH)
+            else None
+        )
+        for source in (outputs, metadata):
+            if isinstance(source, Mapping):
+                sources.append(source)
+        return sources
+
     def _activity_result_status(self, result: Any) -> str | None:
         raw_status = self._get_from_result(result, "status")
         if raw_status is None:
@@ -10897,28 +10915,33 @@ class MoonMindRunWorkflow:
         )
 
     async def _resolve_auto_publish_evidence_ref(self, execution_result: Any) -> None:
-        outputs = self._effective_result_outputs(execution_result)
-        if not isinstance(outputs, Mapping):
+        sources = self._auto_publish_evidence_sources(execution_result)
+        if not sources:
             return
-        for key in (
-            "publishResult",
-            "publish_result",
-            "publishEvidence",
-            "publish_evidence",
-            "autoPublishEvidence",
-            "auto_publish_evidence",
-        ):
-            if key in outputs:
-                return
+        for source in sources:
+            for key in (
+                "publishResult",
+                "publish_result",
+                "publishEvidence",
+                "publish_evidence",
+                "autoPublishEvidence",
+                "auto_publish_evidence",
+            ):
+                if key in source:
+                    return
 
-        output_refs = outputs.get("outputRefs") or outputs.get("output_refs")
-        if not isinstance(output_refs, Mapping):
-            return
-        ref = (
-            output_refs.get("publish_result.json")
-            or output_refs.get("publishResult")
-            or output_refs.get("publish_result")
-        )
+        ref: Any = None
+        for source in sources:
+            output_refs = source.get("outputRefs") or source.get("output_refs")
+            if not isinstance(output_refs, Mapping):
+                continue
+            ref = (
+                output_refs.get("publish_result.json")
+                or output_refs.get("publishResult")
+                or output_refs.get("publish_result")
+            )
+            if isinstance(ref, str) and ref.strip():
+                break
         if not isinstance(ref, str) or not ref.strip():
             return
 
@@ -10941,9 +10964,8 @@ class MoonMindRunWorkflow:
         self._publish_context["autoPublishEvidence"] = evidence_payload
 
     def _record_auto_publish_result(self, execution_result: Any) -> None:
-        outputs = self._effective_result_outputs(execution_result)
         evidence_payload: Any = None
-        if isinstance(outputs, Mapping):
+        for source in self._auto_publish_evidence_sources(execution_result):
             for key in (
                 "publishResult",
                 "publish_result",
@@ -10952,11 +10974,11 @@ class MoonMindRunWorkflow:
                 "autoPublishEvidence",
                 "auto_publish_evidence",
             ):
-                if key in outputs:
-                    evidence_payload = outputs.get(key)
+                if key in source:
+                    evidence_payload = source.get(key)
                     break
             if evidence_payload is None:
-                output_refs = outputs.get("outputRefs") or outputs.get("output_refs")
+                output_refs = source.get("outputRefs") or source.get("output_refs")
                 if isinstance(output_refs, Mapping):
                     ref = (
                         output_refs.get("publish_result.json")
@@ -10965,6 +10987,9 @@ class MoonMindRunWorkflow:
                     )
                     if isinstance(ref, str) and ref.strip():
                         self._publish_context["evidenceRef"] = ref.strip()
+                        break
+            else:
+                break
         if evidence_payload is None:
             evidence_payload = self._publish_context.get("autoPublishEvidence")
 

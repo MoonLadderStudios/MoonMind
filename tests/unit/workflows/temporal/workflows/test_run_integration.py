@@ -20,6 +20,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
+    RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH,
     RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
     MoonMindRunWorkflow,
 )
@@ -1985,6 +1986,85 @@ async def test_auto_publish_verified_merge_maps_to_published_pr_finish_outcome(
 
 
 @pytest.mark.asyncio
+async def test_auto_publish_verified_merge_accepts_agent_result_metadata(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH,
+    )
+    parameters = {"publishMode": "auto"}
+    evidence = _auto_publish_evidence(
+        skillId="pr-resolver",
+        action="merge",
+        pushed=False,
+        merged=True,
+        remoteVerified=False,
+        remoteBranchHead=None,
+        prUrl="https://github.com/MoonLadderStudios/MoonMind/pull/2970",
+    )
+
+    await mock_run_workflow._record_publish_result_from_execution(
+        parameters=parameters,
+        execution_result=AgentRunResult(metadata={"publishResult": evidence}),
+    )
+
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        mock_run_workflow,
+        parameters=parameters,
+    )
+
+    assert summary["finishOutcome"]["code"] == "PUBLISHED_PR"
+    assert summary["publish"]["status"] == "published"
+    assert summary["publish"]["reason"] == "auto publish verified merge"
+    assert summary["publishContext"]["skillId"] == "pr-resolver"
+    assert summary["publishContext"]["prUrl"] == (
+        "https://github.com/MoonLadderStudios/MoonMind/pull/2970"
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_publish_metadata_evidence_preserves_unpatched_replay(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parameters = {"publishMode": "auto"}
+    evidence = _auto_publish_evidence(
+        skillId="pr-resolver",
+        action="merge",
+        pushed=False,
+        merged=True,
+        remoteVerified=False,
+        remoteBranchHead=None,
+        prUrl="https://github.com/MoonLadderStudios/MoonMind/pull/2970",
+    )
+
+    await mock_run_workflow._record_publish_result_from_execution(
+        parameters=parameters,
+        execution_result=AgentRunResult(metadata={"publishResult": evidence}),
+    )
+
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        mock_run_workflow,
+        parameters=parameters,
+        status="failed",
+        error=mock_run_workflow._publish_reason,
+    )
+
+    assert summary["finishOutcome"] == {
+        "code": "FAILED",
+        "stage": "publish",
+        "reason": "auto_publish_evidence_missing",
+    }
+    assert summary["publish"]["status"] == "failed"
+    assert summary["publish"]["reason"] == "auto_publish_evidence_missing"
+
+
+@pytest.mark.asyncio
 async def test_auto_publish_no_op_maps_to_no_commit_not_publish_disabled(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
@@ -2083,6 +2163,40 @@ async def test_auto_publish_evidence_ref_is_loaded_before_recording(
     assert mock_run_workflow._publish_reason == "auto publish verified push"
     assert mock_run_workflow._publish_context["evidenceRef"] == (
         "artifact://publish-result"
+    )
+
+
+def test_auto_publish_record_keeps_loaded_evidence_ref_when_later_metadata_ref_exists(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH,
+    )
+    mock_run_workflow._publish_context["autoPublishEvidence"] = (
+        _auto_publish_evidence()
+    )
+
+    mock_run_workflow._record_auto_publish_result(
+        {
+            "outputs": {
+                "outputRefs": {
+                    "publish_result.json": "artifact://publish-result-first"
+                }
+            },
+            "metadata": {
+                "outputRefs": {
+                    "publish_result.json": "artifact://publish-result-second"
+                }
+            },
+        }
+    )
+
+    assert mock_run_workflow._publish_status == "published"
+    assert mock_run_workflow._publish_context["evidenceRef"] == (
+        "artifact://publish-result-first"
     )
 
 
