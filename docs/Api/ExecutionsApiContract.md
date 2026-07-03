@@ -592,6 +592,15 @@ Representative response:
  "attempt": 1,
  "startedAt": "2026-04-04T18:10:00Z",
  "updatedAt": "2026-04-04T18:11:15Z",
+ "timing": {
+   "startedAt": "2026-04-04T18:10:00Z",
+   "endedAt": null,
+   "durationMs": null,
+   "elapsedMs": 75000,
+   "serverNow": "2026-04-04T18:11:15Z",
+   "precision": "live",
+   "preserved": false
+ },
  "summary": "Executing tests in sandbox",
  "checks": [],
  "refs": {
@@ -627,6 +636,13 @@ Per-step required fields:
 - `attempt`
 - `startedAt`
 - `updatedAt`
+- `timing.startedAt`
+- `timing.endedAt`
+- `timing.durationMs`
+- `timing.elapsedMs`
+- `timing.serverNow`
+- `timing.precision`
+- `timing.preserved`
 - `summary`
 - `checks[]`
 - `refs.childWorkflowId`
@@ -648,6 +664,12 @@ Rules:
 - `attempt` is scoped to `(workflowId, runId, logicalStepId)`
 - `checks[]` is the structured place for review/check verdicts and retry summaries
 - `agentRunId` may appear on a step row even when the top-level execution detail also exposes a managed-run binding
+- `timing` is the row-level logical step timing object consumed by the Workflow Details step ledger; it is separate from runner workload timing
+- `timing.precision` is one of `exact`, `live`, `fallback`, or `unavailable`; `live` values are elapsed as of `serverNow`, and `fallback` values are displayable but not exact terminal evidence
+- preserved rows use `timing.preserved: true` and the dashboard labels the value as original timing rather than newly executed work
+- clients must not infer logical step duration from `workload.durationSeconds`; workload duration is runner-level metadata
+
+The Step Execution history endpoint, `GET /api/executions/{workflowId}/steps/{logicalStepId}/step-executions`, returns the same `timing` object on each attempt projection. The expanded dashboard history shows per-attempt timing and may derive a total across attempts from those attempt-local values.
 
 ### 11.6 Step-route error responses
 
