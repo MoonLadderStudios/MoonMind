@@ -1,0 +1,27 @@
+{
+  "provider": "github",
+  "boundary": "status_update",
+  "mode": "recorded_trusted_tool",
+  "tool": "github.update_issue_status",
+  "input": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "issueNumber": 1101,
+    "mode": "finalize_after_pr_or_done",
+    "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
+    "verificationArtifactPath": "var/artifacts/moonspec-verify/github-issue-orchestrate.json"
+  },
+  "trustedArtifacts": {
+    "verification": {
+      "verdict": "FULLY_IMPLEMENTED"
+    },
+    "pullRequest": {
+      "pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"
+    }
+  },
+  "output": {
+    "status": "COMPLETED",
+    "decision": "updated",
+    "targetStatus": "code_review",
+    "verificationVerdict": "FULLY_IMPLEMENTED"
+  }
+}
