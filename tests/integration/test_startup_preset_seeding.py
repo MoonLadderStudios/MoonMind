@@ -325,6 +325,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "artifacts/jira-implement-assessment.json"
             in implement_assessment_step["instructions"]
         )
+        assert (
+            "artifacts/jira-implement-brief.json"
+            in implement_assessment_step["instructions"]
+        )
         implement_in_progress_step = expanded_steps[3]
         assert implement_in_progress_step["title"] == "Move Jira issue to In Progress"
         assert implement_in_progress_step["skill"]["id"] == "jira-issue-updater"

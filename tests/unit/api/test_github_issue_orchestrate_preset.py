@@ -119,6 +119,7 @@ async def test_github_issue_orchestrate_seed_exposes_issue_picker_and_tools(tmp_
         "issue_url": "{{ inputs.github_issue.url | default('') }}",
         "brief_artifact_path": "artifacts/github-issue-orchestrate-brief.json",
         "assessment_artifact_path": "artifacts/github-issue-orchestrate-assessment.json",
+        "constraints": "{{ inputs.constraints }}",
     }
     assert template.steps[3]["tool"]["inputs"]["assessmentArtifactPath"] == (
         "artifacts/github-issue-orchestrate-assessment.json"
@@ -166,6 +167,10 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
     assert "artifacts/github-issue-orchestrate-assessment.json" in steps[1][
         "instructions"
     ]
+    assert "artifacts/github-issue-orchestrate-brief.json" in steps[1][
+        "instructions"
+    ]
+    assert "Preserve MM-1063 traceability." in steps[1]["instructions"]
     assert "FULLY_IMPLEMENTED" in steps[1]["instructions"]
     assert steps[2]["tool"]["id"] == "github.check_issue_blockers"
     assert "deterministic trusted GitHub blocker preflight" in steps[2][

@@ -469,12 +469,57 @@ def test_agent_request_includes_trusted_jira_previous_outputs_in_instruction_ref
     assert "moonmind.jira.get_issue" in request.instruction_ref
     assert "MM-657: Settings HTTP API surface" in request.instruction_ref
     assert "docs/Designs/RuntimeTypes.md" in request.instruction_ref
-    assert "Do not use provider-native Jira/Atlassian connectors" in request.instruction_ref
+    assert (
+        "Do not use provider-native Jira/Atlassian or GitHub connectors"
+        in request.instruction_ref
+    )
 
 
-def test_trusted_jira_context_persists_after_intermediate_step_output() -> None:
+def test_agent_request_includes_trusted_github_previous_outputs_in_instruction_ref() -> None:
     wf = MoonMindRunWorkflow()
-    wf._record_trusted_jira_context(
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "claude_code"},
+                "instructions": "Assess existing implementation state.",
+                "previousOutputs": {
+                    "trustedSource": "moonmind.github.get_issue",
+                    "issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 123,
+                        "title": "Persist issue briefs",
+                    },
+                    "presetBrief": (
+                        "MoonLadderStudios/MoonMind#123: Persist issue briefs"
+                    ),
+                    "artifactPath": "artifacts/github-issue-implement-brief.json",
+                    "summary": "Loaded GitHub issue preset brief.",
+                },
+            },
+            node_id="assess",
+            tool_name="claude_code",
+            workflow_parameters={"task": {}},
+        )
+
+    assert request.instruction_ref is not None
+    assert request.instruction_ref.startswith(
+        "Assess existing implementation state."
+    )
+    assert "MoonMind trusted previous step context:" in request.instruction_ref
+    assert "moonmind.github.get_issue" in request.instruction_ref
+    assert (
+        "MoonLadderStudios/MoonMind#123: Persist issue briefs"
+        in request.instruction_ref
+    )
+    assert "artifacts/github-issue-implement-brief.json" in request.instruction_ref
+
+
+def test_trusted_issue_context_persists_after_intermediate_step_output() -> None:
+    wf = MoonMindRunWorkflow()
+    wf._record_trusted_issue_context(
         {
             "trustedSource": "moonmind.jira.get_issue",
             "jiraIssueKey": "MM-657",
@@ -482,7 +527,7 @@ def test_trusted_jira_context_persists_after_intermediate_step_output() -> None:
         }
     )
 
-    merged = wf._merge_trusted_jira_context({"storyOutput": {"status": "COMPLETED"}})
+    merged = wf._merge_trusted_issue_context({"storyOutput": {"status": "COMPLETED"}})
 
     assert merged["storyOutput"] == {"status": "COMPLETED"}
     assert merged["trustedSource"] == "moonmind.jira.get_issue"
@@ -490,7 +535,7 @@ def test_trusted_jira_context_persists_after_intermediate_step_output() -> None:
     assert merged["jiraPresetBrief"] == "MM-657: Settings HTTP API surface"
 
 
-def test_trusted_jira_context_uses_valid_json_after_truncation() -> None:
+def test_trusted_issue_context_uses_valid_json_after_truncation() -> None:
     instruction = MoonMindRunWorkflow._trusted_previous_outputs_instruction(
         {
             "trustedSource": "moonmind.jira.get_issue",
@@ -506,7 +551,7 @@ def test_trusted_jira_context_uses_valid_json_after_truncation() -> None:
     assert parsed["jiraPresetBrief"].endswith("...[truncated]")
 
 
-def test_trusted_jira_context_ignores_unconsumed_instruction_aliases() -> None:
+def test_trusted_issue_context_ignores_unconsumed_instruction_aliases() -> None:
     wf = MoonMindRunWorkflow()
     merged = wf._append_trusted_previous_outputs_to_agent_inputs(
         {

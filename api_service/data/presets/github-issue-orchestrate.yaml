@@ -125,6 +125,7 @@ steps:
     issue_url: '{{ inputs.github_issue.url | default('''') }}'
     brief_artifact_path: artifacts/github-issue-orchestrate-brief.json
     assessment_artifact_path: artifacts/github-issue-orchestrate-assessment.json
+    constraints: '{{ inputs.constraints }}'
 - title: Check GitHub issue blockers before orchestration
   type: tool
   instructions: 'Read artifacts/github-issue-orchestrate-assessment.json (or the recorded
