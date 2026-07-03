@@ -25,6 +25,7 @@ from moonmind.schemas.agent_skill_models import (
 from moonmind.workflows.temporal.workflows.run import (
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
+    RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
     RUN_STEP_EXECUTION_NAMING_PATCH,
     MoonMindRunWorkflow,
@@ -113,6 +114,25 @@ class TestSlotContinuityMetadata(unittest.TestCase):
         )
 
         self.assertLess(guard_index, write_complete_index)
+
+    def test_omnigent_checkpoint_branch_turn_request_shape_is_replay_patch_guarded(
+        self,
+    ) -> None:
+        source = inspect.getsource(MoonMindRunWorkflow._build_agent_execution_request)
+        self.assertEqual(
+            RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+            "run-omnigent-checkpoint-branch-turn-request-v1",
+        )
+
+        guard_index = source.index(
+            "RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH"
+        )
+        prompt_index = source.index(
+            "_apply_omnigent_checkpoint_branch_turn_prompt",
+            guard_index,
+        )
+
+        self.assertLess(guard_index, prompt_index)
 
     def test_slot_continuity_patch_marker_precedes_launch_block_short_circuit(self) -> None:
         source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
@@ -994,7 +1014,11 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         ), patch(
             "moonmind.workflows.temporal.workflows.run.workflow.patched",
             side_effect=lambda patch_id: (
-                patch_id == RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH
+                patch_id
+                in {
+                    RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
+                    RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+                }
             ),
         ):
             request = wf._build_agent_execution_request(
@@ -1075,6 +1099,200 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             ],
             "turn-1",
         )
+
+    def test_build_agent_execution_request_routes_omnigent_branch_instruction_ref(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        branch_turn = {
+            "branchId": "branch-omnigent",
+            "branchTurnId": "turn-omnigent",
+            "sourceWorkflowId": "source-wf",
+            "sourceRunId": "source-run",
+            "sourceLogicalStepId": "source-step",
+            "sourceCheckpointRef": "artifact://checkpoint/source",
+            "sourceCheckpointDigest": "sha256:" + "a" * 64,
+            "instructionArtifactRef": "artifact://instructions/turn-omnigent",
+            "instructionDigest": "sha256:" + "b" * 64,
+            "workspacePolicy": "fresh_branch_from_source",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "gitWorkBranch": "mm/branch-omnigent",
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id
+                in {
+                    RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
+                    RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+                }
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "omnigent": {
+                            "endpointRef": "default",
+                            "prompt": {"text": "stale inline prompt"},
+                            "capture": {"workspaceFiles": True},
+                        },
+                        "metadata": {
+                            "moonmind": {"checkpointBranchTurn": branch_turn}
+                        },
+                    },
+                },
+                node_id="branch-omnigent",
+                tool_name="omnigent",
+                attempt_reason="runtime_recovered",
+            )
+
+        self.assertEqual(request.agent_kind, "external")
+        self.assertEqual(request.agent_id, "omnigent")
+        self.assertIsNone(request.instruction_ref)
+        self.assertEqual(
+            request.idempotency_key,
+            "test-wf-id:branch-omnigent:turn-omnigent:omnigent",
+        )
+        self.assertEqual(
+            request.parameters["omnigent"]["prompt"],
+            {"instructionRef": "artifact://instructions/turn-omnigent"},
+        )
+        self.assertEqual(
+            request.parameters["omnigent"]["capture"],
+            {"workspaceFiles": True},
+        )
+        self.assertEqual(request.workspace_spec["branch"], "mm/branch-omnigent")
+        self.assertEqual(
+            request.workspace_spec["startingBranch"],
+            "mm/branch-omnigent",
+        )
+        self.assertEqual(
+            request.step_execution.runtime_context_policy,
+            "fresh_agent_run",
+        )
+        moonmind_metadata = request.parameters["metadata"]["moonmind"]
+        self.assertEqual(
+            moonmind_metadata["executionContext"]["priorEvidenceRefs"],
+            [],
+        )
+        self.assertEqual(
+            moonmind_metadata["checkpointBranchTurn"]["branchId"],
+            "branch-omnigent",
+        )
+
+    def test_build_agent_execution_request_preserves_omnigent_request_shape_unpatched(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        branch_turn = {
+            "branchId": "branch-omnigent",
+            "branchTurnId": "turn-omnigent",
+            "sourceWorkflowId": "source-wf",
+            "sourceRunId": "source-run",
+            "sourceLogicalStepId": "source-step",
+            "sourceCheckpointRef": "artifact://checkpoint/source",
+            "sourceCheckpointDigest": "sha256:" + "a" * 64,
+            "instructionArtifactRef": "artifact://instructions/turn-omnigent",
+            "instructionDigest": "sha256:" + "b" * 64,
+            "workspacePolicy": "fresh_branch_from_source",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "gitWorkBranch": "mm/branch-omnigent",
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "workspaceSpec": {"repository": "https://example/repo.git"},
+                        "omnigent": {
+                            "endpointRef": "default",
+                            "prompt": {"text": "legacy prompt"},
+                        },
+                        "metadata": {
+                            "moonmind": {"checkpointBranchTurn": branch_turn}
+                        },
+                    },
+                },
+                node_id="branch-omnigent",
+                tool_name="omnigent",
+                attempt_reason="runtime_recovered",
+            )
+
+        self.assertEqual(
+            request.instruction_ref,
+            "artifact://instructions/turn-omnigent",
+        )
+        self.assertEqual(
+            request.idempotency_key,
+            "test-wf-id:branch-omnigent:test-run-id",
+        )
+        self.assertEqual(
+            request.parameters["omnigent"]["prompt"],
+            {"text": "legacy prompt"},
+        )
+        self.assertNotIn("branch", request.workspace_spec)
+        self.assertNotIn("startingBranch", request.workspace_spec)
+
+    def test_build_agent_execution_request_rejects_non_object_omnigent_block(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), pytest.raises(
+            ValueError,
+            match=r"node\[bad-omnigent\]\.omnigent must be an object",
+        ):
+            wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "omnigent": "not-an-object",
+                    },
+                },
+                node_id="bad-omnigent",
+                tool_name="omnigent",
+                attempt_reason="runtime_recovered",
+            )
 
     def test_checkpoint_branch_turn_requires_source_identity_for_explicit_checkpoint_ref(
         self,
