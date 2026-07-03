@@ -123,6 +123,23 @@ async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -
     assert "create_pull_request" in prepared
 
 
+async def test_prepare_managed_codex_turn_appends_vocab_when_path_already_present() -> None:
+    path = "var/artifacts/moonspec-verify/verify-final.json"
+    prepared = TemporalAgentRuntimeActivities._prepare_managed_codex_turn_text(
+        f"Run moonspec-verify and write JSON to `{path}`.",
+        parameters={
+            "metadata": {"moonmind": {"selectedSkill": "moonspec-verify"}},
+            "verify_artifact_path": path,
+        },
+    )
+
+    assert "MoonSpec verification output contract:" in prepared
+    assert prepared.count("complete structured verifier JSON") == 0
+    assert '"FULLY_IMPLEMENTED"' in prepared
+    assert '"advance"' in prepared
+    assert "create_pull_request" in prepared
+
+
 async def test_codex_skill_payload_rejects_auto_publish_mode() -> None:
     from moonmind.agents.codex_worker.handlers import (
         CodexSkillPayload,

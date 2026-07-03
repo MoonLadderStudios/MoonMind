@@ -8330,15 +8330,23 @@ class TemporalAgentRuntimeActivities:
             if isinstance(value, str) and value.strip():
                 verify_artifact_path = value.strip()
                 break
-        if not verify_artifact_path or verify_artifact_path in instructions:
+        if not verify_artifact_path:
             return instructions
         verdict_values = " | ".join(f'"{value}"' for value in sorted(REVIEW_VERDICTS))
         next_action_values = " | ".join(
             f'"{value}"' for value in recommended_next_actions()
         )
+        path_hint = (
+            ""
+            if verify_artifact_path in instructions
+            else (
+                "- Write the complete structured verifier JSON to "
+                f"`{verify_artifact_path}`.\n"
+            )
+        )
         block = (
             "MoonSpec verification output contract:\n"
-            f"- Write the complete structured verifier JSON to `{verify_artifact_path}`.\n"
+            f"{path_hint}"
             "- The JSON must include the canonical `verdict`, `recommendedNextAction`, "
             "`recoverableInCurrentRuntime`, and `remainingWork` fields.\n"
             f"- `verdict` must be exactly one of: {verdict_values}.\n"

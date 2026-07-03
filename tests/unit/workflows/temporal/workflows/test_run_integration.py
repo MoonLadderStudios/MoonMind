@@ -3143,6 +3143,22 @@ def test_moonspec_gate_draft_publish_qualification(
     )
     assert mock_run_workflow._moonspec_gate_qualifies_for_draft_publish() is True
 
+    # A degraded implementation-gap verdict is still an implementation gap,
+    # not an environment-class failure eligible for draft publication.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "moonSpecVerify": {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "recommendedNextAction": "create_pull_request",
+            }
+        },
+    )
+    assert mock_run_workflow._publish_context["moonSpecGate"][
+        "declaredVerdict"
+    ] == "ADDITIONAL_WORK_NEEDED"
+    assert mock_run_workflow._moonspec_gate_qualifies_for_draft_publish() is False
+
     # Genuine implementation gaps never qualify.
     mock_run_workflow._record_moonspec_verify_gate(
         node_id="verify-final",
@@ -3162,27 +3178,25 @@ def test_moonspec_gate_draft_publish_qualification(
     )
     assert mock_run_workflow._moonspec_gate_qualifies_for_draft_publish() is False
 
+    mock_run_workflow._moonspec_gate_verdict = None
+    assert mock_run_workflow._moonspec_gate_qualifies_for_draft_publish() is False
+
 
 def test_moonspec_environment_blocked_publish_action_defaults_to_fail(
     mock_run_workflow: MoonMindRunWorkflow,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert (
         mock_run_workflow._moonspec_environment_blocked_publish_action() == "fail"
     )
-    monkeypatch.setattr(
-        run_workflow_module.settings.workflow,
-        "moonspec_environment_blocked_publish_action",
-        "draft_pr",
+    mock_run_workflow._moonspec_environment_blocked_publish_action_snapshot = (
+        "draft_pr"
     )
     assert (
         mock_run_workflow._moonspec_environment_blocked_publish_action()
         == "draft_pr"
     )
-    monkeypatch.setattr(
-        run_workflow_module.settings.workflow,
-        "moonspec_environment_blocked_publish_action",
-        "unsupported_value",
+    mock_run_workflow._moonspec_environment_blocked_publish_action_snapshot = (
+        "unsupported_value"
     )
     assert (
         mock_run_workflow._moonspec_environment_blocked_publish_action() == "fail"

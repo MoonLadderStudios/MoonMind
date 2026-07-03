@@ -1110,6 +1110,18 @@ class TemporalExecutionService:
         params = dict(initial_parameters or {})
         if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
+        if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
+            action = str(
+                getattr(
+                    settings.workflow,
+                    "moonspec_environment_blocked_publish_action",
+                    "fail",
+                )
+                or "fail"
+            ).strip().lower()
+            if action not in {"fail", "draft_pr"}:
+                action = "fail"
+            params["moonspecEnvironmentBlockedPublishAction"] = action
         task_params = dict(_workflow_payload(params))
         legacy_task_params = params.get("task")
         if isinstance(legacy_task_params, Mapping):

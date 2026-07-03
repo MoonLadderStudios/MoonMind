@@ -277,6 +277,22 @@ class TestParseReviewVerdict:
         assert gate.degraded is True
         assert gate.recommended_next_action == "blocked"
 
+    def test_parse_non_string_recommended_action_fails_closed(self):
+        gate = parse_step_gate_result(
+            {
+                "verdict": "FULLY_IMPLEMENTED",
+                "confidence": 0.95,
+                "recommendedNextAction": ["advance"],
+            }
+        )
+
+        assert gate.verdict == "NO_DETERMINATION"
+        assert gate.invalid is True
+        assert gate.degraded is True
+        assert gate.recommended_next_action == "blocked"
+        assert gate.downgrade_reason is not None
+        assert "recommendedNextAction must be a string" in gate.downgrade_reason
+
     @pytest.mark.parametrize("flag", ["invalid", "degraded"])
     def test_parse_passing_verdict_with_failure_flag_downgrades(self, flag):
         # A passing verdict that arrives already marked invalid/degraded must

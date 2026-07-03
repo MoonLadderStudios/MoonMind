@@ -61,19 +61,22 @@ def step_gate_contract_violations(payload: Mapping[str, Any]) -> list[str]:
         violations.append("payload was flagged invalid by its producer")
     if bool(payload.get("degraded")):
         violations.append("payload was flagged degraded by its producer")
-    recommended_next_action = payload.get("recommendedNextAction") or payload.get(
-        "recommended_next_action"
-    )
-    recommended_text = (
-        recommended_next_action.strip()
-        if isinstance(recommended_next_action, str)
-        else None
-    )
-    if recommended_text and recommended_text not in _RECOMMENDED_NEXT_ACTIONS:
-        violations.append(
-            f"recommendedNextAction {recommended_text!r} is not one of "
-            f"{sorted(_RECOMMENDED_NEXT_ACTIONS)}"
-        )
+    recommended_next_action = payload.get("recommendedNextAction")
+    if recommended_next_action is None:
+        recommended_next_action = payload.get("recommended_next_action")
+    if recommended_next_action is not None:
+        if not isinstance(recommended_next_action, str):
+            violations.append(
+                "recommendedNextAction must be a string, got "
+                f"{type(recommended_next_action).__name__}"
+            )
+        else:
+            recommended_text = recommended_next_action.strip()
+            if recommended_text not in _RECOMMENDED_NEXT_ACTIONS:
+                violations.append(
+                    f"recommendedNextAction {recommended_text!r} is not one of "
+                    f"{sorted(_RECOMMENDED_NEXT_ACTIONS)}"
+                )
     return violations
 
 @dataclass(frozen=True, slots=True)
@@ -388,13 +391,13 @@ def parse_step_gate_result(payload: Mapping[str, Any]) -> StepGateResult:
         "blocking_evidence_refs"
     )
 
-    recommended_next_action = _optional_text(
-        payload.get("recommendedNextAction")
-        or payload.get("recommended_next_action")
-    )
-    if (
-        recommended_next_action
-        and recommended_next_action not in _RECOMMENDED_NEXT_ACTIONS
+    recommended_next_action_value = payload.get("recommendedNextAction")
+    if recommended_next_action_value is None:
+        recommended_next_action_value = payload.get("recommended_next_action")
+    recommended_next_action = _optional_text(recommended_next_action_value)
+    if recommended_next_action_value is not None and (
+        not isinstance(recommended_next_action_value, str)
+        or recommended_next_action not in _RECOMMENDED_NEXT_ACTIONS
     ):
         # Fail closed gracefully on an unrecognized recommended action instead
         # of raising a hard ContractValidationError from StepGateResult.

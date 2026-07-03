@@ -953,6 +953,7 @@ class MoonMindRunWorkflow:
         self._plan_blocked_message: Optional[str] = None
         self._moonspec_gate_verdict: Optional[str] = None
         self._moonspec_gate_reason: Optional[str] = None
+        self._moonspec_environment_blocked_publish_action_snapshot: str = "fail"
         self._moonspec_draft_publication_reason: Optional[str] = None
         self._last_diagnostics_ref: Optional[str] = None
         # Bounded, redacted structured failure diagnostic captured at the
@@ -4950,9 +4951,17 @@ class MoonMindRunWorkflow:
                 break
         self._moonspec_gate_verdict = verdict
         self._moonspec_gate_reason = reason
+        declared_verdict = None
+        for source in self._moonspec_verify_sources(outputs):
+            declared_verdict = self._normalize_moonspec_verify_verdict(
+                source.get("verdict")
+            )
+            if declared_verdict:
+                break
         gate_context: dict[str, Any] = {
             "logicalStepId": node_id,
             "verdict": verdict,
+            "declaredVerdict": declared_verdict,
             "confidence": gate_result.confidence,
             "validatedRefs": dict(gate_result.validated_refs or {}),
             "invalidatedRefs": list(gate_result.invalidated_refs),
@@ -5163,20 +5172,14 @@ class MoonMindRunWorkflow:
         return True
 
     @staticmethod
-    def _moonspec_environment_blocked_publish_action() -> str:
-        action = (
-            str(
-                getattr(
-                    settings.workflow,
-                    "moonspec_environment_blocked_publish_action",
-                    "fail",
-                )
-                or "fail"
-            )
-            .strip()
-            .lower()
-        )
+    def _normalize_moonspec_environment_blocked_publish_action(value: Any) -> str:
+        action = str(value or "fail").strip().lower()
         return action if action in {"fail", "draft_pr"} else "fail"
+
+    def _moonspec_environment_blocked_publish_action(self) -> str:
+        return self._normalize_moonspec_environment_blocked_publish_action(
+            self._moonspec_environment_blocked_publish_action_snapshot
+        )
 
     def _moonspec_gate_qualifies_for_draft_publish(self) -> bool:
         """Environment-class gate outcomes eligible for draft publication.
@@ -5186,6 +5189,8 @@ class MoonMindRunWorkflow:
         degraded/malformed gate payload. Genuine implementation-gap verdicts
         (``ADDITIONAL_WORK_NEEDED``, ``FAILED_UNRECOVERABLE``) never qualify.
         """
+        if not self._moonspec_gate_verdict:
+            return False
         verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
         if verdict == "BLOCKED":
             return True
@@ -5193,6 +5198,14 @@ class MoonMindRunWorkflow:
             return False
         gate_context = self._publish_context.get("moonSpecGate")
         if not isinstance(gate_context, Mapping):
+            return False
+        declared_verdict = self._normalize_moonspec_verify_verdict(
+            gate_context.get("declaredVerdict")
+        )
+        if declared_verdict in {
+            "ADDITIONAL_WORK_NEEDED",
+            "FAILED_UNRECOVERABLE",
+        }:
             return False
         return bool(gate_context.get("degraded") or gate_context.get("invalid"))
 
@@ -6739,6 +6752,12 @@ class MoonMindRunWorkflow:
             input_payload,
             "initialParameters",
             "initial_parameters",
+        )
+        self._moonspec_environment_blocked_publish_action_snapshot = (
+            self._normalize_moonspec_environment_blocked_publish_action(
+                parameters.get("moonspecEnvironmentBlockedPublishAction")
+                or parameters.get("moonspec_environment_blocked_publish_action")
+            )
         )
         recovery_source = self._mapping_value(parameters, "recoverySource", "recovery_source")
         self._recovery_source = (
@@ -8506,6 +8525,7 @@ class MoonMindRunWorkflow:
                             )
                             and self._moonspec_environment_blocked_publish_action()
                             == "draft_pr"
+                            and publish_mode == "pr"
                             and self._moonspec_gate_qualifies_for_draft_publish()
                         ):
                             draft_summary = (
