@@ -22,7 +22,7 @@ This skill acts as an **Umbrella Skill**. It relies on existing specialized skil
 * The `temporal-worker-sandbox` environment already supports run-scoped skills via `.agents/skills` symlinks to a single active set.
 * The worker environment has GitHub auth available for private repo operations and includes `gh` usage in existing workflows.
 * Specialized sub-skills (like `fix-merge-conflicts`) are available in the `.agents/skills/` directory.
-* Because the PR Resolver performs git/PR mutations itself (via sub-skills), **Temporal Workflows using this skill must set `publish.mode=none`** to avoid the system publish Activity attempting a second publish/PR create.
+* Because the PR Resolver performs git/PR mutations itself (via sub-skills), Temporal Workflows using this skill must use `publish.mode=auto`. The selected skill owns repository publishing, must write `artifacts/publish_result.json` evidence, and avoids the MoonMind-managed branch/PR publish Activity.
 
 ---
 
@@ -189,7 +189,7 @@ Execution: `gh pr merge <pr> --<mergeMethod>`
 
 ### 9.1 Example `AgentTaskWorkflow` payload
 
-Use an `AgentTaskWorkflow` with `publish.mode` `none`, because the skill owns git pushes and merging inside the agent loop.
+Use an `AgentTaskWorkflow` with `publish.mode` `auto`, because the skill owns git pushes and merging inside the agent loop and must produce auto publish evidence.
 
 ```json
 {
@@ -201,7 +201,7 @@ Use an `AgentTaskWorkflow` with `publish.mode` `none`, because the skill owns gi
       "id": "pr-resolver",
       "args": { "mergeMethod": "squash" }
     },
-    "publish": { "mode": "none" }
+    "publish": { "mode": "auto" }
   }
 }
 ```
@@ -269,7 +269,7 @@ You are the Master orchestrator for finishing Pull Requests. You diagnose the PR
 
 ## Constraints
 - Do NOT try to invent your own conflict resolution or CI fixing workflow. Always load and follow the specialized sub-skill instructions.
-- This skill is allowed to commit/push and merge (task.publish.mode MUST be none).
+- This skill is allowed to commit/push and merge only under `task.publish.mode = "auto"` and must write `artifacts/publish_result.json` evidence before reporting success.
 ```
 
 ---

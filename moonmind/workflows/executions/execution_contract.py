@@ -2447,11 +2447,11 @@ def _build_spec_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
         payload.get("ref")
     )
     publish_payload = {
-        # Preserve an omitted publish mode as ``None`` so the self-managed skill
-        # resolver applies the correct per-skill default (e.g. ``none`` for
-        # fix-comments/fix-ci/fix-merge-conflicts). Materializing the default
-        # ``pr`` here would make ``resolve_publish_mode_for_skill`` treat the
-        # absent mode as an explicit forbidden mode and reject the request.
+        # Preserve an omitted publish mode as ``None`` so the auto-publish-capable
+        # skill resolver applies the per-skill default from
+        # docs/Workflows/WorkflowPublishing.md. Materializing the default ``pr``
+        # here would make ``resolve_publish_mode_for_skill`` treat the absent mode
+        # as an explicit forbidden mode and reject the request.
         "mode": _normalize_publish_mode(publish_mode)
         if publish_mode is not None
         else None,
