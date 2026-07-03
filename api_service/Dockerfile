@@ -204,6 +204,7 @@ COPY api_service /app/api_service/
 COPY config /app/config/
 COPY docs/ReleaseNotes /app/docs/ReleaseNotes/
 COPY .agents /app/.agents/
+COPY moonspec /app/moonspec/
 RUN pip install --disable-pip-version-check --no-deps .
 
 # Copy pre-built frontend assets from the frontend-builder stage
