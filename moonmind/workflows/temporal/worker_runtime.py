@@ -422,7 +422,6 @@ def _build_jira_orchestrate_execution_creator():
 
     return _create_execution
 
-_SUPPORTED_AGENT_RUNTIMES = frozenset({"codex", "claude", "jules"})
 _CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
 # Agent runtimes where PR creation is driven by the provider API (e.g. Jules
 # ``automationMode`` / ``AUTO_CREATE_PR``), not by appending ``gh pr create``

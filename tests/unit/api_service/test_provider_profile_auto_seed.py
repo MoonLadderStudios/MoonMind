@@ -605,8 +605,8 @@ async def test_auto_seed_first_party_stubs_have_default_readiness_labels(
     await _auto_seed_provider_profiles()
 
     expected_command_behavior = {
-        "supported_auth_methods": ["oauth_volume"],
-        "auth_actions": ["connect_oauth"],
+        "supported_auth_methods": ["oauth_volume", "secret_ref"],
+        "auth_actions": ["connect_oauth", "use_api_key"],
         "auth_status_label": "Not connected",
         "auth_readiness": {
             "connected": False,
@@ -629,3 +629,63 @@ async def test_auto_seed_first_party_stubs_have_default_readiness_labels(
         for profile_id in FIRST_PARTY_SETUP_PROFILE_IDS
     }
     assert len(readiness_ids) == len(FIRST_PARTY_SETUP_PROFILE_IDS)
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_disables_and_reenables_env_api_profiles(
+    _module_db, monkeypatch
+):
+    """Env-backed API profiles track whether their backing env key exists."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    await _auto_seed_provider_profiles()
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    seeded = await _auto_seed_provider_profiles()
+    assert seeded == []
+
+    async with db_base.async_session_maker() as session:
+        codex_api = await session.get(
+            ManagedAgentProviderProfile, "codex_openai_api"
+        )
+        claude_api = await session.get(
+            ManagedAgentProviderProfile, "claude_anthropic_api"
+        )
+
+    for profile, env_key in (
+        (codex_api, "OPENAI_API_KEY"),
+        (claude_api, "ANTHROPIC_API_KEY"),
+    ):
+        assert profile is not None
+        assert profile.enabled is False
+        assert profile.auth_state == ProviderProfileAuthState.NOT_CONFIGURED
+        assert (
+            profile.disabled_reason
+            == ProviderProfileDisabledReason.MISSING_CREDENTIALS
+        )
+        readiness = profile.command_behavior["auth_readiness"]
+        assert readiness["launch_ready"] is False
+        assert readiness["backing_secret_exists"] is False
+        assert readiness["failure_reason"] == f"{env_key} is not configured."
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        codex_api = await session.get(
+            ManagedAgentProviderProfile, "codex_openai_api"
+        )
+        claude_api = await session.get(
+            ManagedAgentProviderProfile, "claude_anthropic_api"
+        )
+
+    for profile in (codex_api, claude_api):
+        assert profile is not None
+        assert profile.enabled is True
+        assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+        assert profile.disabled_reason is None
+        assert profile.command_behavior["auth_readiness"]["launch_ready"] is True

@@ -53,6 +53,7 @@ class TestAgentKindForId(unittest.TestCase):
 
     def test_case_insensitive(self) -> None:
         wf = MoonMindRunWorkflow()
+        self.assertEqual(wf._agent_kind_for_id("Gemini_CLI"), "managed")
         self.assertEqual(wf._agent_kind_for_id("Codex_CLI"), "managed")
         self.assertEqual(wf._agent_kind_for_id("CLAUDE_CODE"), "managed")
 

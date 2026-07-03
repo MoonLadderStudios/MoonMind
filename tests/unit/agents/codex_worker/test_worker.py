@@ -10473,17 +10473,11 @@ async def test_build_non_codex_runtime_command_routes_claude_code_alias(
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
-    from unittest.mock import Mock
-
-    prepared_mock = Mock()
-    prepared_mock.job_root = tmp_path
-
     command = worker._build_non_codex_runtime_command(
         runtime_mode="claude_code",
         instruction="resolve the task",
         model="claude-sonnet",
         effort="high",
-        prepared=prepared_mock,
     )
 
     assert command[:3] == [config.claude_binary, "--print", "resolve the task"]

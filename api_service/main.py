@@ -679,17 +679,34 @@ async def _auto_seed_provider_profiles() -> list[str]:
         logger.info("Provider profile auto-seeding disabled via MOONMIND_SKIP_PROVIDER_PROFILE_SEED.")
         return []
 
-    # First-party OAuth profiles are visible but disabled until OAuth setup
-    # succeeds. API-key profiles are inserted only when the corresponding env
-    # key is configured.
+    # First-party setup profiles are visible but disabled until OAuth setup
+    # succeeds or an API key is added. API-key profiles are inserted only when
+    # the corresponding env key is configured.
     def _make_first_party_oauth_command_behavior() -> dict[str, Any]:
         return {
-            "supported_auth_methods": ["oauth_volume"],
-            "auth_actions": ["connect_oauth"],
+            "supported_auth_methods": ["oauth_volume", "secret_ref"],
+            "auth_actions": ["connect_oauth", "use_api_key"],
             "auth_status_label": "Not connected",
             "auth_readiness": {
                 "connected": False,
                 "launch_ready": False,
+            },
+        }
+
+    def _make_first_party_api_key_missing_command_behavior(
+        env_key: str,
+    ) -> dict[str, Any]:
+        return {
+            "supported_auth_methods": ["secret_ref"],
+            "auth_actions": ["use_api_key"],
+            "auth_strategy": "api_key_env",
+            "auth_state": "not_configured",
+            "auth_status_label": f"{env_key} is not configured",
+            "auth_readiness": {
+                "connected": False,
+                "backing_secret_exists": False,
+                "launch_ready": False,
+                "failure_reason": f"{env_key} is not configured.",
             },
         }
 
@@ -967,6 +984,15 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ManagedAgentProviderProfile.default_model,
                     ManagedAgentProviderProfile.clear_env_keys,
                     ManagedAgentProviderProfile.file_templates,
+                    ManagedAgentProviderProfile.credential_source,
+                    ManagedAgentProviderProfile.runtime_materialization_mode,
+                    ManagedAgentProviderProfile.secret_refs,
+                    ManagedAgentProviderProfile.env_template,
+                    ManagedAgentProviderProfile.enabled,
+                    ManagedAgentProviderProfile.auth_state,
+                    ManagedAgentProviderProfile.disabled_reason,
+                    ManagedAgentProviderProfile.command_behavior,
+                    ManagedAgentProviderProfile.last_auth_method,
                 )
             )
             existing_rows = existing_result.all()
@@ -977,31 +1003,111 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "default_model": row.default_model,
                     "clear_env_keys": row.clear_env_keys,
                     "file_templates": row.file_templates,
+                    "credential_source": row.credential_source,
+                    "runtime_materialization_mode": row.runtime_materialization_mode,
+                    "secret_refs": row.secret_refs,
+                    "env_template": row.env_template,
+                    "enabled": row.enabled,
+                    "auth_state": row.auth_state,
+                    "disabled_reason": row.disabled_reason,
+                    "command_behavior": row.command_behavior,
+                    "last_auth_method": row.last_auth_method,
                 }
                 for row in existing_rows
             }
             existing_ids: set[str] = set(existing_by_id)
 
-            deprecated_gemini_profile_ids = (
+            deprecated_gemini_profile_ids = {
                 "gemini_google_default",
                 "gemini_default",
+            }
+            deprecated_gemini_profile_ids_to_delete = (
+                deprecated_gemini_profile_ids.intersection(existing_ids)
             )
-            delete_result = await session.execute(
-                delete(ManagedAgentProviderProfile).where(
-                    ManagedAgentProviderProfile.profile_id.in_(
-                        deprecated_gemini_profile_ids
-                    ),
-                    ManagedAgentProviderProfile.runtime_id == "gemini_cli",
+            needs_commit = False
+            if deprecated_gemini_profile_ids_to_delete:
+                await session.execute(
+                    delete(ManagedAgentProviderProfile).where(
+                        ManagedAgentProviderProfile.profile_id.in_(
+                            deprecated_gemini_profile_ids_to_delete
+                        ),
+                        ManagedAgentProviderProfile.runtime_id == "gemini_cli",
+                    )
                 )
-            )
-            needs_commit = bool(delete_result.rowcount)
-            if needs_commit:
+                needs_commit = True
                 existing_by_id = {
                     profile_id: row
                     for profile_id, row in existing_by_id.items()
-                    if profile_id not in deprecated_gemini_profile_ids
+                    if profile_id not in deprecated_gemini_profile_ids_to_delete
                 }
                 existing_ids = set(existing_by_id)
+
+            first_party_env_api_profiles = {
+                "codex_openai_api": "OPENAI_API_KEY",
+                "claude_anthropic_api": "ANTHROPIC_API_KEY",
+            }
+            default_profile_by_id = {
+                profile_def["profile_id"]: profile_def
+                for profile_def in _DEFAULT_PROFILES
+            }
+            for profile_id, env_key in first_party_env_api_profiles.items():
+                current = existing_by_id.get(profile_id)
+                if current is None:
+                    continue
+                configured = bool(os.environ.get(env_key))
+                profile_def = default_profile_by_id.get(profile_id)
+                updates: dict[str, Any] = {}
+                if configured and profile_def is not None:
+                    desired_values = {
+                        "credential_source": profile_def["credential_source"],
+                        "runtime_materialization_mode": profile_def[
+                            "runtime_materialization_mode"
+                        ],
+                        "secret_refs": profile_def.get("secret_refs"),
+                        "env_template": profile_def.get("env_template"),
+                        "clear_env_keys": profile_def.get("clear_env_keys"),
+                        "enabled": True,
+                        "auth_state": ProviderProfileAuthState.CONNECTED,
+                        "disabled_reason": None,
+                        "command_behavior": profile_def.get("command_behavior"),
+                        "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
+                    }
+                    updates = {
+                        key: value
+                        for key, value in desired_values.items()
+                        if current.get(key) != value
+                    }
+                elif not configured:
+                    secret_refs = current.get("secret_refs") or {}
+                    env_ref = f"env://{env_key}"
+                    uses_env_ref = any(
+                        str(value or "").strip() == env_ref
+                        for value in secret_refs.values()
+                    )
+                    if uses_env_ref:
+                        desired_values = {
+                            "enabled": False,
+                            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+                            "disabled_reason": (
+                                ProviderProfileDisabledReason.MISSING_CREDENTIALS
+                            ),
+                            "command_behavior": _make_first_party_api_key_missing_command_behavior(
+                                env_key
+                            ),
+                        }
+                        updates = {
+                            key: value
+                            for key, value in desired_values.items()
+                            if current.get(key) != value
+                        }
+                if updates:
+                    await session.execute(
+                        update(ManagedAgentProviderProfile)
+                        .where(ManagedAgentProviderProfile.profile_id == profile_id)
+                        .values(**updates)
+                    )
+                    existing_by_id[profile_id].update(updates)
+                    needs_commit = True
 
             to_insert = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
 

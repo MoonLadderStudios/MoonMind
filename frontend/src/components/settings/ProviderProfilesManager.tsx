@@ -467,9 +467,12 @@ function extractErrorMessage(payload: unknown): string {
 }
 
 function isFirstPartyOAuthProfile(profile: ProviderProfile): boolean {
+  const authActions = commandBehaviorStringArray(profile, 'auth_actions') ?? [];
   return (
     profile.runtime_id === 'codex_cli' &&
-    (profile.credential_source === 'oauth_volume' ||
+    profile.provider_id === 'openai' &&
+    (authActions.includes('connect_oauth') ||
+      profile.credential_source === 'oauth_volume' ||
       profile.runtime_materialization_mode === 'oauth_home' ||
       Boolean(profile.volume_ref || profile.volume_mount_path))
   );
@@ -495,9 +498,9 @@ function defaultClaudeCredentialActions(profile: ProviderProfile): string[] {
   }
   const actions = ['use_api_key'];
   if (
-    (profile.credential_source === 'oauth_volume' ||
-      profile.runtime_materialization_mode === 'oauth_home' ||
-      Boolean(profile.volume_ref || profile.volume_mount_path))
+    profile.credential_source === 'oauth_volume' ||
+    profile.runtime_materialization_mode === 'oauth_home' ||
+    Boolean(profile.volume_ref || profile.volume_mount_path)
   ) {
     actions.unshift('connect_oauth');
   }

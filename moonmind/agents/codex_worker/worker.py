@@ -8941,7 +8941,6 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
-                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -10065,7 +10064,6 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
-                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -11081,7 +11079,6 @@ class CodexWorker:
         instruction: str,
         model: str | None,
         effort: str | None,
-        prepared: PreparedTaskWorkspace,
     ) -> list[str]:
         canonical = _canonical_execution_runtime(runtime_mode)
         if canonical == "claude":

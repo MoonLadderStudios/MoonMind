@@ -1223,6 +1223,8 @@ class WorkflowSettings(BaseSettings):
     @classmethod
     def _normalize_vision_provider(cls, value: object) -> str:
         candidate = str(value or "").strip().lower() or "gemini"
+        if candidate == "gemini_cli":
+            candidate = "gemini"
         allowed = {"gemini", "openai", "anthropic", "off"}
         if candidate not in allowed:
             supported = ", ".join(sorted(allowed))

@@ -208,16 +208,6 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.FAILED: "failed",
     MoonMindWorkflowState.CANCELED: "canceled",
 }
-_SUPPORTED_TASK_RUNTIMES = frozenset({
-    "codex_cli",
-    "claude_code",
-    "codex_cloud",
-    "jules",
-    # Legacy aliases accepted and normalized below.
-    "codex",
-    "claude",
-})
-
 _MAX_TASK_TITLE_LENGTH = 150
 _MAX_TASK_SUMMARY_LENGTH = 180
 _TASK_SUMMARY_ELLIPSIS = "..."

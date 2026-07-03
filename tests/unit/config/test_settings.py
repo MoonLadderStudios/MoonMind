@@ -604,6 +604,16 @@ class TestWorkflowSettings:
         monkeypatch.delenv("MOONMIND_VISION_MAX_TOKENS", raising=False)
         monkeypatch.delenv("MOONMIND_VISION_OCR_ENABLED", raising=False)
 
+    def test_vision_provider_normalizes_legacy_gemini_cli_value(self, monkeypatch):
+        """The preserved Gemini API provider accepts the previous operator value."""
+
+        monkeypatch.setenv("MOONMIND_VISION_PROVIDER", "gemini_cli")
+
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.vision_provider == "gemini"
+        monkeypatch.delenv("MOONMIND_VISION_PROVIDER", raising=False)
+
     def test_task_default_baselines(self):
         """Task defaults should provide stable queue execution baselines."""
 

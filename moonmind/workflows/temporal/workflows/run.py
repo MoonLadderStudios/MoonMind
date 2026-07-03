@@ -552,7 +552,14 @@ RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code")
 _MANAGED_AGENT_IDS = frozenset(
-    {"claude", "claude_code", "codex", "codex_cli"}
+    {
+        "claude",
+        "claude_code",
+        "codex",
+        "codex_cli",
+        # Replay-only: preserve managed classification for pre-cutover histories.
+        "gemini_cli",
+    }
 )
 
 def _normalize_agent_runtime_id(agent_id: str) -> str:
