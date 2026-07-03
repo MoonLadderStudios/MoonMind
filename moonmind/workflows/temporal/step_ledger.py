@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Mapping
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 ACTIVE_STEP_STATUSES = ("executing", "reviewing", "awaiting_external")
@@ -30,9 +30,17 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
 
 
 def _duration_ms(started_at: datetime | None, ended_at: datetime | None) -> int | None:
-    if started_at is None or ended_at is None or ended_at < started_at:
+    if started_at is None or ended_at is None:
         return None
-    return max(0, int((ended_at - started_at).total_seconds() * 1000))
+    started = started_at
+    ended = ended_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if ended.tzinfo is None:
+        ended = ended.replace(tzinfo=timezone.utc)
+    if ended < started:
+        return None
+    return max(0, int((ended - started).total_seconds() * 1000))
 
 
 def step_timing_for_row(

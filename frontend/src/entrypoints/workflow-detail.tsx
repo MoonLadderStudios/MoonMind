@@ -2247,6 +2247,21 @@ function parseTimestampMs(value: string | null | undefined): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
+function timingDurationMs(timing: z.infer<typeof StepTimingSchema> | null | undefined): number | null {
+  const value = timing?.durationMs ?? timing?.elapsedMs ?? null;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function timestampDurationMs(
+  startedAt: string | null | undefined,
+  endedAt: string | null | undefined,
+): number | null {
+  const startedMs = parseTimestampMs(startedAt);
+  const endedMs = parseTimestampMs(endedAt);
+  if (startedMs === null || endedMs === null || endedMs < startedMs) return null;
+  return endedMs - startedMs;
+}
+
 function stepTimingFromRow(
   row: z.infer<typeof StepLedgerRowSchema>,
   nowMs: number,
@@ -4289,12 +4304,9 @@ function StepExecutionHistoryRow({
   const runtimeChildRefs = stepRefEntries(execution.runtimeChildRefs);
   const downstreamInvalidated = execution.reason === 'dependency_invalidated';
   const lineage = execution.lineage ?? null;
-  const startedMs = parseTimestampMs(execution.startedAt ?? null);
-  const updatedMs = parseTimestampMs(execution.updatedAt ?? null);
   const attemptDurationMs =
-    startedMs !== null && updatedMs !== null && updatedMs >= startedMs
-      ? updatedMs - startedMs
-      : null;
+    timingDurationMs(execution.timing) ??
+    timestampDurationMs(execution.startedAt ?? null, execution.updatedAt ?? null);
 
   return (
     <li className="step-execution-history-item">
@@ -4461,10 +4473,10 @@ function StepExecutionHistory({
   const executions = historyQuery.data?.stepExecutions ?? [];
   const ordered = [...executions].sort((a, b) => b.executionOrdinal - a.executionOrdinal);
   const totalDurationMs = executions.reduce((total, execution) => {
-    const startedMs = parseTimestampMs(execution.startedAt ?? null);
-    const updatedMs = parseTimestampMs(execution.updatedAt ?? null);
-    if (startedMs === null || updatedMs === null || updatedMs < startedMs) return total;
-    return total + (updatedMs - startedMs);
+    const durationMs =
+      timingDurationMs(execution.timing) ??
+      timestampDurationMs(execution.startedAt ?? null, execution.updatedAt ?? null);
+    return durationMs === null ? total : total + durationMs;
   }, 0);
 
   return (
@@ -4531,7 +4543,9 @@ function StepLedgerRowCard({
   const timingLabel = stepTimingLabel(row, timing);
   const durationForBar = timing.elapsedMs ?? timing.durationMs ?? 0;
   const durationBarPercent =
-    longestVisibleDurationMs > 0 ? Math.max(3, Math.min(100, (durationForBar / longestVisibleDurationMs) * 100)) : 0;
+    longestVisibleDurationMs > 0 && durationForBar > 0
+      ? Math.max(3, Math.min(100, (durationForBar / longestVisibleDurationMs) * 100))
+      : 0;
 
   return (
     <article className={`step-tl-row${expanded ? ' step-tl-expanded' : ''}${isLast ? ' step-tl-last' : ''}`}>
@@ -6627,12 +6641,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     const current = items.find((item) => ACTIVE_STEP_STATUS_VALUES.has(item.row.status)) ?? null;
     const completedCount = items.filter((item) => item.row.status === 'completed').length;
     const maxDurationMs = Math.max(0, ...items.map((item) => item.durationMs));
-    const minStartedMs = Math.min(
-      ...items
-        .map((item) => item.startedMs)
-        .filter((value): value is number => value !== null),
-    );
-    const timelineStartMs = Number.isFinite(minStartedMs) ? minStartedMs : null;
+    const startedTimes = items
+      .map((item) => item.startedMs)
+      .filter((value): value is number => value !== null);
+    const timelineStartMs = startedTimes.length > 0 ? Math.min(...startedTimes) : null;
     const timelineEndMs = Math.max(
       ...items
         .flatMap((item) => [item.startedMs, item.endedMs, item.startedMs !== null ? item.startedMs + item.durationMs : null])
