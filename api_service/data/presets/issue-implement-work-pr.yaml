@@ -49,7 +49,7 @@ inputs:
   label: Remediation Max Attempts
   type: text
   required: false
-  default: '1'
+  default: '6'
 - name: constraints
   label: Constraints
   type: textarea
@@ -155,18 +155,14 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps
+- title: Remediate verification gaps 1 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-remediation
     moonSpecRemediationAttempt: 1
     moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
   instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
-    }} issue {{ inputs.issue_ref }} before doing any work.
-
-
-    This preset allows at most {{ inputs.remediation_max_attempts }} remediation
-    attempt before the issue implementation must stop and report the remaining verifier
-    evidence.
+    }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
+    1 of {{ inputs.remediation_max_attempts }}.
 
 
     If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
@@ -195,29 +191,387 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation
+- title: Verify remediation 1 of {{ inputs.remediation_max_attempts }}
   annotations:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 1
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+  instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
+    remediation result before doing anything.
+
+
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
+    Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
+    inputs.assessment_artifact_path }} as the initial state assessment.
+
+
+    This is remediation verification attempt 1 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
+    preserve the verification report as the mandatory input for the next remediation
+    attempt and continue only to the next remediation step. If the verdict is NO_DETERMINATION,
+    stop and report the missing evidence. If the verdict is BLOCKED,
+    FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify
+    runtime or infrastructure causes as environment failure, stop immediately, and
+    do not create a pull request.
+
+
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
+    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
+  skill:
+    id: moonspec-verify
+    args:
+      verification_target: '{{ inputs.verification_target }}'
+      issue_provider: '{{ inputs.issue_provider }}'
+      issue_ref: '{{ inputs.issue_ref }}'
+      brief_artifact_path: '{{ inputs.brief_artifact_path }}'
+      assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
+      verify_artifact_path: '{{ inputs.verify_artifact_path }}'
+    requiredCapabilities:
+    - git
+- title: Remediate verification gaps 2 of {{ inputs.remediation_max_attempts }}
+  annotations:
+    issueImplementRole: moonspec-remediation
+    moonSpecRemediationAttempt: 2
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+  instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
+    2 of {{ inputs.remediation_max_attempts }}.
+
+
+    If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
+    that remediation is skipped because verification already passed.
+
+
+    If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report''s
+    gaps and remaining work as the authoritative bounded implementation backlog.
+    Fix only those reported implementation or verification gaps, update or add the
+    required tests, and run the focused checks named by the verification report when
+    feasible.
+
+
+    If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
+    is recoverable in this runtime, such as by running a skipped command or inspecting
+    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
+    treat it as terminal for issue implementation remediation and do not create a
+    pull request.
+
+
+    Do not broaden the issue scope, do not create a pull request, and do not change
+    {{ inputs.issue_provider }} issue status during remediation.'
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+- title: Verify remediation 2 of {{ inputs.remediation_max_attempts }}
+  annotations:
+    issueImplementRole: moonspec-verification-gate
+    moonSpecRemediationAttempt: 2
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+  instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
+    remediation result before doing anything.
+
+
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
+    Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
+    inputs.assessment_artifact_path }} as the initial state assessment.
+
+
+    This is remediation verification attempt 2 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
+    preserve the verification report as the mandatory input for the next remediation
+    attempt and continue only to the next remediation step. If the verdict is NO_DETERMINATION,
+    stop and report the missing evidence. If the verdict is BLOCKED,
+    FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify
+    runtime or infrastructure causes as environment failure, stop immediately, and
+    do not create a pull request.
+
+
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
+    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
+  skill:
+    id: moonspec-verify
+    args:
+      verification_target: '{{ inputs.verification_target }}'
+      issue_provider: '{{ inputs.issue_provider }}'
+      issue_ref: '{{ inputs.issue_ref }}'
+      brief_artifact_path: '{{ inputs.brief_artifact_path }}'
+      assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
+      verify_artifact_path: '{{ inputs.verify_artifact_path }}'
+    requiredCapabilities:
+    - git
+- title: Remediate verification gaps 3 of {{ inputs.remediation_max_attempts }}
+  annotations:
+    issueImplementRole: moonspec-remediation
+    moonSpecRemediationAttempt: 3
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+  instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
+    3 of {{ inputs.remediation_max_attempts }}.
+
+
+    If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
+    that remediation is skipped because verification already passed.
+
+
+    If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report''s
+    gaps and remaining work as the authoritative bounded implementation backlog.
+    Fix only those reported implementation or verification gaps, update or add the
+    required tests, and run the focused checks named by the verification report when
+    feasible.
+
+
+    If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
+    is recoverable in this runtime, such as by running a skipped command or inspecting
+    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
+    treat it as terminal for issue implementation remediation and do not create a
+    pull request.
+
+
+    Do not broaden the issue scope, do not create a pull request, and do not change
+    {{ inputs.issue_provider }} issue status during remediation.'
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+- title: Verify remediation 3 of {{ inputs.remediation_max_attempts }}
+  annotations:
+    issueImplementRole: moonspec-verification-gate
+    moonSpecRemediationAttempt: 3
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+  instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
+    remediation result before doing anything.
+
+
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
+    Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
+    inputs.assessment_artifact_path }} as the initial state assessment.
+
+
+    This is remediation verification attempt 3 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
+    preserve the verification report as the mandatory input for the next remediation
+    attempt and continue only to the next remediation step. If the verdict is NO_DETERMINATION,
+    stop and report the missing evidence. If the verdict is BLOCKED,
+    FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify
+    runtime or infrastructure causes as environment failure, stop immediately, and
+    do not create a pull request.
+
+
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
+    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
+  skill:
+    id: moonspec-verify
+    args:
+      verification_target: '{{ inputs.verification_target }}'
+      issue_provider: '{{ inputs.issue_provider }}'
+      issue_ref: '{{ inputs.issue_ref }}'
+      brief_artifact_path: '{{ inputs.brief_artifact_path }}'
+      assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
+      verify_artifact_path: '{{ inputs.verify_artifact_path }}'
+    requiredCapabilities:
+    - git
+- title: Remediate verification gaps 4 of {{ inputs.remediation_max_attempts }}
+  annotations:
+    issueImplementRole: moonspec-remediation
+    moonSpecRemediationAttempt: 4
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+  instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
+    4 of {{ inputs.remediation_max_attempts }}.
+
+
+    If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
+    that remediation is skipped because verification already passed.
+
+
+    If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report''s
+    gaps and remaining work as the authoritative bounded implementation backlog.
+    Fix only those reported implementation or verification gaps, update or add the
+    required tests, and run the focused checks named by the verification report when
+    feasible.
+
+
+    If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
+    is recoverable in this runtime, such as by running a skipped command or inspecting
+    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
+    treat it as terminal for issue implementation remediation and do not create a
+    pull request.
+
+
+    Do not broaden the issue scope, do not create a pull request, and do not change
+    {{ inputs.issue_provider }} issue status during remediation.'
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+- title: Verify remediation 4 of {{ inputs.remediation_max_attempts }}
+  annotations:
+    issueImplementRole: moonspec-verification-gate
+    moonSpecRemediationAttempt: 4
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+  instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
+    remediation result before doing anything.
+
+
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
+    Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
+    inputs.assessment_artifact_path }} as the initial state assessment.
+
+
+    This is remediation verification attempt 4 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
+    preserve the verification report as the mandatory input for the next remediation
+    attempt and continue only to the next remediation step. If the verdict is NO_DETERMINATION,
+    stop and report the missing evidence. If the verdict is BLOCKED,
+    FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify
+    runtime or infrastructure causes as environment failure, stop immediately, and
+    do not create a pull request.
+
+
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
+    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
+  skill:
+    id: moonspec-verify
+    args:
+      verification_target: '{{ inputs.verification_target }}'
+      issue_provider: '{{ inputs.issue_provider }}'
+      issue_ref: '{{ inputs.issue_ref }}'
+      brief_artifact_path: '{{ inputs.brief_artifact_path }}'
+      assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
+      verify_artifact_path: '{{ inputs.verify_artifact_path }}'
+    requiredCapabilities:
+    - git
+- title: Remediate verification gaps 5 of {{ inputs.remediation_max_attempts }}
+  annotations:
+    issueImplementRole: moonspec-remediation
+    moonSpecRemediationAttempt: 5
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+  instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
+    5 of {{ inputs.remediation_max_attempts }}.
+
+
+    If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
+    that remediation is skipped because verification already passed.
+
+
+    If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report''s
+    gaps and remaining work as the authoritative bounded implementation backlog.
+    Fix only those reported implementation or verification gaps, update or add the
+    required tests, and run the focused checks named by the verification report when
+    feasible.
+
+
+    If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
+    is recoverable in this runtime, such as by running a skipped command or inspecting
+    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
+    treat it as terminal for issue implementation remediation and do not create a
+    pull request.
+
+
+    Do not broaden the issue scope, do not create a pull request, and do not change
+    {{ inputs.issue_provider }} issue status during remediation.'
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+- title: Verify remediation 5 of {{ inputs.remediation_max_attempts }}
+  annotations:
+    issueImplementRole: moonspec-verification-gate
+    moonSpecRemediationAttempt: 5
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+  instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
+    remediation result before doing anything.
+
+
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
+    Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
+    inputs.assessment_artifact_path }} as the initial state assessment.
+
+
+    This is remediation verification attempt 5 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
+    preserve the verification report as the mandatory input for the next remediation
+    attempt and continue only to the next remediation step. If the verdict is NO_DETERMINATION,
+    stop and report the missing evidence. If the verdict is BLOCKED,
+    FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify
+    runtime or infrastructure causes as environment failure, stop immediately, and
+    do not create a pull request.
+
+
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
+    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
+  skill:
+    id: moonspec-verify
+    args:
+      verification_target: '{{ inputs.verification_target }}'
+      issue_provider: '{{ inputs.issue_provider }}'
+      issue_ref: '{{ inputs.issue_ref }}'
+      brief_artifact_path: '{{ inputs.brief_artifact_path }}'
+      assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
+      verify_artifact_path: '{{ inputs.verify_artifact_path }}'
+    requiredCapabilities:
+    - git
+- title: Remediate verification gaps 6 of {{ inputs.remediation_max_attempts }}
+  annotations:
+    issueImplementRole: moonspec-remediation
+    moonSpecRemediationAttempt: 6
+    moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+  instructions: 'Inspect the latest moonspec-verify result for {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }} before doing any work. This is remediation attempt
+    6 of {{ inputs.remediation_max_attempts }}.
+
+
+    If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report
+    that remediation is skipped because verification already passed.
+
+
+    If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report''s
+    gaps and remaining work as the authoritative bounded implementation backlog.
+    Fix only those reported implementation or verification gaps, update or add the
+    required tests, and run the focused checks named by the verification report when
+    feasible.
+
+
+    If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
+    is recoverable in this runtime, such as by running a skipped command or inspecting
+    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
+    treat it as terminal for issue implementation remediation and do not create a
+    pull request.
+
+
+    Do not broaden the issue scope, do not create a pull request, and do not change
+    {{ inputs.issue_provider }} issue status during remediation.'
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+- title: Verify remediation 6 of {{ inputs.remediation_max_attempts }}
+  annotations:
+    issueImplementRole: moonspec-verification-gate
+    moonSpecRemediationAttempt: 6
     moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
     moonSpecFinalRemediationGate: true
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
 
-    Run moonspec-verify against verification target {{ inputs.verification_target
-    }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation,
-    even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+    Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
 
 
     This is the controlling verification gate for pull request creation. If the verdict
-    is ADDITIONAL_WORK_NEEDED or NO_DETERMINATION, stop and report the gaps or missing
-    evidence; do not continue to pull request creation. If the verdict is BLOCKED,
-    FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify
-    runtime or infrastructure causes as environment failure, stop immediately, and
-    do not create a pull request.
+    is ADDITIONAL_WORK_NEEDED or NO_DETERMINATION, the remediation budget is exhausted:
+    stop the issue implementation, report the gaps or missing evidence, and do not
+    continue to pull request creation. If the verdict is BLOCKED, FAILED_UNRECOVERABLE,
+    or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify runtime or infrastructure
+    causes as environment failure, stop immediately, and do not create a pull request.
 
 
     Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
@@ -255,7 +609,7 @@ steps:
     moonspec-verify verdict is FULLY_IMPLEMENTED in {{ inputs.verify_artifact_path }}.
     If the verifier reported ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED,
     FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, or if
-    {{ inputs.remediation_max_attempts }} remediation attempt has been exhausted
+    {{ inputs.remediation_max_attempts }} remediation attempts have been exhausted
     without FULLY_IMPLEMENTED, stop without creating a pull request and report the
     verifier evidence.
 

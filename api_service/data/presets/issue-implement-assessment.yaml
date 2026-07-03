@@ -63,15 +63,18 @@ steps:
 
     First persist the loaded issue preset brief as a local handoff artifact at {{
     inputs.brief_artifact_path }} with keys issue_provider, issue_ref, issue_url,
-    title, description, acceptance_criteria, preset_brief, constraints, source_resolution,
-    and truncated. Copy the brief content exactly from the trusted brief-loading tool
-    step context for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }}; do
-    not re-fetch, paraphrase, or invent requirements. Set truncated to true when any
-    copied field contains the literal marker ...[truncated], and record that truncation
-    as a risk in the assessment summary; otherwise set truncated to false. Later moonspec-verify
-    steps in this preset require this artifact as the authoritative issue brief for
-    verification target issue_brief. If no trusted loaded brief is available to persist,
-    report BLOCKED with that missing evidence instead of writing a fabricated brief.
+    title, description, acceptance_criteria, labels, preset_brief, constraints,
+    source_resolution, trusted_source, and truncated. Copy the brief content exactly
+    from the trusted brief-loading tool step context for {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }}; do not re-fetch, paraphrase, or invent requirements.
+    Map provider summary/title fields to title and provider body/description fields
+    to description; do not write summary or body aliases. Set truncated to true when
+    any copied field contains the literal marker ...[truncated], and record that
+    truncation as a risk in the assessment summary; otherwise set truncated to false.
+    Later moonspec-verify steps in this preset require this artifact as the authoritative
+    issue brief for verification target issue_brief. If no trusted loaded brief is
+    available to persist, report BLOCKED with that missing evidence instead of writing
+    a fabricated brief.
 
 
     Record the following workflow constraints verbatim under the constraints key

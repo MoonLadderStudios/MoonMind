@@ -3807,6 +3807,13 @@ async def load_jira_preset_brief(
         preset_brief=preset_brief,
     )
     resolved_source_path = _string(source_resolution.get("selectedPath"))
+    artifact_path = _first_string(
+        inputs.get("artifactPath"),
+        inputs.get("artifact_path"),
+        inputs.get("briefArtifactPath"),
+        inputs.get("brief_artifact_path"),
+        "artifacts/jira-implement-brief.json",
+    )
 
     summary_text = f"Loaded Jira preset brief for {resolved_key} from trusted Jira data."
     if resolved_source_path:
@@ -3818,7 +3825,9 @@ async def load_jira_preset_brief(
         "trustedSource": "moonmind.jira.get_issue",
         "jiraIssueKey": resolved_key,
         "jiraPresetBrief": preset_brief,
+        "presetBrief": preset_brief,
         "jiraStepInstructions": step_instructions,
+        "artifactPath": artifact_path,
         "sourceResolution": source_resolution,
         "jiraIssue": {
             "key": resolved_key,

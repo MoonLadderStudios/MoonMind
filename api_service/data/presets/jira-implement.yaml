@@ -97,6 +97,7 @@ steps:
     args: {}
     inputs:
       issueKey: '{{ inputs.jira_issue_key }}'
+      artifactPath: artifacts/jira-implement-brief.json
 - kind: include
   slug: issue-implement-assessment
   alias: assess
@@ -199,7 +200,7 @@ steps:
     pr_artifact_path: artifacts/jira-implement-pr.json
     verify_artifact_path: artifacts/jira-implement-verify.json
     verification_target: issue_brief
-    remediation_max_attempts: '1'
+    remediation_max_attempts: '6'
     constraints: '{{ inputs.constraints }}'
 - title: Finalize Jira status
   annotations:

@@ -62,6 +62,7 @@ steps:
       args: {}
       inputs:
         issueKey: "{{ inputs.source_issue_key }}"
+        artifactPath: artifacts/jira-breakdown-brief.json
   - title: Break down preferred source input
     instructions: |-
       Run moonspec-breakdown using this input preference chain:

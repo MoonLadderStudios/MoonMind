@@ -127,6 +127,7 @@ steps:
       args: {}
       inputs:
         issueKey: "{{ inputs.jira_issue_key }}"
+        artifactPath: artifacts/jira-orchestrate-brief.json
   - title: Classify request and resume point
     instructions: |-
       Use the Jira preset brief for {{ inputs.jira_issue_key }} as the canonical MoonSpec orchestration input.
