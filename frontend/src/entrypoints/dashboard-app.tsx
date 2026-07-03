@@ -18,12 +18,12 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ScrollText } from 'lucide-react';
 import {
   MoonIcon,
   RocketIcon,
   SettingsIcon,
   SparklesIcon,
-  WorkflowIcon,
 } from 'lucide-animated';
 
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -67,7 +67,7 @@ type NavIconProps = {
 };
 
 function WorkflowsNavIcon({ className }: NavIconProps) {
-  return <WorkflowIcon size={NAV_ICON_SIZE} className={className} animateOnHover aria-hidden="true" />;
+  return <ScrollText size={NAV_ICON_SIZE} className={className} aria-hidden="true" />;
 }
 
 function StartWorkflowNavIcon({ className }: NavIconProps) {
