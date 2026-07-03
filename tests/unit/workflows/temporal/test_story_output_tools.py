@@ -338,6 +338,48 @@ async def test_update_github_issue_status_blocks_code_review_without_verificatio
 
 
 @pytest.mark.asyncio
+async def test_update_github_issue_status_uses_previous_verification_payload(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "verificationArtifactPath": str(tmp_path / "workspace-only-verify.json"),
+        },
+        {
+            "previousOutputs": {
+                "moonSpecVerify": {
+                    "verdict": "FULLY_IMPLEMENTED",
+                    "gateResultRef": "art_verify",
+                },
+                "moonSpecVerifyArtifactRef": "art_verify",
+            }
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert "mode code_review" in result.outputs["summary"]
+    assert service.token_requests == [
+        "MoonLadderStudios/MoonMind",
+        "MoonLadderStudios/MoonMind",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_update_github_issue_status_blocks_code_review_for_malformed_verification_artifact(
     tmp_path,
 ):

@@ -17,6 +17,9 @@
       {
         "id": "STORY-001",
         "summary": "Harden GitHub Issue handoff",
+        "sourceReference": {
+          "sourceIssueKey": "MM-1063"
+        },
         "issueCreation": {
           "action": "create_issue"
         }
@@ -24,6 +27,9 @@
       {
         "id": "STORY-002",
         "summary": "Already complete",
+        "sourceReference": {
+          "sourceIssueKey": "MM-1063"
+        },
         "issueCreation": {
           "action": "skip",
           "reason": "Already implemented"
