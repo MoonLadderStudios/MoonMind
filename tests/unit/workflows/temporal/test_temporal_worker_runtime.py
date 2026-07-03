@@ -2072,10 +2072,17 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
     assert "MM-501" in task["steps"][0]["instructions"]
     assert task["steps"][7]["skill"]["id"] == "moonspec-tasks"
     assert task["steps"][9]["skill"]["id"] == "moonspec-implement"
+    assert task["steps"][10]["skill"]["id"] == "moonspec-verify"
+    assert task["steps"][10]["skill"]["args"]["verify_artifact_path"] == (
+        "var/artifacts/moonspec-verify/jira-orchestrate.json"
+    )
     assert task["steps"][11]["title"] == "Remediate verification gaps 1 of 6"
     assert task["steps"][11]["skill"]["id"] == "moonspec-implement"
     assert task["steps"][22]["title"] == "Verify remediation 6 of 6"
     assert task["steps"][22]["skill"]["id"] == "moonspec-verify"
+    assert task["steps"][22]["skill"]["args"]["verify_artifact_path"] == (
+        "var/artifacts/moonspec-verify/jira-orchestrate.json"
+    )
     assert task["steps"][23]["title"] == "Reconcile declarative docs"
     assert task["steps"][23]["skill"]["id"] == "moonspec-doc-reconcile"
     assert task["steps"][24]["title"] == "Create pull request"

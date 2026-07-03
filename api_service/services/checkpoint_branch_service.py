@@ -59,6 +59,11 @@ NON_BRANCH_CONTROL_OPERATIONS = frozenset(
 _PROTECTED_GIT_WORK_BRANCHES = {"", "main", "master", "HEAD"}
 
 
+def _stored_value(value: Any) -> str:
+    raw_value = getattr(value, "value", value)
+    return str(raw_value)
+
+
 @dataclass(frozen=True)
 class CheckpointBranchGitBindingInput:
     """Input for persisting a git binding for a product checkpoint branch."""
@@ -72,6 +77,8 @@ class CheckpointBranchGitBindingInput:
     head_commit: str | None = None
     patch_ref: str | None = None
     pull_request_url: str | None = None
+    workspace_policy: str = "apply_previous_execution_diff_to_clean_baseline"
+    creation_mode: str = "manual"
     publish_status: str = "unpublished"
 
 
@@ -173,6 +180,7 @@ class CheckpointBranchService:
         self,
         branch: WorkflowCheckpointBranch,
     ) -> CheckpointBranchGraphModel:
+        await self._session.refresh(branch)
         turns = (
             await self._session.execute(
                 select(WorkflowCheckpointBranchTurn)
@@ -249,12 +257,14 @@ class CheckpointBranchService:
             parent_branch_id=model.parent_branch_id,
             parent_turn_id=model.parent_turn_id,
             label=model.label,
-            state=CheckpointBranchState(model.state),
-            branch_kind=CheckpointBranchKind(model.branch_kind),
-            workspace_policy=CheckpointBranchWorkspacePolicy(model.workspace_policy),
+            state=CheckpointBranchState(model.state).value,
+            branch_kind=CheckpointBranchKind(model.branch_kind).value,
+            workspace_policy=CheckpointBranchWorkspacePolicy(
+                model.workspace_policy
+            ).value,
             runtime_context_policy=CheckpointBranchRuntimeContextPolicy(
                 model.runtime_context_policy
-            ),
+            ).value,
             git_repository=model.git_repository,
             git_base_branch=model.git_base_branch,
             git_base_commit=model.git_base_commit,
@@ -347,8 +357,8 @@ class CheckpointBranchService:
                 "sourceStateKind": branch.source_state_kind,
                 "sourceStateRef": branch.source_state_ref,
                 "sourceStateDigest": branch.source_state_digest,
-                "workspacePolicy": branch.workspace_policy.value,
-                "runtimeContextPolicy": branch.runtime_context_policy.value,
+                "workspacePolicy": _stored_value(branch.workspace_policy),
+                "runtimeContextPolicy": _stored_value(branch.runtime_context_policy),
                 "instructionRef": model.instruction_ref,
                 "instructionDigest": model.instruction_digest,
                 "contextBundleRef": model.context_bundle_ref,
@@ -359,7 +369,7 @@ class CheckpointBranchService:
                 "status": "created",
             }
         )
-        branch.state = CheckpointBranchState.ACTIVE
+        branch.state = CheckpointBranchState.ACTIVE.value
         branch.current_head_step_execution_id = turn.created_step_execution_id
         branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
         await self._session.flush()
@@ -457,7 +467,7 @@ class CheckpointBranchService:
             artifact_kind="operation_archive",
         ):
             return CheckpointBranchStateUpdateModel.model_validate(branch)
-        branch.state = CheckpointBranchState.ARCHIVED
+        branch.state = CheckpointBranchState.ARCHIVED.value
         branch.archived_at = branch.archived_at or datetime.now(UTC)
         if idempotency_key:
             await self._record_operation_artifact_once(
@@ -466,6 +476,7 @@ class CheckpointBranchService:
                 artifact_kind="operation_archive",
             )
         await self._session.flush()
+        await self._session.refresh(branch)
         return CheckpointBranchStateUpdateModel.model_validate(branch)
 
     async def mark_failed(
@@ -514,7 +525,7 @@ class CheckpointBranchService:
             artifact_kind=artifact_kind,
         ):
             return CheckpointBranchStateUpdateModel.model_validate(branch)
-        branch.state = state
+        branch.state = state.value
         if idempotency_key:
             await self._record_operation_artifact_once(
                 branch_id=branch.branch_id,
@@ -522,6 +533,7 @@ class CheckpointBranchService:
                 artifact_kind=artifact_kind,
             )
         await self._session.flush()
+        await self._session.refresh(branch)
         return CheckpointBranchStateUpdateModel.model_validate(branch)
 
     async def mark_publish_ready(
@@ -544,7 +556,7 @@ class CheckpointBranchService:
             artifact_kind="operation_publish_ready",
         ):
             return CheckpointBranchStateUpdateModel.model_validate(branch)
-        branch.state = CheckpointBranchState.PROMOTABLE
+        branch.state = CheckpointBranchState.PROMOTABLE.value
         candidate_ref = artifact_ref or model.artifact_ref
         if candidate_ref:
             existing_candidate = (
@@ -569,6 +581,7 @@ class CheckpointBranchService:
             artifact_kind="operation_publish_ready",
         )
         await self._session.flush()
+        await self._session.refresh(branch)
         return CheckpointBranchStateUpdateModel.model_validate(branch)
 
     async def list_branch_graphs(
@@ -584,9 +597,9 @@ class CheckpointBranchService:
             statement = statement.where(
                 WorkflowCheckpointBranch.state.notin_(
                     [
-                        CheckpointBranchState.ARCHIVED,
-                        CheckpointBranchState.FAILED,
-                        CheckpointBranchState.SUPERSEDED,
+                        CheckpointBranchState.ARCHIVED.value,
+                        CheckpointBranchState.FAILED.value,
+                        CheckpointBranchState.SUPERSEDED.value,
                     ]
                 )
             )
@@ -631,10 +644,12 @@ class CheckpointBranchService:
             source_state_kind=model.source_state_kind,
             source_state_ref=model.source_state_ref,
             source_state_digest=model.source_state_digest,
-            workspace_policy=CheckpointBranchWorkspacePolicy(model.workspace_policy),
+            workspace_policy=CheckpointBranchWorkspacePolicy(
+                model.workspace_policy
+            ).value,
             runtime_context_policy=CheckpointBranchRuntimeContextPolicy(
                 model.runtime_context_policy
-            ),
+            ).value,
             instruction_ref=model.instruction_ref,
             instruction_digest=model.instruction_digest,
             context_bundle_ref=model.context_bundle_ref,
@@ -642,7 +657,7 @@ class CheckpointBranchService:
             runtime_agent_run_id=model.runtime_agent_run_id,
             provider_session_id=model.provider_session_id,
             idempotency_key=model.idempotency_key,
-            status=CheckpointBranchTurnState(model.status),
+            status=CheckpointBranchTurnState(model.status).value,
         )
         self._session.add(record)
         await self._session.flush()
@@ -687,7 +702,11 @@ class CheckpointBranchService:
             head_commit=model.head_commit,
             patch_ref=model.patch_ref,
             pull_request_url=model.pull_request_url,
-            publish_status=CheckpointBranchPublishStatus(model.publish_status),
+            workspace_policy=CheckpointBranchWorkspacePolicy(
+                model.workspace_policy
+            ).value,
+            creation_mode=model.creation_mode,
+            publish_status=CheckpointBranchPublishStatus(model.publish_status).value,
         )
         self._session.add(record)
         await self._session.flush()

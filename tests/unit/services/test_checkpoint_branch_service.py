@@ -121,13 +121,17 @@ def test_branch_manifest_metadata_is_optional_step_execution_lineage() -> None:
         }
     )
 
-    assert manifest.branch == StepExecutionBranchMetadataModel(
+    assert manifest.branch is not None
+    expected_branch = StepExecutionBranchMetadataModel(
         branchId="cbr-1",
         branchTurnId="cbt-1",
         rootCheckpointRef="artifact://checkpoint/after",
         parentBranchId="cbr-parent",
         parentTurnId="cbt-parent",
         gitWorkBranch="mm/wf-1/implement/cbr-1-focused-fix",
+    )
+    assert manifest.branch.model_dump(by_alias=True) == expected_branch.model_dump(
+        by_alias=True
     )
     assert manifest.model_dump(by_alias=True)["branch"]["branchId"] == "cbr-1"
 
@@ -183,13 +187,10 @@ async def test_checkpoint_branch_service_persists_branch_turn_artifact_and_git_b
     assert branch.source_checkpoint_boundary == "after_execution"
     assert branch.source_checkpoint_ref == "artifact://checkpoint/after"
     assert branch.source_checkpoint_digest == "sha256:checkpoint"
-    assert branch.state.value == "created"
-    assert turn.status.value == "created"
-    assert (
-        turn.workspace_policy.value
-        == "apply_previous_execution_diff_to_clean_baseline"
-    )
-    assert turn.runtime_context_policy.value == "fresh_agent_run"
+    assert branch.state == "created"
+    assert turn.status == "created"
+    assert turn.workspace_policy == "apply_previous_execution_diff_to_clean_baseline"
+    assert turn.runtime_context_policy == "fresh_agent_run"
 
     git_binding = (
         await checkpoint_branch_session.execute(

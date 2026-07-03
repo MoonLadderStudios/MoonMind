@@ -1077,6 +1077,26 @@ class MoonMindAgentRun:
         request_params = (
             request.parameters if isinstance(request.parameters, Mapping) else {}
         )
+        selected_skill = _request_selected_skill(request)
+        if selected_skill:
+            moonmind_payload = (
+                metadata.get("moonmind")
+                if isinstance(metadata.get("moonmind"), dict)
+                else {}
+            )
+            moonmind_payload.setdefault("selectedSkill", selected_skill)
+            metadata["moonmind"] = moonmind_payload
+        if str(selected_skill or "").strip().lower() == "moonspec-verify":
+            for key in (
+                "verify_artifact_path",
+                "verifyArtifactPath",
+                "verification_artifact_path",
+                "verificationArtifactPath",
+            ):
+                value = request_params.get(key)
+                if isinstance(value, str) and value.strip():
+                    metadata["verify_artifact_path"] = value.strip()
+                    break
         request_metadata = request_params.get("metadata")
         request_moonmind = (
             request_metadata.get("moonmind")

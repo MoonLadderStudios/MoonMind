@@ -1559,6 +1559,177 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/checkpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Execution Checkpoints */
+        get: operations["list_execution_checkpoints_api_executions__workflow_id__checkpoints_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/checkpoint-branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Checkpoint Branches */
+        get: operations["list_checkpoint_branches_api_executions__workflow_id__checkpoint_branches_get"];
+        put?: never;
+        /** Create Checkpoint Branch */
+        post: operations["create_checkpoint_branch_api_executions__workflow_id__checkpoint_branches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Checkpoint Branch */
+        get: operations["read_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Checkpoint Branch Turns */
+        get: operations["list_checkpoint_branch_turns_api_executions__workflow_id__checkpoint_branches__branch_id__turns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Continue Checkpoint Branch */
+        post: operations["continue_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fork Checkpoint Branch */
+        post: operations["fork_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__fork_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compare Checkpoint Branches */
+        get: operations["compare_checkpoint_branches_api_executions__workflow_id__checkpoint_branches__branch_id__compare_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Promote Checkpoint Branch */
+        post: operations["promote_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Archive Checkpoint Branch */
+        post: operations["archive_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Checkpoint Branch */
+        post: operations["publish_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}": {
         parameters: {
             query?: never;
@@ -1763,92 +1934,6 @@ export interface paths {
         put?: never;
         /** Recover Execution From Selected Step */
         post: operations["recover_execution_from_selected_step_api_executions__workflow_id__recover_from_selected_step_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/executions/{workflow_id}/checkpoint-branches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Checkpoint Branches */
-        get: operations["list_checkpoint_branches_api_executions__workflow_id__checkpoint_branches_get"];
-        put?: never;
-        /** Create Checkpoint Branch */
-        post: operations["create_checkpoint_branch_api_executions__workflow_id__checkpoint_branches_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Checkpoint Branch */
-        get: operations["read_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/continue": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Continue Checkpoint Branch */
-        post: operations["continue_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__continue_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/fork": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Fork Checkpoint Branch */
-        post: operations["fork_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__fork_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/archive": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Archive Checkpoint Branch */
-        post: operations["archive_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__archive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3893,6 +3978,23 @@ export interface components {
             choices: components["schemas"]["Choice"][];
             usage?: components["schemas"]["Usage"] | null;
         };
+        /** CheckpointBranchApiSourceModel */
+        CheckpointBranchApiSourceModel: {
+            /** Workflowid */
+            workflowId?: string | null;
+            /** Runid */
+            runId: string;
+            /** Logicalstepid */
+            logicalStepId?: string | null;
+            /** Executionordinal */
+            executionOrdinal?: number | null;
+            /** Checkpointboundary */
+            checkpointBoundary: string;
+            /** Checkpointref */
+            checkpointRef: string;
+            /** Checkpointdigest */
+            checkpointDigest?: string | null;
+        };
         /**
          * CheckpointBranchArchiveModel
          * @description Archive a branch without deleting its evidence.
@@ -3901,13 +4003,23 @@ export interface components {
             /** Idempotencykey */
             idempotencyKey: string;
         };
+        /** CheckpointBranchArchiveRequest */
+        CheckpointBranchArchiveRequest: {
+            /** Reason */
+            reason?: string | null;
+            /** Idempotencykey */
+            idempotencyKey: string;
+        };
         /**
          * CheckpointBranchArtifactRecordModel
          * @description Read model for branch evidence artifacts.
          */
         CheckpointBranchArtifactRecordModel: {
-            /** Id */
-            id: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
             /** Branchid */
             branchId: string;
             /** Branchturnid */
@@ -3921,6 +4033,31 @@ export interface components {
              * Format: date-time
              */
             createdAt: string;
+        };
+        /** CheckpointBranchCompareResponse */
+        CheckpointBranchCompareResponse: {
+            /** Branchid */
+            branchId: string;
+            /** Againstbranchid */
+            againstBranchId: string;
+            /** Workflowid */
+            workflowId: string;
+            /** Branchstate */
+            branchState: string;
+            /** Againststate */
+            againstState: string;
+            /** Branchheadstepexecutionid */
+            branchHeadStepExecutionId?: string | null;
+            /** Againstheadstepexecutionid */
+            againstHeadStepExecutionId?: string | null;
+            /** Summaryref */
+            summaryRef?: string | null;
+            /** Diagnosticsrefs */
+            diagnosticsRefs?: string[];
+            /** Comparisonrecord */
+            comparisonRecord?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * CheckpointBranchContinueModel
@@ -3943,6 +4080,58 @@ export interface components {
             providerSessionId?: string | null;
             /** Idempotencykey */
             idempotencyKey: string;
+        };
+        /** CheckpointBranchContinueRequest */
+        CheckpointBranchContinueRequest: {
+            /** Label */
+            label?: string | null;
+            instructions: components["schemas"]["CheckpointBranchInstructionsModel"];
+            /**
+             * Workspacepolicy
+             * @default continue_from_previous_execution
+             * @enum {string}
+             */
+            workspacePolicy: "continue_from_previous_execution" | "restore_pre_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source";
+            /**
+             * Runtimecontextpolicy
+             * @default reuse_session_new_epoch
+             * @enum {string}
+             */
+            runtimeContextPolicy: "fresh_agent_run" | "reuse_session_new_epoch" | "reuse_session_same_epoch" | "external_provider_continuation";
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Maxbudgetusd */
+            maxBudgetUsd?: number | null;
+        };
+        /** CheckpointBranchCreateRequest */
+        CheckpointBranchCreateRequest: {
+            source: components["schemas"]["CheckpointBranchApiSourceModel"];
+            /** Label */
+            label: string;
+            instructions: components["schemas"]["CheckpointBranchInstructionsModel"];
+            /**
+             * Workspacepolicy
+             * @enum {string}
+             */
+            workspacePolicy: "continue_from_previous_execution" | "restore_pre_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source";
+            /**
+             * Runtimecontextpolicy
+             * @default fresh_agent_run
+             * @enum {string}
+             */
+            runtimeContextPolicy: "fresh_agent_run" | "reuse_session_new_epoch" | "reuse_session_same_epoch" | "external_provider_continuation";
+            /**
+             * Publishmode
+             * @default none
+             * @enum {string}
+             */
+            publishMode: "none" | "branch" | "pull_request";
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Gitworkbranch */
+            gitWorkBranch?: string | null;
+            /** Maxbudgetusd */
+            maxBudgetUsd?: number | null;
         };
         /**
          * CheckpointBranchForkModel
@@ -3977,6 +4166,30 @@ export interface components {
             createdStepExecutionId?: string | null;
             /** Idempotencykey */
             idempotencyKey: string;
+        };
+        /** CheckpointBranchForkRequest */
+        CheckpointBranchForkRequest: {
+            /** Label */
+            label?: string | null;
+            instructions: components["schemas"]["CheckpointBranchInstructionsModel"];
+            /**
+             * Workspacepolicy
+             * @default apply_previous_execution_diff_to_clean_baseline
+             * @enum {string}
+             */
+            workspacePolicy: "continue_from_previous_execution" | "restore_pre_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source";
+            /**
+             * Runtimecontextpolicy
+             * @default fresh_agent_run
+             * @enum {string}
+             */
+            runtimeContextPolicy: "fresh_agent_run" | "reuse_session_new_epoch" | "reuse_session_same_epoch" | "external_provider_continuation";
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Maxbudgetusd */
+            maxBudgetUsd?: number | null;
+            /** Parentturnid */
+            parentTurnId?: string | null;
         };
         /**
          * CheckpointBranchGraphCreateModel
@@ -4060,6 +4273,116 @@ export interface components {
             /** Artifacts */
             artifacts?: components["schemas"]["CheckpointBranchArtifactRecordModel"][];
         };
+        /** CheckpointBranchInstructionsModel */
+        CheckpointBranchInstructionsModel: {
+            /** Text */
+            text?: string | null;
+            /** Instructionref */
+            instructionRef?: string | null;
+            /** Instructiondigest */
+            instructionDigest?: string | null;
+        };
+        /** CheckpointBranchListResponse */
+        CheckpointBranchListResponse: {
+            /** Items */
+            items?: components["schemas"]["CheckpointBranchModel"][];
+        };
+        /** CheckpointBranchModel */
+        CheckpointBranchModel: {
+            /** Branchid */
+            branchId: string;
+            /** Workflowid */
+            workflowId: string;
+            /** Rootworkflowid */
+            rootWorkflowId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Logicalstepid */
+            logicalStepId?: string | null;
+            /** Sourceexecutionordinal */
+            sourceExecutionOrdinal?: number | null;
+            /** Sourcecheckpointboundary */
+            sourceCheckpointBoundary: string;
+            /** Sourcecheckpointref */
+            sourceCheckpointRef: string;
+            /** Sourcecheckpointdigest */
+            sourceCheckpointDigest?: string | null;
+            /** Parentbranchid */
+            parentBranchId?: string | null;
+            /** Parentturnid */
+            parentTurnId?: string | null;
+            /** Label */
+            label: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "created" | "preparing" | "active" | "blocked" | "failed" | "succeeded" | "promotable" | "promoted" | "archived" | "superseded";
+            /** Branchkind */
+            branchKind: string;
+            /** Workspacepolicy */
+            workspacePolicy: string;
+            /** Runtimecontextpolicy */
+            runtimeContextPolicy: string;
+            /** Gitrepository */
+            gitRepository?: string | null;
+            /** Gitbasebranch */
+            gitBaseBranch?: string | null;
+            /** Gitworkbranch */
+            gitWorkBranch?: string | null;
+            /** Currentheadstepexecutionid */
+            currentHeadStepExecutionId?: string | null;
+            /** Currentheadcheckpointref */
+            currentHeadCheckpointRef?: string | null;
+            /** Currentheadcommit */
+            currentHeadCommit?: string | null;
+            /** Pullrequesturl */
+            pullRequestUrl?: string | null;
+            /** Publishstatus */
+            publishStatus?: string | null;
+            /** Promotedat */
+            promotedAt?: string | null;
+            /** Archivedat */
+            archivedAt?: string | null;
+            /** Createdby */
+            createdBy?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** CheckpointBranchPromoteRequest */
+        CheckpointBranchPromoteRequest: {
+            /** Expectedheadstepexecutionid */
+            expectedHeadStepExecutionId: string;
+            /** Expectedheadcommit */
+            expectedHeadCommit?: string | null;
+            /** Gateevidence */
+            gateEvidence: {
+                [key: string]: unknown;
+            };
+            /** Sideeffectdisposition */
+            sideEffectDisposition: {
+                [key: string]: unknown;
+            };
+            /** Approvalevidence */
+            approvalEvidence?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Policyrequiresapproval
+             * @default false
+             */
+            policyRequiresApproval: boolean;
+            /** Idempotencykey */
+            idempotencyKey: string;
+        };
         /**
          * CheckpointBranchPublishReadyModel
          * @description Mark a branch candidate ready for publication without promotion.
@@ -4067,6 +4390,28 @@ export interface components {
         CheckpointBranchPublishReadyModel: {
             /** Artifactref */
             artifactRef?: string | null;
+            /** Idempotencykey */
+            idempotencyKey: string;
+        };
+        /** CheckpointBranchPublishRequest */
+        CheckpointBranchPublishRequest: {
+            /**
+             * Mode
+             * @default pull_request
+             * @enum {string}
+             */
+            mode: "branch" | "pull_request";
+            /** Repository */
+            repository: string;
+            /** Basebranch */
+            baseBranch: string;
+            /** Headbranch */
+            headBranch: string;
+            /**
+             * Provider
+             * @default github
+             */
+            provider: string;
             /** Idempotencykey */
             idempotencyKey: string;
         };
@@ -4193,6 +4538,44 @@ export interface components {
             /** Archivedat */
             archivedAt?: string | null;
         };
+        /** CheckpointBranchTurnListResponse */
+        CheckpointBranchTurnListResponse: {
+            /** Items */
+            items?: components["schemas"]["CheckpointBranchTurnModel"][];
+        };
+        /** CheckpointBranchTurnModel */
+        CheckpointBranchTurnModel: {
+            /** Branchturnid */
+            branchTurnId: string;
+            /** Branchid */
+            branchId: string;
+            /** Parentturnid */
+            parentTurnId?: string | null;
+            /** Instructionref */
+            instructionRef: string;
+            /** Instructiondigest */
+            instructionDigest: string;
+            /** Sourcecheckpointref */
+            sourceCheckpointRef: string;
+            /** Sourcecheckpointdigest */
+            sourceCheckpointDigest?: string | null;
+            /** Createdstepexecutionid */
+            createdStepExecutionId?: string | null;
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Status */
+            status: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
         /**
          * CheckpointBranchTurnRecordModel
          * @description Read model for one persisted checkpoint branch turn.
@@ -4257,6 +4640,26 @@ export interface components {
              * Format: date-time
              */
             updatedAt: string;
+        };
+        /** CheckpointListResponse */
+        CheckpointListResponse: {
+            /** Items */
+            items?: components["schemas"]["CheckpointSummaryModel"][];
+        };
+        /** CheckpointSummaryModel */
+        CheckpointSummaryModel: {
+            /** Checkpointref */
+            checkpointRef: string;
+            /** Checkpointboundary */
+            checkpointBoundary: string;
+            /** Runid */
+            runId?: string | null;
+            /** Logicalstepid */
+            logicalStepId?: string | null;
+            /** Executionordinal */
+            executionOrdinal?: number | null;
+            /** Checkpointdigest */
+            checkpointDigest?: string | null;
         };
         /** Choice */
         Choice: {
@@ -8945,7 +9348,7 @@ export interface components {
         };
         /**
          * StepExecutionBranchMetadataModel
-         * @description Optional Step Execution manifest lineage for checkpoint branch turns.
+         * @description Optional Checkpoint Branch lineage attached to a Step Execution manifest.
          */
         StepExecutionBranchMetadataModel: {
             /** Branchid */
@@ -8958,6 +9361,8 @@ export interface components {
             sourceStateKind?: string | null;
             /** Sourcestateref */
             sourceStateRef?: string | null;
+            /** Sourcestatedigest */
+            sourceStateDigest?: string | null;
             /** Parentbranchid */
             parentBranchId?: string | null;
             /** Parentturnid */
@@ -8987,7 +9392,7 @@ export interface components {
             lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
             branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
-            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation" | "checkpoint_branch") | null;
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
             status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
@@ -9112,7 +9517,7 @@ export interface components {
             lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
             branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
-            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation" | "checkpoint_branch") | null;
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
             status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
@@ -13334,6 +13739,383 @@ export interface operations {
             };
         };
     };
+    list_execution_checkpoints_api_executions__workflow_id__checkpoints_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_checkpoint_branches_api_executions__workflow_id__checkpoint_branches_get: {
+        parameters: {
+            query?: {
+                activeOnly?: boolean;
+            };
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchGraphListModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_checkpoint_branch_api_executions__workflow_id__checkpoint_branches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointBranchGraphCreateModel"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchGraphModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchGraphModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_checkpoint_branch_turns_api_executions__workflow_id__checkpoint_branches__branch_id__turns_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchTurnListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointBranchContinueModel"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchTurnRecordModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fork_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__fork_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointBranchForkModel"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchGraphModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_checkpoint_branches_api_executions__workflow_id__checkpoint_branches__branch_id__compare_get: {
+        parameters: {
+            query: {
+                against: string;
+            };
+            header?: never;
+            path: {
+                workflow_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchCompareResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__promote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointBranchPromoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointBranchArchiveModel"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchStateUpdateModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointBranchPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     describe_execution_api_executions__workflow_id__get: {
         parameters: {
             query?: {
@@ -13731,214 +14513,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecoverFromFailedStepResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_checkpoint_branches_api_executions__workflow_id__checkpoint_branches_get: {
-        parameters: {
-            query?: {
-                activeOnly?: boolean;
-            };
-            header?: never;
-            path: {
-                workflow_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CheckpointBranchGraphListModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_checkpoint_branch_api_executions__workflow_id__checkpoint_branches_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workflow_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CheckpointBranchGraphCreateModel"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CheckpointBranchGraphModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workflow_id: string;
-                branch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CheckpointBranchGraphModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    continue_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__continue_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workflow_id: string;
-                branch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CheckpointBranchContinueModel"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CheckpointBranchTurnRecordModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fork_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__fork_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workflow_id: string;
-                branch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CheckpointBranchForkModel"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CheckpointBranchGraphModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    archive_checkpoint_branch_api_executions__workflow_id__checkpoint_branches__branch_id__archive_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workflow_id: string;
-                branch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CheckpointBranchArchiveModel"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CheckpointBranchStateUpdateModel"];
                 };
             };
             /** @description Validation Error */

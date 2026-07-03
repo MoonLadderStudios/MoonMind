@@ -380,6 +380,31 @@ async def test_managed_session_result_enrichment_carries_story_output_paths(
         "artifacts/story-breakdowns/demo/stories.md"
     )
 
+
+async def test_managed_session_result_enrichment_carries_moonspec_verify_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={
+            "metadata": {"moonmind": {"selectedSkill": "moonspec-verify"}},
+            "verify_artifact_path": "var/artifacts/moonspec-verify/final.json",
+        },
+    )
+
+    result = run._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult(summary="done", metadata={}),
+    )
+
+    assert result is not None
+    assert result.metadata["verify_artifact_path"] == (
+        "var/artifacts/moonspec-verify/final.json"
+    )
+    assert result.metadata["moonmind"]["selectedSkill"] == "moonspec-verify"
+
+
 async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

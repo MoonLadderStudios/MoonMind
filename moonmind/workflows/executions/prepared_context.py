@@ -17,6 +17,12 @@ from moonmind.memory.procedural import fix_patterns_to_memory_proposals
 
 TargetKind = Literal["objective", "step"]
 RetrievalStatus = Literal["captured", "skipped", "unavailable"]
+BranchRuntimeContextPolicy = Literal[
+    "fresh_agent_run",
+    "reuse_session_new_epoch",
+    "reuse_session_same_epoch",
+    "external_provider_continuation",
+]
 MemoryProposalState = Literal[
     "proposed",
     "accepted_for_run_context",
@@ -25,6 +31,26 @@ MemoryProposalState = Literal[
     "superseded",
 ]
 EXECUTION_CONTEXT_BUILDER_VERSION = "execution-context-builder-v1"
+BRANCH_TURN_CONTEXT_BUILDER_VERSION = "branch-turn-context-builder-v1"
+MM_1089_TRACEABILITY = "MM-1089"
+MINIMUM_BRANCH_ARTIFACT_NAMES: tuple[str, ...] = (
+    "input.branch.root_checkpoint.json",
+    "input.branch.initial_instructions.md",
+    "runtime.branch.context_bundle.json",
+    "runtime.branch.workspace_restore.json",
+    "runtime.branch.git_binding.json",
+    "output.branch.summary.json",
+    "output.branch.latest_head.json",
+)
+MINIMUM_BRANCH_TURN_ARTIFACT_NAMES: tuple[str, ...] = (
+    "input.branch_turn.instructions.md",
+    "runtime.branch_turn.context_bundle.json",
+    "runtime.branch_turn.agent_request.json",
+    "runtime.branch_turn.agent_result.json",
+    "output.branch_turn.step_execution_manifest.json",
+    "output.branch_turn.checkpoint.json",
+    "output.branch_turn.diagnostics.json",
+)
 
 _EFFORT_COST_UNITS = {
     "minimal": 1,
@@ -81,6 +107,7 @@ _UNSAFE_PROVIDER_PAYLOAD_KEYS = {
     "tool_calls",
 }
 _SAFE_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._:-]+")
+_COMPACT_ARTIFACT_ID_RE = re.compile(r"^art_[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 
 
 class PreparedInputEntry(BaseModel):
@@ -245,6 +272,12 @@ class ExecutionContextBundle(BaseModel):
     logical_step_id: str = Field(alias="logicalStepId")
     execution_ordinal: int = Field(alias="executionOrdinal")
     reason: str = "initial_execution"
+    branch: dict[str, Any] | None = Field(default=None, alias="branch")
+    instruction_refs: list[str] = Field(default_factory=list, alias="instructionRefs")
+    instruction_digests: dict[str, str] = Field(
+        default_factory=dict,
+        alias="instructionDigests",
+    )
     prepared_input_refs: list[str] = Field(
         default_factory=list,
         alias="preparedInputRefs",
@@ -256,6 +289,10 @@ class ExecutionContextBundle(BaseModel):
     plan_ref: str | None = Field(default=None, alias="planRef")
     plan_digest: str | None = Field(default=None, alias="planDigest")
     workspace_policy: str | None = Field(default=None, alias="workspacePolicy")
+    runtime_context_policy: BranchRuntimeContextPolicy | None = Field(
+        default=None,
+        alias="runtimeContextPolicy",
+    )
     workspace_baseline: dict[str, Any] = Field(
         default_factory=dict,
         alias="workspaceBaseline",
@@ -267,6 +304,14 @@ class ExecutionContextBundle(BaseModel):
     prior_evidence_refs: list[str] = Field(
         default_factory=list,
         alias="priorEvidenceRefs",
+    )
+    bounded_summaries: list[str] = Field(
+        default_factory=list,
+        alias="boundedSummaries",
+    )
+    branch_comparison_refs: list[str] = Field(
+        default_factory=list,
+        alias="branchComparisonRefs",
     )
     retrieval_manifest_ref: str | None = Field(
         default=None,
@@ -321,10 +366,16 @@ class ExecutionContextBundle(BaseModel):
                 "taskInputSnapshotRef": self.task_input_snapshot_ref,
                 "planRef": self.plan_ref,
                 "planDigest": self.plan_digest,
+                "branch": self.branch,
+                "instructionRefs": list(self.instruction_refs),
+                "instructionDigests": dict(self.instruction_digests),
                 "workspacePolicy": self.workspace_policy,
+                "runtimeContextPolicy": self.runtime_context_policy,
                 "workspaceBaseline": self.workspace_baseline,
                 "checkpointRefs": self.checkpoint_refs,
                 "priorEvidenceRefs": list(self.prior_evidence_refs),
+                "boundedSummaries": list(self.bounded_summaries),
+                "branchComparisonRefs": list(self.branch_comparison_refs),
                 "retrievalManifestRef": self.retrieval_manifest_ref,
                 "memoryManifestRef": self.memory_manifest_ref,
                 "memoryContextRef": self.memory_context_ref,
@@ -461,14 +512,20 @@ def build_execution_context_bundle(
     logical_step_id: str,
     execution_ordinal: int | None = None,
     reason: str = "initial_execution",
+    branch: Mapping[str, Any] | None = None,
+    instruction_refs: Sequence[Any] | None = None,
+    instruction_digests: Mapping[str, Any] | None = None,
     task_input_snapshot_ref: str | None = None,
     plan_ref: str | None = None,
     plan_digest: str | None = None,
     prepared_context: StepPreparedContext | None = None,
     workspace_policy: str | None = None,
+    runtime_context_policy: BranchRuntimeContextPolicy | None = None,
     workspace_baseline: Mapping[str, Any] | None = None,
     checkpoint_refs: Mapping[str, Any] | None = None,
     prior_evidence_refs: Sequence[Any] | None = None,
+    bounded_summaries: Sequence[Any] | None = None,
+    branch_comparison_refs: Sequence[Any] | None = None,
     runtime_selection: Mapping[str, Any] | None = None,
     quality_gate_profile: str | None = None,
     policy_refs: Mapping[str, Any] | None = None,
@@ -519,14 +576,20 @@ def build_execution_context_bundle(
         "logicalStepId": logical_step_id,
         "executionOrdinal": execution_ordinal or 1,
         "reason": reason,
+        "branch": _optional_mapping(branch),
+        "instructionRefs": _clean_existing_refs(instruction_refs),
+        "instructionDigests": _compact_mapping(instruction_digests),
         "taskInputSnapshotRef": _optional_text(task_input_snapshot_ref),
         "planRef": _optional_text(plan_ref),
         "planDigest": _optional_text(plan_digest),
         "preparedInputRefs": list(prepared_input_refs),
         "workspacePolicy": _optional_text(workspace_policy),
+        "runtimeContextPolicy": runtime_context_policy,
         "workspaceBaseline": _compact_mapping(workspace_baseline),
         "checkpointRefs": _compact_mapping(checkpoint_refs),
         "priorEvidenceRefs": _clean_existing_refs(prior_evidence_refs),
+        "boundedSummaries": _bounded_summaries(bounded_summaries),
+        "branchComparisonRefs": _clean_existing_refs(branch_comparison_refs),
         "retrievalManifestRef": retrieval_manifest_ref,
         "memoryManifestRef": memory_manifest_ref,
         "memoryContextRef": memory_context_ref,
@@ -549,6 +612,231 @@ def build_execution_context_bundle(
         "contextBundleDigest": digest,
     }
     return ExecutionContextBundle.model_validate(payload)
+
+
+def build_branch_turn_context_bundle(
+    *,
+    workflow_id: str,
+    run_id: str,
+    logical_step_id: str,
+    execution_ordinal: int,
+    branch_id: str,
+    branch_turn_id: str,
+    source_checkpoint: Mapping[str, Any],
+    instruction_artifact_ref: str,
+    instruction_digest: str,
+    runtime_context_policy: BranchRuntimeContextPolicy,
+    workspace_policy: str,
+    task_input_snapshot_ref: str | None = None,
+    plan_ref: str | None = None,
+    plan_digest: str | None = None,
+    initial_instruction_ref: str | None = None,
+    initial_instruction_digest: str | None = None,
+    parent_branch_id: str | None = None,
+    parent_turn_id: str | None = None,
+    label: str | None = None,
+    git_work_branch: str | None = None,
+    prepared_context: StepPreparedContext | None = None,
+    workspace_baseline: Mapping[str, Any] | None = None,
+    prior_evidence_refs: Sequence[Any] | None = None,
+    bounded_summaries: Sequence[Any] | None = None,
+    branch_comparison_refs: Sequence[Any] | None = None,
+    runtime_selection: Mapping[str, Any] | None = None,
+    policy_refs: Mapping[str, Any] | None = None,
+    retrieval: Mapping[str, Any] | None = None,
+    memory_proposals: Sequence[Mapping[str, Any]] | None = None,
+    memory_context: Mapping[str, Any] | None = None,
+    fix_patterns: Sequence[Mapping[str, Any]] | None = None,
+    builder_version: str = BRANCH_TURN_CONTEXT_BUILDER_VERSION,
+) -> ExecutionContextBundle:
+    """Build the immutable context bundle for one Checkpoint Branch turn.
+
+    This is the MM-1089 branch-turn launch contract: it requires a new Step
+    Execution identity, pinned source checkpoint identity, declared workspace
+    and runtime policies, and artifact-backed instructions with a digest.
+    """
+
+    source = _branch_source_evidence(source_checkpoint)
+    turn_ref = _required_artifact_ref(
+        instruction_artifact_ref,
+        field_name="instruction_artifact_ref",
+    )
+    turn_digest = _required_digest(
+        instruction_digest,
+        field_name="instruction_digest",
+    )
+    instruction_refs = [turn_ref]
+    instruction_digests = {turn_ref: turn_digest}
+    if initial_instruction_ref is not None:
+        initial_ref = _required_artifact_ref(
+            initial_instruction_ref,
+            field_name="initial_instruction_ref",
+        )
+        instruction_refs.insert(0, initial_ref)
+        if initial_instruction_digest is None:
+            raise ValueError(
+                "initial_instruction_digest is required with initial_instruction_ref"
+            )
+        instruction_digests[initial_ref] = _required_digest(
+            initial_instruction_digest,
+            field_name="initial_instruction_digest",
+        )
+
+    branch = {
+        "branchId": _required_text(branch_id, field_name="branch_id"),
+        "branchTurnId": _required_text(branch_turn_id, field_name="branch_turn_id"),
+        "label": _optional_text(label),
+        "sourceCheckpoint": source if source.get("checkpointRef") else None,
+        "sourceCheckpointRef": source.get("checkpointRef"),
+        "sourceCheckpointDigest": source.get("checkpointDigest"),
+        "rootCheckpointRef": source.get("checkpointRef"),
+        "sourceStateKind": source.get("sourceStateKind"),
+        "sourceStateRef": source.get("sourceStateRef"),
+        "sourceStateDigest": source.get("sourceStateDigest"),
+        "parentBranchId": _optional_text(parent_branch_id),
+        "parentTurnId": _optional_text(parent_turn_id),
+        "gitWorkBranch": _optional_text(git_work_branch),
+        "traceability": MM_1089_TRACEABILITY,
+    }
+    branch = {key: value for key, value in branch.items() if value is not None}
+    checkpoint_refs = {}
+    if source.get("checkpointRef"):
+        checkpoint_refs["source"] = source["checkpointRef"]
+        checkpoint_refs["sourceCheckpoint"] = source
+    elif source.get("sourceStateRef"):
+        checkpoint_refs["sourceState"] = {
+            key: source[key]
+            for key in ("sourceStateKind", "sourceStateRef", "sourceStateDigest")
+            if source.get(key) is not None
+        }
+
+    return build_execution_context_bundle(
+        workflow_id=workflow_id,
+        run_id=run_id,
+        logical_step_id=logical_step_id,
+        execution_ordinal=execution_ordinal,
+        reason="checkpoint_branch",
+        branch=branch,
+        instruction_refs=instruction_refs,
+        instruction_digests=instruction_digests,
+        task_input_snapshot_ref=task_input_snapshot_ref,
+        plan_ref=plan_ref,
+        plan_digest=plan_digest,
+        prepared_context=prepared_context,
+        workspace_policy=workspace_policy,
+        runtime_context_policy=runtime_context_policy,
+        workspace_baseline=workspace_baseline,
+        checkpoint_refs=checkpoint_refs,
+        prior_evidence_refs=prior_evidence_refs,
+        bounded_summaries=bounded_summaries,
+        branch_comparison_refs=branch_comparison_refs,
+        runtime_selection=runtime_selection,
+        policy_refs=policy_refs,
+        retrieval=retrieval,
+        memory_proposals=memory_proposals,
+        memory_context=memory_context,
+        fix_patterns=fix_patterns,
+        builder_version=builder_version,
+    )
+
+
+def branch_turn_step_execution_manifest_projection(
+    bundle: ExecutionContextBundle,
+) -> dict[str, Any]:
+    """Return branch metadata for a Step Execution manifest extension."""
+
+    branch = dict(bundle.branch or {})
+    branch_metadata = {
+        "branchId": branch.get("branchId"),
+        "branchTurnId": branch.get("branchTurnId"),
+        "rootCheckpointRef": branch.get("rootCheckpointRef"),
+        "sourceStateKind": branch.get("sourceStateKind"),
+        "sourceStateRef": branch.get("sourceStateRef"),
+        "sourceStateDigest": branch.get("sourceStateDigest"),
+        "parentBranchId": branch.get("parentBranchId"),
+        "parentTurnId": branch.get("parentTurnId"),
+        "gitWorkBranch": branch.get("gitWorkBranch"),
+    }
+    return {
+        "branch": {
+            key: value for key, value in branch_metadata.items() if value is not None
+        }
+    }
+
+
+def build_branch_turn_artifact_manifest(
+    *,
+    branch_id: str,
+    branch_turn_id: str,
+    context_bundle: ExecutionContextBundle,
+    artifact_refs: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the minimum named artifact plan for a branch and branch turn."""
+
+    branch_text = _safe_segment(_required_text(branch_id, field_name="branch_id"))
+    turn_text = _safe_segment(
+        _required_text(branch_turn_id, field_name="branch_turn_id")
+    )
+    actual_refs = {
+        str(name): str(ref).strip()
+        for name, ref in dict(artifact_refs or {}).items()
+        if str(name).strip() and str(ref).strip()
+    }
+    artifacts: list[dict[str, Any]] = []
+    for name in MINIMUM_BRANCH_ARTIFACT_NAMES:
+        planned_ref = f"artifact://checkpoint-branches/{branch_text}/{name}"
+        artifacts.append(
+            _branch_artifact_manifest_entry(
+                name=name,
+                scope="branch",
+                planned_ref=planned_ref,
+                actual_ref=actual_refs.get(name),
+            )
+        )
+    for name in MINIMUM_BRANCH_TURN_ARTIFACT_NAMES:
+        planned_ref = (
+            "artifact://checkpoint-branches/"
+            f"{branch_text}/turns/{turn_text}/{name}"
+        )
+        artifacts.append(
+            _branch_artifact_manifest_entry(
+                name=name,
+                scope="branch_turn",
+                planned_ref=planned_ref,
+                actual_ref=actual_refs.get(name),
+            )
+        )
+    payload = {
+        "schemaVersion": "v1",
+        "traceability": MM_1089_TRACEABILITY,
+        "branchId": branch_id,
+        "branchTurnId": branch_turn_id,
+        "contextBundleRef": context_bundle.context_bundle_ref,
+        "contextBundleDigest": context_bundle.context_bundle_digest,
+        "artifacts": artifacts,
+    }
+    payload["artifactManifestDigest"] = _digest_payload(payload)
+    return payload
+
+
+def _branch_artifact_manifest_entry(
+    *,
+    name: str,
+    scope: str,
+    planned_ref: str,
+    actual_ref: str | None,
+) -> dict[str, Any]:
+    entry = {
+        "name": name,
+        "scope": scope,
+        "plannedArtifactRef": planned_ref,
+    }
+    if actual_ref:
+        entry["artifactRef"] = actual_ref
+        entry["artifactRefStatus"] = "persisted"
+    else:
+        entry["artifactRefStatus"] = "planned"
+    return entry
 
 
 def _build_cost_policy(runtime_selection: Mapping[str, Any]) -> dict[str, Any]:
@@ -710,6 +998,71 @@ def _clean_existing_refs(existing_refs: Sequence[Any] | None) -> list[str]:
         if isinstance(ref, str) and ref.strip():
             refs.append(ref.strip())
     return refs
+
+
+def _branch_source_evidence(source_checkpoint: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(source_checkpoint, Mapping):
+        raise ValueError("source_checkpoint must be a mapping")
+    _reject_unsafe_values(source_checkpoint, path="branch.sourceCheckpoint")
+    checkpoint_ref = source_checkpoint.get("checkpointRef") or source_checkpoint.get(
+        "checkpoint_ref"
+    )
+    source_state_kind = source_checkpoint.get(
+        "sourceStateKind"
+    ) or source_checkpoint.get("source_state_kind")
+    source_state_ref = source_checkpoint.get("sourceStateRef") or source_checkpoint.get(
+        "source_state_ref"
+    )
+    payload = {
+        "workflowId": _required_text(
+            source_checkpoint.get("workflowId") or source_checkpoint.get("workflow_id"),
+            field_name="source_checkpoint.workflowId",
+        ),
+        "runId": _required_text(
+            source_checkpoint.get("runId") or source_checkpoint.get("run_id"),
+            field_name="source_checkpoint.runId",
+        ),
+        "logicalStepId": _optional_text(
+            source_checkpoint.get("logicalStepId")
+            or source_checkpoint.get("logical_step_id")
+        ),
+        "sourceExecutionOrdinal": _optional_int(
+            source_checkpoint.get("sourceExecutionOrdinal")
+            or source_checkpoint.get("source_execution_ordinal")
+            or source_checkpoint.get("executionOrdinal")
+            or source_checkpoint.get("execution_ordinal")
+        ),
+        "checkpointBoundary": _optional_text(
+            source_checkpoint.get("checkpointBoundary")
+            or source_checkpoint.get("checkpoint_boundary")
+        ),
+        "checkpointRef": _optional_artifact_ref(
+            checkpoint_ref,
+            field_name="source_checkpoint.checkpointRef",
+        ),
+        "checkpointDigest": _optional_digest(
+            source_checkpoint.get("checkpointDigest")
+            or source_checkpoint.get("checkpoint_digest")
+        ),
+        "sourceStateKind": _optional_text(source_state_kind),
+        "sourceStateRef": _optional_text(source_state_ref),
+        "sourceStateDigest": _optional_digest(
+            source_checkpoint.get("sourceStateDigest")
+            or source_checkpoint.get("source_state_digest")
+        ),
+    }
+    if payload["checkpointRef"] and not payload["checkpointBoundary"]:
+        raise ValueError(
+            "source_checkpoint.checkpointBoundary is required with checkpointRef"
+        )
+    if not payload["checkpointRef"] and not (
+        payload["sourceStateKind"] and payload["sourceStateRef"]
+    ):
+        raise ValueError(
+            "source_checkpoint requires checkpointRef or typed sourceStateRef"
+        )
+    _reject_unsafe_values(payload, path="branch.sourceCheckpoint")
+    return {key: value for key, value in payload.items() if value is not None}
 
 
 def build_recovery_prepared_artifact_refs(
@@ -982,6 +1335,47 @@ def _optional_text(value: Any) -> str | None:
         return None
     candidate = str(value).strip()
     return candidate or None
+
+
+def _required_text(value: Any, *, field_name: str) -> str:
+    candidate = _optional_text(value)
+    if candidate is None:
+        raise ValueError(f"{field_name} must be a non-empty string")
+    _reject_unsafe_values(candidate, path=field_name)
+    return candidate
+
+
+def _required_artifact_ref(value: Any, *, field_name: str) -> str:
+    candidate = _optional_artifact_ref(value, field_name=field_name)
+    if candidate is None:
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return candidate
+
+
+def _optional_artifact_ref(value: Any, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    candidate = _required_text(value, field_name=field_name)
+    if not (
+        candidate.startswith("artifact://")
+        or _COMPACT_ARTIFACT_ID_RE.fullmatch(candidate)
+    ):
+        raise ValueError(f"{field_name} must be an artifact ref or artifact id")
+    return candidate
+
+
+def _required_digest(value: Any, *, field_name: str) -> str:
+    candidate = _required_text(value, field_name=field_name)
+    if not candidate.startswith("sha256:"):
+        raise ValueError(f"{field_name} must be a sha256 digest")
+    return candidate
+
+
+def _optional_digest(value: Any) -> str | None:
+    candidate = _optional_text(value)
+    if candidate is None:
+        return None
+    return _required_digest(candidate, field_name="checkpointDigest")
 
 
 def _optional_int(value: Any) -> int | None:

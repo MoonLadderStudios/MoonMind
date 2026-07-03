@@ -253,6 +253,7 @@ class RecurringWorkflowDefinition(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
     runs: Mapped[list["RecurringWorkflowRun"]] = relationship(
         "RecurringWorkflowRun",
         back_populates="definition",
@@ -407,6 +408,268 @@ class OmnigentExternalRun(Base):
         onupdate=func.now(),
     )
 
+
+class WorkflowCheckpointBranch(Base):
+    """Product-level checkpoint branch persisted separately from git refs."""
+
+    __tablename__ = "workflow_checkpoint_branches"
+    __table_args__ = (
+        Index("ix_checkpoint_branches_workflow", "workflow_id"),
+        Index("ix_checkpoint_branches_checkpoint", "source_checkpoint_ref"),
+        Index("ix_checkpoint_branches_state", "state"),
+    )
+
+    branch_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    root_workflow_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    logical_step_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_execution_ordinal: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source_checkpoint_boundary: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_checkpoint_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_checkpoint_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    source_state_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    source_state_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    source_state_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    parent_branch_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    parent_turn_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    state: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="created", server_default="created"
+    )
+    branch_kind: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="root", server_default="root"
+    )
+    workspace_policy: Mapped[str] = mapped_column(String(64), nullable=False)
+    runtime_context_policy: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    git_repository: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    git_base_branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    git_base_commit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    git_work_branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    current_head_step_execution_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    current_head_checkpoint_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    current_head_commit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    pull_request_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    publish_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    promotion_evidence: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    archive_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    artifact_refs: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    diagnostics: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    promoted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    turns: Mapped[list["WorkflowCheckpointBranchTurn"]] = relationship(
+        "WorkflowCheckpointBranchTurn",
+        back_populates="branch",
+        cascade="all, delete-orphan",
+        foreign_keys=lambda: [WorkflowCheckpointBranchTurn.branch_id],
+        order_by="WorkflowCheckpointBranchTurn.created_at",
+    )
+    git_binding: Mapped[Optional["WorkflowCheckpointBranchGitBinding"]] = relationship(
+        "WorkflowCheckpointBranchGitBinding",
+        back_populates="branch",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    artifacts: Mapped[list["WorkflowCheckpointBranchArtifact"]] = relationship(
+        "WorkflowCheckpointBranchArtifact",
+        back_populates="branch",
+        cascade="all, delete-orphan",
+        order_by="WorkflowCheckpointBranchArtifact.created_at",
+    )
+
+
+class WorkflowCheckpointBranchTurn(Base):
+    """Immutable instruction-bearing turn for a checkpoint branch."""
+
+    __tablename__ = "workflow_checkpoint_branch_turns"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", name="uq_checkpoint_branch_turn_idempotency_key"
+        ),
+        Index("ix_checkpoint_branch_turns_branch", "branch_id"),
+        Index("ix_checkpoint_branch_turns_status", "status"),
+    )
+
+    branch_turn_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    branch_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    parent_turn_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey(
+            "workflow_checkpoint_branch_turns.branch_turn_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
+    source_checkpoint_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_checkpoint_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    source_state_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    source_state_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    source_state_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    instruction_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    instruction_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    context_bundle_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    workspace_policy: Mapped[str] = mapped_column(String(96), nullable=False)
+    runtime_context_policy: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    git_work_branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    workspace_restore_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    git_binding_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    step_execution_manifest_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    created_step_execution_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    runtime_agent_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    provider_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="preparing", server_default="preparing"
+    )
+    diagnostics: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    branch: Mapped[WorkflowCheckpointBranch] = relationship(
+        "WorkflowCheckpointBranch",
+        back_populates="turns",
+        foreign_keys=[branch_id],
+    )
+
+
+class WorkflowCheckpointBranchGitBinding(Base):
+    """Git/worktree/provider workspace binding for one product checkpoint branch."""
+
+    __tablename__ = "workflow_checkpoint_branch_git_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "repository",
+            "work_branch",
+            name="uq_checkpoint_branch_git_binding_work_branch",
+        ),
+        Index("ix_checkpoint_branch_git_bindings_repository", "repository"),
+    )
+
+    branch_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    repository: Mapped[str] = mapped_column(String(512), nullable=False)
+    base_branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    base_commit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    work_branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    worktree_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    provider_workspace_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    head_commit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    patch_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    pull_request_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    workspace_policy: Mapped[str] = mapped_column(String(64), nullable=False)
+    creation_mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    publish_status: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="unpublished",
+        server_default="unpublished",
+    )
+    binding_metadata: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    branch: Mapped[WorkflowCheckpointBranch] = relationship(
+        "WorkflowCheckpointBranch", back_populates="git_binding"
+    )
+
+
+class WorkflowCheckpointBranchArtifact(Base):
+    """Artifact refs attached to checkpoint branch or branch-turn evidence."""
+
+    __tablename__ = "workflow_checkpoint_branch_artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "branch_id",
+            "branch_turn_id",
+            "artifact_kind",
+            name="uq_checkpoint_branch_artifact_kind",
+        ),
+        Index("ix_checkpoint_branch_artifacts_branch", "branch_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    branch_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    branch_turn_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey("workflow_checkpoint_branch_turns.branch_turn_id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    artifact_kind: Mapped[str] = mapped_column(String(128), nullable=False)
+    artifact_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    branch: Mapped[WorkflowCheckpointBranch] = relationship(
+        "WorkflowCheckpointBranch", back_populates="artifacts"
+    )
+
+
 __all__ = [
     "Base",
     "User",
@@ -419,6 +682,10 @@ __all__ = [
     "RecurringWorkflowScheduleType",
     "RecurringWorkflowScopeType",
     "OmnigentExternalRun",
+    "WorkflowCheckpointBranch",
+    "WorkflowCheckpointBranchTurn",
+    "WorkflowCheckpointBranchGitBinding",
+    "WorkflowCheckpointBranchArtifact",
     "TemporalWorkflowType",
     "MoonMindWorkflowState",
     "TemporalExecutionCloseStatus",
@@ -1059,333 +1326,6 @@ class CheckpointBranchPublishStatus(str, enum.Enum):
     ARCHIVED = "archived"
 
 
-class WorkflowCheckpointBranch(Base):
-    """Durable product-level continuation lane forked from checkpoint evidence.
-
-    Implements MM-1088 with source design traceability to MM-1087.
-    """
-
-    __tablename__ = "workflow_checkpoint_branches"
-    __table_args__ = (
-        CheckConstraint(
-            "(source_checkpoint_ref IS NOT NULL "
-            "AND source_checkpoint_boundary IS NOT NULL) "
-            "OR (source_state_kind IS NOT NULL AND source_state_ref IS NOT NULL)",
-            name="ck_checkpoint_branch_requires_source_ref",
-        ),
-        CheckConstraint(
-            "branch_id NOT LIKE '%:execution:%'",
-            name="ck_checkpoint_branch_not_step_execution_id",
-        ),
-        CheckConstraint(
-            "branch_kind != 'child_fork' "
-            "OR (parent_branch_id IS NOT NULL AND parent_turn_id IS NOT NULL)",
-            name="ck_checkpoint_branch_child_has_parent_lineage",
-        ),
-        Index("ix_checkpoint_branches_workflow", "workflow_id"),
-        Index("ix_checkpoint_branches_root_workflow", "root_workflow_id"),
-        Index("ix_checkpoint_branches_source", "workflow_id", "source_run_id"),
-    )
-
-    branch_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    workflow_id: Mapped[str] = mapped_column(
-        String(255),
-        ForeignKey("temporal_execution_sources.workflow_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    root_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    source_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    logical_step_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    source_execution_ordinal: Mapped[Optional[int]] = mapped_column(
-        Integer, nullable=True
-    )
-    source_checkpoint_boundary: Mapped[Optional[str]] = mapped_column(
-        String(128), nullable=True
-    )
-    source_checkpoint_ref: Mapped[Optional[str]] = mapped_column(
-        String(512), nullable=True
-    )
-    source_checkpoint_digest: Mapped[Optional[str]] = mapped_column(
-        String(128), nullable=True
-    )
-    source_state_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    source_state_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    source_state_digest: Mapped[Optional[str]] = mapped_column(
-        String(128), nullable=True
-    )
-    parent_branch_id: Mapped[Optional[str]] = mapped_column(
-        String(128),
-        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="RESTRICT"),
-        nullable=True,
-    )
-    parent_turn_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    label: Mapped[str] = mapped_column(String(255), nullable=False)
-    state: Mapped[CheckpointBranchState] = mapped_column(
-        Enum(
-            CheckpointBranchState,
-            name="checkpointbranchstate",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-        default=CheckpointBranchState.CREATED,
-        server_default=CheckpointBranchState.CREATED.value,
-    )
-    branch_kind: Mapped[CheckpointBranchKind] = mapped_column(
-        Enum(
-            CheckpointBranchKind,
-            name="checkpointbranchkind",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-        default=CheckpointBranchKind.ROOT,
-        server_default=CheckpointBranchKind.ROOT.value,
-    )
-    workspace_policy: Mapped[CheckpointBranchWorkspacePolicy] = mapped_column(
-        Enum(
-            CheckpointBranchWorkspacePolicy,
-            name="checkpointbranchworkspacepolicy",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-    )
-    runtime_context_policy: Mapped[CheckpointBranchRuntimeContextPolicy] = (
-        mapped_column(
-            Enum(
-                CheckpointBranchRuntimeContextPolicy,
-                name="checkpointbranchruntimecontextpolicy",
-                native_enum=True,
-                validate_strings=True,
-                values_callable=_enum_values,
-            ),
-            nullable=False,
-        )
-    )
-    git_repository: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    git_base_branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    git_base_commit: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    git_work_branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    current_head_step_execution_id: Mapped[Optional[str]] = mapped_column(
-        String(512), nullable=True
-    )
-    current_head_checkpoint_ref: Mapped[Optional[str]] = mapped_column(
-        String(512), nullable=True
-    )
-    current_head_commit: Mapped[Optional[str]] = mapped_column(
-        String(64), nullable=True
-    )
-    pull_request_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    promoted_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    archived_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    created_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-
-class WorkflowCheckpointBranchTurn(Base):
-    """Append-only instruction-bearing turn for a checkpoint branch."""
-
-    __tablename__ = "workflow_checkpoint_branch_turns"
-    __table_args__ = (
-        CheckConstraint(
-            "source_checkpoint_ref IS NOT NULL "
-            "OR (source_state_kind IS NOT NULL AND source_state_ref IS NOT NULL)",
-            name="ck_checkpoint_branch_turn_requires_source_ref",
-        ),
-        UniqueConstraint(
-            "idempotency_key", name="uq_checkpoint_branch_turn_idempotency"
-        ),
-        Index("ix_checkpoint_branch_turns_branch", "branch_id"),
-    )
-
-    branch_turn_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    branch_id: Mapped[str] = mapped_column(
-        String(128),
-        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    parent_turn_id: Mapped[Optional[str]] = mapped_column(
-        String(128),
-        ForeignKey(
-            "workflow_checkpoint_branch_turns.branch_turn_id",
-            ondelete="RESTRICT",
-        ),
-        nullable=True,
-    )
-    source_checkpoint_ref: Mapped[Optional[str]] = mapped_column(
-        String(512), nullable=True
-    )
-    source_checkpoint_digest: Mapped[Optional[str]] = mapped_column(
-        String(128), nullable=True
-    )
-    source_state_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    source_state_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    source_state_digest: Mapped[Optional[str]] = mapped_column(
-        String(128), nullable=True
-    )
-    workspace_policy: Mapped[CheckpointBranchWorkspacePolicy] = mapped_column(
-        Enum(
-            CheckpointBranchWorkspacePolicy,
-            name="checkpointbranchworkspacepolicy",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-    )
-    runtime_context_policy: Mapped[CheckpointBranchRuntimeContextPolicy] = (
-        mapped_column(
-            Enum(
-                CheckpointBranchRuntimeContextPolicy,
-                name="checkpointbranchruntimecontextpolicy",
-                native_enum=True,
-                validate_strings=True,
-                values_callable=_enum_values,
-            ),
-            nullable=False,
-        )
-    )
-    instruction_ref: Mapped[str] = mapped_column(String(512), nullable=False)
-    instruction_digest: Mapped[str] = mapped_column(String(128), nullable=False)
-    context_bundle_ref: Mapped[Optional[str]] = mapped_column(
-        String(512), nullable=True
-    )
-    created_step_execution_id: Mapped[Optional[str]] = mapped_column(
-        String(512), nullable=True
-    )
-    runtime_agent_run_id: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True
-    )
-    provider_session_id: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True
-    )
-    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[CheckpointBranchTurnState] = mapped_column(
-        Enum(
-            CheckpointBranchTurnState,
-            name="checkpointbranchturnstate",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-        default=CheckpointBranchTurnState.CREATED,
-        server_default=CheckpointBranchTurnState.CREATED.value,
-    )
-    started_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-
-class WorkflowCheckpointBranchGitBinding(Base):
-    """Git isolation binding for a checkpoint branch."""
-
-    __tablename__ = "workflow_checkpoint_branch_git_bindings"
-    __table_args__ = (
-        CheckConstraint(
-            "work_branch NOT IN ('main', 'master', 'HEAD', '')",
-            name="ck_checkpoint_branch_git_work_branch_safe",
-        ),
-        UniqueConstraint(
-            "repository",
-            "work_branch",
-            name="uq_checkpoint_branch_git_repository_work_branch",
-        ),
-    )
-
-    branch_id: Mapped[str] = mapped_column(
-        String(128),
-        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    repository: Mapped[str] = mapped_column(String(512), nullable=False)
-    base_branch: Mapped[str] = mapped_column(String(255), nullable=False)
-    base_commit: Mapped[str] = mapped_column(String(64), nullable=False)
-    work_branch: Mapped[str] = mapped_column(String(255), nullable=False)
-    worktree_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    head_commit: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    patch_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    pull_request_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    publish_status: Mapped[CheckpointBranchPublishStatus] = mapped_column(
-        Enum(
-            CheckpointBranchPublishStatus,
-            name="checkpointbranchpublishstatus",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-        default=CheckpointBranchPublishStatus.UNPUBLISHED,
-        server_default=CheckpointBranchPublishStatus.UNPUBLISHED.value,
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-
-class WorkflowCheckpointBranchArtifact(Base):
-    """Artifact evidence attached to a checkpoint branch or one branch turn."""
-
-    __tablename__ = "workflow_checkpoint_branch_artifacts"
-    __table_args__ = (
-        Index("ix_checkpoint_branch_artifacts_branch", "branch_id"),
-        Index("ix_checkpoint_branch_artifacts_turn", "branch_turn_id"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    branch_id: Mapped[str] = mapped_column(
-        String(128),
-        ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    branch_turn_id: Mapped[Optional[str]] = mapped_column(
-        String(128),
-        ForeignKey(
-            "workflow_checkpoint_branch_turns.branch_turn_id",
-            ondelete="CASCADE",
-        ),
-        nullable=True,
-    )
-    artifact_ref: Mapped[str] = mapped_column(String(512), nullable=False)
-    artifact_kind: Mapped[str] = mapped_column(String(128), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
 class TemporalExecutionDependency(Base):
     """Durable direct dependency edge between top-level executions."""
 
@@ -1473,6 +1413,42 @@ class TemporalExecutionRemediationLink(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+class WorkflowCheckpointBranchOperation(Base):
+    """Idempotency ledger for branch side-effecting operations."""
+
+    __tablename__ = "workflow_checkpoint_branch_operations"
+    __table_args__ = (
+        UniqueConstraint(
+            "workflow_id",
+            "idempotency_key",
+            name="uq_workflow_checkpoint_branch_operations_workflow_idempotency",
+        ),
+        Index(
+            "ix_workflow_checkpoint_branch_operations_branch",
+            "branch_id",
+            "operation",
+        ),
+    )
+
+    operation_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    workflow_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("temporal_execution_sources.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    branch_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    branch_turn_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    response_payload: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
 
 class TemporalExecutionRecord(Base):
     """Temporal execution projection used for lifecycle APIs and filtering."""

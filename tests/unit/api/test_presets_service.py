@@ -3092,12 +3092,18 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
     }
     assert expanded["steps"][11]["skill"]["id"] == "moonspec-verify"
+    assert expanded["steps"][11]["skill"]["args"]["verify_artifact_path"] == (
+        "var/artifacts/moonspec-verify/github-issue-orchestrate.json"
+    )
     assert expanded["steps"][23]["annotations"] == {
         "jiraOrchestrateRole": "moonspec-verification-gate",
         "moonSpecRemediationAttempt": 6,
         "moonSpecRemediationMaxAttempts": 6,
         "moonSpecFinalRemediationGate": True,
     }
+    assert expanded["steps"][23]["skill"]["args"]["verify_artifact_path"] == (
+        "var/artifacts/moonspec-verify/github-issue-orchestrate.json"
+    )
     assert expanded["steps"][24]["annotations"] == {
         "jiraOrchestrateRole": "doc-reconciliation"
     }

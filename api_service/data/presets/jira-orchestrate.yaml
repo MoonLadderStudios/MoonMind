@@ -203,7 +203,8 @@ steps:
       Do not create a pull request from this step. Pull request creation is allowed only after the post-remediation verification step reports FULLY_IMPLEMENTED.
     skill:
       id: moonspec-verify
-      args: {}
+      args:
+        verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 1 of 6
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -243,7 +244,8 @@ steps:
       Continue toward pull request creation only when the latest post-remediation verdict is FULLY_IMPLEMENTED.
     skill:
       id: moonspec-verify
-      args: {}
+      args:
+        verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 2 of 6
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -283,7 +285,8 @@ steps:
       Continue toward pull request creation only when the latest post-remediation verdict is FULLY_IMPLEMENTED.
     skill:
       id: moonspec-verify
-      args: {}
+      args:
+        verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 3 of 6
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -323,7 +326,8 @@ steps:
       Continue toward pull request creation only when the latest post-remediation verdict is FULLY_IMPLEMENTED.
     skill:
       id: moonspec-verify
-      args: {}
+      args:
+        verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 4 of 6
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -363,7 +367,8 @@ steps:
       Continue toward pull request creation only when the latest post-remediation verdict is FULLY_IMPLEMENTED.
     skill:
       id: moonspec-verify
-      args: {}
+      args:
+        verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 5 of 6
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -403,7 +408,8 @@ steps:
       Continue toward pull request creation only when the latest post-remediation verdict is FULLY_IMPLEMENTED.
     skill:
       id: moonspec-verify
-      args: {}
+      args:
+        verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps 6 of 6
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -442,7 +448,8 @@ steps:
       Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.
     skill:
       id: moonspec-verify
-      args: {}
+      args:
+        verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Reconcile declarative docs
     annotations:
       jiraOrchestrateRole: doc-reconciliation
