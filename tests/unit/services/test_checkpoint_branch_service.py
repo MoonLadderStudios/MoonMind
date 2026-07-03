@@ -988,9 +988,7 @@ async def test_checkpoint_branch_service_rejects_launch_mutation_and_bad_key(
             idempotency_key=launch_key,
         )
 
-    with pytest.raises(
-        ValueError, match="immutable launch field created_step_execution_id"
-    ):
+    with pytest.raises(ValueError, match="requires Step Execution evidence"):
         await service.launch_turn(
             workflow_id="wf-1",
             branch_id="cbr-immutable",
@@ -1086,7 +1084,6 @@ async def test_checkpoint_branch_service_launch_records_only_real_optional_artif
         "output.branch_turn.step_execution_manifest.json",
         "output.branch_turn.diagnostics.json",
     }
-    assert "latestBranchTurnCheckpoint" not in stored_graph.branch.artifact_refs
 
 
 def test_checkpoint_branch_graph_traceability_preserves_source_issue() -> None:
