@@ -66,6 +66,14 @@ def test_required_pytest_unit_workflow_selects_integration_ci_for_prs() -> None:
     assert "integration-ci" in required_job["needs"]
 
 
+def test_required_integration_job_checks_out_moonspec_submodule() -> None:
+    workflow = _load_unit_workflow()
+    checkout = workflow["jobs"]["integration-ci"]["steps"][0]
+
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"]["submodules"] == "recursive"
+
+
 def test_generated_contracts_use_cheap_detector_and_stable_required_status() -> None:
     workflow = _load_unit_workflow()
     jobs = workflow["jobs"]

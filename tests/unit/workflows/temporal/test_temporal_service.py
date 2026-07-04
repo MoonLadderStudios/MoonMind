@@ -1938,7 +1938,9 @@ async def test_create_execution_removes_empty_normalized_depends_on_from_paramet
             TemporalExecutionCanonicalRecord, created.workflow_id
         )
         assert source is not None
-        assert source.parameters == {}
+        assert source.parameters == {
+            "moonspecEnvironmentBlockedPublishAction": "fail"
+        }
 
 @pytest.mark.asyncio
 async def test_validate_dependencies_rejects_self_dependency(tmp_path):

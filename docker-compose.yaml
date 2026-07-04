@@ -67,6 +67,7 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./docs:/app/docs:ro
       - ./.agents:/app/.agents:ro
+      - ./moonspec:/app/moonspec:ro
       - ./deploy/state:/workspace/deployment_state:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - moonmind_secrets:/app/var/secrets

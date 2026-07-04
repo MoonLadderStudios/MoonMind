@@ -1,5 +1,1 @@
-# Generated from moonspec/bundle/skills/moonspec-align/agents/openai.yaml; edit MoonSpec repo instead.
-interface:
-  display_name: "MoonSpec Align"
-  short_description: "Analyze and remediate MoonSpec artifact drift."
-  default_prompt: "Use $moonspec-align to analyze the active MoonSpec feature artifacts and implement consistency improvements."
+../../../../moonspec/bundle/skills/moonspec-align/agents/openai.yaml
