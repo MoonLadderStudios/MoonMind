@@ -1445,6 +1445,17 @@ def _validate_branch_policy(
         )
 
 
+def _validate_branch_turn_launch_policy(turn: WorkflowCheckpointBranchTurn) -> None:
+    if turn.runtime_context_policy == "external_provider_continuation":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "provider_continuation_unsupported",
+                "reason": "provider_continuation_unsupported",
+            },
+        )
+
+
 async def _load_checkpoint_branch(
     session: AsyncSession,
     *,
@@ -11918,6 +11929,7 @@ async def launch_checkpoint_branch_turn(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "checkpoint_branch_turn_not_found"},
         )
+    _validate_branch_turn_launch_policy(turn)
     launch_key = build_branch_turn_launch_idempotency_key(
         workflow_id=workflow_id,
         branch_id=branch.branch_id,

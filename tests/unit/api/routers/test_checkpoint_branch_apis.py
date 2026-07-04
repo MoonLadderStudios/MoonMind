@@ -496,6 +496,41 @@ async def test_checkpoint_branch_api_launch_requires_step_execution_id(
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_branch_api_launch_rejects_unsupported_provider_continuation(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1104:create-provider-launch"),
+    )
+    branch_id = created.json()["branchId"]
+    turns = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
+    )
+    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+        assert turn is not None
+        turn.runtime_context_policy = "external_provider_continuation"
+        await session.commit()
+
+    launched = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
+        f"{branch_turn_id}/launch",
+        json={
+            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
+            "providerSessionId": "omnigent-session-1",
+            "diagnosticsRef": "artifact://diagnostics/mm-1104",
+        },
+    )
+
+    assert launched.status_code == 409
+    assert launched.json()["detail"]["code"] == "provider_continuation_unsupported"
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_api_launch_rejects_archived_branch(
     checkpoint_branch_client: AsyncClient,
 ) -> None:
@@ -686,6 +721,19 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     assert continued_turn is not None
     assert branch.git_work_branch == created.json()["gitWorkBranch"]
     assert continued_turn.git_work_branch == created.json()["gitWorkBranch"]
+    unsupported_continue = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/continue",
+        json={
+            **continue_payload,
+            "runtimeContextPolicy": "external_provider_continuation",
+            "idempotencyKey": "mm-1104:continue-provider",
+        },
+    )
+    assert unsupported_continue.status_code == 409
+    assert (
+        unsupported_continue.json()["detail"]["code"]
+        == "provider_continuation_unsupported"
+    )
 
     fork_payload = {
         "label": "Forked branch",
@@ -707,6 +755,19 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     fork_id = first_fork.json()["branchId"]
     assert fork_id == second_fork.json()["branchId"]
     assert first_fork.json()["parentBranchId"] == branch_id
+    unsupported_fork = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
+        json={
+            **fork_payload,
+            "runtimeContextPolicy": "external_provider_continuation",
+            "idempotencyKey": "mm-1104:fork-provider",
+        },
+    )
+    assert unsupported_fork.status_code == 409
+    assert (
+        unsupported_fork.json()["detail"]["code"]
+        == "provider_continuation_unsupported"
+    )
     await _set_branch_head(checkpoint_branch_client, branch_id)
 
     first_compare = await checkpoint_branch_client.get(
