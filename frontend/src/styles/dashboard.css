@@ -5053,6 +5053,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-color: rgb(255 255 255 / 0.28);
 }
 
+.td-branch-blocked-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+  color: rgb(253 186 116 / 0.95);
+  font-size: 0.72rem;
+}
+
 .step-check-details {
   display: flex;
   flex-wrap: wrap;

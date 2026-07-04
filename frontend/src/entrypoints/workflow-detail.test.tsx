@@ -1567,6 +1567,521 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  function mm1105StepsSnapshot() {
+    return {
+      ...latestStepsSnapshot,
+      steps: latestStepsSnapshot.steps.map((step) => {
+        if (step.logicalStepId === 'apply') {
+          return {
+            ...step,
+            stateCheckpointRef: 'artifact://checkpoint-apply',
+            status: 'completed',
+            summary: 'Mainline apply checkpoint preserved',
+          };
+        }
+        if (step.logicalStepId === 'verify') {
+          return {
+            ...step,
+            status: 'blocked',
+            stateCheckpointRef: 'artifact://checkpoint-verify',
+            summary: 'Verification blocked pending policy review',
+          };
+        }
+        return step;
+      }),
+    };
+  }
+
+  function mm1105Execution() {
+    return {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-1105 branch workflow',
+      summary: 'Branch explorer detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      relatedRuns: [],
+    };
+  }
+
+  function mm1105Branches() {
+    return [
+      {
+        branchId: 'branch-active',
+        workflowId: 'test-123',
+        rootWorkflowId: 'test-123',
+        sourceRunId: '02-run',
+        logicalStepId: 'apply',
+        sourceExecutionOrdinal: 1,
+        sourceCheckpointBoundary: 'after_execution',
+        sourceCheckpointRef: 'artifact://checkpoint-apply',
+        label: 'Active apply branch',
+        state: 'active',
+        branchKind: 'root',
+        workspacePolicy: 'apply_previous_execution_diff_to_clean_baseline',
+        runtimeContextPolicy: 'fresh_agent_run',
+        gitRepository: 'MoonLadderStudios/MoonMind',
+        gitBaseBranch: 'main',
+        gitWorkBranch: 'mm/test-123/apply/active',
+        currentHeadStepExecutionId: 'step-head-active',
+        currentHeadCheckpointRef: 'artifact://checkpoint-head-active',
+        currentHeadCommit: 'abc1234',
+        artifactRefs: {
+          summary: 'artifact://branch-summary-active',
+          diff: 'artifact://branch-diff-active',
+          diagnostics: 'artifact://branch-diagnostics-active',
+        },
+        publishStatus: 'unpublished',
+        actionAvailability: {
+          providerDiagnostics: {
+            available: false,
+            reason: 'Provider diagnostics are disabled by policy.',
+            nextStep: 'Request provider diagnostics access.',
+          },
+        },
+        createdAt: '2026-04-09T00:01:00Z',
+        updatedAt: '2026-04-09T00:02:00Z',
+      },
+      {
+        branchId: 'branch-archived',
+        workflowId: 'test-123',
+        rootWorkflowId: 'test-123',
+        sourceRunId: '02-run',
+        logicalStepId: 'apply',
+        sourceExecutionOrdinal: 1,
+        sourceCheckpointBoundary: 'after_execution',
+        sourceCheckpointRef: 'artifact://checkpoint-apply',
+        parentBranchId: 'branch-active',
+        parentTurnId: 'turn-active-1',
+        label: 'Archived bad turn branch',
+        state: 'archived',
+        branchKind: 'child_fork',
+        workspacePolicy: 'restore_pre_execution',
+        runtimeContextPolicy: 'fresh_agent_run',
+        gitRepository: 'MoonLadderStudios/MoonMind',
+        gitBaseBranch: 'main',
+        gitWorkBranch: 'mm/test-123/apply/archived',
+        currentHeadStepExecutionId: 'step-head-archived',
+        currentHeadCheckpointRef: 'artifact://checkpoint-head-archived',
+        artifactRefs: {
+          summary: 'artifact://branch-summary-archived',
+          diagnostics: 'artifact://branch-diagnostics-archived',
+        },
+        publishStatus: 'unpublished',
+        archivedAt: '2026-04-09T00:03:00Z',
+        createdAt: '2026-04-09T00:01:30Z',
+        updatedAt: '2026-04-09T00:03:00Z',
+      },
+      {
+        branchId: 'branch-failed',
+        workflowId: 'test-123',
+        rootWorkflowId: 'test-123',
+        sourceRunId: '02-run',
+        logicalStepId: 'apply',
+        sourceExecutionOrdinal: 1,
+        sourceCheckpointBoundary: 'after_execution',
+        sourceCheckpointRef: 'artifact://checkpoint-apply',
+        label: 'Failed branch with diagnostics',
+        state: 'failed',
+        branchKind: 'root',
+        workspacePolicy: 'start_from_last_passed_commit',
+        runtimeContextPolicy: 'fresh_agent_run',
+        gitRepository: 'MoonLadderStudios/MoonMind',
+        gitBaseBranch: 'main',
+        gitWorkBranch: null,
+        currentHeadStepExecutionId: 'step-head-failed',
+        currentHeadCheckpointRef: 'artifact://checkpoint-head-failed',
+        artifactRefs: {
+          summary: 'artifact://branch-summary-failed',
+          diagnostics: 'artifact://branch-diagnostics-failed',
+        },
+        publishStatus: 'unpublished',
+        actionAvailability: {
+          publish: {
+            available: false,
+            reason: 'Git work branch is missing.',
+            nextStep: 'Create a branch with a git work branch before publishing.',
+          },
+        },
+        createdAt: '2026-04-09T00:01:40Z',
+        updatedAt: '2026-04-09T00:04:00Z',
+      },
+      {
+        branchId: 'branch-blocked',
+        workflowId: 'test-123',
+        rootWorkflowId: 'test-123',
+        sourceRunId: '02-run',
+        logicalStepId: 'verify',
+        sourceExecutionOrdinal: 0,
+        sourceCheckpointBoundary: 'after_execution',
+        sourceCheckpointRef: 'artifact://checkpoint-verify',
+        label: 'Blocked verification branch',
+        state: 'blocked',
+        branchKind: 'root',
+        workspacePolicy: 'fresh_branch_from_source',
+        runtimeContextPolicy: 'reuse_session_new_epoch',
+        gitRepository: 'MoonLadderStudios/MoonMind',
+        gitBaseBranch: 'main',
+        gitWorkBranch: 'mm/test-123/verify/blocked',
+        currentHeadStepExecutionId: null,
+        currentHeadCheckpointRef: 'artifact://checkpoint-head-blocked',
+        artifactRefs: {
+          summary: 'artifact://branch-summary-blocked',
+          diagnostics: 'artifact://branch-diagnostics-blocked',
+        },
+        publishStatus: 'unpublished',
+        actionAvailability: {
+          continue: {
+            available: false,
+            reason: 'Approval is required before continuation.',
+            nextStep: 'Collect approval evidence.',
+          },
+          promote: {
+            available: false,
+            reason: 'Branch has no promotable head.',
+            nextStep: 'Continue the branch until a head step is recorded.',
+          },
+        },
+        createdAt: '2026-04-09T00:02:00Z',
+        updatedAt: '2026-04-09T00:05:00Z',
+      },
+      {
+        branchId: 'branch-superseded',
+        workflowId: 'test-123',
+        rootWorkflowId: 'test-123',
+        sourceRunId: '02-run',
+        logicalStepId: 'apply',
+        sourceExecutionOrdinal: 1,
+        sourceCheckpointBoundary: 'after_execution',
+        sourceCheckpointRef: 'artifact://checkpoint-apply',
+        label: 'Superseded branch',
+        state: 'superseded',
+        branchKind: 'root',
+        workspacePolicy: 'restore_pre_execution',
+        runtimeContextPolicy: 'fresh_agent_run',
+        gitRepository: 'MoonLadderStudios/MoonMind',
+        gitBaseBranch: 'main',
+        gitWorkBranch: 'mm/test-123/apply/superseded',
+        currentHeadStepExecutionId: 'step-head-superseded',
+        currentHeadCheckpointRef: 'artifact://checkpoint-head-superseded',
+        artifactRefs: { summary: 'artifact://branch-summary-superseded' },
+        publishStatus: 'unpublished',
+        createdAt: '2026-04-09T00:02:30Z',
+        updatedAt: '2026-04-09T00:06:00Z',
+      },
+      {
+        branchId: 'branch-promoted',
+        workflowId: 'test-123',
+        rootWorkflowId: 'test-123',
+        sourceRunId: '02-run',
+        logicalStepId: 'apply',
+        sourceExecutionOrdinal: 1,
+        sourceCheckpointBoundary: 'after_execution',
+        sourceCheckpointRef: 'artifact://checkpoint-apply',
+        label: 'Promoted branch',
+        state: 'promoted',
+        branchKind: 'root',
+        workspacePolicy: 'apply_previous_execution_diff_to_clean_baseline',
+        runtimeContextPolicy: 'fresh_agent_run',
+        gitRepository: 'MoonLadderStudios/MoonMind',
+        gitBaseBranch: 'main',
+        gitWorkBranch: 'mm/test-123/apply/promoted',
+        currentHeadStepExecutionId: 'step-head-promoted',
+        currentHeadCheckpointRef: 'artifact://checkpoint-head-promoted',
+        currentHeadCommit: 'def5678',
+        pullRequestUrl: 'https://github.example/pr/1105',
+        artifactRefs: {
+          summary: 'artifact://branch-summary-promoted',
+          promotion: 'artifact://promotion-evidence-promoted',
+        },
+        publishStatus: 'published',
+        promotedAt: '2026-04-09T00:07:00Z',
+        createdAt: '2026-04-09T00:03:00Z',
+        updatedAt: '2026-04-09T00:07:00Z',
+      },
+    ];
+  }
+
+  function mm1105Turns() {
+    return {
+      'branch-active': [{
+        branchTurnId: 'turn-active-1',
+        branchId: 'branch-active',
+        instructionRef: 'artifact://instructions/active',
+        instructionDigest: 'sha256:active',
+        sourceCheckpointRef: 'artifact://checkpoint-apply',
+        contextBundleRef: 'artifact://context/active',
+        stepExecutionManifestRef: 'artifact://manifest/active',
+        createdStepExecutionId: 'step-head-active',
+        runtimeAgentRunId: 'agent-run-active',
+        providerSessionId: 'provider-session-active',
+        idempotencyKey: 'idem-active',
+        status: 'succeeded',
+        diagnostics: { refs: ['artifact://turn-diagnostics-active'] },
+        createdAt: '2026-04-09T00:01:00Z',
+        updatedAt: '2026-04-09T00:02:00Z',
+      }],
+      'branch-archived': [{
+        branchTurnId: 'turn-archived-1',
+        branchId: 'branch-archived',
+        parentTurnId: 'turn-active-1',
+        instructionRef: 'artifact://instructions/archived',
+        instructionDigest: 'sha256:archived',
+        sourceCheckpointRef: 'artifact://checkpoint-apply',
+        contextBundleRef: 'artifact://context/archived',
+        stepExecutionManifestRef: 'artifact://manifest/archived',
+        createdStepExecutionId: 'step-head-archived',
+        runtimeAgentRunId: 'agent-run-archived',
+        providerSessionId: 'provider-session-archived',
+        idempotencyKey: 'idem-archived',
+        status: 'archived',
+        diagnostics: { refs: ['artifact://turn-diagnostics-archived'] },
+        createdAt: '2026-04-09T00:01:30Z',
+        updatedAt: '2026-04-09T00:03:00Z',
+      }],
+      'branch-failed': [{
+        branchTurnId: 'turn-failed-1',
+        branchId: 'branch-failed',
+        instructionRef: 'artifact://instructions/failed',
+        instructionDigest: 'sha256:failed',
+        sourceCheckpointRef: 'artifact://checkpoint-apply',
+        contextBundleRef: 'artifact://context/failed',
+        stepExecutionManifestRef: 'artifact://manifest/failed',
+        createdStepExecutionId: 'step-head-failed',
+        runtimeAgentRunId: 'agent-run-failed',
+        providerSessionId: 'provider-session-failed',
+        idempotencyKey: 'idem-failed',
+        status: 'failed',
+        diagnostics: { refs: ['artifact://turn-diagnostics-failed'] },
+        createdAt: '2026-04-09T00:01:40Z',
+        updatedAt: '2026-04-09T00:04:00Z',
+      }],
+      'branch-blocked': [{
+        branchTurnId: 'turn-blocked-1',
+        branchId: 'branch-blocked',
+        instructionRef: 'artifact://instructions/blocked',
+        instructionDigest: 'sha256:blocked',
+        sourceCheckpointRef: 'artifact://checkpoint-verify',
+        contextBundleRef: 'artifact://context/blocked',
+        stepExecutionManifestRef: 'artifact://manifest/blocked',
+        createdStepExecutionId: null,
+        runtimeAgentRunId: 'agent-run-blocked',
+        providerSessionId: 'provider-session-blocked',
+        idempotencyKey: 'idem-blocked',
+        status: 'blocked',
+        diagnostics: { refs: ['artifact://turn-diagnostics-blocked'] },
+        createdAt: '2026-04-09T00:02:00Z',
+        updatedAt: '2026-04-09T00:05:00Z',
+      }],
+    };
+  }
+
+  function mockMm1105BranchFetches({ actions = true }: { actions?: boolean } = {}) {
+    const steps = mm1105StepsSnapshot();
+    const branches = mm1105Branches();
+    const turnsByBranch = mm1105Turns();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method && init.method !== 'GET') {
+        return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+      }
+      if (url.includes('/compare?against=')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            branchId: 'branch-active',
+            againstBranchId: 'branch-archived',
+            workflowId: 'test-123',
+            branchState: 'active',
+            againstState: 'archived',
+            branchHeadStepExecutionId: 'step-head-active',
+            againstHeadStepExecutionId: 'step-head-archived',
+            summaryRef: 'artifact://comparison-summary-active-archived',
+            diagnosticsRefs: ['artifact://comparison-diagnostics-active-archived'],
+            comparisonRecord: {
+              artifactRefs: {
+                summary: 'artifact://comparison-summary-active-archived',
+                diff: 'artifact://comparison-diff-active-archived',
+              },
+            },
+          }),
+        } as Response);
+      }
+      const turnsMatch = url.match(/\/checkpoint-branches\/([^/]+)\/turns$/);
+      if (turnsMatch) {
+        const branchId = decodeURIComponent(turnsMatch[1]!);
+        return Promise.resolve({ ok: true, json: async () => ({ items: turnsByBranch[branchId as keyof typeof turnsByBranch] ?? [] }) } as Response);
+      }
+      if (url.endsWith('/checkpoint-branches')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: branches }) } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => steps } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          ...mm1105Execution(),
+          actions: actions ? {} : { disabledReason: 'Branch actions disabled by workflow policy.' },
+        }),
+      } as Response);
+    });
+  }
+
+  it('MM-1105 defaults to mainline and surfaces branch counts near checkpoint and blocked rows', async () => {
+    window.history.pushState({}, 'MM-1105 Mainline Test', '/workflows/test-123/steps?source=temporal');
+    mockMm1105BranchFetches();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    expect(await screen.findByText('Mainline remains selected by default; checkpoint branches are listed from persisted branch records.')).toBeTruthy();
+    expect(await screen.findByText('5 branches · Active, Archived, Failed, Superseded, Promoted')).toBeTruthy();
+    expect(await screen.findByText('1 branch · Blocked')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Apply patch' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Verify tests' })).toBeTruthy();
+  });
+
+  it('MM-1105 renders checkpoint-to-branch-to-turn lineage with inactive evidence refs', async () => {
+    window.history.pushState({}, 'MM-1105 Lineage Test', '/workflows/test-123/steps?source=temporal');
+    mockMm1105BranchFetches();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Branch Explorer' })).toBeTruthy();
+    for (const label of [
+      'Active apply branch',
+      'Archived bad turn branch',
+      'Failed branch with diagnostics',
+      'Blocked verification branch',
+      'Superseded branch',
+      'Promoted branch',
+    ]) {
+      expect(screen.getByRole('button', { name: label })).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Archived bad turn branch' }));
+    expect(await screen.findByText('turn-archived-1')).toBeTruthy();
+    expect(screen.getByText('artifact://manifest/archived')).toBeTruthy();
+    expect(screen.getByText('artifact://branch-summary-archived')).toBeTruthy();
+    expect(screen.getByText('artifact://branch-diagnostics-archived')).toBeTruthy();
+    expect(screen.getByText('artifact://turn-diagnostics-archived')).toBeTruthy();
+  });
+
+  it('MM-1105 represents the complete branch action surface where policy allows', async () => {
+    window.history.pushState({}, 'MM-1105 Actions Test', '/workflows/test-123/steps?source=temporal');
+    mockMm1105BranchFetches();
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(await screen.findByRole('button', { name: 'Create branch from checkpoint' })).toBeTruthy();
+    for (const name of [
+      'Continue branch',
+      'Fork from turn',
+      'Compare branches',
+      'Promote branch',
+      'Publish branch',
+      'Archive branch',
+      'View branch evidence',
+      'View git diff',
+      'View provider diagnostics',
+    ]) {
+      expect(await screen.findByRole('button', { name })).toBeTruthy();
+    }
+  });
+
+  it('MM-1105 renders policy-disabled actions with reasons and next steps without submitting mutations', async () => {
+    window.history.pushState({}, 'MM-1105 Blocked Actions Test', '/workflows/test-123/steps?source=temporal');
+    mockMm1105BranchFetches();
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Blocked verification branch' }));
+    expect(await screen.findByText('Approval is required before continuation.')).toBeTruthy();
+    expect(screen.getByText('Collect approval evidence.')).toBeTruthy();
+    expect(screen.getByText('Branch has no promotable head.')).toBeTruthy();
+    expect(screen.getByText('Continue the branch until a head step is recorded.')).toBeTruthy();
+    const continueButton = screen.getByRole('button', { name: 'Continue branch' });
+    expect(continueButton).toHaveProperty('disabled', true);
+    fireEvent.click(continueButton);
+    expect(fetchSpy.mock.calls.some(([url, init]) => (
+      String(url).endsWith('/checkpoint-branches/branch-blocked/continue') &&
+      (init as RequestInit | undefined)?.method === 'POST'
+    ))).toBe(false);
+  });
+
+  it('MM-1105 shows complete create branch safety preview fields before confirmation', async () => {
+    window.history.pushState({}, 'MM-1105 Create Preview Test', '/workflows/test-123/steps?source=temporal');
+    mockMm1105BranchFetches();
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(await screen.findByText('Create branch preview')).toBeTruthy();
+    for (const label of [
+      'Source checkpoint',
+      'Workspace policy',
+      'Git work branch',
+      'Runtime/session policy',
+      'Publish mode',
+      'Side-effect risk',
+      'Budget impact',
+      'Approval requirements',
+    ]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    expect(screen.getByText('artifact://checkpoint-apply')).toBeTruthy();
+    expect(screen.getByText('No publish side effect requested')).toBeTruthy();
+  });
+
+  it('MM-1105 shows complete promotion preview fields before confirmation', async () => {
+    window.history.pushState({}, 'MM-1105 Promotion Preview Test', '/workflows/test-123/steps?source=temporal');
+    mockMm1105BranchFetches();
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Promoted branch' }));
+    expect(await screen.findByText('Promotion preview')).toBeTruthy();
+    for (const label of [
+      'Branch head',
+      'Gate verdict',
+      'Git / PR',
+      'Invalidations',
+      'Side effects',
+      'Approvals',
+      'Competing branches',
+      'Competing outcome',
+    ]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    expect(screen.getByText('step-head-promoted')).toBeTruthy();
+    expect(screen.getByText('artifact://promotion-evidence-promoted')).toBeTruthy();
+  });
+
+  it('MM-1105 shows bounded comparison and evidence refs without raw large evidence', async () => {
+    window.history.pushState({}, 'MM-1105 Evidence Test', '/workflows/test-123/steps?source=temporal');
+    mockMm1105BranchFetches();
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Compare branches' }));
+    expect(await screen.findByText('artifact://comparison-summary-active-archived')).toBeTruthy();
+    expect(screen.getByText('artifact://comparison-diagnostics-active-archived')).toBeTruthy();
+    expect(screen.getByText('artifact://comparison-diff-active-archived')).toBeTruthy();
+    expect(screen.getByText('artifact://branch-diff-active')).toBeTruthy();
+    expect(screen.getByText('artifact://branch-diagnostics-active')).toBeTruthy();
+    expect(screen.queryByText(/diff --git/)).toBeNull();
+    expect(screen.queryByText(/BEGIN PRIVATE KEY/)).toBeNull();
+  });
+
   it('selects Chat by default and preserves query state in detail tab links', async () => {
     window.history.pushState({}, 'Default Chat Test', '/workflows/test-123?source=temporal');
     mockWorkflowDetailSubrouteFetch();

@@ -4172,6 +4172,17 @@ type BranchCreateDraft = {
 };
 
 type BranchMutationKind = 'create' | 'continue' | 'fork' | 'promote' | 'publish' | 'archive' | 'compare';
+type BranchActionKind =
+  | BranchMutationKind
+  | 'evidence'
+  | 'gitDiff'
+  | 'providerDiagnostics';
+type BranchActionAvailability = {
+  available?: boolean;
+  reason?: string | null;
+  nextStep?: string | null;
+  policyCode?: string | null;
+};
 
 type BranchMutationRequest =
   | { kind: 'create'; draft: BranchCreateDraft; source: StepLedgerRow; idempotencyKey: string }
@@ -4231,19 +4242,81 @@ function branchArtifactEntries(branch: CheckpointBranch): Array<{ label: string;
   return entries;
 }
 
-function artifactRefHref(apiBase: string, ref: string): string | null {
-  const artifactId = coerceArtifactRef(ref);
-  if (!artifactId) return null;
-  if (/^https?:\/\//i.test(artifactId)) return artifactId;
-  if (artifactId.startsWith('artifact://')) return null;
-  return buildArtifactDownloadHref(apiBase, artifactId);
+function artifactEntriesFromUnknown(value: unknown): Array<{ label: string; ref: string }> {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value
+      .map((item, index) => {
+        const ref = coerceArtifactRef(item);
+        return ref ? { label: `Diagnostics ${index + 1}`, ref } : null;
+      })
+      .filter((item): item is { label: string; ref: string } => Boolean(item));
+  }
+  const directRef = coerceArtifactRef(value);
+  if (directRef) return [{ label: 'Diagnostics', ref: directRef }];
+  if (typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  return Object.entries(record)
+    .flatMap(([key, entry]) => {
+      if (Array.isArray(entry)) {
+        return entry
+          .map((item, index) => {
+            const ref = coerceArtifactRef(item);
+            return ref ? { label: `${formatStatusLabel(key)} ${index + 1}`, ref } : null;
+          })
+          .filter((item): item is { label: string; ref: string } => Boolean(item));
+      }
+      const ref = coerceArtifactRef(entry);
+      return ref ? [{ label: formatStatusLabel(key), ref }] : [];
+    });
 }
 
-function branchEvidenceLinks(apiBase: string, branch: CheckpointBranch): ReactNode {
-  const entries = branchArtifactEntries(branch);
-  if (entries.length === 0 && !branch.pullRequestUrl) {
-    return <span className="small">No evidence refs linked yet.</span>;
+function branchActionAvailability(branch: CheckpointBranch, action: BranchActionKind): BranchActionAvailability | null {
+  const record = branch as CheckpointBranch & {
+    actionAvailability?: Record<string, BranchActionAvailability>;
+    actions?: Record<string, BranchActionAvailability>;
+  };
+  return record.actionAvailability?.[action] ?? record.actions?.[action] ?? null;
+}
+
+function isBranchActionPolicyBlocked(branch: CheckpointBranch, action: BranchActionKind): boolean {
+  return branchActionAvailability(branch, action)?.available === false;
+}
+
+function branchActionBlocker(
+  branch: CheckpointBranch,
+  action: BranchActionKind,
+  fallbackReason: string | null,
+  fallbackNextStep: string | null,
+): BranchActionAvailability | null {
+  const policy = branchActionAvailability(branch, action);
+  if (policy?.available === false || policy?.reason || policy?.nextStep) {
+    const blocker: BranchActionAvailability = {
+      reason: policy.reason ?? fallbackReason,
+      nextStep: policy.nextStep ?? fallbackNextStep,
+      policyCode: policy.policyCode ?? null,
+    };
+    if (policy.available !== undefined) blocker.available = policy.available;
+    return blocker;
   }
+  if (fallbackReason || fallbackNextStep) {
+    return { available: false, reason: fallbackReason, nextStep: fallbackNextStep };
+  }
+  return null;
+}
+
+function BranchActionBlockedState({ blocker }: { blocker: BranchActionAvailability | null }) {
+  if (!blocker?.reason && !blocker?.nextStep) return null;
+  return (
+    <p className="td-branch-blocked-state">
+      {blocker.reason ? <span>{blocker.reason}</span> : null}
+      {blocker.nextStep ? <span>{blocker.nextStep}</span> : null}
+    </p>
+  );
+}
+
+function ArtifactRefList({ apiBase, entries }: { apiBase: string; entries: Array<{ label: string; ref: string }> }) {
+  if (entries.length === 0) return null;
   return (
     <div className="live-logs-artifact-links">
       {entries.map((entry) => {
@@ -4262,6 +4335,26 @@ function branchEvidenceLinks(apiBase: string, branch: CheckpointBranch): ReactNo
           <code key={`${entry.label}-${entry.ref}`} className="text-xs break-all">{entry.ref}</code>
         );
       })}
+    </div>
+  );
+}
+
+function artifactRefHref(apiBase: string, ref: string): string | null {
+  const artifactId = coerceArtifactRef(ref);
+  if (!artifactId) return null;
+  if (/^https?:\/\//i.test(artifactId)) return artifactId;
+  if (artifactId.startsWith('artifact://')) return null;
+  return buildArtifactDownloadHref(apiBase, artifactId);
+}
+
+function branchEvidenceLinks(apiBase: string, branch: CheckpointBranch): ReactNode {
+  const entries = branchArtifactEntries(branch);
+  if (entries.length === 0 && !branch.pullRequestUrl) {
+    return <span className="small">No evidence refs linked yet.</span>;
+  }
+  return (
+    <div className="stack gap-1">
+      <ArtifactRefList apiBase={apiBase} entries={entries} />
       {branch.pullRequestUrl ? (
         <a className="live-logs-artifact-link" href={branch.pullRequestUrl} target="_blank" rel="noreferrer">
           Pull request
@@ -4385,9 +4478,102 @@ function BranchExplorerPanel({
     (publishModeRequiresBranch && !draft.gitWorkBranch.trim())
   );
   const selectedMutable = Boolean(selectedBranch && branchCanMutate(selectedBranch));
-  const promoteDisabled = !actionsEnabled || busy || !selectedBranch?.currentHeadStepExecutionId;
-  const publishDisabled = !actionsEnabled || busy || !selectedBranch?.gitRepository || !selectedBranch?.gitBaseBranch || !selectedBranch?.gitWorkBranch;
-  const compareDisabled = !actionsEnabled || busy || !selectedBranch || !againstBranchId || againstBranchId === selectedBranch.branchId;
+  const continueBlocked = selectedBranch
+    ? branchActionBlocker(
+      selectedBranch,
+      'continue',
+      !actionsEnabled
+        ? 'Branch actions are disabled by workflow policy.'
+        : !selectedMutable ? 'This branch state cannot be continued.' : null,
+      !actionsEnabled
+        ? 'Enable branch actions for this workflow.'
+        : !selectedMutable ? 'Select an active, failed, blocked, succeeded, or promotable branch.' : null,
+    )
+    : null;
+  const forkBlocked = selectedBranch
+    ? branchActionBlocker(
+      selectedBranch,
+      'fork',
+      !actionsEnabled
+        ? 'Branch actions are disabled by workflow policy.'
+        : !selectedMutable ? 'This branch state cannot be forked.' : null,
+      !actionsEnabled
+        ? 'Enable branch actions for this workflow.'
+        : !selectedMutable ? 'Select an active, failed, blocked, succeeded, or promotable branch.' : null,
+    )
+    : null;
+  const compareBlocked = selectedBranch
+    ? branchActionBlocker(
+      selectedBranch,
+      'compare',
+      !actionsEnabled
+        ? 'Branch actions are disabled by workflow policy.'
+        : !againstBranchId || againstBranchId === selectedBranch.branchId ? 'Another branch is required for comparison.' : null,
+      !actionsEnabled
+        ? 'Enable branch actions for this workflow.'
+        : !againstBranchId || againstBranchId === selectedBranch.branchId ? 'Select a different branch from the comparison list.' : null,
+    )
+    : null;
+  const promoteBlocked = selectedBranch
+    ? branchActionBlocker(
+      selectedBranch,
+      'promote',
+      !actionsEnabled
+        ? 'Branch actions are disabled by workflow policy.'
+        : !selectedBranch.currentHeadStepExecutionId ? 'Branch has no promotable head.' : null,
+      !actionsEnabled
+        ? 'Enable branch actions for this workflow.'
+        : !selectedBranch.currentHeadStepExecutionId ? 'Continue the branch until a head step is recorded.' : null,
+    )
+    : null;
+  const publishBlocked = selectedBranch
+    ? branchActionBlocker(
+      selectedBranch,
+      'publish',
+      !actionsEnabled
+        ? 'Branch actions are disabled by workflow policy.'
+        : !selectedBranch.gitRepository || !selectedBranch.gitBaseBranch || !selectedBranch.gitWorkBranch ? 'Git publication binding is incomplete.' : null,
+      !actionsEnabled
+        ? 'Enable branch actions for this workflow.'
+        : !selectedBranch.gitRepository || !selectedBranch.gitBaseBranch || !selectedBranch.gitWorkBranch ? 'Create or continue the branch with repository, base branch, and work branch metadata.' : null,
+    )
+    : null;
+  const archiveBlocked = selectedBranch
+    ? branchActionBlocker(
+      selectedBranch,
+      'archive',
+      !actionsEnabled
+        ? 'Branch actions are disabled by workflow policy.'
+        : !selectedMutable ? 'This branch state cannot be archived.' : null,
+      !actionsEnabled
+        ? 'Enable branch actions for this workflow.'
+        : !selectedMutable ? 'Select a mutable branch before archiving.' : null,
+    )
+    : null;
+  const providerDiagnosticsBlocked = selectedBranch
+    ? branchActionBlocker(selectedBranch, 'providerDiagnostics', null, null)
+    : null;
+  const promoteDisabled = busy || !selectedBranch?.currentHeadStepExecutionId || isBranchActionPolicyBlocked(selectedBranch, 'promote') || !actionsEnabled;
+  const publishDisabled = busy || !selectedBranch?.gitRepository || !selectedBranch?.gitBaseBranch || !selectedBranch?.gitWorkBranch || isBranchActionPolicyBlocked(selectedBranch, 'publish') || !actionsEnabled;
+  const compareDisabled = busy || !selectedBranch || !againstBranchId || againstBranchId === selectedBranch.branchId || isBranchActionPolicyBlocked(selectedBranch, 'compare') || !actionsEnabled;
+  const continueDisabled = !actionsEnabled || busy || !selectedMutable || Boolean(selectedBranch && isBranchActionPolicyBlocked(selectedBranch, 'continue'));
+  const forkDisabled = !actionsEnabled || busy || !selectedMutable || Boolean(selectedBranch && isBranchActionPolicyBlocked(selectedBranch, 'fork'));
+  const archiveDisabled = !actionsEnabled || busy || !selectedMutable || Boolean(selectedBranch && isBranchActionPolicyBlocked(selectedBranch, 'archive'));
+  const evidenceEntries = selectedBranch ? branchArtifactEntries(selectedBranch) : [];
+  const diffEntry = evidenceEntries.find((entry) => /diff/i.test(entry.label) || /diff/i.test(entry.ref));
+  const diagnosticsEntries = selectedBranch
+    ? [
+      ...evidenceEntries.filter((entry) => /diagnostic/i.test(entry.label) || /diagnostic/i.test(entry.ref)),
+      ...turns.flatMap((turn) => artifactEntriesFromUnknown(turn.diagnostics)),
+    ]
+    : [];
+  const latestCompareEntries = latestCompare
+    ? [
+      { label: 'Comparison summary', ref: latestCompare.summaryRef },
+      ...latestCompare.diagnosticsRefs.map((ref, index) => ({ label: `Comparison diagnostics ${index + 1}`, ref })),
+      ...artifactEntriesFromUnknown(latestCompare.comparisonRecord?.artifactRefs),
+    ]
+    : [];
 
   return (
     <section className="stack td-branch-explorer td-evidence-region" aria-label="Branch Explorer">
@@ -4544,7 +4730,10 @@ function BranchExplorerPanel({
             <Fact label="Invalidations">Recorded during promotion</Fact>
             <Fact label="Side effects">{selectedBranch.publishStatus ? formatStatusLabel(selectedBranch.publishStatus) : 'Unpublished'}</Fact>
             <Fact label="Approvals">Policy evidence required by promote API</Fact>
+            <Fact label="Competing branches">{competingBranches.length}</Fact>
+            <Fact label="Competing outcome">{competingBranches.length > 0 ? 'Remain active unless promotion supersedes them' : 'No competing branches'}</Fact>
           </div>
+          <ArtifactRefList apiBase={apiBase} entries={evidenceEntries} />
           {turnsError ? <p className="small step-tl-error">{turnsError.message}</p> : null}
           {turns.length > 0 ? (
             <ol className="step-execution-history" aria-label="Branch turns">
@@ -4556,6 +4745,11 @@ function BranchExplorerPanel({
                     <Fact label="Instructions"><code className="text-xs break-all">{turn.instructionRef}</code></Fact>
                     {turn.stepExecutionManifestRef ? <Fact label="Manifest"><code className="text-xs break-all">{turn.stepExecutionManifestRef}</code></Fact> : null}
                     {turn.createdStepExecutionId ? <Fact label="Step Execution"><code className="text-xs break-all">{turn.createdStepExecutionId}</code></Fact> : null}
+                    {artifactEntriesFromUnknown(turn.diagnostics).length > 0 ? (
+                      <Fact label="Diagnostics">
+                        <ArtifactRefList apiBase={apiBase} entries={artifactEntriesFromUnknown(turn.diagnostics)} />
+                      </Fact>
+                    ) : null}
                   </div>
                 </li>
               ))}
@@ -4577,14 +4771,29 @@ function BranchExplorerPanel({
             </select>
           </label>
           <div className="button-row">
-            <button type="button" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId) })}>Continue branch</button>
-            <button type="button" className="secondary" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId) })}>Fork from this branch</button>
+            <button type="button" disabled={continueDisabled} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId) })}>Continue branch</button>
+            <button type="button" className="secondary" disabled={forkDisabled} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId) })}>Fork from turn</button>
             <button type="button" className="secondary" disabled={compareDisabled} onClick={() => onBranchAction({ kind: 'compare', branch: selectedBranch, againstBranchId })}>Compare branches</button>
             <button type="button" className="secondary" disabled={promoteDisabled} onClick={() => onBranchAction({ kind: 'promote', branch: selectedBranch, competingBranches, idempotencyKey: branchIdempotencyKey('promote', workflowId, selectedBranch.branchId) })}>Promote branch</button>
             <button type="button" className="secondary" disabled={publishDisabled} onClick={() => onBranchAction({ kind: 'publish', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('publish', workflowId, selectedBranch.branchId) })}>Publish branch</button>
-            <button type="button" className="secondary" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'archive', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('archive', workflowId, selectedBranch.branchId) })}>Archive branch</button>
+            <button type="button" className="secondary" disabled={archiveDisabled} onClick={() => onBranchAction({ kind: 'archive', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('archive', workflowId, selectedBranch.branchId) })}>Archive branch</button>
+            <button type="button" className="secondary" disabled={evidenceEntries.length === 0}>View branch evidence</button>
+            <button type="button" className="secondary" disabled={!diffEntry}>View git diff</button>
+            <button type="button" className="secondary" disabled={diagnosticsEntries.length === 0 || providerDiagnosticsBlocked?.available === false}>View provider diagnostics</button>
           </div>
-          {latestCompare ? <p className="small">Latest comparison summary: <code className="text-xs break-all">{latestCompare.summaryRef}</code></p> : null}
+          <BranchActionBlockedState blocker={continueBlocked} />
+          <BranchActionBlockedState blocker={forkBlocked} />
+          <BranchActionBlockedState blocker={compareBlocked} />
+          <BranchActionBlockedState blocker={promoteBlocked} />
+          <BranchActionBlockedState blocker={publishBlocked} />
+          <BranchActionBlockedState blocker={archiveBlocked} />
+          <BranchActionBlockedState blocker={providerDiagnosticsBlocked} />
+          {latestCompare ? (
+            <div className="stack gap-1">
+              <p className="small">Latest comparison summary: <code className="text-xs break-all">{latestCompare.summaryRef}</code></p>
+              <ArtifactRefList apiBase={apiBase} entries={latestCompareEntries} />
+            </div>
+          ) : null}
         </div>
       ) : null}
     </section>
