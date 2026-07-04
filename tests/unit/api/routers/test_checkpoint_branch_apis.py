@@ -1042,6 +1042,36 @@ async def test_checkpoint_branch_promotion_requires_fresh_and_expected_git_head(
         "reason": "expected_head_commit_mismatch",
     }
 
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = (
+            await session.execute(
+                select(WorkflowCheckpointBranch).where(
+                    WorkflowCheckpointBranch.branch_id == branch_id
+                )
+            )
+        ).scalar_one()
+        branch.current_head_commit = None
+        await session.commit()
+
+    unknown_branch_head_commit = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
+        json={
+            "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
+            "expectedHeadCommit": "client-observed-head",
+            "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
+            "sideEffectDisposition": {"status": "isolated"},
+            "policyEvidence": {"freshHeadValidated": True},
+            "idempotencyKey": "mm-1103:promote-unknown-branch-head-commit",
+        },
+    )
+    assert unknown_branch_head_commit.status_code == 409
+    assert unknown_branch_head_commit.json()["detail"] == {
+        "code": "expected_head_mismatch",
+        "reason": "expected_head_commit_mismatch",
+    }
+
 
 @pytest.mark.asyncio
 async def test_checkpoint_branch_api_fails_closed_for_invalid_source_provider_budget_and_refs(
@@ -1408,6 +1438,93 @@ async def test_checkpoint_branch_compare_fails_closed_for_incompatible_checkpoin
 
     assert compared.status_code == 409
     assert compared.json()["detail"]["code"] == "incompatible_checkpoint_lineage"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_fails_closed_for_source_digest_mismatch(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1103:create-digest-lineage-left"),
+    )
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for digest mismatch comparison."},
+            "idempotencyKey": "mm-1103:fork-digest-lineage-right",
+        },
+    )
+
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        right = (
+            await session.execute(
+                select(WorkflowCheckpointBranch).where(
+                    WorkflowCheckpointBranch.branch_id == forked.json()["branchId"]
+                )
+            )
+        ).scalar_one()
+        right.source_checkpoint_ref = created.json()["sourceCheckpointRef"]
+        right.source_checkpoint_digest = "sha256:differentcheckpointdigest"
+        await session.commit()
+
+    compared = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/compare",
+        params={"against": forked.json()["branchId"]},
+    )
+
+    assert compared.status_code == 409
+    assert compared.json()["detail"] == {
+        "code": "incompatible_checkpoint_lineage",
+        "reason": "base_checkpoint_digest_mismatch",
+    }
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_allows_fork_from_current_head(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1103:create-current-head-parent"),
+    )
+    branch_id = created.json()["branchId"]
+
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = (
+            await session.execute(
+                select(WorkflowCheckpointBranch).where(
+                    WorkflowCheckpointBranch.branch_id == branch_id
+                )
+            )
+        ).scalar_one()
+        branch.current_head_checkpoint_ref = "artifact://checkpoints/parent-head"
+        await session.commit()
+
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
+        json={
+            "label": "Forked from current head",
+            "instructions": {"text": "Fork from the current checkpoint head."},
+            "idempotencyKey": "mm-1103:fork-current-head-child",
+        },
+    )
+
+    compared = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/compare",
+        params={"against": forked.json()["branchId"]},
+    )
+
+    assert compared.status_code == 200
+    assert compared.json()["comparisonRecord"]["baseCheckpointRef"] == {
+        "branch": created.json()["sourceCheckpointRef"],
+        "against": "artifact://checkpoints/parent-head",
+    }
 
 
 @pytest.mark.asyncio

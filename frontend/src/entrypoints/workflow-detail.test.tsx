@@ -1563,6 +1563,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(body.gateEvidence.verdict).toBe('passed');
       expect(body.sideEffectDisposition.status).toBe('none');
       expect(body.sideEffectDisposition.publishStatus).toBe('unpublished');
+      expect(body.policyEvidence.freshHeadValidated).toBe(true);
       expect(body.idempotencyKey).toMatch(/^dashboard:promote:test-123:branch-a:/);
     });
   });

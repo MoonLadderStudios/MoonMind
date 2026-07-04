@@ -591,11 +591,33 @@ def _require_comparable_checkpoint_lineage(
             },
         )
     if branch_base != other_base:
+        branch_head = str(branch.current_head_checkpoint_ref or "").strip()
+        other_head = str(other.current_head_checkpoint_ref or "").strip()
+        if (
+            other.parent_branch_id == branch.branch_id
+            and branch_head
+            and branch_head == other_base
+        ) or (
+            branch.parent_branch_id == other.branch_id
+            and other_head
+            and other_head == branch_base
+        ):
+            return
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "incompatible_checkpoint_lineage",
                 "reason": "base_checkpoint_ref_mismatch",
+            },
+        )
+    branch_digest = str(branch.source_checkpoint_digest or "").strip()
+    other_digest = str(other.source_checkpoint_digest or "").strip()
+    if branch_digest and other_digest and branch_digest != other_digest:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "incompatible_checkpoint_lineage",
+                "reason": "base_checkpoint_digest_mismatch",
             },
         )
 
@@ -976,7 +998,7 @@ def _branch_comparison_record(
         if value
     }
     record_payload = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "recordType": "checkpoint_branch_comparison",
         "workflowId": workflow_id,
         "branchId": branch.branch_id,
@@ -12194,7 +12216,8 @@ async def compare_checkpoint_branches(
     branch_promotion_evidence_digest = _operation_digest(branch.promotion_evidence or {})
     other_promotion_evidence_digest = _operation_digest(other.promotion_evidence or {})
     idempotency_key = (
-        f"checkpoint_branch.compare:{branch.branch_id}:{branch_head}:"
+        f"checkpoint_branch.compare:v{comparison_record.get('schemaVersion', 1)}:"
+        f"{branch.branch_id}:{branch_head}:"
         f"promotion:{branch_promotion_evidence_digest}:"
         f"against:{other.branch_id}:{other_head}:"
         f"promotion:{other_promotion_evidence_digest}"
@@ -12341,7 +12364,7 @@ async def promote_checkpoint_branch(
             reason="expected_head_commit_required",
         )
     if (
-        branch.current_head_commit
+        payload.expected_head_commit
         and payload.expected_head_commit != branch.current_head_commit
     ):
         await _reject_promotion(
