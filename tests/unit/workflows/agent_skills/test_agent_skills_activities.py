@@ -235,22 +235,20 @@ async def test_build_skill_bundle_payload_rejects_flattened_pointer_missing_targ
         AgentSkillsActivities._build_skill_bundle_payload(projected_skill)
 
 
-async def test_build_skill_bundle_payload_rejects_flattened_pointer_escaping_root(
+async def test_build_skill_bundle_payload_rejects_untrusted_flattened_pointer_skill_md(
     tmp_path,
 ):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
-    outside = tmp_path / "outside.md"
-    outside.write_text("# Outside\n", encoding="utf-8")
     projected_skill = repo / ".agents" / "skills" / "unsafe"
     projected_skill.mkdir(parents=True)
     (projected_skill / "SKILL.md").write_text(
-        "../../../../outside.md",
+        "../../../var/secrets/provider-token",
         encoding="utf-8",
     )
 
-    with pytest.raises(OSError, match="skill bundle symlink escapes allowed root"):
+    with pytest.raises(OSError, match="untrusted pointer-shaped text"):
         AgentSkillsActivities._build_skill_bundle_payload(projected_skill)
 
 

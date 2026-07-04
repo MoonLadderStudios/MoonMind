@@ -29,6 +29,7 @@ from moonmind.services.skill_materialization import AgentSkillMaterializer
 from moonmind.workflows.skills.pointer_files import (
     SUBMODULE_REMEDIATION_HINT,
     flattened_symlink_target,
+    resolve_flattened_skill_symlink,
 )
 
 
@@ -178,18 +179,25 @@ class AgentSkillsActivities:
                 if path.is_symlink():
                     source_path = path.resolve(strict=True)
                 else:
-                    pointer_target = flattened_symlink_target(path)
-                    if pointer_target is not None:
-                        source_path = (path.parent / pointer_target).resolve(
-                            strict=False
-                        )
+                    flattened_symlink = resolve_flattened_skill_symlink(
+                        path,
+                        skill_dir=skill_dir,
+                        allowed_root=allowed_root,
+                    )
+                    if flattened_symlink is not None:
+                        source_path = flattened_symlink.target_path
                         if not source_path.is_file():
                             raise OSError(
                                 f"skill bundle file {path} contains only the "
-                                f"symlink pointer text {pointer_target!r} and "
+                                f"symlink pointer text {flattened_symlink.target!r} and "
                                 "the target does not exist; "
                                 f"{SUBMODULE_REMEDIATION_HINT}"
                             )
+                    elif path.name == "SKILL.md" and flattened_symlink_target(path):
+                        raise OSError(
+                            f"skill bundle file {path} contains only untrusted "
+                            "pointer-shaped text instead of skill content"
+                        )
                 if source_path != path:
                     try:
                         source_path.relative_to(allowed_root)

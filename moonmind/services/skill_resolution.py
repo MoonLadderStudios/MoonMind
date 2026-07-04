@@ -239,7 +239,35 @@ def _is_moonmind_active_projection(skills_dir: Path) -> bool:
 
 
 def _load_skill_frontmatter(skill_dir: Path) -> dict[str, typing.Any]:
+    from moonmind.workflows.skills.pointer_files import (
+        SUBMODULE_REMEDIATION_HINT,
+        flattened_symlink_target,
+        resolve_flattened_skill_symlink,
+        skill_source_allowed_root,
+    )
+
     skill_file = skill_dir / "SKILL.md"
+    pointer_target = flattened_symlink_target(skill_file)
+    flattened_symlink = resolve_flattened_skill_symlink(
+        skill_file,
+        skill_dir=skill_dir,
+        allowed_root=skill_source_allowed_root(skill_dir),
+    )
+    if flattened_symlink is not None:
+        if not flattened_symlink.target_path.is_file():
+            raise ValueError(
+                f"failed to read skill frontmatter from {skill_file}: "
+                f"SKILL.md contains only the symlink pointer text "
+                f"{flattened_symlink.target!r} and the target does not exist; "
+                f"{SUBMODULE_REMEDIATION_HINT}"
+            )
+        skill_file = flattened_symlink.target_path
+    elif pointer_target is not None:
+        raise ValueError(
+            f"failed to read skill frontmatter from {skill_file}: "
+            f"SKILL.md contains untrusted pointer-shaped text {pointer_target!r} "
+            f"instead of skill content; {SUBMODULE_REMEDIATION_HINT}"
+        )
     try:
         lines = skill_file.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
