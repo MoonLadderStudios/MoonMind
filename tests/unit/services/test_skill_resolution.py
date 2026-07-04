@@ -96,6 +96,26 @@ async def test_built_in_loader_discovers_packaged_agent_skills():
     assert discovered["moonspec-breakdown"].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
     assert discovered["moonspec-breakdown"].provenance.source_path
 
+async def test_resolver_reports_missing_skill_symlink_target(tmp_path):
+    skills_root = tmp_path / ".agents" / "skills"
+    skill_dir = skills_root / "moonspec-verify"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").symlink_to(
+        "../../../moonspec/bundle/skills/moonspec-verify/SKILL.md"
+    )
+
+    resolver = AgentSkillResolver(loaders=[BuiltInSkillLoader(skills_root=skills_root)])
+    context = SkillResolutionContext(snapshot_id="snap-123")
+    selector = SkillSelector(include=[{"name": "moonspec-verify"}])
+
+    with pytest.raises(ValueError) as excinfo:
+        await resolver.resolve(selector, context)
+
+    message = str(excinfo.value)
+    assert "Could not resolve selected skill" not in message
+    assert "SKILL.md symlink target is missing" in message
+    assert "git submodule update --init" in message
+
 async def test_built_in_loader_resolves_batch_dependabot_resolver_by_name(tmp_path):
     """FR-012: batch-dependabot-resolver MUST be resolvable by name through the
     built-in fallback list so a recurring queue_task schedule can target it.

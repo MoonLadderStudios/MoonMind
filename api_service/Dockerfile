@@ -205,6 +205,11 @@ COPY config /app/config/
 COPY docs/ReleaseNotes /app/docs/ReleaseNotes/
 COPY .agents /app/.agents/
 COPY moonspec /app/moonspec/
+# MoonSpec skills are symlinked through .agents; fail builds before broken
+# projections can reach the published runtime image.
+RUN test -f /app/moonspec/bundle/moonspec.bundle.yaml \
+    && test -f /app/moonspec/bundle/skills/moonspec-verify/SKILL.md \
+    && test -f /app/.agents/skills/moonspec-verify/SKILL.md
 RUN pip install --disable-pip-version-check --no-deps .
 
 # Copy pre-built frontend assets from the frontend-builder stage
