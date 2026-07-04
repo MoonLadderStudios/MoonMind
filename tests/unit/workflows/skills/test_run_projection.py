@@ -138,9 +138,11 @@ async def test_materialize_only_includes_selected_skills(tmp_path: Path) -> None
     visible = Path(metadata["visiblePath"])
     assert sorted(p.name for p in visible.iterdir()) == [
         "_manifest.json",
+        "_shared",
         "alpha",
         "beta",
     ]
+    assert (visible / "_shared" / "publish_evidence.py").is_file()
 
 
 @pytest.mark.asyncio

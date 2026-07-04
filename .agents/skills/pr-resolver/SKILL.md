@@ -50,8 +50,10 @@ python3 .agents/skills/pr-resolver/bin/pr_resolve_orchestrate.py \
 This writes:
 - `var/pr_resolver/result.json` (terminal orchestration summary)
 - `var/pr_resolver/attempts/*.json` (per-attempt finalize/full artifacts)
+- `artifacts/publish_result.json` (canonical auto-publish evidence, generated
+  by `.agents/skills/_shared/publish_evidence.py`)
 
-If this command does not run, does not write `var/pr_resolver/result.json`, or exits before producing a parseable result, stop as blocked with the command output and do not report success.
+If this command does not run, does not write `var/pr_resolver/result.json`, does not write `artifacts/publish_result.json`, or exits before producing parseable artifacts, stop as blocked with the command output and do not report success.
 
 ## Foreground Execution Contract (no backgrounding)
 This skill runs inside a one-shot managed agent run. When your process exits, the
@@ -162,6 +164,10 @@ python3 .agents/skills/pr-resolver/bin/pr_resolve_full.py --pr <pr_number_or_bra
 - Keep `pr_resolve_finalize.py` as a gate checker; do not add remediation mutations there.
 - Do NOT invent custom conflict/CI/comment workflows; always execute the specialized skill instructions.
 - Respect retry caps; if retries are exhausted, return `attempts_exhausted` and stop.
-- This skill owns publishing under `task.publish.mode = "auto"` and may commit, push, or merge only as required to resolve the target PR. Before reporting success, write `artifacts/publish_result.json` with auto publish evidence proving the verified outcome.
+- This skill owns publishing under `task.publish.mode = "auto"` and may commit, push, or merge only as required to resolve the target PR. Before reporting success, ensure `artifacts/publish_result.json` exists. The orchestration command normally generates it by running:
+  ```bash
+  python3 .agents/skills/_shared/publish_evidence.py from-pr-resolver-result \
+    --result var/pr_resolver/result.json
+  ```
 - A failed push, missing GitHub auth, or missing remote branch update is an unresolved PR blocker, even if all code changes are committed locally.
 - Never background the orchestration command or rely on notifications/scheduled wakeups to finish the merge; run it in the foreground and wait for it to return (see Foreground Execution Contract).

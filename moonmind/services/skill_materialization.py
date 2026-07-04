@@ -119,6 +119,7 @@ class AgentSkillMaterializer:
                         self._extract_skill_bundle(payload, skill_dir)
                     else:
                         (skill_dir / "SKILL.md").write_bytes(payload)
+                self._copy_builtin_support_directories(staging_dir)
 
                 (staging_dir / "_manifest.json").write_text(
                     json.dumps(manifest_content, indent=2, sort_keys=True) + "\n",
@@ -170,6 +171,11 @@ class AgentSkillMaterializer:
                             if self._is_repo_authored_skills_dir(alias_dir)
                             else links.agents_skills_error or "canonical_alias_unavailable"
                         )
+                        if alias_skipped_reason == "repo_authored_skills_present":
+                            self._project_builtin_support_directory(
+                                alias_dir=alias_dir,
+                                active_dir=active_dir,
+                            )
                 except (OSError, SkillWorkspaceError) as ex:
                     raise RuntimeError(
                         self._projection_error_message(alias_dir, cause=str(ex))
@@ -266,6 +272,46 @@ class AgentSkillMaterializer:
         if self.workspace_root.name == "repo":
             return self.workspace_root.parent / "runtime" / "skills_active" / snapshot_id
         return self.workspace_root / "runtime" / "skills_active" / snapshot_id
+
+    @staticmethod
+    def _builtin_shared_skill_support_dir() -> Path | None:
+        candidates = [
+            Path("/app/.agents/skills/_shared"),
+            Path(__file__).resolve().parents[2] / ".agents" / "skills" / "_shared",
+        ]
+        for candidate in candidates:
+            if candidate.is_dir():
+                return candidate
+        return None
+
+    def _copy_builtin_support_directories(self, active_dir: Path) -> None:
+        shared_dir = self._builtin_shared_skill_support_dir()
+        if shared_dir is None:
+            return
+        target = active_dir / "_shared"
+        if target.exists() or target.is_symlink():
+            self._remove_directory_path(target)
+        shutil.copytree(shared_dir, target, symlinks=False)
+
+    def _project_builtin_support_directory(
+        self,
+        *,
+        alias_dir: Path,
+        active_dir: Path,
+    ) -> None:
+        shared_dir = active_dir / "_shared"
+        if not shared_dir.is_dir():
+            shared_dir = self._builtin_shared_skill_support_dir() or shared_dir
+        if not shared_dir.is_dir():
+            return
+        alias_dir.mkdir(parents=True, exist_ok=True)
+        target = alias_dir / "_shared"
+        if target.exists() or target.is_symlink():
+            return
+        try:
+            target.symlink_to(shared_dir, target_is_directory=True)
+        except OSError:
+            shutil.copytree(shared_dir, target, symlinks=False)
 
     @staticmethod
     def _manifest_skill_entry(entry: Any) -> dict[str, Any]:

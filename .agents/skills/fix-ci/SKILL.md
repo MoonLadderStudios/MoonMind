@@ -55,18 +55,36 @@ If no inputs are provided, investigate the failing CI checks for the current bra
 - Record the exact local `HEAD` SHA after the push.
 - Confirm the PR branch on GitHub points at that same SHA. If it does not,
   stop as blocked; do not report success.
-- Write `artifacts/publish_result.json` proving the exact remote head
-  verification for pushed or no-op outcomes.
+- Write `artifacts/publish_result.json` through the shared helper after every
+  pushed or verified no-op outcome:
+  ```bash
+  python3 .agents/skills/_shared/publish_evidence.py write-pushed \
+    --skill-id fix-ci \
+    --repo "$REPO" \
+    --branch "$BRANCH"
+  ```
+  If no commit was needed, use:
+  ```bash
+  python3 .agents/skills/_shared/publish_evidence.py write-no-op \
+    --skill-id fix-ci \
+    --repo "$REPO" \
+    --branch "$BRANCH"
+  ```
 - Wait for required PR checks on that SHA to finish. Poll with bounded backoff.
 - If checks pass, finish successfully.
 - If checks fail, fetch the new failing logs and repeat steps 2-6, up to
   `maxIterations`.
 - If checks remain queued/running beyond the wait cap, GitHub is unavailable,
-  or the task explicitly forbids pushing, stop as blocked with the current SHA,
-  check state, next action, and `artifacts/publish_result.json` containing
-  `blockedReason=publish_unavailable` when push or remote verification is
-  unavailable. Do not report success while CI is running, degraded, unknown, or
-  failing.
+  or the task explicitly forbids pushing, write blocked evidence and stop with
+  the current SHA, check state, and next action:
+  ```bash
+  python3 .agents/skills/_shared/publish_evidence.py write-blocked \
+    --skill-id fix-ci \
+    --repo "$REPO" \
+    --branch "$BRANCH" \
+    --reason publish_unavailable
+  ```
+  Do not report success while CI is running, degraded, unknown, or failing.
 
 ## Output
 

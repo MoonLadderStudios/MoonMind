@@ -52,7 +52,9 @@ from moonmind.capabilities.input_contracts import (
     parse_skill_capability_input_contract,
 )
 from moonmind.services.skill_resolution import (
+    extract_publish_metadata_from_skill_markdown,
     extract_required_capabilities_from_skill_markdown,
+    extract_side_effect_metadata_from_skill_markdown,
 )
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
@@ -136,6 +138,15 @@ class DashboardSkillOption(BaseModel):
         default_factory=list,
         alias="requiredCapabilities",
         description="Default required capabilities declared by Skill metadata",
+    )
+    publish: dict[str, Any] | None = Field(
+        None,
+        description="Skill-declared publish ownership metadata, when present",
+    )
+    side_effect: dict[str, Any] | None = Field(
+        None,
+        alias="sideEffect",
+        description="Skill-declared non-repository side-effect metadata, when present",
     )
     markdown: str | None = Field(
         None, description="Markdown content of the skill, if requested"
@@ -380,6 +391,8 @@ def _skill_option_from_contract(
     label: str | None = None,
     description: str | None = None,
     required_capabilities: list[str] | None = None,
+    publish: dict[str, Any] | None = None,
+    side_effect: dict[str, Any] | None = None,
     markdown: str | None = None,
     contract: dict[str, Any],
     source: dict[str, Any] | None,
@@ -409,6 +422,8 @@ def _skill_option_from_contract(
             else None
         ),
         requiredCapabilities=required_capabilities or [],
+        publish=publish,
+        sideEffect=side_effect,
         markdown=markdown,
         inputSchema=input_schema,
         uiSchema=dict(contract.get("uiSchema") or {}),
@@ -429,6 +444,8 @@ async def _file_backed_skill_option(
 ) -> DashboardSkillOption:
     markdown_content = None
     required_capabilities: list[str] = []
+    publish: dict[str, Any] | None = None
+    side_effect: dict[str, Any] | None = None
     contract = {
         "inputSchema": {"type": "object", "properties": {}},
         "uiSchema": {},
@@ -454,6 +471,16 @@ async def _file_backed_skill_option(
                 source_label=str(skill_file),
             )
         )
+        publish = extract_publish_metadata_from_skill_markdown(
+            skill_markdown,
+            skill_name=skill_id,
+            source_label=str(skill_file),
+        ) or None
+        side_effect = extract_side_effect_metadata_from_skill_markdown(
+            skill_markdown,
+            skill_name=skill_id,
+            source_label=str(skill_file),
+        ) or None
         source = {
             "kind": "file",
             "path": str(skill_file),
@@ -464,6 +491,8 @@ async def _file_backed_skill_option(
     return _skill_option_from_contract(
         skill_id=skill_id,
         required_capabilities=required_capabilities,
+        publish=publish,
+        side_effect=side_effect,
         markdown=markdown_content,
         contract=contract,
         source=source,
@@ -497,6 +526,18 @@ async def _deployment_skill_options(
             for item in metadata.get("required_capabilities") or []
             if str(item).strip()
         ]
+        publish = (
+            metadata.get("publish")
+            if isinstance(metadata.get("publish"), dict)
+            else None
+        )
+        side_effect = (
+            metadata.get("sideEffect")
+            if isinstance(metadata.get("sideEffect"), dict)
+            else metadata.get("side_effect")
+            if isinstance(metadata.get("side_effect"), dict)
+            else None
+        )
         source = {
             "kind": "deployment",
             "artifactRef": definition.artifact_ref,
@@ -508,6 +549,8 @@ async def _deployment_skill_options(
                 label=definition.title,
                 description=definition.description,
                 required_capabilities=required_capabilities,
+                publish=dict(publish) if publish is not None else None,
+                side_effect=dict(side_effect) if side_effect is not None else None,
                 contract=contract,
                 source=source,
             )
@@ -1264,11 +1307,23 @@ async def get_dashboard_skill_input_contract(
         for item in metadata.get("required_capabilities") or []
         if str(item).strip()
     ]
+    publish = (
+        metadata.get("publish") if isinstance(metadata.get("publish"), dict) else None
+    )
+    side_effect = (
+        metadata.get("sideEffect")
+        if isinstance(metadata.get("sideEffect"), dict)
+        else metadata.get("side_effect")
+        if isinstance(metadata.get("side_effect"), dict)
+        else None
+    )
     option = _skill_option_from_contract(
         skill_id=definition.slug,
         label=definition.title,
         description=definition.description,
         required_capabilities=required_capabilities,
+        publish=dict(publish) if publish is not None else None,
+        side_effect=dict(side_effect) if side_effect is not None else None,
         contract=contract,
         source={
             "kind": "deployment",

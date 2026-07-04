@@ -22,6 +22,8 @@ from moonmind.schemas.agent_skill_models import (
 
 _REQUIRED_SKILLS_METADATA_KEY = "required-skills"
 _REQUIRED_CAPABILITIES_METADATA_KEY = "required-capabilities"
+_PUBLISH_METADATA_KEY = "publish"
+_SIDE_EFFECT_METADATA_KEY = "sideEffect"
 _AGENT_SKILL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 _CAPABILITY_TOKEN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.:-]{0,126}[a-z0-9])?$")
 
@@ -444,6 +446,70 @@ def extract_required_capabilities_from_skill_markdown(
         source_label=source_label or skill_name,
     )
     return _required_capabilities_from_frontmatter(frontmatter, owner=skill_name)
+
+
+def _publish_metadata_from_frontmatter(
+    frontmatter: dict[str, typing.Any],
+    *,
+    owner: str,
+) -> dict[str, typing.Any]:
+    metadata = frontmatter.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError(f"skill '{owner}' metadata must be a mapping")
+    raw_publish = metadata.get(_PUBLISH_METADATA_KEY)
+    if raw_publish is None:
+        return {}
+    if not isinstance(raw_publish, dict):
+        raise ValueError(f"skill '{owner}' metadata.publish must be a mapping")
+    return dict(raw_publish)
+
+
+def _side_effect_metadata_from_frontmatter(
+    frontmatter: dict[str, typing.Any],
+    *,
+    owner: str,
+) -> dict[str, typing.Any]:
+    metadata = frontmatter.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError(f"skill '{owner}' metadata must be a mapping")
+    raw_side_effect = metadata.get(_SIDE_EFFECT_METADATA_KEY)
+    if raw_side_effect is None:
+        raw_side_effect = metadata.get("side_effect")
+    if raw_side_effect is None:
+        return {}
+    if not isinstance(raw_side_effect, dict):
+        raise ValueError(f"skill '{owner}' metadata.sideEffect must be a mapping")
+    return dict(raw_side_effect)
+
+
+def extract_publish_metadata_from_skill_markdown(
+    markdown: str,
+    *,
+    skill_name: str,
+    source_label: str | None = None,
+) -> dict[str, typing.Any]:
+    """Return publish capability metadata from a skill markdown payload."""
+
+    frontmatter = _load_skill_frontmatter_from_markdown(
+        markdown,
+        source_label=source_label or skill_name,
+    )
+    return _publish_metadata_from_frontmatter(frontmatter, owner=skill_name)
+
+
+def extract_side_effect_metadata_from_skill_markdown(
+    markdown: str,
+    *,
+    skill_name: str,
+    source_label: str | None = None,
+) -> dict[str, typing.Any]:
+    """Return non-repository side-effect metadata from a skill markdown payload."""
+
+    frontmatter = _load_skill_frontmatter_from_markdown(
+        markdown,
+        source_label=source_label or skill_name,
+    )
+    return _side_effect_metadata_from_frontmatter(frontmatter, owner=skill_name)
 
 
 async def _required_skill_names_for_entry(entry: ResolvedSkillEntry) -> tuple[str, ...]:

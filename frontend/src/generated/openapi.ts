@@ -4869,6 +4869,20 @@ export interface components {
              */
             requiredCapabilities?: string[];
             /**
+             * Publish
+             * @description Skill-declared publish ownership metadata, when present
+             */
+            publish?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Sideeffect
+             * @description Skill-declared non-repository side-effect metadata, when present
+             */
+            sideEffect?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Markdown
              * @description Markdown content of the skill, if requested
              */
@@ -4974,6 +4988,20 @@ export interface components {
              * @description Default required capabilities declared by Skill metadata
              */
             requiredCapabilities?: string[];
+            /**
+             * Publish
+             * @description Skill-declared publish ownership metadata, when present
+             */
+            publish?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Sideeffect
+             * @description Skill-declared non-repository side-effect metadata, when present
+             */
+            sideEffect?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Markdown
              * @description Markdown content of the skill, if requested

@@ -6638,7 +6638,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
-      ).toBe("auto");
+      ).toBe("pr");
     });
   });
 
@@ -7740,9 +7740,19 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
-  it("submits manually selected publish mode auto", async () => {
+  it("submits manually selected publish mode auto for an auto-capable skill", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
+    const primaryStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "fix-ci" },
+      },
+    );
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run the publish-capable workflow." },
     });
@@ -7775,7 +7785,10 @@ describe.skip("Task Create Entrypoint", () => {
     )) as HTMLSelectElement;
     expect(
       Array.from(publishModeSelect.options).some(
-        (option) => option.value === "auto" && option.text === "Auto",
+        (option) =>
+          option.value === "auto" &&
+          option.text === "Auto — selected skill decides" &&
+          option.disabled,
       ),
     ).toBe(true);
     expect(
@@ -7885,10 +7898,18 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
-      ).toBe("none");
+      ).toBe("auto");
     });
     expect(
       (screen.getByLabelText("Publish Mode") as HTMLSelectElement).disabled,
+    ).toBe(false);
+    const resolverPublishSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    expect(
+      Array.from(resolverPublishSelect.options).find(
+        (option) => option.value === "branch",
+      )?.disabled,
     ).toBe(true);
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText("Instructions"),
@@ -7907,7 +7928,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     const payload = latestCreateRequest().payload as Record<string, unknown>;
     const task = payload.task as Record<string, unknown>;
-    expect(task.publish).toMatchObject({ mode: "none" });
+    expect(task.publish).toMatchObject({ mode: "auto" });
     expect(payload).not.toHaveProperty("mergeAutomation");
   });
 
@@ -7938,12 +7959,12 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
-      ).toBe("none");
+      ).toBe("auto");
     });
     const publishModeAfterPreset = screen.getByLabelText(
       "Publish Mode",
     ) as HTMLSelectElement;
-    expect(publishModeAfterPreset.disabled).toBe(true);
+    expect(publishModeAfterPreset.disabled).toBe(false);
     expect(
       Array.from(publishModeAfterPreset.options).find(
         (option) => option.value === "pr_with_merge_automation",
@@ -7961,9 +7982,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     const payload = latestCreateRequest().payload as Record<string, unknown>;
     const task = payload.task as Record<string, unknown>;
-    expect(payload.publishMode).toBe("none");
+    expect(payload.publishMode).toBe("auto");
     expect(payload).not.toHaveProperty("mergeAutomation");
-    expect(task.publish).toMatchObject({ mode: "none" });
+    expect(task.publish).toMatchObject({ mode: "auto" });
     expect(task.skills).toEqual({ include: [{ name: "pr-resolver" }] });
   });
 

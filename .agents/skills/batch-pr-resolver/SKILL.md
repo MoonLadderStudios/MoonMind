@@ -2,11 +2,10 @@
 name: batch-pr-resolver
 description: Discover open PRs in a repository and enqueue one `pr-resolver` task for each.
 metadata:
-  publish:
-    mode: auto
+  sideEffect:
+    kind: enqueue_children
     owner: agent
-    requiresEvidence: true
-    verifyRemoteHead: exact
+    outcomeArtifact: artifacts/batch_pr_resolver_result.json
   required-capabilities:
     - gh
 ---
@@ -16,6 +15,10 @@ metadata:
 ## Purpose
 
 Create one queue task per open pull request so each PR branch can be resolved by `pr-resolver` on its existing branch. Fork PRs are skipped.
+
+This parent batch skill does not publish repository changes itself. It records
+child workflow queueing evidence in `artifacts/batch_pr_resolver_result.json`;
+each queued `pr-resolver` child owns its repository publishing outcome.
 
 ## Inputs (skill args)
 

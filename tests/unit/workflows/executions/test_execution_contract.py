@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from moonmind.workflows.executions import execution_contract as execution_contract_module
 from moonmind.workflows.executions.execution_contract import (
     build_canonical_workflow_view,
     build_authoritative_workflow_input_snapshot,
@@ -11,6 +12,7 @@ from moonmind.workflows.executions.execution_contract import (
     CanonicalWorkflowExecutionPayload,
     ResumeFromFailedStepRef,
     SUPPORTED_PUBLISH_MODES,
+    is_auto_publish_capable_skill,
     reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
     strip_workflow_capability_identity_versions,
@@ -1238,9 +1240,16 @@ def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
 
 @pytest.mark.parametrize(
     "skill_id",
-    ["jira-issue-creator", "jira-pr-verify", "jira-verify"],
+    [
+        "batch-pr-resolver",
+        "batch-dependabot-resolver",
+        "batch-workflows",
+        "jira-issue-creator",
+        "jira-pr-verify",
+        "jira-verify",
+    ],
 )
-def test_jira_side_effect_skills_reject_repository_publish_modes(
+def test_non_repository_side_effect_skills_reject_repository_publish_modes(
     skill_id: str,
 ) -> None:
     with pytest.raises(WorkflowContractError, match="non-repository skill"):
@@ -1254,8 +1263,6 @@ def test_jira_side_effect_skills_reject_repository_publish_modes(
     "skill_id",
     [
         "pr-resolver",
-        "batch-pr-resolver",
-        "batch-dependabot-resolver",
         "fix-comments",
         "fix-ci",
         "fix-merge-conflicts",
@@ -1295,6 +1302,129 @@ def test_auto_publish_capable_skills_resolve_to_auto(skill_id: str) -> None:
 def test_non_capable_skill_rejects_auto_publish_mode() -> None:
     with pytest.raises(WorkflowContractError, match="auto-publish-capable"):
         resolve_publish_mode_for_skill("ordinary-skill", "auto")
+
+
+@pytest.mark.parametrize(
+    "skill_id",
+    ["batch-pr-resolver", "batch-dependabot-resolver", "batch-workflows"],
+)
+def test_batch_parent_skills_are_side_effect_not_auto_publish(
+    skill_id: str,
+) -> None:
+    assert is_auto_publish_capable_skill(skill_id) is False
+    assert resolve_publish_mode_for_skill(skill_id, None) == "none"
+    with pytest.raises(WorkflowContractError, match="non-repository skill"):
+        resolve_publish_mode_for_skill(skill_id, "auto")
+
+
+def test_auto_publish_capability_can_come_from_skill_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        execution_contract_module,
+        "_load_skill_publish_metadata",
+        lambda skill_id: {
+            "mode": "auto",
+            "owner": "agent",
+            "requiresEvidence": True,
+        },
+    )
+
+    diagnostics: list[dict[str, object]] = []
+
+    assert is_auto_publish_capable_skill("metadata-only-skill") is True
+    assert (
+        resolve_publish_mode_for_skill(
+            "metadata-only-skill",
+            None,
+            diagnostics=diagnostics,
+        )
+        == "auto"
+    )
+    assert diagnostics == []
+
+
+def test_auto_publish_metadata_precedes_migration_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        execution_contract_module,
+        "_load_skill_publish_metadata",
+        lambda skill_id: {},
+    )
+
+    assert is_auto_publish_capable_skill("fix-ci") is False
+
+
+def test_auto_publish_fallback_emits_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        execution_contract_module,
+        "_load_skill_publish_metadata",
+        lambda skill_id: None,
+    )
+    diagnostics: list[dict[str, object]] = []
+
+    assert (
+        resolve_publish_mode_for_skill("fix-ci", None, diagnostics=diagnostics)
+        == "auto"
+    )
+    assert diagnostics == [
+        {
+            "code": "auto_publish_capability_migration_fallback",
+            "skillId": "fix-ci",
+            "message": (
+                "Auto publish capability for skill 'fix-ci' was resolved from "
+                "the migration fallback because publish metadata was unavailable."
+            ),
+        }
+    ]
+
+
+def test_workflow_skill_publish_metadata_enables_auto_for_unknown_skill() -> None:
+    payload = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "targetRuntime": "codex",
+        "workflow": {
+            "instructions": "Run deployment skill.",
+            "skill": {
+                "id": "deployment-auto-skill",
+                "publish": {
+                    "mode": "auto",
+                    "owner": "agent",
+                    "requiresEvidence": True,
+                },
+            },
+            "publish": {"mode": "auto"},
+        },
+    }
+
+    result = CanonicalWorkflowExecutionPayload.model_validate(payload)
+
+    assert result.task.publish.mode == "auto"
+
+
+def test_workflow_skill_side_effect_metadata_forces_none_for_unknown_skill() -> None:
+    payload = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "targetRuntime": "codex",
+        "workflow": {
+            "instructions": "Queue children.",
+            "skill": {
+                "id": "deployment-batch-skill",
+                "sideEffect": {
+                    "kind": "enqueue_children",
+                    "owner": "agent",
+                    "outcomeArtifact": "artifacts/result.json",
+                },
+            },
+            "publish": {"mode": "pr"},
+        },
+    }
+
+    with pytest.raises(ValidationError, match="non-repository skill"):
+        CanonicalWorkflowExecutionPayload.model_validate(payload)
 
 
 @pytest.mark.parametrize(

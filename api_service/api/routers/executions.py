@@ -34,6 +34,7 @@ from api_service.auth_providers import get_current_user
 from api_service.core import sync as execution_sync
 from api_service.db.base import get_async_session
 from api_service.db.models import (
+    AgentSkillDefinition,
     ManagedAgentProviderProfile,
     MoonMindWorkflowState,
     TemporalExecutionCanonicalRecord,
@@ -7359,6 +7360,124 @@ def _copy_skill_contract_metadata(
         if isinstance(evidence_value, str) and evidence_value.strip():
             target[evidence_key] = evidence_value.strip()
 
+
+def _copy_trusted_skill_publish_metadata(
+    *,
+    metadata: Mapping[str, Any],
+    target: dict[str, Any],
+) -> None:
+    publish = metadata.get("publish")
+    if isinstance(publish, Mapping):
+        target["publish"] = dict(publish)
+    side_effect = metadata.get("sideEffect")
+    if not isinstance(side_effect, Mapping):
+        side_effect = metadata.get("side_effect")
+    if isinstance(side_effect, Mapping):
+        target["sideEffect"] = dict(side_effect)
+
+
+def _skill_names_for_metadata_enrichment(
+    *,
+    normalized_tool: Mapping[str, Any] | None,
+    steps: list[dict[str, Any]],
+) -> set[str]:
+    names: set[str] = set()
+    if isinstance(normalized_tool, Mapping):
+        name = str(normalized_tool.get("name") or "").strip()
+        if name:
+            names.add(name)
+    for step in steps:
+        skill = step.get("skill") if isinstance(step.get("skill"), Mapping) else None
+        if not skill:
+            continue
+        name = str(skill.get("id") or skill.get("name") or "").strip()
+        if name:
+            names.add(name)
+    return names
+
+
+async def _load_deployment_skill_metadata(
+    *,
+    session: AsyncSession | None,
+    skill_names: set[str],
+) -> dict[str, dict[str, Any]]:
+    if session is None or not skill_names:
+        return {}
+    stmt = select(AgentSkillDefinition).where(
+        AgentSkillDefinition.slug.in_(sorted(skill_names))
+    )
+    try:
+        result = await session.execute(stmt)
+    except Exception as ex:
+        logger.warning(
+            "Deployment skill metadata unavailable; continuing without catalog publish metadata.",
+            extra={
+                "skill_count": len(skill_names),
+                "error_type": type(ex).__name__,
+            },
+        )
+        return {}
+    definitions = list(result.scalars().all())
+    artifact_refs = {
+        str(definition.artifact_ref)
+        for definition in definitions
+        if str(definition.artifact_ref or "").strip()
+    }
+    if not artifact_refs:
+        return {}
+    metadata_by_skill: dict[str, dict[str, Any]] = {}
+    for definition in definitions:
+        artifact_ref = str(definition.artifact_ref or "").strip()
+        if not artifact_ref:
+            continue
+        try:
+            artifact = await session.get(TemporalArtifact, artifact_ref)
+        except Exception as ex:
+            logger.warning(
+                "Deployment skill metadata artifact unavailable; continuing without catalog publish metadata.",
+                extra={
+                    "skill": str(definition.slug),
+                    "error_type": type(ex).__name__,
+                },
+            )
+            continue
+        metadata = getattr(artifact, "metadata_json", None)
+        if isinstance(metadata, Mapping):
+            metadata_by_skill[str(definition.slug)] = dict(metadata)
+    return metadata_by_skill
+
+
+async def _enrich_deployment_skill_metadata(
+    *,
+    session: AsyncSession | None,
+    normalized_tool: dict[str, Any] | None,
+    steps: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    metadata_by_skill = await _load_deployment_skill_metadata(
+        session=session,
+        skill_names=_skill_names_for_metadata_enrichment(
+            normalized_tool=normalized_tool,
+            steps=steps,
+        ),
+    )
+    if normalized_tool is not None:
+        metadata = metadata_by_skill.get(str(normalized_tool.get("name") or ""))
+        if isinstance(metadata, Mapping):
+            _copy_trusted_skill_publish_metadata(
+                metadata=metadata,
+                target=normalized_tool,
+            )
+    for step in steps:
+        skill = step.get("skill") if isinstance(step.get("skill"), dict) else None
+        if skill is None:
+            continue
+        skill_id = str(skill.get("id") or skill.get("name") or "").strip()
+        metadata = metadata_by_skill.get(skill_id)
+        if isinstance(metadata, Mapping):
+            _copy_trusted_skill_publish_metadata(metadata=metadata, target=skill)
+    return metadata_by_skill
+
+
 async def _resolve_step_runtime_selections(
     *,
     steps: list[dict[str, Any]],
@@ -7746,6 +7865,8 @@ def _resolve_workflow_publish_payload(
     payload: Mapping[str, Any],
     task_payload: Mapping[str, Any],
     normalized_tool: Mapping[str, Any] | None,
+    skill_publish_metadata: Mapping[str, Any] | None = None,
+    skill_side_effect_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     task_publish = _normalize_publish_payload(task_payload.get("publish"))
     top_publish = _normalize_publish_payload(payload.get("publish"))
@@ -7779,6 +7900,8 @@ def _resolve_workflow_publish_payload(
             skill_id,
             requested_mode,
             allow_repository_publish=allow_repository_publish,
+            publish_metadata=skill_publish_metadata,
+            side_effect_metadata=skill_side_effect_metadata,
         )
     except WorkflowContractError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
@@ -9293,10 +9416,34 @@ async def _create_execution_from_workflow_request(
         user=user,
         request=(principal_context or {}).get("request"),
     )
+    deployment_skill_metadata = await _enrich_deployment_skill_metadata(
+        session=session,
+        normalized_tool=normalized_tool,
+        steps=normalized_steps,
+    )
+    publish_skill_id = _workflow_publish_skill_id(task_payload, normalized_tool)
+    publish_skill_metadata = deployment_skill_metadata.get(
+        str(publish_skill_id or "").strip()
+    )
+    publish_metadata = (
+        publish_skill_metadata.get("publish")
+        if isinstance(publish_skill_metadata, Mapping)
+        and isinstance(publish_skill_metadata.get("publish"), Mapping)
+        else None
+    )
+    side_effect_metadata = None
+    if isinstance(publish_skill_metadata, Mapping):
+        side_effect_metadata = publish_skill_metadata.get("sideEffect")
+        if not isinstance(side_effect_metadata, Mapping):
+            side_effect_metadata = publish_skill_metadata.get("side_effect")
+        if not isinstance(side_effect_metadata, Mapping):
+            side_effect_metadata = None
     publish_payload = _resolve_workflow_publish_payload(
         payload=payload,
         task_payload=task_payload,
         normalized_tool=normalized_tool,
+        skill_publish_metadata=publish_metadata,
+        skill_side_effect_metadata=side_effect_metadata,
     )
     normalized_task_skills = _normalize_task_skill_selectors(
         task_payload.get("skills"),
@@ -9333,9 +9480,14 @@ async def _create_execution_from_workflow_request(
     if normalized_tool is not None:
         normalized_task_for_planner["tool"] = normalized_tool
         # Keep legacy shape for compatibility while tool is canonical.
-        normalized_task_for_planner["skill"] = {
+        normalized_skill = {
             "name": normalized_tool["name"],
         }
+        for metadata_key in ("publish", "sideEffect"):
+            metadata_value = normalized_tool.get(metadata_key)
+            if isinstance(metadata_value, Mapping):
+                normalized_skill[metadata_key] = dict(metadata_value)
+        normalized_task_for_planner["skill"] = normalized_skill
         if isinstance(normalized_tool.get("inputs"), dict):
             normalized_task_for_planner["inputs"] = dict(normalized_tool["inputs"])
     if isinstance(task_payload.get("inputs"), dict):
