@@ -577,6 +577,29 @@ def _checkpoint_branch_head_identity(branch: WorkflowCheckpointBranch) -> str:
     )
 
 
+def _require_comparable_checkpoint_lineage(
+    branch: WorkflowCheckpointBranch, other: WorkflowCheckpointBranch
+) -> None:
+    branch_base = str(branch.source_checkpoint_ref or "").strip()
+    other_base = str(other.source_checkpoint_ref or "").strip()
+    if not branch_base or not other_base:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "checkpoint_invalidity",
+                "reason": "base_checkpoint_ref_required",
+            },
+        )
+    if branch_base != other_base:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "incompatible_checkpoint_lineage",
+                "reason": "base_checkpoint_ref_mismatch",
+            },
+        )
+
+
 def _checkpoint_branch_creation_mode(workspace_policy: str) -> str:
     if workspace_policy == "apply_previous_execution_diff_to_clean_baseline":
         return "from_checkpoint_patch"
@@ -12155,6 +12178,7 @@ async def compare_checkpoint_branches(
     other = await _load_checkpoint_branch(
         session, workflow_id=workflow_id, branch_id=against
     )
+    _require_comparable_checkpoint_lineage(branch, other)
     comparison_record = _branch_comparison_record(
         workflow_id=workflow_id, branch=branch, other=other
     )
@@ -12305,6 +12329,11 @@ async def promote_checkpoint_branch(
         await _reject_promotion(
             code="expected_head_mismatch",
             reason="expected_head_step_execution_mismatch",
+        )
+    if not branch.current_head_checkpoint_ref:
+        await _reject_promotion(
+            code="checkpoint_invalidity",
+            reason="head_checkpoint_ref_required",
         )
     if branch.current_head_commit and not payload.expected_head_commit:
         await _reject_promotion(

@@ -939,6 +939,46 @@ async def test_checkpoint_branch_promotion_requires_head_gate_side_effects_and_a
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_branch_promotion_rejects_unverifiable_head_checkpoint(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1103:create-unverifiable-head"),
+    )
+    branch_id = created.json()["branchId"]
+    await _set_branch_head(checkpoint_branch_client, branch_id)
+
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = (
+            await session.execute(
+                select(WorkflowCheckpointBranch).where(
+                    WorkflowCheckpointBranch.branch_id == branch_id
+                )
+            )
+        ).scalar_one()
+        branch.current_head_checkpoint_ref = None
+        await session.commit()
+
+    promoted = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
+        json={
+            "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
+            "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
+            "sideEffectDisposition": {"status": "isolated"},
+            "policyEvidence": {"freshHeadValidated": True},
+            "idempotencyKey": "mm-1103:promote-unverifiable-head",
+        },
+    )
+
+    assert promoted.status_code == 409
+    assert promoted.json()["detail"]["code"] == "checkpoint_invalidity"
+    assert promoted.json()["detail"]["reason"] == "head_checkpoint_ref_required"
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_promotion_requires_fresh_and_expected_git_head(
     checkpoint_branch_client: AsyncClient,
 ) -> None:
@@ -1328,6 +1368,46 @@ async def test_checkpoint_branch_compare_returns_only_bounded_artifact_refs(
     assert "diagnostics" not in record
     assert "password=" not in str(body).lower()
     assert "token=" not in str(body).lower()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_fails_closed_for_incompatible_checkpoint_lineage(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1103:create-incompatible-lineage-left"),
+    )
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for incompatible lineage comparison."},
+            "idempotencyKey": "mm-1103:fork-incompatible-lineage-right",
+        },
+    )
+
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        right = (
+            await session.execute(
+                select(WorkflowCheckpointBranch).where(
+                    WorkflowCheckpointBranch.branch_id == forked.json()["branchId"]
+                )
+            )
+        ).scalar_one()
+        right.source_checkpoint_ref = "artifact://checkpoints/unrelated-base"
+        right.source_checkpoint_digest = "sha256:unrelatedcheckpointdigest"
+        await session.commit()
+
+    compared = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/compare",
+        params={"against": forked.json()["branchId"]},
+    )
+
+    assert compared.status_code == 409
+    assert compared.json()["detail"]["code"] == "incompatible_checkpoint_lineage"
 
 
 @pytest.mark.asyncio
