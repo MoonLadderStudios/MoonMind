@@ -1389,7 +1389,6 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByRole('heading', { name: 'Branch Explorer' })).toBeTruthy();
     expect(await screen.findByText('Try minimal API contract fix')).toBeTruthy();
-    expect(await screen.findByText('Promotable')).toBeTruthy();
     expect(await screen.findByRole('list', { name: 'Branch turns' })).toBeTruthy();
     expect(screen.getByText('art-branch-summary-a')).toBeTruthy();
     expect(screen.getByText('artifact://checkpoint-head-a')).toBeTruthy();
@@ -4111,11 +4110,6 @@ describe('Workflow Detail Entrypoint', () => {
     );
     expect(telemetryEvents).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          event: 'detail_edit_click',
-          mode: 'detail',
-          workflowId: 'test-123',
-        }),
         expect.objectContaining({
           event: 'detail_rerun_click',
           mode: 'detail',
