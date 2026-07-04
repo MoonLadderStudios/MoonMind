@@ -446,6 +446,59 @@ def _build_full_command_from_template(
     )
     return shlex.split(rendered)
 
+
+def _write_publish_evidence_fallback(reason: str) -> None:
+    artifacts_dir = Path("artifacts")
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schemaVersion": "moonmind.publish.auto.v1",
+        "mode": "auto",
+        "owner": "agent",
+        "skillId": "pr-resolver",
+        "status": "blocked",
+        "action": "none",
+        "repository": "unknown/unknown",
+        "branch": "unknown",
+        "localHead": None,
+        "remoteBranchHead": None,
+        "remoteVerified": False,
+        "pushed": False,
+        "merged": False,
+        "prUrl": None,
+        "blockedReason": reason,
+        "verificationCommands": [],
+    }
+    (artifacts_dir / "publish_result.json").write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _write_auto_publish_evidence(result_path: Path) -> None:
+    helper = SCRIPT_DIR.parent.parent / "_shared" / "publish_evidence.py"
+    if not helper.is_file():
+        _write_publish_evidence_fallback("publish_evidence_helper_missing")
+        return
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(helper),
+                "from-pr-resolver-result",
+                "--result",
+                str(result_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        _write_publish_evidence_fallback("publish_evidence_generation_failed")
+        return
+    if result.returncode != 0:
+        _write_publish_evidence_fallback("publish_evidence_generation_failed")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Orchestrate bounded finalize retries and full remediation escalations"
@@ -595,6 +648,7 @@ def main() -> None:
     result_path.write_text(
         json.dumps(result_payload, indent=2) + "\n", encoding="utf-8"
     )
+    _write_auto_publish_evidence(result_path)
     print(json.dumps(result_payload, indent=2))
     raise SystemExit(exit_code)
 

@@ -122,9 +122,11 @@ async def test_materializer_projects_only_selected_skills(tmp_path: Path):
     visible_dir = tmp_path / ".agents" / "skills"
     assert sorted(path.name for path in visible_dir.iterdir()) == [
         "_manifest.json",
+        "_shared",
         "alpha",
         "beta",
     ]
+    assert (visible_dir / "_shared" / "publish_evidence.py").is_file()
     assert not (visible_dir / "unselected_skill").exists()
 
 @pytest.mark.asyncio

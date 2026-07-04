@@ -20,6 +20,7 @@ from pydantic import (
 
 from moonmind.config.settings import settings
 from moonmind.services.skill_resolution import (
+    extract_publish_metadata_from_skill_markdown,
     extract_required_capabilities_from_skill_markdown,
 )
 from moonmind.workflows.skills.resolver import (
@@ -54,19 +55,24 @@ _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 _PROPOSAL_POLICY_TARGETS = ("workflow_repo", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
-_AUTO_PUBLISH_CAPABLE_SKILLS = frozenset(
+_AUTO_PUBLISH_MIGRATION_FALLBACK_SKILLS = frozenset(
     {
         "pr-resolver",
-        "batch-pr-resolver",
-        "batch-dependabot-resolver",
-        "batch-workflows",
         "fix-comments",
         "fix-ci",
         "fix-merge-conflicts",
     }
 )
 _NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
-    {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}
+    {
+        "batch-pr-resolver",
+        "batch-dependabot-resolver",
+        "batch-workflows",
+        "jira-issue-creator",
+        "jira-issue-updater",
+        "jira-pr-verify",
+        "jira-verify",
+    }
 )
 _REPOSITORY_PUBLISH_COMPATIBLE_SIDE_EFFECT_SKILLS = frozenset({"jira-issue-updater"})
 _JIRA_ORCHESTRATE_PRESET_SLUGS = frozenset({"jira-orchestrate"})
@@ -129,6 +135,7 @@ _CAPABILITY_IDENTITY_VERSION_KEYS = (
     | _PRESET_IDENTITY_VERSION_KEYS
 )
 _SKILL_METADATA_CAPABILITY_CACHE: dict[str, tuple[str, ...]] = {}
+_SKILL_PUBLISH_METADATA_CACHE: dict[str, dict[str, Any] | None] = {}
 
 class WorkflowContractError(ValueError):
     """Raised when queue payloads violate task contract requirements."""
@@ -763,13 +770,64 @@ def _normalize_publish_mode(value: object) -> str:
         raise WorkflowContractError(f"publish.mode must be one of: {supported}")
     return candidate
 
+
 def _normalize_skill_id(value: object) -> str:
     return (_clean_optional_str(value) or "").lower()
+
+
+def _load_skill_publish_metadata(skill_id: str) -> dict[str, Any] | None:
+    normalized = _normalize_skill_id(skill_id)
+    if not normalized:
+        return None
+    if normalized in _SKILL_PUBLISH_METADATA_CACHE:
+        return _SKILL_PUBLISH_METADATA_CACHE[normalized]
+    try:
+        skill_path = resolve_skill_markdown_path(normalized)
+    except SkillResolutionError:
+        _SKILL_PUBLISH_METADATA_CACHE[normalized] = None
+        return None
+    if skill_path is None:
+        _SKILL_PUBLISH_METADATA_CACHE[normalized] = None
+        return None
+    try:
+        markdown = skill_path.read_text(encoding="utf-8")
+        metadata = extract_publish_metadata_from_skill_markdown(
+            markdown,
+            skill_name=normalized,
+            source_label=str(skill_path),
+        )
+    except (OSError, ValueError) as exc:
+        raise WorkflowContractError(
+            f"skill '{normalized}' publish metadata is invalid: {exc}"
+        ) from exc
+    _SKILL_PUBLISH_METADATA_CACHE[normalized] = metadata
+    return metadata
+
+
+def _is_agent_owned_auto_publish_metadata(metadata: Mapping[str, Any]) -> bool:
+    return (
+        _clean_str(metadata.get("mode")).lower() == "auto"
+        and _clean_str(metadata.get("owner")).lower() == "agent"
+        and metadata.get("requiresEvidence") is True
+    )
+
+
+def _auto_publish_capability_source(skill_id: object) -> str:
+    normalized = _normalize_skill_id(skill_id)
+    if not normalized:
+        return "none"
+    metadata = _load_skill_publish_metadata(normalized)
+    if metadata is not None:
+        return "metadata" if _is_agent_owned_auto_publish_metadata(metadata) else "none"
+    if normalized in _AUTO_PUBLISH_MIGRATION_FALLBACK_SKILLS:
+        return "fallback"
+    return "none"
+
 
 def is_auto_publish_capable_skill(skill_id: object) -> bool:
     """Return True when the selected skill owns auto publish evidence/actions."""
 
-    return _normalize_skill_id(skill_id) in _AUTO_PUBLISH_CAPABLE_SKILLS
+    return _auto_publish_capability_source(skill_id) in {"metadata", "fallback"}
 
 
 def is_self_managed_publish_skill(skill_id: object) -> bool:
@@ -790,10 +848,23 @@ def _auto_publish_legacy_none_diagnostic(skill_id: str) -> dict[str, object]:
         ),
     }
 
+
+def _auto_publish_fallback_diagnostic(skill_id: str) -> dict[str, object]:
+    return {
+        "code": "auto_publish_capability_migration_fallback",
+        "skillId": skill_id,
+        "message": (
+            f"Auto publish capability for skill '{skill_id}' was resolved from "
+            "the migration fallback because publish metadata was unavailable."
+        ),
+    }
+
+
 def is_non_repository_side_effect_skill(skill_id: object) -> bool:
     """Return True when the selected skill performs side effects outside git publish."""
 
     return _normalize_skill_id(skill_id) in _NON_REPOSITORY_SIDE_EFFECT_SKILLS
+
 
 def _iter_applied_step_templates(value: object) -> list[object]:
     if isinstance(value, Mapping):
@@ -830,9 +901,12 @@ def resolve_publish_mode_for_skill(
     """Resolve publish mode for a skill while enforcing skill publish constraints."""
 
     normalized_skill_id = _normalize_skill_id(skill_id)
-    is_auto_publish_capable = is_auto_publish_capable_skill(normalized_skill_id)
+    auto_publish_source = _auto_publish_capability_source(normalized_skill_id)
+    is_auto_publish_capable = auto_publish_source in {"metadata", "fallback"}
     is_non_repository = is_non_repository_side_effect_skill(normalized_skill_id)
     if is_auto_publish_capable:
+        if auto_publish_source == "fallback" and diagnostics is not None:
+            diagnostics.append(_auto_publish_fallback_diagnostic(normalized_skill_id))
         if requested_mode is None:
             return "auto"
         publish_mode = _normalize_publish_mode(requested_mode)
@@ -866,7 +940,8 @@ def resolve_publish_mode_for_skill(
             return publish_mode
         if publish_mode != "none":
             raise WorkflowContractError(
-                f"task.publish.mode must be 'none' when using non-repository skill '{normalized_skill_id}'"
+                "task.publish.mode must be 'none' when using non-repository skill "
+                f"'{normalized_skill_id}'"
             )
         return "none"
     publish_mode = _normalize_publish_mode(requested_mode)
@@ -895,6 +970,7 @@ def _is_resolve_pr_objective(value: object) -> bool:
     if not text:
         return False
     return _RESOLVE_PR_OBJECTIVE_PATTERN.search(text) is not None
+
 
 def _contains_no_commit_push_constraint(value: object) -> bool:
     """Return True when text instructs the runtime not to commit/push."""

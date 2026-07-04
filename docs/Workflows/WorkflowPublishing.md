@@ -13,7 +13,17 @@ Workflow publishing controls how agent-produced changes reach the repository aft
 
 ### `auto`
 
-Auto mode is the canonical mode for skills that own repository side effects inside the managed runtime. Initial auto-publish-capable skills are `pr-resolver`, `batch-pr-resolver`, `batch-dependabot-resolver`, `batch-workflows`, `fix-comments`, `fix-ci`, and `fix-merge-conflicts`.
+Auto mode is the canonical mode for skills that own repository side effects inside the managed runtime. Repository auto-publish capability is declared by skill metadata:
+
+```yaml
+metadata:
+  publish:
+    mode: auto
+    owner: agent
+    requiresEvidence: true
+```
+
+The built-in repository auto-publish skills are `pr-resolver`, `fix-comments`, `fix-ci`, and `fix-merge-conflicts`. The backend may retain a narrow migration fallback when metadata is temporarily unavailable, but catalog metadata is authoritative when present.
 
 Resolution rules:
 
@@ -24,6 +34,17 @@ Resolution rules:
 - `auto` is invalid for tasks that do not declare agent-owned publishing capability.
 
 Every successful auto run must produce `artifacts/publish_result.json` with `schemaVersion = "moonmind.publish.auto.v1"`, `mode = "auto"`, `owner = "agent"`, the selected skill id, status, action, repository, branch, local and remote head fields, remote verification status, push/merge booleans, optional PR URL, optional blocked reason, and verification commands.
+
+Built-in auto-publish skills produce this evidence through the portable helper:
+
+```bash
+python3 .agents/skills/_shared/publish_evidence.py write-pushed \
+  --skill-id <skill> \
+  --repo <owner/repo> \
+  --branch <branch>
+```
+
+The helper also supports `write-merged`, `write-no-op`, `write-blocked`, `write-failed`, and `from-pr-resolver-result`. It has no Temporal, database, or service-layer imports and can run in a local checkout outside MoonMind.
 
 Allowed status values are `verified`, `no_op_verified`, `blocked`, and `failed`. Allowed action values are `none`, `commit`, `push`, `merge`, `commit_and_push`, and `push_and_merge`.
 
@@ -40,6 +61,10 @@ Finish outcome mapping is evidence-driven:
 - verified no-op -> `NO_COMMIT`, not `PUBLISH_DISABLED`;
 - blocked or failed evidence -> publish-stage failure/block;
 - missing evidence -> publish-stage failure with `auto_publish_evidence_missing`.
+
+### Non-Repository Side-Effect Outcomes
+
+Some skills perform parent-level side effects without publishing repository changes. `batch-pr-resolver`, `batch-dependabot-resolver`, and `batch-workflows` queue child workflows and write summary artifacts such as `batch_pr_resolver_result.json`, `batch_dependabot_resolver_result.json`, `batch-workflows-result.json`, and `skill_outcome.json`. These parent skills resolve to `publish.mode = "none"` and must not be forced to produce repository remote-head evidence. Their child workflows keep their own publish mode, including `auto` for queued `pr-resolver` children.
 
 ### `none`
 

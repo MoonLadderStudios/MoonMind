@@ -77,8 +77,29 @@ fi
 - Push current branch: `git push`
 - After push, record local `HEAD` with `git rev-parse HEAD` and verify the exact same SHA is visible on the remote branch with `git ls-remote origin refs/heads/<current-branch>` or an equivalent trusted GitHub path.
 - If there was nothing to commit, still verify the current local `HEAD` exactly matches the remote branch head.
-- If push or remote verification is unavailable, write `artifacts/publish_result.json` with `schemaVersion=moonmind.publish.auto.v1`, `mode=auto`, `owner=agent`, `status=blocked`, `action=none`, `blockedReason=publish_unavailable`, and the available repository/branch/head fields; then stop as blocked with reason `publish_unavailable`. Do not report success.
-- On successful push or verified no-op, write `artifacts/publish_result.json` proving the exact remote head verification.
+- On successful push, write canonical evidence:
+  ```bash
+  python3 .agents/skills/_shared/publish_evidence.py write-pushed \
+    --skill-id fix-merge-conflicts \
+    --repo "$REPO" \
+    --branch "$BRANCH"
+  ```
+- On verified no-op, write canonical no-op evidence:
+  ```bash
+  python3 .agents/skills/_shared/publish_evidence.py write-no-op \
+    --skill-id fix-merge-conflicts \
+    --repo "$REPO" \
+    --branch "$BRANCH"
+  ```
+- If push or remote verification is unavailable, write blocked evidence, then stop as blocked with reason `publish_unavailable`:
+  ```bash
+  python3 .agents/skills/_shared/publish_evidence.py write-blocked \
+    --skill-id fix-merge-conflicts \
+    --repo "$REPO" \
+    --branch "$BRANCH" \
+    --reason publish_unavailable
+  ```
+  Do not report success.
 
 ## Output
 

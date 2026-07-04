@@ -2,11 +2,10 @@
 name: batch-workflows
 description: Resolve Jira issues by project/status and enqueue one child MoonMind workflow per target using a selected run capability, inherited runtime, and a shared advanced publish policy.
 metadata:
-  publish:
-    mode: auto
+  sideEffect:
+    kind: enqueue_children
     owner: agent
-    requiresEvidence: true
-    verifyRemoteHead: exact
+    outcomeArtifact: artifacts/batch-workflows-result.json
   required-capabilities:
     - git
     - jira
@@ -22,6 +21,10 @@ running a selected child capability such as `skill:jira-verify` or
 `preset:jira-implement`. Every child inherits the parent runtime
 (`runtimeInheritance="caller"`) and a single shared publish policy. The parent
 records a summary artifact that links every queued child workflow.
+
+This parent batch skill does not publish repository changes itself. It records
+child workflow queueing evidence in `artifacts/batch-workflows-result.json`;
+each queued child workflow owns its configured publish outcome.
 
 This replaces one-off prompts like "Queue Jira Verify for every MM issue in In
 Progress" with a single batch run.

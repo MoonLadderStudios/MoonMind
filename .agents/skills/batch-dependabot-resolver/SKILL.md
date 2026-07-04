@@ -2,11 +2,10 @@
 name: batch-dependabot-resolver
 description: Discover open Dependabot version-bump PRs and enqueue one `pr-resolver` workflow for each.
 metadata:
-  publish:
-    mode: auto
+  sideEffect:
+    kind: enqueue_children
     owner: agent
-    requiresEvidence: true
-    verifyRemoteHead: exact
+    outcomeArtifact: artifacts/batch_dependabot_resolver_result.json
   required-capabilities:
     - gh
 ---
@@ -23,6 +22,10 @@ same child `pr-resolver` payload shape, fork/cross-repo safety, runtime
 inheritance, and `/api/executions` submission path, and adds Dependabot-specific
 matching, a cross-run-stable idempotency key, a dry-run mode, an optional `maxPrs`
 cap, and a Dependabot-specific summary artifact.
+
+This parent batch skill does not publish repository changes itself. It records
+child workflow queueing evidence in `artifacts/batch_dependabot_resolver_result.json`;
+each queued `pr-resolver` child owns its repository publishing outcome.
 
 ## Inputs (skill args)
 

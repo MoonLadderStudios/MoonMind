@@ -1001,6 +1001,11 @@ def test_orchestrate_main_uses_extended_finalize_wait_defaults(
         )
 
     monkeypatch.setitem(globals_dict, "run_orchestration", _fake_run_orchestration)
+    monkeypatch.setitem(
+        globals_dict,
+        "_write_auto_publish_evidence",
+        lambda _result_path: None,
+    )
 
     result_path = tmp_path / "result.json"
     snapshot_path = tmp_path / "snapshot.json"
