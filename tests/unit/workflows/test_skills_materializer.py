@@ -123,6 +123,39 @@ def test_materialize_run_skill_workspace_requires_skill_md(tmp_path):
 
     assert exc.value.code == "missing_skill_md"
 
+def test_materialize_run_skill_workspace_rejects_flattened_pointer_skill_md(tmp_path):
+    source_root = tmp_path / "source"
+    cache_root = tmp_path / "cache"
+    run_root = tmp_path / "runs" / "run-3b"
+    skill_dir = source_root / "moonspec-verify"
+    skill_dir.mkdir(parents=True)
+    # A git symlink checked out without symlink support leaves a regular file
+    # containing only the relative link target.
+    (skill_dir / "SKILL.md").write_text(
+        "../../../moonspec/bundle/skills/moonspec-verify/SKILL.md",
+        encoding="utf-8",
+    )
+
+    selection = RunSkillSelection(
+        run_id="run-3b",
+        selection_source="job_override",
+        skills=(
+            ResolvedSkill(
+                skill_name="moonspec-verify",
+                source_uri=skill_dir.resolve().as_uri(),
+            ),
+        ),
+    )
+
+    with pytest.raises(SkillMaterializationError, match="symlink pointer text") as exc:
+        materialize_run_skill_workspace(
+            selection=selection,
+            run_root=run_root,
+            cache_root=cache_root,
+        )
+
+    assert exc.value.code == "skill_md_flattened_symlink"
+
 def test_materialize_run_skill_workspace_rejects_duplicate_names(tmp_path):
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"

@@ -26,6 +26,10 @@ from moonmind.services.skill_resolution import (
     SkillResolutionContext,
 )
 from moonmind.services.skill_materialization import AgentSkillMaterializer
+from moonmind.workflows.skills.pointer_files import (
+    SUBMODULE_REMEDIATION_HINT,
+    flattened_symlink_target,
+)
 
 
 class AgentSkillsActivities:
@@ -148,18 +152,45 @@ class AgentSkillsActivities:
     def _build_skill_bundle_payload(skill_dir: Path) -> bytes:
         if not skill_dir.is_dir():
             raise OSError(f"skill source path is not a directory: {skill_dir}")
-        if not (skill_dir / "SKILL.md").is_file():
+        skill_doc = skill_dir / "SKILL.md"
+        if not skill_doc.is_file():
+            if skill_doc.is_symlink():
+                raise OSError(
+                    "skill source SKILL.md symlink target is missing: "
+                    f"{skill_doc} -> {skill_doc.readlink()}; "
+                    f"{SUBMODULE_REMEDIATION_HINT}"
+                )
             raise OSError(f"skill source path is missing SKILL.md: {skill_dir}")
 
         allowed_root = AgentSkillsActivities._skill_bundle_allowed_root(skill_dir)
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
             for path in sorted(skill_dir.rglob("*")):
+                if path.is_symlink() and not path.exists():
+                    raise OSError(
+                        "skill bundle symlink target is missing: "
+                        f"{path} -> {path.readlink()}; "
+                        f"{SUBMODULE_REMEDIATION_HINT}"
+                    )
                 if not path.is_file():
                     continue
                 source_path = path
                 if path.is_symlink():
                     source_path = path.resolve(strict=True)
+                else:
+                    pointer_target = flattened_symlink_target(path)
+                    if pointer_target is not None:
+                        source_path = (path.parent / pointer_target).resolve(
+                            strict=False
+                        )
+                        if not source_path.is_file():
+                            raise OSError(
+                                f"skill bundle file {path} contains only the "
+                                f"symlink pointer text {pointer_target!r} and "
+                                "the target does not exist; "
+                                f"{SUBMODULE_REMEDIATION_HINT}"
+                            )
+                if source_path != path:
                     try:
                         source_path.relative_to(allowed_root)
                     except ValueError as exc:

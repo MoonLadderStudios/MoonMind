@@ -27,6 +27,7 @@ from urllib.request import (
     build_opener,
 )
 
+from .pointer_files import SUBMODULE_REMEDIATION_HINT, flattened_symlink_target
 from .resolver import ResolvedSkill, RunSkillSelection, validate_skill_name
 from .workspace_links import (
     SkillWorkspaceError,
@@ -520,6 +521,15 @@ def _validate_skill_metadata(entry: ResolvedSkill, skill_dir: Path) -> None:
         raise SkillMaterializationError(
             "missing_skill_md",
             f"Missing SKILL.md for skill '{entry.skill_name}' in {skill_dir}",
+        )
+
+    pointer_target = flattened_symlink_target(skill_md)
+    if pointer_target is not None:
+        raise SkillMaterializationError(
+            "skill_md_flattened_symlink",
+            f"SKILL.md for skill '{entry.skill_name}' at {skill_md} contains "
+            f"only the symlink pointer text {pointer_target!r} instead of "
+            f"skill content; {SUBMODULE_REMEDIATION_HINT}",
         )
 
     metadata_name = _parse_frontmatter_name(skill_md)
