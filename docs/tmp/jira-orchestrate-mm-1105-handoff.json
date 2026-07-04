@@ -1,0 +1,85 @@
+{
+  "handoffType": "jira-orchestrate-intake",
+  "createdAt": "2026-07-04T00:00:00Z",
+  "jiraIssueKey": "MM-1105",
+  "classification": {
+    "inputType": "single-story feature request",
+    "reason": "The trusted Jira preset brief identifies one Jira Story for adding dashboard Branch Explorer and safety preview surfaces. Although the source reference is a broad declarative design document, the brief narrows the runtime implementation request to UI requirements, branch comparison summaries, security/safety affordances, and desired end-state behavior for this story."
+  },
+  "intent": "runtime implementation workflow",
+  "sourceStory": {
+    "summary": "Add dashboard branch explorer and safety previews",
+    "sourceDesignPath": "docs/Workflows/CheckpointBranchSystem.md",
+    "sourceSections": [
+      "15. UI requirements",
+      "13. Branch comparison",
+      "14. Security and safety",
+      "20. Desired end state"
+    ],
+    "canonicalClaimIds": [
+      "docs-workflows-checkpoint-branch-system#s15-ui",
+      "docs-workflows-checkpoint-branch-system#s13-comparison",
+      "docs-workflows-checkpoint-branch-system#s14-safety",
+      "docs-workflows-checkpoint-branch-system#s20-end"
+    ],
+    "coverageIds": [
+      "DESIGN-REQ-014",
+      "DESIGN-REQ-015",
+      "DESIGN-REQ-016",
+      "DESIGN-REQ-021"
+    ]
+  },
+  "canonicalInput": {
+    "trustedSource": "moonmind.jira.get_issue",
+    "jiraPresetBrief": "MM-1105: Add dashboard branch explorer and safety previews",
+    "sourceDesignClassification": "canonical declarative document",
+    "treatImplementationDocumentAsRuntimeSourceRequirements": true
+  },
+  "artifactResumeInspection": {
+    "status": "no_existing_feature_artifacts_found",
+    "checkedLocations": [
+      "docs/tmp/",
+      "artifacts/",
+      "var/artifacts/",
+      "/work/agent_jobs/mm:5ed52522-3d04-4fd7-9d3b-612a031d5aec/artifacts"
+    ],
+    "checkedPatterns": [
+      "MM-1105",
+      "1105",
+      "Add dashboard branch explorer",
+      "branch explorer",
+      "safety previews",
+      "Checkpoint Branch System"
+    ],
+    "evidence": [
+      "No MM-1105-specific handoff, spec, plan, tasks, or verification artifact was found in the searched workspace paths.",
+      "No local spec.md, plan.md, tasks.md, research.md, quickstart.md, or data-model.md files exist outside template or test fixture paths.",
+      "docs/Workflows/CheckpointBranchSystem.md exists and contains the cited Sections 13, 14, 15, and 20.",
+      "docs/Workflows/MoonSpecDocumentModel.md and MoonSpec command markdown paths are symlinks into an absent moonspec bundle in this checkout; the readable jira-orchestrate preset still defines the current stage order."
+    ],
+    "resumeFrom": "Specify",
+    "nextStageReason": "The Specify gate is the first incomplete gate because no active feature directory or spec.md exists to validate, and no later valid MoonSpec artifacts for MM-1105 were found."
+  },
+  "stageGateStatus": {
+    "Specify": "INCOMPLETE",
+    "Plan": "NOT_STARTED",
+    "Tasks": "NOT_STARTED",
+    "Align": "NOT_STARTED",
+    "Implement": "NOT_STARTED",
+    "Verify": "NOT_STARTED",
+    "DocReconcile": "NOT_STARTED"
+  },
+  "stageExecution": {
+    "performedInThisStep": false,
+    "reason": "This managed step is limited to intake classification and artifact resume inspection. It must not run specification, planning, task generation, implementation, verification, publishing, pull request creation, or Jira transitions."
+  },
+  "downstreamInstructions": {
+    "useBriefAsCanonicalInput": true,
+    "treatImplementationDocumentAsRuntimeSourceRequirements": true,
+    "sourceDesignPath": "docs/Workflows/CheckpointBranchSystem.md",
+    "resumeFromFirstIncompleteStage": "Specify",
+    "doNotRegenerateValidLaterStageArtifacts": true,
+    "keepEvidenceAndDiagnosticsArtifactBacked": true,
+    "representPolicyDisabledActionsWithActionableBlockedState": true
+  }
+}
