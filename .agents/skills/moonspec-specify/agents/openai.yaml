@@ -1,5 +1,1 @@
-# Generated from moonspec/bundle/skills/moonspec-specify/agents/openai.yaml; edit MoonSpec repo instead.
-interface:
-  display_name: "MoonSpec Specify"
-  short_description: "Create MoonSpec specs from requests or designs."
-  default_prompt: "Use $moonspec-specify to create a one-story MoonSpec feature specification from this request or design:"
+../../../../moonspec/bundle/skills/moonspec-specify/agents/openai.yaml

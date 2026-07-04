@@ -7585,6 +7585,11 @@ async def _expand_goal_preset_for_workflow_submission(
         task_payload.get("publish"), Mapping
     ):
         task_payload["publish"] = dict(expanded_publish)
+    expanded_checkpoint_branching = (
+        expanded.get("checkpointBranching") if isinstance(expanded, Mapping) else None
+    )
+    if isinstance(expanded_checkpoint_branching, Mapping):
+        task_payload["checkpointBranching"] = dict(expanded_checkpoint_branching)
     _apply_goal_schedule_metadata(
         task_payload=task_payload,
         schedule=schedule,

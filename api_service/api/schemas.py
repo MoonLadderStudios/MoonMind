@@ -577,6 +577,9 @@ class PresetExpandResponseSchema(BaseModel):
     )
     capabilities: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    checkpoint_branching: dict[str, Any] = Field(
+        default_factory=dict, alias="checkpointBranching"
+    )
 
 class PresetSaveFromWorkflowRequestSchema(BaseModel):
     """Request model for creating presets from draft workflow steps."""

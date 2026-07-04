@@ -763,6 +763,76 @@ async def test_goal_preset_submission_uses_default_runtime_for_composite_context
     assert downstream_task["repository"] == "MoonLadderStudios/MoonMind"
     assert downstream_task["runtime"] == {"mode": "claude_code"}
 
+@pytest.mark.asyncio
+async def test_goal_preset_submission_carries_expanded_checkpoint_branching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.executions.preset_goal_scheduler import GoalPresetSchedule
+
+    class FakePresetCatalogService:
+        def __init__(self, session: Any) -> None:
+            self.session = session
+
+        async def expand_template(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "steps": [{"id": "step-1", "title": "Run", "instructions": "Run"}],
+                "appliedTemplate": {
+                    "slug": kwargs["slug"],
+                    "inputs": kwargs["inputs"],
+                    "stepIds": ["step-1"],
+                    "appliedAt": "2026-07-04T00:00:00+00:00",
+                },
+                "capabilities": [],
+                "checkpointBranching": {
+                    "enabled": True,
+                    "triggers": ["failed_step"],
+                    "maxBranchesPerCheckpoint": 2,
+                    "maxTurnsPerBranch": 3,
+                    "promotionPolicy": "approval_gated",
+                    "defaultWorkspacePolicy": (
+                        "apply_previous_execution_diff_to_clean_baseline"
+                    ),
+                    "runtimeContextPolicy": "fresh_agent_run",
+                    "publishMode": "none",
+                    "sideEffectPolicy": "isolated",
+                    "branchTemplates": [
+                        {
+                            "label": "minimal_fix",
+                            "instructionsRef": "art_template_minimal_fix",
+                        }
+                    ],
+                },
+            }
+
+        async def sync_seed_templates(self, seed_dir: Path) -> None:
+            raise AssertionError("seed sync should not be needed")
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.schedule_preset_from_goal",
+        lambda goal: GoalPresetSchedule(
+            goal=goal,
+            slug="checkpoint-enabled",
+            inputs={},
+            reason="test",
+            issue_key=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "api_service.services.presets.catalog.PresetCatalogService",
+        FakePresetCatalogService,
+    )
+
+    task_payload = {"goal": "Run checkpoint-enabled preset"}
+    await _expand_goal_preset_for_workflow_submission(
+        task_payload=task_payload,
+        request_payload={"repository": "MoonLadderStudios/MoonMind"},
+        session=object(),
+        user_id=uuid4(),
+    )
+
+    assert task_payload["checkpointBranching"]["enabled"] is True
+    assert task_payload["checkpointBranching"]["triggers"] == ["failed_step"]
+
 
 class _QueryHandle:
     def __init__(

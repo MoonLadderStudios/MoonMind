@@ -1401,6 +1401,90 @@ const RemediationLinksSchema = z
   })
   .passthrough();
 
+const CheckpointBranchModelSchema = z
+  .object({
+    branchId: z.string(),
+    workflowId: z.string(),
+    rootWorkflowId: z.string().nullable().optional(),
+    sourceRunId: z.string(),
+    logicalStepId: z.string().nullable().optional(),
+    sourceExecutionOrdinal: z.number().nullable().optional(),
+    sourceCheckpointBoundary: z.string(),
+    sourceCheckpointRef: z.string(),
+    sourceCheckpointDigest: z.string().nullable().optional(),
+    parentBranchId: z.string().nullable().optional(),
+    parentTurnId: z.string().nullable().optional(),
+    label: z.string(),
+    state: z.string(),
+    branchKind: z.string().nullable().optional(),
+    workspacePolicy: z.string(),
+    runtimeContextPolicy: z.string(),
+    gitRepository: z.string().nullable().optional(),
+    gitBaseBranch: z.string().nullable().optional(),
+    gitWorkBranch: z.string().nullable().optional(),
+    currentHeadStepExecutionId: z.string().nullable().optional(),
+    currentHeadCheckpointRef: z.string().nullable().optional(),
+    artifactRefs: z.record(z.string(), z.unknown()).default({}),
+    currentHeadCommit: z.string().nullable().optional(),
+    pullRequestUrl: z.string().nullable().optional(),
+    publishStatus: z.string().nullable().optional(),
+    promotedAt: z.string().nullable().optional(),
+    archivedAt: z.string().nullable().optional(),
+    createdBy: z.string().nullable().optional(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .passthrough();
+
+const CheckpointBranchListSchema = z
+  .object({
+    items: z.array(CheckpointBranchModelSchema).default([]),
+  })
+  .passthrough();
+
+const CheckpointBranchTurnModelSchema = z
+  .object({
+    branchTurnId: z.string(),
+    branchId: z.string(),
+    parentTurnId: z.string().nullable().optional(),
+    instructionRef: z.string(),
+    instructionDigest: z.string(),
+    sourceCheckpointRef: z.string(),
+    sourceCheckpointDigest: z.string().nullable().optional(),
+    contextBundleRef: z.string().nullable().optional(),
+    stepExecutionManifestRef: z.string().nullable().optional(),
+    createdStepExecutionId: z.string().nullable().optional(),
+    runtimeAgentRunId: z.string().nullable().optional(),
+    providerSessionId: z.string().nullable().optional(),
+    idempotencyKey: z.string(),
+    status: z.string(),
+    diagnostics: z.record(z.string(), z.unknown()).default({}),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .passthrough();
+
+const CheckpointBranchTurnListSchema = z
+  .object({
+    items: z.array(CheckpointBranchTurnModelSchema).default([]),
+  })
+  .passthrough();
+
+const CheckpointBranchCompareSchema = z
+  .object({
+    branchId: z.string(),
+    againstBranchId: z.string(),
+    workflowId: z.string(),
+    branchState: z.string(),
+    againstState: z.string(),
+    branchHeadStepExecutionId: z.string().nullable().optional(),
+    againstHeadStepExecutionId: z.string().nullable().optional(),
+    summaryRef: z.string(),
+    diagnosticsRefs: z.array(z.string()).default([]),
+    comparisonRecord: z.record(z.string(), z.unknown()).default({}),
+  })
+  .passthrough();
+
 const ArtifactSummarySchema = z
   .object({
     artifactId: z.string(),
@@ -2635,6 +2719,39 @@ async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLe
     throw new Error(`Steps: ${resp.status}${detail} (${stepsHref})`);
   }
   return StepLedgerSnapshotSchema.parse(await resp.json());
+}
+
+async function fetchCheckpointBranches(
+  apiBase: string,
+  workflowId: string,
+): Promise<z.infer<typeof CheckpointBranchListSchema>> {
+  const resp = await fetch(
+    `${apiBase}/executions/${encodeURIComponent(workflowId)}/checkpoint-branches`,
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    const statusText = resp.statusText.trim();
+    const detail = statusText ? ` ${statusText}` : '';
+    throw new Error(`Checkpoint branches: ${resp.status}${detail}`);
+  }
+  return CheckpointBranchListSchema.parse(await resp.json());
+}
+
+async function fetchCheckpointBranchTurns(
+  apiBase: string,
+  workflowId: string,
+  branchId: string,
+): Promise<z.infer<typeof CheckpointBranchTurnListSchema>> {
+  const resp = await fetch(
+    `${apiBase}/executions/${encodeURIComponent(workflowId)}/checkpoint-branches/${encodeURIComponent(branchId)}/turns`,
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    const statusText = resp.statusText.trim();
+    const detail = statusText ? ` ${statusText}` : '';
+    throw new Error(`Branch turns: ${resp.status}${detail}`);
+  }
+  return CheckpointBranchTurnListSchema.parse(await resp.json());
 }
 
 const TERMINAL_RUN_STATUSES = new Set([
@@ -4039,7 +4156,440 @@ const ACTIVE_STEP_TIMING_STATUSES = new Set(['executing', 'reviewing', 'awaiting
 
 type StepTiming = z.infer<typeof StepTimingSchema> | null | undefined;
 type StepLedgerRow = z.infer<typeof StepLedgerRowSchema>;
+type CheckpointBranch = z.infer<typeof CheckpointBranchModelSchema>;
+type CheckpointBranchTurn = z.infer<typeof CheckpointBranchTurnModelSchema>;
 type StepExecutionProjection = z.infer<typeof StepExecutionProjectionSchema>;
+
+type BranchCreateDraft = {
+  sourceStepId: string;
+  label: string;
+  instructions: string;
+  workspacePolicy: string;
+  runtimeContextPolicy: string;
+  publishMode: string;
+  gitWorkBranch: string;
+  maxBudgetUsd: string;
+};
+
+type BranchMutationKind = 'create' | 'continue' | 'fork' | 'promote' | 'publish' | 'archive' | 'compare';
+
+type BranchMutationRequest =
+  | { kind: 'create'; draft: BranchCreateDraft; source: StepLedgerRow; idempotencyKey: string }
+  | { kind: 'continue'; branch: CheckpointBranch; instructions: string; idempotencyKey: string }
+  | { kind: 'fork'; branch: CheckpointBranch; instructions: string; idempotencyKey: string }
+  | { kind: 'promote'; branch: CheckpointBranch; competingBranches: CheckpointBranch[]; idempotencyKey: string }
+  | { kind: 'publish'; branch: CheckpointBranch; idempotencyKey: string }
+  | { kind: 'archive'; branch: CheckpointBranch; idempotencyKey: string }
+  | { kind: 'compare'; branch: CheckpointBranch; againstBranchId: string };
+
+const BRANCH_MUTATING_STATES = new Set(['created', 'active', 'blocked', 'failed', 'succeeded', 'promotable']);
+const DEFAULT_BRANCH_CREATE_DRAFT: BranchCreateDraft = {
+  sourceStepId: '',
+  label: 'Checkpoint branch',
+  instructions: 'Continue from this checkpoint with a bounded alternative implementation.',
+  workspacePolicy: 'apply_previous_execution_diff_to_clean_baseline',
+  runtimeContextPolicy: 'fresh_agent_run',
+  publishMode: 'none',
+  gitWorkBranch: '',
+  maxBudgetUsd: '',
+};
+
+function stepCheckpointRef(row: StepLedgerRow): string | null {
+  return row.stateCheckpointRef || null;
+}
+
+function isSupportedCheckpointRef(ref: string | null): boolean {
+  return Boolean(ref?.startsWith('artifact://'));
+}
+
+function stepBranchKey(row: StepLedgerRow): string {
+  return `${row.logicalStepId}:${row.executionOrdinal}`;
+}
+
+function branchStepKey(branch: CheckpointBranch): string {
+  return `${branch.logicalStepId || ''}:${branch.sourceExecutionOrdinal ?? 0}`;
+}
+
+function buildBranchGroups(branches: CheckpointBranch[]): Map<string, CheckpointBranch[]> {
+  const groups = new Map<string, CheckpointBranch[]>();
+  for (const branch of branches) {
+    const key = branchStepKey(branch);
+    groups.set(key, [...(groups.get(key) ?? []), branch]);
+  }
+  return groups;
+}
+
+function branchArtifactEntries(branch: CheckpointBranch): Array<{ label: string; ref: string }> {
+  const entries: Array<{ label: string; ref: string }> = [];
+  for (const [key, value] of Object.entries(branch.artifactRefs || {})) {
+    const ref = coerceArtifactRef(value);
+    if (ref) entries.push({ label: formatStatusLabel(key), ref });
+  }
+  if (branch.currentHeadCheckpointRef) {
+    entries.push({ label: 'Head checkpoint', ref: branch.currentHeadCheckpointRef });
+  }
+  return entries;
+}
+
+function artifactRefHref(apiBase: string, ref: string): string | null {
+  const artifactId = coerceArtifactRef(ref);
+  if (!artifactId) return null;
+  if (/^https?:\/\//i.test(artifactId)) return artifactId;
+  if (artifactId.startsWith('artifact://')) return null;
+  return buildArtifactDownloadHref(apiBase, artifactId);
+}
+
+function branchEvidenceLinks(apiBase: string, branch: CheckpointBranch): ReactNode {
+  const entries = branchArtifactEntries(branch);
+  if (entries.length === 0 && !branch.pullRequestUrl) {
+    return <span className="small">No evidence refs linked yet.</span>;
+  }
+  return (
+    <div className="live-logs-artifact-links">
+      {entries.map((entry) => {
+        const href = artifactRefHref(apiBase, entry.ref);
+        return href ? (
+          <a
+            key={`${entry.label}-${entry.ref}`}
+            className="live-logs-artifact-link"
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {entry.label}
+          </a>
+        ) : (
+          <code key={`${entry.label}-${entry.ref}`} className="text-xs break-all">{entry.ref}</code>
+        );
+      })}
+      {branch.pullRequestUrl ? (
+        <a className="live-logs-artifact-link" href={branch.pullRequestUrl} target="_blank" rel="noreferrer">
+          Pull request
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
+function BranchStatusAffordance({ branches }: { branches: CheckpointBranch[] }) {
+  if (branches.length === 0) return null;
+  const states = Array.from(new Set(branches.map((branch) => branch.state || 'unknown')));
+  const stateLabels = states.map((state) => formatStatusLabel(state));
+  return (
+    <span className="step-execution-pill" title={stateLabels.join(', ')}>
+      {branches.length} branch{branches.length === 1 ? '' : 'es'} · {stateLabels.join(', ')}
+    </span>
+  );
+}
+
+function safeBranchSlug(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return slug || 'checkpoint-branch';
+}
+
+function branchIdempotencyKey(kind: BranchMutationKind, workflowId: string, subject: string): string {
+  return `dashboard:${kind}:${workflowId}:${subject}:${Date.now()}`;
+}
+
+function branchCanMutate(branch: CheckpointBranch): boolean {
+  return BRANCH_MUTATING_STATES.has(branch.state);
+}
+
+function branchPromotionGateVerdict(branch: CheckpointBranch): string {
+  return branch.state === 'promotable' || branch.state === 'succeeded' ? 'passed' : branch.state;
+}
+
+function branchPromotionSideEffectStatus(branch: CheckpointBranch): string {
+  const publishStatus = branch.publishStatus || 'unpublished';
+  return publishStatus === 'unpublished' ? 'none' : 'accepted';
+}
+
+function BranchExplorerPanel({
+  apiBase,
+  workflowId,
+  runId,
+  rows,
+  branches,
+  selectedBranch,
+  turns,
+  isLoading,
+  error,
+  turnsError,
+  actionsEnabled,
+  busy,
+  latestCompare,
+  onSelectBranch,
+  onBranchAction,
+}: {
+  apiBase: string;
+  workflowId: string;
+  runId: string;
+  rows: StepLedgerRow[];
+  branches: CheckpointBranch[];
+  selectedBranch: CheckpointBranch | null;
+  turns: CheckpointBranchTurn[];
+  isLoading: boolean;
+  error: Error | null;
+  turnsError: Error | null;
+  actionsEnabled: boolean;
+  busy: boolean;
+  latestCompare: z.infer<typeof CheckpointBranchCompareSchema> | null;
+  onSelectBranch: (branchId: string) => void;
+  onBranchAction: (request: BranchMutationRequest) => void;
+}) {
+  const checkpointRows = rows.filter((row) => isSupportedCheckpointRef(stepCheckpointRef(row)));
+  const branchGroups = useMemo(() => buildBranchGroups(branches), [branches]);
+  const [draft, setDraft] = useState<BranchCreateDraft>(() => DEFAULT_BRANCH_CREATE_DRAFT);
+  const [branchInstructions, setBranchInstructions] = useState('Continue this branch with bounded instructions.');
+  const [againstBranchId, setAgainstBranchId] = useState('');
+
+  useEffect(() => {
+    const firstCheckpointRow = checkpointRows[0];
+    const selectedCheckpointExists = checkpointRows.some((row) => stepBranchKey(row) === draft.sourceStepId);
+    if ((!draft.sourceStepId || !selectedCheckpointExists) && firstCheckpointRow) {
+      setDraft((current) => ({ ...current, sourceStepId: stepBranchKey(firstCheckpointRow) }));
+    }
+  }, [checkpointRows, draft.sourceStepId]);
+
+  useEffect(() => {
+    if (!selectedBranch) {
+      if (againstBranchId) setAgainstBranchId('');
+      return;
+    }
+    const targetExists = branches.some((branch) => branch.branchId === againstBranchId);
+    if (againstBranchId === selectedBranch.branchId || !againstBranchId || !targetExists) {
+      const next = branches.find((branch) => branch.branchId !== selectedBranch.branchId);
+      setAgainstBranchId(next?.branchId || '');
+    }
+  }, [againstBranchId, branches, selectedBranch]);
+
+  const selectedSource = checkpointRows.find((row) => stepBranchKey(row) === draft.sourceStepId) || checkpointRows[0] || null;
+  const competingBranches = selectedBranch
+    ? branches.filter((branch) => (
+      branch.branchId !== selectedBranch.branchId &&
+      branch.sourceCheckpointRef === selectedBranch.sourceCheckpointRef &&
+      branch.state !== 'archived'
+    ))
+    : [];
+  const publishModeRequiresBranch = draft.publishMode !== 'none';
+  const createDisabled = (
+    !actionsEnabled ||
+    busy ||
+    !selectedSource ||
+    !draft.label.trim() ||
+    !draft.instructions.trim() ||
+    (publishModeRequiresBranch && !draft.gitWorkBranch.trim())
+  );
+  const selectedMutable = Boolean(selectedBranch && branchCanMutate(selectedBranch));
+  const promoteDisabled = !actionsEnabled || busy || !selectedBranch?.currentHeadStepExecutionId;
+  const publishDisabled = !actionsEnabled || busy || !selectedBranch?.gitRepository || !selectedBranch?.gitBaseBranch || !selectedBranch?.gitWorkBranch;
+  const compareDisabled = !actionsEnabled || busy || !selectedBranch || !againstBranchId || againstBranchId === selectedBranch.branchId;
+
+  return (
+    <section className="stack td-branch-explorer td-evidence-region" aria-label="Branch Explorer">
+      <div className="step-tl-section-header">
+        <div>
+          <h3>Branch Explorer</h3>
+          <p className="small">Mainline remains selected by default; checkpoint branches are listed from persisted branch records.</p>
+        </div>
+        <span className="step-tl-header-meta">
+          <span className="step-tl-count">{branches.length} branch{branches.length === 1 ? '' : 'es'}</span>
+        </span>
+      </div>
+      {isLoading ? (
+        <LoadingPlaceholder surface="workflow-detail" region="checkpoint-branches" variant="list" density="compact" preserveContext />
+      ) : error ? (
+        <div className="notice error">{error.message}</div>
+      ) : branches.length === 0 ? (
+        <p className="notice subtle">No checkpoint branches recorded for this workflow yet.</p>
+      ) : (
+        <div className="stack">
+          {checkpointRows.map((row) => {
+            const rowBranches = branchGroups.get(stepBranchKey(row)) ?? [];
+            if (rowBranches.length === 0) return null;
+            return (
+              <div key={stepBranchKey(row)} className="card">
+                <div className="stack gap-1">
+                  <strong>{row.title}</strong>
+                  <p className="small">
+                    Checkpoint <code className="text-xs break-all">{stepCheckpointRef(row)}</code>
+                  </p>
+                  <ul className="stack" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                    {rowBranches.map((branch) => {
+                      const childCount = branches.filter((candidate) => candidate.parentBranchId === branch.branchId).length;
+                      return (
+                        <li key={branch.branchId} className="stack gap-1">
+                          <button
+                            type="button"
+                            className="secondary"
+                            aria-pressed={selectedBranch?.branchId === branch.branchId}
+                            onClick={() => onSelectBranch(branch.branchId)}
+                          >
+                            {branch.label}
+                          </button>
+                          <div className="td-facts-grid">
+                            <Fact label="State"><ExecutionStatusPill status={branch.state || 'unknown'} /></Fact>
+                            <Fact label="Branch ID"><code className="text-xs break-all">{branch.branchId}</code></Fact>
+                            <Fact label="Kind">{formatStatusLabel(branch.branchKind || 'root')}</Fact>
+                            <Fact label="Children">{childCount}</Fact>
+                            {branch.parentBranchId ? <Fact label="Parent"><code className="text-xs break-all">{branch.parentBranchId}</code></Fact> : null}
+                            {branch.gitWorkBranch ? <Fact label="Git Branch"><code className="text-xs break-all">{branch.gitWorkBranch}</code></Fact> : null}
+                          </div>
+                          {branchEvidenceLinks(apiBase, branch)}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="stack td-branch-preview">
+        <h4>Create branch preview</h4>
+        <div className="grid-2">
+          <label>
+            Source checkpoint
+            <select value={draft.sourceStepId} disabled={checkpointRows.length === 0 || busy} onChange={(event) => setDraft((current) => ({ ...current, sourceStepId: event.target.value }))}>
+              {checkpointRows.map((row) => (
+                <option key={stepBranchKey(row)} value={stepBranchKey(row)}>
+                  {row.title} · execution {row.executionOrdinal}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Branch label
+            <input value={draft.label} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} />
+          </label>
+          <label>
+            Workspace policy
+            <select value={draft.workspacePolicy} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, workspacePolicy: event.target.value }))}>
+              <option value="apply_previous_execution_diff_to_clean_baseline">Apply previous diff to clean baseline</option>
+              <option value="restore_pre_execution">Restore pre-execution checkpoint</option>
+              <option value="start_from_last_passed_commit">Start from last passed commit</option>
+              <option value="fresh_branch_from_source">Fresh branch from source</option>
+            </select>
+          </label>
+          <label>
+            Runtime/session policy
+            <select value={draft.runtimeContextPolicy} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, runtimeContextPolicy: event.target.value }))}>
+              <option value="fresh_agent_run">Fresh agent run</option>
+              <option value="reuse_session_new_epoch">Reuse session new epoch</option>
+              <option value="reuse_session_same_epoch">Reuse session same epoch</option>
+            </select>
+          </label>
+          <label>
+            Publish mode
+            <select value={draft.publishMode} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, publishMode: event.target.value }))}>
+              <option value="none">None</option>
+              <option value="branch">Git branch</option>
+              <option value="pull_request">Pull request</option>
+            </select>
+          </label>
+          <label>
+            Git work branch
+            <input value={draft.gitWorkBranch} disabled={busy} placeholder={`mm/${safeBranchSlug(workflowId)}/${safeBranchSlug(draft.label)}`} onChange={(event) => setDraft((current) => ({ ...current, gitWorkBranch: event.target.value }))} />
+          </label>
+          <label>
+            Budget impact
+            <input value={draft.maxBudgetUsd} disabled={busy} inputMode="decimal" placeholder="No explicit cap" onChange={(event) => setDraft((current) => ({ ...current, maxBudgetUsd: event.target.value }))} />
+          </label>
+          <Card label="Approval requirements">Policy evaluated by checkpoint branch API</Card>
+        </div>
+        <label>
+          Branch instructions
+          <textarea value={draft.instructions} disabled={busy} rows={3} onChange={(event) => setDraft((current) => ({ ...current, instructions: event.target.value }))} />
+        </label>
+        <div className="td-facts-grid">
+          <Fact label="Checkpoint"><code className="text-xs break-all">{selectedSource ? stepCheckpointRef(selectedSource) : '—'}</code></Fact>
+          <Fact label="Side-effect risk">{draft.publishMode === 'none' ? 'No publish side effect requested' : 'Git publication requested'}</Fact>
+          <Fact label="Run"><code className="text-xs break-all">{runId || '—'}</code></Fact>
+        </div>
+        <button
+          type="button"
+          disabled={createDisabled}
+          onClick={() => selectedSource && onBranchAction({
+            kind: 'create',
+            draft,
+            source: selectedSource,
+            idempotencyKey: branchIdempotencyKey('create', workflowId, stepBranchKey(selectedSource)),
+          })}
+        >
+          Create branch from checkpoint
+        </button>
+      </div>
+
+      {selectedBranch ? (
+        <div className="stack td-branch-preview">
+          <h4>Promotion preview</h4>
+          <MetricStrip
+            items={[
+              { label: 'State', value: formatStatusLabel(selectedBranch.state) },
+              { label: 'Turns', value: String(turns.length) },
+              { label: 'Publish', value: formatStatusLabel(selectedBranch.publishStatus || 'unpublished') },
+              { label: 'Competing Branches', value: String(competingBranches.length) },
+            ]}
+          />
+          <div className="td-facts-grid">
+            <Fact label="Branch head"><code className="text-xs break-all">{selectedBranch.currentHeadStepExecutionId || selectedBranch.currentHeadCommit || selectedBranch.currentHeadCheckpointRef || '—'}</code></Fact>
+            <Fact label="Gate verdict">{formatStatusLabel(selectedBranch.state)}</Fact>
+            <Fact label="Git / PR">{selectedBranch.pullRequestUrl ? <a href={selectedBranch.pullRequestUrl} target="_blank" rel="noreferrer">Pull request</a> : <code className="text-xs break-all">{selectedBranch.currentHeadCommit || selectedBranch.gitWorkBranch || '—'}</code>}</Fact>
+            <Fact label="Invalidations">Recorded during promotion</Fact>
+            <Fact label="Side effects">{selectedBranch.publishStatus ? formatStatusLabel(selectedBranch.publishStatus) : 'Unpublished'}</Fact>
+            <Fact label="Approvals">Policy evidence required by promote API</Fact>
+          </div>
+          {turnsError ? <p className="small step-tl-error">{turnsError.message}</p> : null}
+          {turns.length > 0 ? (
+            <ol className="step-execution-history" aria-label="Branch turns">
+              {turns.map((turn, index) => (
+                <li key={turn.branchTurnId}>
+                  <strong>Turn {index + 1}</strong> <ExecutionStatusPill status={turn.status || 'unknown'} />
+                  <div className="td-facts-grid">
+                    <Fact label="Turn ID"><code className="text-xs break-all">{turn.branchTurnId}</code></Fact>
+                    <Fact label="Instructions"><code className="text-xs break-all">{turn.instructionRef}</code></Fact>
+                    {turn.stepExecutionManifestRef ? <Fact label="Manifest"><code className="text-xs break-all">{turn.stepExecutionManifestRef}</code></Fact> : null}
+                    {turn.createdStepExecutionId ? <Fact label="Step Execution"><code className="text-xs break-all">{turn.createdStepExecutionId}</code></Fact> : null}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="small">No branch turns recorded for this branch yet.</p>
+          )}
+          <label>
+            Branch action instructions
+            <textarea value={branchInstructions} disabled={busy} rows={2} onChange={(event) => setBranchInstructions(event.target.value)} />
+          </label>
+          <label>
+            Compare against
+            <select value={againstBranchId} disabled={busy || branches.length < 2} onChange={(event) => setAgainstBranchId(event.target.value)}>
+              <option value="">Select branch</option>
+              {branches.filter((branch) => branch.branchId !== selectedBranch.branchId).map((branch) => (
+                <option key={branch.branchId} value={branch.branchId}>{branch.label}</option>
+              ))}
+            </select>
+          </label>
+          <div className="button-row">
+            <button type="button" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId) })}>Continue branch</button>
+            <button type="button" className="secondary" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId) })}>Fork from this branch</button>
+            <button type="button" className="secondary" disabled={compareDisabled} onClick={() => onBranchAction({ kind: 'compare', branch: selectedBranch, againstBranchId })}>Compare branches</button>
+            <button type="button" className="secondary" disabled={promoteDisabled} onClick={() => onBranchAction({ kind: 'promote', branch: selectedBranch, competingBranches, idempotencyKey: branchIdempotencyKey('promote', workflowId, selectedBranch.branchId) })}>Promote branch</button>
+            <button type="button" className="secondary" disabled={publishDisabled} onClick={() => onBranchAction({ kind: 'publish', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('publish', workflowId, selectedBranch.branchId) })}>Publish branch</button>
+            <button type="button" className="secondary" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'archive', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('archive', workflowId, selectedBranch.branchId) })}>Archive branch</button>
+          </div>
+          {latestCompare ? <p className="small">Latest comparison summary: <code className="text-xs break-all">{latestCompare.summaryRef}</code></p> : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
 
 function stepTimingMs(timing: StepTiming): number | null {
   const value = timing?.elapsedMs ?? timing?.durationMs ?? null;
@@ -4478,6 +5028,7 @@ function StepLedgerRowCard({
   isLast,
   maxDurationMs,
   routes,
+  branches,
 }: {
   apiBase: string;
   logStreamingEnabled: boolean;
@@ -4493,6 +5044,7 @@ function StepLedgerRowCard({
   isLast: boolean;
   maxDurationMs: number;
   routes: AgentRunRouteTemplates;
+  branches: CheckpointBranch[];
 }) {
   const lastError = formatStepLastError(row.lastError);
 
@@ -4516,6 +5068,7 @@ function StepLedgerRowCard({
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
               <ExecutionStatusPill status={row.status} />
               <StepTimingChip row={row} />
+              <BranchStatusAffordance branches={branches} />
               <span className="sr-only">{formatStatusLabel(row.status)}</span>
               {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}
               <StepProvenanceMarker row={row} />
@@ -6546,6 +7099,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     DEFAULT_REMEDIATION_ACTION_POLICY,
   );
   const [selectedRecoveryStepId, setSelectedRecoveryStepId] = useState('');
+  const [selectedBranchId, setSelectedBranchId] = useState('');
+  const [latestBranchCompare, setLatestBranchCompare] = useState<z.infer<typeof CheckpointBranchCompareSchema> | null>(null);
 
   const detailQuery = useQuery({
     queryKey: ['workflow-detail', encodedTaskId, sourceTemporal],
@@ -6635,6 +7190,31 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     queryFn: () => fetchStepLedger(String(execution?.stepsHref || '')),
     enabled: shouldFetchStepLedger,
     refetchInterval: shouldFetchStepLedger && !isTerminalExecution ? detailPoll : false,
+  });
+  const branchesQuery = useQuery({
+    queryKey: ['workflow-detail-checkpoint-branches', workflowId],
+    queryFn: () => fetchCheckpointBranches(payload.apiBase, workflowId),
+    enabled: stepsTabActive && Boolean(execution && workflowId),
+    refetchInterval: stepsTabActive && !isTerminalExecution ? detailPoll : false,
+  });
+  const branches = branchesQuery.data?.items ?? [];
+  const selectedBranch = branches.find((branch) => branch.branchId === selectedBranchId) || branches[0] || null;
+  useEffect(() => {
+    const firstBranch = branches[0];
+    if (firstBranch) {
+      const exists = branches.some((branch) => branch.branchId === selectedBranchId);
+      if (!selectedBranchId || !exists) {
+        setSelectedBranchId(firstBranch.branchId);
+      }
+    } else if (selectedBranchId) {
+      setSelectedBranchId('');
+    }
+  }, [branches, selectedBranchId]);
+  const selectedBranchTurnsQuery = useQuery({
+    queryKey: ['workflow-detail-checkpoint-branch-turns', workflowId, selectedBranch?.branchId],
+    queryFn: () => fetchCheckpointBranchTurns(payload.apiBase, workflowId, String(selectedBranch?.branchId || '')),
+    enabled: stepsTabActive && Boolean(workflowId && selectedBranch?.branchId),
+    refetchInterval: stepsTabActive && !isTerminalExecution ? detailPoll : false,
   });
   const latestRunId = stepsQuery.data?.runId || runId;
   const artifactRunId = execution?.stepsHref ? stepsQuery.data?.runId : runId;
@@ -6835,6 +7415,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const hasStepsEndpoint = Boolean(execution?.stepsHref);
   const showExecutionObservationFallback =
     !hasStepsEndpoint || (!stepsQuery.isLoading && (stepsQuery.isError || !stepsQuery.data));
+  const branchesByStep = useMemo(() => buildBranchGroups(branches), [branches]);
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['workflow-detail', encodedTaskId] });
@@ -6843,6 +7424,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     void queryClient.invalidateQueries({ queryKey: ['workflow-detail-latest-report', namespace, workflowId, artifactRunId] });
     void queryClient.invalidateQueries({ queryKey: ['workflow-detail-run-summary', summaryArtifactRef] });
     void queryClient.invalidateQueries({ queryKey: ['workflow-detail-remediations', workflowId] });
+    void queryClient.invalidateQueries({ queryKey: ['workflow-detail-checkpoint-branches', workflowId] });
+    void queryClient.invalidateQueries({ queryKey: ['workflow-detail-checkpoint-branch-turns', workflowId] });
   };
 
   const updateMutation = useMutation({
@@ -7049,6 +7632,130 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     onError: (error: Error) => setActionError(error.message),
   });
 
+  const checkpointBranchMutation = useMutation({
+    mutationFn: async (request: BranchMutationRequest) => {
+      const branchBase = `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/checkpoint-branches`;
+      if (request.kind === 'compare') {
+        const response = await fetch(
+          `${branchBase}/${encodeURIComponent(request.branch.branchId)}/compare?against=${encodeURIComponent(request.againstBranchId)}`,
+          { credentials: 'include' },
+        );
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || response.statusText);
+        }
+        return { kind: request.kind, body: CheckpointBranchCompareSchema.parse(await response.json()) };
+      }
+
+      let url = branchBase;
+      let body: Record<string, unknown>;
+      if (request.kind === 'create') {
+        const budget = Number.parseFloat(request.draft.maxBudgetUsd);
+        body = {
+          source: {
+            workflowId,
+            runId: latestRunId || runId || request.source.refs.childRunId || 'latest',
+            logicalStepId: request.source.logicalStepId,
+            executionOrdinal: request.source.executionOrdinal || null,
+            checkpointBoundary: 'after_execution',
+            checkpointRef: stepCheckpointRef(request.source),
+            checkpointDigest: null,
+          },
+          label: request.draft.label.trim(),
+          instructions: { text: request.draft.instructions.trim() },
+          workspacePolicy: request.draft.workspacePolicy,
+          runtimeContextPolicy: request.draft.runtimeContextPolicy,
+          publishMode: request.draft.publishMode,
+          idempotencyKey: request.idempotencyKey,
+          gitWorkBranch: request.draft.gitWorkBranch.trim() || null,
+          maxBudgetUsd: Number.isFinite(budget) ? budget : null,
+        };
+      } else if (request.kind === 'continue') {
+        url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/continue`;
+        body = {
+          label: request.branch.label,
+          instructions: { text: request.instructions.trim() || 'Continue this checkpoint branch.' },
+          workspacePolicy: 'continue_from_previous_execution',
+          runtimeContextPolicy: 'reuse_session_new_epoch',
+          idempotencyKey: request.idempotencyKey,
+          maxBudgetUsd: null,
+        };
+      } else if (request.kind === 'fork') {
+        url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/fork`;
+        body = {
+          label: `Fork of ${request.branch.label}`,
+          instructions: { text: request.instructions.trim() || 'Fork this checkpoint branch.' },
+          workspacePolicy: 'apply_previous_execution_diff_to_clean_baseline',
+          runtimeContextPolicy: 'fresh_agent_run',
+          idempotencyKey: request.idempotencyKey,
+          maxBudgetUsd: null,
+        };
+      } else if (request.kind === 'promote') {
+        url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/promote`;
+        body = {
+          expectedHeadStepExecutionId: request.branch.currentHeadStepExecutionId,
+          expectedHeadCommit: request.branch.currentHeadCommit || null,
+          acceptedOutputRefs: request.branch.artifactRefs || {},
+          gateEvidence: {
+            verdict: branchPromotionGateVerdict(request.branch),
+            checkpointRef: request.branch.currentHeadCheckpointRef || request.branch.sourceCheckpointRef,
+          },
+          sideEffectDisposition: {
+            status: branchPromotionSideEffectStatus(request.branch),
+            publishStatus: request.branch.publishStatus || 'unpublished',
+            pullRequestUrl: request.branch.pullRequestUrl || null,
+          },
+          downstreamInvalidation: {
+            competingBranchIds: request.competingBranches.map((branch) => branch.branchId),
+          },
+          approvalEvidence: null,
+          policyEvidence: { requestedFrom: 'workflow-detail' },
+          policyRequiresApproval: false,
+          idempotencyKey: request.idempotencyKey,
+        };
+      } else if (request.kind === 'publish') {
+        url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/publish`;
+        body = {
+          mode: 'pull_request',
+          repository: request.branch.gitRepository,
+          baseBranch: request.branch.gitBaseBranch,
+          headBranch: request.branch.gitWorkBranch,
+          provider: 'github',
+          idempotencyKey: request.idempotencyKey,
+        };
+      } else {
+        url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/archive`;
+        body = {
+          reason: 'Archived from workflow detail Branch Explorer.',
+          idempotencyKey: request.idempotencyKey,
+        };
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return { kind: request.kind, body: await response.json() };
+    },
+    onSuccess: (result) => {
+      if (result.kind === 'compare') {
+        setLatestBranchCompare(result.body as z.infer<typeof CheckpointBranchCompareSchema>);
+        setActionNotice('Branch comparison evidence refreshed.');
+      } else {
+        setLatestBranchCompare(null);
+        setActionNotice(`Checkpoint branch ${result.kind} submitted.`);
+      }
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
   const onRename = () => {
     setActionError(null);
     setActiveWorkflowDialog('rename');
@@ -7118,7 +7825,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     failedStepResumeMutation.isPending ||
     selectedStepRecoveryMutation.isPending ||
     createRemediationMutation.isPending ||
-    remediationApprovalMutation.isPending;
+    remediationApprovalMutation.isPending ||
+    checkpointBranchMutation.isPending;
   const editHref = workflowId
     ? actions?.canEditForRerun
       ? taskEditForRerunHref(workflowId)
@@ -7816,10 +8524,31 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                           isLast={idx === stepsQuery.data.steps.length - 1}
                           maxDurationMs={maxDurationMs}
                           routes={agentRunRoutes}
+                          branches={branchesByStep.get(stepBranchKey(row)) ?? []}
                         />
                       ));
                     })()}
                   </div>
+                  <BranchExplorerPanel
+                    apiBase={payload.apiBase}
+                    workflowId={workflowId}
+                    runId={latestRunId || runId}
+                    rows={stepsQuery.data.steps}
+                    branches={branches}
+                    selectedBranch={selectedBranch}
+                    turns={selectedBranchTurnsQuery.data?.items ?? []}
+                    isLoading={branchesQuery.isLoading}
+                    error={branchesQuery.isError ? (branchesQuery.error as Error) : null}
+                    turnsError={selectedBranchTurnsQuery.isError ? (selectedBranchTurnsQuery.error as Error) : null}
+                    actionsEnabled={actionsOn}
+                    busy={busy}
+                    latestCompare={latestBranchCompare}
+                    onSelectBranch={setSelectedBranchId}
+                    onBranchAction={(request) => {
+                      setActionError(null);
+                      checkpointBranchMutation.mutate(request);
+                    }}
+                  />
                 </>
               ) : (
                 <p className="small">No step ledger available for this execution.</p>

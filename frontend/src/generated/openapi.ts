@@ -7437,6 +7437,10 @@ export interface components {
             capabilities?: string[];
             /** Warnings */
             warnings?: string[];
+            /** Checkpointbranching */
+            checkpointBranching?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * PresetFavoriteRequestSchema
