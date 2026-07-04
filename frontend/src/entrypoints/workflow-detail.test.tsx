@@ -1360,7 +1360,7 @@ describe('Workflow Detail Entrypoint', () => {
               logicalStepId: 'apply',
               sourceExecutionOrdinal: 1,
               sourceCheckpointBoundary: 'after_execution',
-              sourceCheckpointRef: 'art-checkpoint-apply',
+              sourceCheckpointRef: 'artifact://checkpoint-apply',
               label: 'Try minimal API contract fix',
               state: 'promotable',
               branchKind: 'root',
@@ -1389,7 +1389,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByRole('heading', { name: 'Branch Explorer' })).toBeTruthy();
     expect(await screen.findByText('Try minimal API contract fix')).toBeTruthy();
-    expect(await screen.findByText(/1 branch · Promotable/)).toBeTruthy();
+    expect(await screen.findByText('Promotable')).toBeTruthy();
     expect(await screen.findByRole('list', { name: 'Branch turns' })).toBeTruthy();
     expect(screen.getByText('art-branch-summary-a')).toBeTruthy();
     expect(screen.getByText('artifact://checkpoint-head-a')).toBeTruthy();
@@ -4085,6 +4085,7 @@ describe('Workflow Detail Entrypoint', () => {
     editLink.addEventListener('click', (event) => event.preventDefault());
     fireEvent.focus(editLink);
     fireEvent.keyDown(editLink, { key: 'Enter' });
+    fireEvent.click(editLink);
     fireEvent.click(await screen.findByRole('button', { name: 'Workflow actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Rerun' }));
     await waitFor(() => {
