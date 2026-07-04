@@ -1371,7 +1371,7 @@ describe('Workflow Detail Entrypoint', () => {
               gitWorkBranch: 'mm/test-123/apply/branch-a',
               currentHeadStepExecutionId: 'step-head-a',
               currentHeadCheckpointRef: 'artifact://checkpoint-head-a',
-              artifactRefs: { summary: 'art-branch-summary-a' },
+              artifactRefs: { summary: 'artifact://branch-summary-a' },
               publishStatus: 'unpublished',
               createdAt: '2026-04-09T00:01:00Z',
               updatedAt: '2026-04-09T00:02:00Z',
@@ -1390,7 +1390,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByRole('heading', { name: 'Branch Explorer' })).toBeTruthy();
     expect(await screen.findByText('Try minimal API contract fix')).toBeTruthy();
     expect(await screen.findByRole('list', { name: 'Branch turns' })).toBeTruthy();
-    expect(screen.getByText('art-branch-summary-a')).toBeTruthy();
+    expect(screen.getByText('artifact://branch-summary-a')).toBeTruthy();
     expect(screen.getByText('artifact://checkpoint-head-a')).toBeTruthy();
   });
 
