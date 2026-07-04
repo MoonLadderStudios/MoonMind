@@ -8,6 +8,8 @@ import {
   getSessionCapabilityRefetchInterval,
   getSessionProjectionRefetchInterval,
   normalizeObservabilityEvent,
+  WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
+  WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
   WorkflowDetailEntrypoint,
   WorkflowDetailPage,
 } from './workflow-detail';
@@ -792,6 +794,12 @@ describe('Workflow Detail Entrypoint', () => {
       }
       expect(within(row).queryByText(ariaLabel.replace('Status: ', ''))).toBeNull();
     }
+  });
+
+  it('MM-1108 lets the planning RouteIcon finish before replaying', () => {
+    expect(WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS.planning).toBeGreaterThan(
+      WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
+    );
   });
 
   it('MM-999 does not show a pinned current row when the selected workflow is in the normal sidebar list', async () => {
