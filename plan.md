@@ -17,6 +17,7 @@ The repository already contains compare and promote endpoints. This plan treats 
 - Comparison is evidence-backed and bounded; large diffs and diagnostics remain behind artifact refs.
 - Promotion is an explicit canonical acceptance operation, separate from publication.
 - Promotion requires expected head validation, passing gate evidence, safe side-effect disposition, approval evidence when required, and fresh branch-head validation.
+- Promotion must also fail closed when policy evidence reports budget exhaustion or when checkpoint/head validity cannot be proven.
 - Promotion must not delete or mutate competing branch evidence.
 
 ## Scope
@@ -68,9 +69,11 @@ The API contract is captured in `contracts/checkpoint-branch-compare-promote.ope
 4. Confirm promotion validates accepted output refs against the current branch head.
 5. Confirm promotion requires passing gate evidence and safe side-effect disposition.
 6. Confirm promotion requires approval evidence when policy requires approval.
-7. Confirm promotion records branch id, branch turn id, Step Execution id, accepted output refs, git/PR refs, gate refs, side-effect disposition, downstream invalidation, approval evidence, policy evidence, and artifact refs.
-8. Confirm promotion does not delete, archive, or supersede competing branches.
-9. Confirm publication state remains separate from promotion state.
+7. Confirm promotion rejects budget-exhausted policy evidence before canonical acceptance.
+8. Confirm promotion rejects invalid or unverifiable checkpoint/head evidence before canonical acceptance.
+9. Confirm promotion records branch id, branch turn id, Step Execution id, accepted output refs, git/PR refs, gate refs, side-effect disposition, downstream invalidation, approval evidence, policy evidence, and artifact refs.
+10. Confirm promotion does not delete, archive, or supersede competing branches.
+11. Confirm publication state remains separate from promotion state.
 
 ## Unit Test Strategy
 
@@ -88,6 +91,8 @@ Required unit coverage:
 - Promotion rejects missing approval when `policyRequiresApproval=true`.
 - Promotion rejects non-passing gate evidence.
 - Promotion rejects unsafe side-effect disposition.
+- Promotion rejects budget-exhausted policy evidence.
+- Promotion rejects invalid or unverifiable checkpoint/head evidence.
 - Promotion rejects stale expected head Step Execution id.
 - Promotion rejects conflicting accepted output refs.
 - Promotion writes promotion evidence and artifact refs.
@@ -114,7 +119,6 @@ Integration coverage should verify the same API boundary with a real database se
 | Acceptance Criterion | Plan Coverage |
 | --- | --- |
 | Comparison artifacts contain branch ids, base checkpoint ref, diff refs, gate verdict summaries, diagnostics refs, and bounded summary refs. | Steps 1-2; unit compare tests; API contract. |
-| Promotion records branch id, turn id, Step Execution id, accepted output refs, git/PR refs, gate verdict refs, side-effect disposition refs, invalidation effects, and approval evidence. | Steps 3-7; promotion evidence tests; data model. |
-| Promotion requires expected head validation, passed gates, applicable approval, and fresh branch-head validation. | Steps 3-6; fail-closed tests. |
-| Promotion does not delete competing branches and publication remains separate from canonical acceptance. | Steps 8-9; sibling branch test; contract fields keep `publishStatus` separate. |
-
+| Promotion records branch id, turn id, Step Execution id, accepted output refs, git/PR refs, gate verdict refs, side-effect disposition refs, invalidation effects, and approval evidence. | Steps 3-9; promotion evidence tests; data model. |
+| Promotion requires expected head validation, passed gates, applicable approval, and fresh branch-head validation. | Steps 3-8; fail-closed tests. |
+| Promotion does not delete competing branches and publication remains separate from canonical acceptance. | Steps 10-11; sibling branch test; contract fields keep `publishStatus` separate. |

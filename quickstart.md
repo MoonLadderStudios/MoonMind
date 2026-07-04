@@ -66,7 +66,7 @@ Expected behavior:
 
 - Valid promotion returns the branch with `state` set to `promoted`.
 - Promotion evidence records output refs, git/PR refs, gate evidence, side-effect disposition, downstream invalidation, approval evidence, and artifact refs.
-- Stale expected head, missing required approval, failed gates, unsafe side effects, and conflicting accepted output refs return `409`.
+- Stale expected head, missing required approval, failed gates, unsafe side effects, budget-exhausted policy evidence, invalid or unverifiable checkpoint/head evidence, and conflicting accepted output refs return `409`.
 
 ## Integration Test Guidance
 
@@ -77,4 +77,3 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_integration.sh
 ```
 
 Provider verification is not required for this story.
-

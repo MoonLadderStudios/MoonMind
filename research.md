@@ -40,9 +40,8 @@ Decision: Promotion rejects missing or stale head evidence, failing gates, unsaf
 
 Rationale: The acceptance criteria require fail-closed behavior. This also follows the checkpoint branch safety rules for fresh branch-head validation and side-effect control.
 
-## Open Questions for Implementation Review
+## Implementation Review Questions
 
 - Should synthesized comparison artifact refs be backed by physical artifact bodies in this story, or is operation-ledger evidence sufficient for the current API behavior?
-- Should `budget_exhausted` be represented as a first-class promotion request field, a gate verdict, or policy evidence status?
-- Should checkpoint validity be rechecked through a dedicated checkpoint service immediately before promotion, beyond matching the persisted current branch head?
-
+- Represent `budget_exhausted` through `policyEvidence` so promotion can fail closed without adding a separate billing-specific request field to the checkpoint branch API.
+- Treat checkpoint validity as a required fresh validation input at the promotion boundary. The implementation may satisfy this through persisted current branch-head checkpoint evidence for the initial API story, but tests must prove unverifiable or invalid checkpoint/head evidence is rejected.

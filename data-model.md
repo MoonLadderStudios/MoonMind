@@ -130,6 +130,8 @@ Required fields:
 - Gate evidence must contain a passing verdict/status.
 - Side-effect disposition must be in the safe promotion set.
 - Approval evidence is required when `policyRequiresApproval=true`.
+- Policy evidence must not report `budget_exhausted`.
+- Checkpoint/head evidence must be present and valid enough to prove the current promoted head.
 - Archived or superseded branches cannot be promoted.
 - A competing promoted sibling from the same source checkpoint blocks promotion.
 
@@ -148,4 +150,3 @@ Comparison:
 ```text
 no branch state transition
 ```
-

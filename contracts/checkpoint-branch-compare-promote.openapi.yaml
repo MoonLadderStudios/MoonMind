@@ -223,6 +223,7 @@ components:
           additionalProperties: true
         policyEvidence:
           type: object
+          description: Promotion policy evidence. A budget-exhausted policy state must fail closed.
           additionalProperties: true
         policyRequiresApproval:
           type: boolean
