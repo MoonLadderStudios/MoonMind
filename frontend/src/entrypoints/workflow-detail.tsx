@@ -4174,12 +4174,12 @@ type BranchCreateDraft = {
 type BranchMutationKind = 'create' | 'continue' | 'fork' | 'promote' | 'publish' | 'archive' | 'compare';
 
 type BranchMutationRequest =
-  | { kind: 'create'; draft: BranchCreateDraft; source: StepLedgerRow }
-  | { kind: 'continue'; branch: CheckpointBranch; instructions: string }
-  | { kind: 'fork'; branch: CheckpointBranch; instructions: string }
-  | { kind: 'promote'; branch: CheckpointBranch; competingBranches: CheckpointBranch[] }
-  | { kind: 'publish'; branch: CheckpointBranch }
-  | { kind: 'archive'; branch: CheckpointBranch }
+  | { kind: 'create'; draft: BranchCreateDraft; source: StepLedgerRow; idempotencyKey: string }
+  | { kind: 'continue'; branch: CheckpointBranch; instructions: string; idempotencyKey: string }
+  | { kind: 'fork'; branch: CheckpointBranch; instructions: string; idempotencyKey: string }
+  | { kind: 'promote'; branch: CheckpointBranch; competingBranches: CheckpointBranch[]; idempotencyKey: string }
+  | { kind: 'publish'; branch: CheckpointBranch; idempotencyKey: string }
+  | { kind: 'archive'; branch: CheckpointBranch; idempotencyKey: string }
   | { kind: 'compare'; branch: CheckpointBranch; againstBranchId: string };
 
 const BRANCH_MUTATING_STATES = new Set(['created', 'active', 'blocked', 'failed', 'succeeded', 'promotable']);
@@ -4196,6 +4196,10 @@ const DEFAULT_BRANCH_CREATE_DRAFT: BranchCreateDraft = {
 
 function stepCheckpointRef(row: StepLedgerRow): string | null {
   return row.stateCheckpointRef || null;
+}
+
+function isSupportedCheckpointRef(ref: string | null): boolean {
+  return Boolean(ref?.startsWith('artifact://'));
 }
 
 function stepBranchKey(row: StepLedgerRow): string {
@@ -4295,6 +4299,15 @@ function branchCanMutate(branch: CheckpointBranch): boolean {
   return BRANCH_MUTATING_STATES.has(branch.state);
 }
 
+function branchPromotionGateVerdict(branch: CheckpointBranch): string {
+  return branch.state === 'promotable' || branch.state === 'succeeded' ? 'passed' : branch.state;
+}
+
+function branchPromotionSideEffectStatus(branch: CheckpointBranch): string {
+  const publishStatus = branch.publishStatus || 'unpublished';
+  return publishStatus === 'unpublished' ? 'none' : 'accepted';
+}
+
 function BranchExplorerPanel({
   apiBase,
   workflowId,
@@ -4328,7 +4341,7 @@ function BranchExplorerPanel({
   onSelectBranch: (branchId: string) => void;
   onBranchAction: (request: BranchMutationRequest) => void;
 }) {
-  const checkpointRows = rows.filter((row) => Boolean(stepCheckpointRef(row)));
+  const checkpointRows = rows.filter((row) => isSupportedCheckpointRef(stepCheckpointRef(row)));
   const branchGroups = useMemo(() => buildBranchGroups(branches), [branches]);
   const [draft, setDraft] = useState<BranchCreateDraft>(() => DEFAULT_BRANCH_CREATE_DRAFT);
   const [branchInstructions, setBranchInstructions] = useState('Continue this branch with bounded instructions.');
@@ -4336,13 +4349,19 @@ function BranchExplorerPanel({
 
   useEffect(() => {
     const firstCheckpointRow = checkpointRows[0];
-    if (!draft.sourceStepId && firstCheckpointRow) {
+    const selectedCheckpointExists = checkpointRows.some((row) => stepBranchKey(row) === draft.sourceStepId);
+    if ((!draft.sourceStepId || !selectedCheckpointExists) && firstCheckpointRow) {
       setDraft((current) => ({ ...current, sourceStepId: stepBranchKey(firstCheckpointRow) }));
     }
   }, [checkpointRows, draft.sourceStepId]);
 
   useEffect(() => {
-    if (!againstBranchId && branches.length > 1 && selectedBranch) {
+    if (!selectedBranch) {
+      if (againstBranchId) setAgainstBranchId('');
+      return;
+    }
+    const targetExists = branches.some((branch) => branch.branchId === againstBranchId);
+    if (againstBranchId === selectedBranch.branchId || !againstBranchId || !targetExists) {
       const next = branches.find((branch) => branch.branchId !== selectedBranch.branchId);
       setAgainstBranchId(next?.branchId || '');
     }
@@ -4356,11 +4375,19 @@ function BranchExplorerPanel({
       branch.state !== 'archived'
     ))
     : [];
-  const createDisabled = !actionsEnabled || busy || !selectedSource || !draft.label.trim() || !draft.instructions.trim();
+  const publishModeRequiresBranch = draft.publishMode !== 'none';
+  const createDisabled = (
+    !actionsEnabled ||
+    busy ||
+    !selectedSource ||
+    !draft.label.trim() ||
+    !draft.instructions.trim() ||
+    (publishModeRequiresBranch && !draft.gitWorkBranch.trim())
+  );
   const selectedMutable = Boolean(selectedBranch && branchCanMutate(selectedBranch));
   const promoteDisabled = !actionsEnabled || busy || !selectedBranch?.currentHeadStepExecutionId;
   const publishDisabled = !actionsEnabled || busy || !selectedBranch?.gitRepository || !selectedBranch?.gitBaseBranch || !selectedBranch?.gitWorkBranch;
-  const compareDisabled = !actionsEnabled || busy || !selectedBranch || !againstBranchId;
+  const compareDisabled = !actionsEnabled || busy || !selectedBranch || !againstBranchId || againstBranchId === selectedBranch.branchId;
 
   return (
     <section className="stack td-branch-explorer td-evidence-region" aria-label="Branch Explorer">
@@ -4485,7 +4512,16 @@ function BranchExplorerPanel({
           <Fact label="Side-effect risk">{draft.publishMode === 'none' ? 'No publish side effect requested' : 'Git publication requested'}</Fact>
           <Fact label="Run"><code className="text-xs break-all">{runId || '—'}</code></Fact>
         </div>
-        <button type="button" disabled={createDisabled} onClick={() => selectedSource && onBranchAction({ kind: 'create', draft, source: selectedSource })}>
+        <button
+          type="button"
+          disabled={createDisabled}
+          onClick={() => selectedSource && onBranchAction({
+            kind: 'create',
+            draft,
+            source: selectedSource,
+            idempotencyKey: branchIdempotencyKey('create', workflowId, stepBranchKey(selectedSource)),
+          })}
+        >
           Create branch from checkpoint
         </button>
       </div>
@@ -4541,12 +4577,12 @@ function BranchExplorerPanel({
             </select>
           </label>
           <div className="button-row">
-            <button type="button" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions })}>Continue branch</button>
-            <button type="button" className="secondary" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions })}>Fork from this branch</button>
+            <button type="button" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId) })}>Continue branch</button>
+            <button type="button" className="secondary" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId) })}>Fork from this branch</button>
             <button type="button" className="secondary" disabled={compareDisabled} onClick={() => onBranchAction({ kind: 'compare', branch: selectedBranch, againstBranchId })}>Compare branches</button>
-            <button type="button" className="secondary" disabled={promoteDisabled} onClick={() => onBranchAction({ kind: 'promote', branch: selectedBranch, competingBranches })}>Promote branch</button>
-            <button type="button" className="secondary" disabled={publishDisabled} onClick={() => onBranchAction({ kind: 'publish', branch: selectedBranch })}>Publish branch</button>
-            <button type="button" className="secondary" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'archive', branch: selectedBranch })}>Archive branch</button>
+            <button type="button" className="secondary" disabled={promoteDisabled} onClick={() => onBranchAction({ kind: 'promote', branch: selectedBranch, competingBranches, idempotencyKey: branchIdempotencyKey('promote', workflowId, selectedBranch.branchId) })}>Promote branch</button>
+            <button type="button" className="secondary" disabled={publishDisabled} onClick={() => onBranchAction({ kind: 'publish', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('publish', workflowId, selectedBranch.branchId) })}>Publish branch</button>
+            <button type="button" className="secondary" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'archive', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('archive', workflowId, selectedBranch.branchId) })}>Archive branch</button>
           </div>
           {latestCompare ? <p className="small">Latest comparison summary: <code className="text-xs break-all">{latestCompare.summaryRef}</code></p> : null}
         </div>
@@ -7165,8 +7201,13 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const selectedBranch = branches.find((branch) => branch.branchId === selectedBranchId) || branches[0] || null;
   useEffect(() => {
     const firstBranch = branches[0];
-    if (!selectedBranchId && firstBranch) {
-      setSelectedBranchId(firstBranch.branchId);
+    if (firstBranch) {
+      const exists = branches.some((branch) => branch.branchId === selectedBranchId);
+      if (!selectedBranchId || !exists) {
+        setSelectedBranchId(firstBranch.branchId);
+      }
+    } else if (selectedBranchId) {
+      setSelectedBranchId('');
     }
   }, [branches, selectedBranchId]);
   const selectedBranchTurnsQuery = useQuery({
@@ -7625,7 +7666,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           workspacePolicy: request.draft.workspacePolicy,
           runtimeContextPolicy: request.draft.runtimeContextPolicy,
           publishMode: request.draft.publishMode,
-          idempotencyKey: branchIdempotencyKey('create', workflowId, stepBranchKey(request.source)),
+          idempotencyKey: request.idempotencyKey,
           gitWorkBranch: request.draft.gitWorkBranch.trim() || null,
           maxBudgetUsd: Number.isFinite(budget) ? budget : null,
         };
@@ -7636,7 +7677,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           instructions: { text: request.instructions.trim() || 'Continue this checkpoint branch.' },
           workspacePolicy: 'continue_from_previous_execution',
           runtimeContextPolicy: 'reuse_session_new_epoch',
-          idempotencyKey: branchIdempotencyKey('continue', workflowId, request.branch.branchId),
+          idempotencyKey: request.idempotencyKey,
           maxBudgetUsd: null,
         };
       } else if (request.kind === 'fork') {
@@ -7646,7 +7687,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           instructions: { text: request.instructions.trim() || 'Fork this checkpoint branch.' },
           workspacePolicy: 'apply_previous_execution_diff_to_clean_baseline',
           runtimeContextPolicy: 'fresh_agent_run',
-          idempotencyKey: branchIdempotencyKey('fork', workflowId, request.branch.branchId),
+          idempotencyKey: request.idempotencyKey,
           maxBudgetUsd: null,
         };
       } else if (request.kind === 'promote') {
@@ -7656,10 +7697,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           expectedHeadCommit: request.branch.currentHeadCommit || null,
           acceptedOutputRefs: request.branch.artifactRefs || {},
           gateEvidence: {
-            verdict: request.branch.state,
+            verdict: branchPromotionGateVerdict(request.branch),
             checkpointRef: request.branch.currentHeadCheckpointRef || request.branch.sourceCheckpointRef,
           },
           sideEffectDisposition: {
+            status: branchPromotionSideEffectStatus(request.branch),
             publishStatus: request.branch.publishStatus || 'unpublished',
             pullRequestUrl: request.branch.pullRequestUrl || null,
           },
@@ -7669,7 +7711,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           approvalEvidence: null,
           policyEvidence: { requestedFrom: 'workflow-detail' },
           policyRequiresApproval: false,
-          idempotencyKey: branchIdempotencyKey('promote', workflowId, request.branch.branchId),
+          idempotencyKey: request.idempotencyKey,
         };
       } else if (request.kind === 'publish') {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/publish`;
@@ -7679,13 +7721,13 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           baseBranch: request.branch.gitBaseBranch,
           headBranch: request.branch.gitWorkBranch,
           provider: 'github',
-          idempotencyKey: branchIdempotencyKey('publish', workflowId, request.branch.branchId),
+          idempotencyKey: request.idempotencyKey,
         };
       } else {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/archive`;
         body = {
           reason: 'Archived from workflow detail Branch Explorer.',
-          idempotencyKey: branchIdempotencyKey('archive', workflowId, request.branch.branchId),
+          idempotencyKey: request.idempotencyKey,
         };
       }
 
