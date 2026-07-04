@@ -18,7 +18,9 @@ from api_service.db.models import (
 )
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
+    CheckpointBranchPolicyError,
     CHECKPOINT_BRANCH_GRAPH_TRACEABILITY_ISSUES,
+    CHECKPOINT_BRANCH_POLICY_TRACEABILITY_ISSUES,
     SOURCE_TRACEABILITY_ISSUES,
     build_branch_turn_launch_idempotency_key,
 )
@@ -75,6 +77,48 @@ def _branch_payload(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def _policy_payload(**overrides):
+    policy = {
+        "enabled": True,
+        "triggers": ["failed_step"],
+        "maxBranchesPerCheckpoint": 2,
+        "maxTurnsPerBranch": 2,
+        "promotionPolicy": "approval_gated",
+        "defaultWorkspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+        "runtimeContextPolicy": "fresh_agent_run",
+        "publishMode": "none",
+        "sideEffectPolicy": "isolated",
+        "branchTemplates": [
+            {
+                "label": "minimal_fix",
+                "instructionsRef": "artifact://instructions/minimal",
+            },
+            {
+                "label": "alternative_design",
+                "instructionsRef": "artifact://instructions/alternative",
+            },
+        ],
+    }
+    policy.update(overrides)
+    return policy
+
+
+def _policy_source(**overrides):
+    source = {
+        "runId": "run-1",
+        "logicalStepId": "implement",
+        "sourceExecutionOrdinal": 2,
+        "checkpointBoundary": "after_execution",
+        "checkpointRef": "artifact://checkpoint/after",
+        "checkpointDigest": "sha256:checkpoint",
+        "gitRepository": "repo://moonmind",
+        "gitBaseBranch": "main",
+        "gitBaseCommit": "abc123",
+    }
+    source.update(overrides)
+    return source
 
 
 def test_checkpoint_branch_requires_checkpoint_or_typed_source_state() -> None:
@@ -596,6 +640,161 @@ async def test_checkpoint_branch_graph_operations_are_idempotent_by_operation_id
             "idempotency://MM-1099:cbr-idempotent:promotable",
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_policy_creates_bounded_branches_through_graph(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+
+    created = await service.create_policy_branches(
+        workflow_id="wf-1",
+        source=_policy_source(),
+        policy=_policy_payload(gitWorkBranch="mm/wf-1/policy/{branchId}"),
+        trigger="failed_step",
+        idempotency_key_prefix="MM-1095:wf-1:failed-step",
+        created_step_execution_id_prefix="wf-1:run-policy:implement:execution",
+    )
+    await checkpoint_branch_session.commit()
+
+    branches = (
+        await checkpoint_branch_session.execute(
+            select(WorkflowCheckpointBranch).order_by(
+                WorkflowCheckpointBranch.branch_id
+            )
+        )
+    ).scalars().all()
+    turns = (
+        await checkpoint_branch_session.execute(
+            select(WorkflowCheckpointBranchTurn).order_by(
+                WorkflowCheckpointBranchTurn.branch_turn_id
+            )
+        )
+    ).scalars().all()
+
+    assert [item.label for item in created] == ["minimal_fix", "alternative_design"]
+    assert CHECKPOINT_BRANCH_POLICY_TRACEABILITY_ISSUES == ("MM-1095",)
+    assert [branch.created_by for branch in branches] == [
+        "policy:failed_step:MM-1095",
+        "policy:failed_step:MM-1095",
+    ]
+    assert [branch.source_checkpoint_ref for branch in branches] == [
+        "artifact://checkpoint/after",
+        "artifact://checkpoint/after",
+    ]
+    assert [branch.git_work_branch for branch in branches] == [
+        f"mm/wf-1/policy/{branches[0].branch_id}",
+        f"mm/wf-1/policy/{branches[1].branch_id}",
+    ]
+    assert [turn.instruction_ref for turn in turns] == [
+        "artifact://instructions/alternative",
+        "artifact://instructions/minimal",
+    ]
+    assert all(turn.idempotency_key.startswith("MM-1095:") for turn in turns)
+    assert all(turn.instruction_digest.startswith("sha256:") for turn in turns)
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_policy_skips_disabled_or_unconfigured_trigger(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+
+    disabled = await service.create_policy_branches(
+        workflow_id="wf-1",
+        source=_policy_source(),
+        policy={"enabled": False},
+        trigger="failed_step",
+        idempotency_key_prefix="MM-1095:wf-1:disabled",
+    )
+    skipped = await service.create_policy_branches(
+        workflow_id="wf-1",
+        source=_policy_source(),
+        policy=_policy_payload(triggers=["operator_requested"]),
+        trigger="failed_step",
+        idempotency_key_prefix="MM-1095:wf-1:not-configured",
+    )
+    branch_count = (
+        await checkpoint_branch_session.execute(
+            select(WorkflowCheckpointBranch.branch_id)
+        )
+    ).scalars().all()
+
+    assert disabled == []
+    assert skipped == []
+    assert branch_count == []
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_policy_fails_closed_for_unsafe_modes(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+
+    for policy in (
+        _policy_payload(promotionPolicy="auto"),
+        _policy_payload(runtimeContextPolicy="external_provider_continuation"),
+        _policy_payload(sideEffectPolicy="unbounded"),
+        _policy_payload(publishMode="pull_request"),
+        _policy_payload(maxBudgetUsd=0),
+    ):
+        with pytest.raises(CheckpointBranchPolicyError):
+            await service.create_policy_branches(
+                workflow_id="wf-1",
+                source=_policy_source(),
+                policy=policy,
+                trigger="failed_step",
+                idempotency_key_prefix="MM-1095:wf-1:unsafe",
+            )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_policy_enforces_branch_and_turn_limits(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    policy = _policy_payload(
+        branchTemplates=[
+            {
+                "label": "minimal_fix",
+                "instructionsRef": "artifact://instructions/minimal",
+            }
+        ],
+        maxBranchesPerCheckpoint=1,
+        maxTurnsPerBranch=1,
+    )
+    created = await service.create_policy_branches(
+        workflow_id="wf-1",
+        source=_policy_source(),
+        policy=policy,
+        trigger="failed_step",
+        idempotency_key_prefix="MM-1095:wf-1:limited",
+    )
+
+    with pytest.raises(
+        CheckpointBranchPolicyError,
+        match="maxBranchesPerCheckpoint",
+    ):
+        await service.create_policy_branches(
+            workflow_id="wf-1",
+            source=_policy_source(),
+            policy=policy,
+            trigger="failed_step",
+            idempotency_key_prefix="MM-1095:wf-1:limited-second",
+        )
+
+    with pytest.raises(CheckpointBranchPolicyError, match="maxTurnsPerBranch"):
+        await service.continue_policy_branch(
+            workflow_id="wf-1",
+            branch_id=created[0].branch_id,
+            policy=policy,
+            payload={
+                "instructionRef": "artifact://instructions/continue",
+                "instructionDigest": "sha256:continue",
+                "idempotencyKey": "MM-1095:wf-1:limited:continue",
+            },
+        )
 
 
 @pytest.mark.asyncio

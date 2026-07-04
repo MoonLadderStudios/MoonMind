@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+import hashlib
+import re
+from typing import Any, Mapping, Sequence
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +38,24 @@ from moonmind.statuses.checkpoint_branch import (
 
 SOURCE_TRACEABILITY_ISSUES = ("MM-1087", "MM-1088")
 CHECKPOINT_BRANCH_GRAPH_TRACEABILITY_ISSUES = ("MM-1087", "MM-1099")
+CHECKPOINT_BRANCH_POLICY_TRACEABILITY_ISSUES = ("MM-1095",)
 _PROTECTED_GIT_WORK_BRANCHES = {"", "main", "master", "HEAD"}
+_POLICY_BRANCHING_SUPPORTED_TRIGGERS = frozenset(
+    {
+        "gate_additional_work_needed",
+        "failed_step",
+        "operator_requested",
+    }
+)
+_POLICY_BRANCHING_RUNTIME_CONTEXT_POLICIES = frozenset(
+    {
+        "fresh_agent_run",
+        "reuse_session_new_epoch",
+        "reuse_session_same_epoch",
+    }
+)
+_POLICY_BRANCHING_SIDE_EFFECT_POLICIES = frozenset({"isolated", "none"})
+_POLICY_BRANCH_LABEL_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
 
 def build_branch_turn_launch_idempotency_key(
@@ -69,6 +88,244 @@ class CheckpointBranchGitBindingInput:
     workspace_policy: str = "apply_previous_execution_diff_to_clean_baseline"
     creation_mode: str = "manual"
     publish_status: str = "unpublished"
+
+
+@dataclass(frozen=True)
+class PolicyCheckpointBranchResult:
+    """Policy branch creation outcome produced through the normal branch graph."""
+
+    branch_id: str
+    branch_turn_id: str
+    label: str
+
+
+class CheckpointBranchPolicyError(ValueError):
+    """Fail-closed checkpoint branch exploration policy error."""
+
+
+def _clean_policy_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _positive_policy_int(policy: Mapping[str, Any], field_name: str) -> int:
+    raw_value = policy.get(field_name)
+    if isinstance(raw_value, bool):
+        raise CheckpointBranchPolicyError(f"checkpointBranching.{field_name} invalid")
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise CheckpointBranchPolicyError(
+            f"checkpointBranching.{field_name} invalid"
+        ) from exc
+    if value <= 0:
+        raise CheckpointBranchPolicyError(
+            f"checkpointBranching.{field_name} must be greater than zero"
+        )
+    return value
+
+
+def _validate_checkpoint_branching_policy(
+    policy: Mapping[str, Any] | None,
+    *,
+    trigger: str | None,
+    require_configured_trigger: bool = True,
+) -> dict[str, Any] | None:
+    if policy is None:
+        return None
+    if not isinstance(policy, Mapping):
+        raise CheckpointBranchPolicyError("checkpointBranching must be an object")
+    enabled = policy.get("enabled", False)
+    if enabled is False:
+        return None
+    if enabled is not True:
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching.enabled must be true or false"
+        )
+
+    configured_triggers = policy.get("triggers")
+    if not isinstance(configured_triggers, Sequence) or isinstance(
+        configured_triggers, (str, bytes)
+    ):
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching.triggers must be a list"
+        )
+    triggers = {
+        str(item).strip()
+        for item in configured_triggers
+        if str(item or "").strip()
+    }
+    if not triggers:
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching.triggers must include configured values"
+        )
+    unsupported_triggers = triggers - _POLICY_BRANCHING_SUPPORTED_TRIGGERS
+    if unsupported_triggers:
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching.triggers contains unsupported values"
+        )
+    if require_configured_trigger:
+        requested_trigger = _clean_policy_text(trigger)
+        if requested_trigger not in _POLICY_BRANCHING_SUPPORTED_TRIGGERS:
+            raise CheckpointBranchPolicyError(
+                "checkpointBranching trigger is unsupported"
+            )
+        if requested_trigger not in triggers:
+            return None
+
+    promotion_policy = _clean_policy_text(policy.get("promotionPolicy"))
+    if promotion_policy != "approval_gated":
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching.promotionPolicy must remain approval_gated"
+        )
+    publish_mode = _clean_policy_text(policy.get("publishMode")) or "none"
+    if publish_mode != "none":
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching.publishMode must be none"
+        )
+    side_effect_policy = (
+        _clean_policy_text(policy.get("sideEffectPolicy")) or "isolated"
+    )
+    if side_effect_policy not in _POLICY_BRANCHING_SIDE_EFFECT_POLICIES:
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching.sideEffectPolicy is unsupported"
+        )
+    runtime_context_policy = (
+        _clean_policy_text(policy.get("runtimeContextPolicy")) or "fresh_agent_run"
+    )
+    if runtime_context_policy not in _POLICY_BRANCHING_RUNTIME_CONTEXT_POLICIES:
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching runtimeContextPolicy is unsupported"
+        )
+
+    max_budget = policy.get("maxBudgetUsd")
+    if max_budget is not None:
+        try:
+            budget = float(max_budget)
+        except (TypeError, ValueError) as exc:
+            raise CheckpointBranchPolicyError(
+                "checkpointBranching.maxBudgetUsd invalid"
+            ) from exc
+        if budget <= 0:
+            raise CheckpointBranchPolicyError(
+                "checkpointBranching.maxBudgetUsd must be greater than zero"
+            )
+    branch_templates = _policy_branch_templates(policy.get("branchTemplates"))
+    max_branches = _positive_policy_int(policy, "maxBranchesPerCheckpoint")
+    max_turns = _positive_policy_int(policy, "maxTurnsPerBranch")
+    if len(branch_templates) > max_branches:
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching.branchTemplates exceeds maxBranchesPerCheckpoint"
+        )
+    workspace_policy = _clean_policy_text(policy.get("defaultWorkspacePolicy"))
+    if not workspace_policy:
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching.defaultWorkspacePolicy is required"
+        )
+    return {
+        "triggers": sorted(triggers),
+        "maxBranchesPerCheckpoint": max_branches,
+        "maxTurnsPerBranch": max_turns,
+        "promotionPolicy": promotion_policy,
+        "defaultWorkspacePolicy": workspace_policy,
+        "runtimeContextPolicy": runtime_context_policy,
+        "publishMode": publish_mode,
+        "sideEffectPolicy": side_effect_policy,
+        "branchTemplates": branch_templates,
+        "gitWorkBranch": _clean_policy_text(policy.get("gitWorkBranch")),
+    }
+
+
+def _policy_branch_templates(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching.branchTemplates must be a list"
+        )
+    labels: set[str] = set()
+    templates: list[dict[str, str]] = []
+    for raw_template in value:
+        if not isinstance(raw_template, Mapping):
+            raise CheckpointBranchPolicyError(
+                "checkpointBranching.branchTemplates entries must be objects"
+            )
+        label = _clean_policy_text(raw_template.get("label"))
+        instructions_ref = _clean_policy_text(raw_template.get("instructionsRef"))
+        if not label or not instructions_ref:
+            raise CheckpointBranchPolicyError(
+                "checkpointBranching branch templates require label and instructionsRef"
+            )
+        if label in labels:
+            raise CheckpointBranchPolicyError(
+                "checkpointBranching branch template labels must be unique"
+            )
+        labels.add(label)
+        templates.append({"label": label, "instructionsRef": instructions_ref})
+    if not templates:
+        raise CheckpointBranchPolicyError(
+            "checkpointBranching.branchTemplates must include at least one template"
+        )
+    return templates
+
+
+def _policy_source_payload(
+    source: Mapping[str, Any],
+    *,
+    workflow_id: str,
+) -> dict[str, Any]:
+    payload = {
+        "workflowId": workflow_id,
+        "rootWorkflowId": _clean_policy_text(source.get("rootWorkflowId")),
+        "runId": _clean_policy_text(source.get("runId")),
+        "logicalStepId": _clean_policy_text(source.get("logicalStepId")),
+        "sourceExecutionOrdinal": source.get("sourceExecutionOrdinal"),
+        "checkpointBoundary": _clean_policy_text(source.get("checkpointBoundary")),
+        "checkpointRef": _clean_policy_text(source.get("checkpointRef")),
+        "checkpointDigest": _clean_policy_text(source.get("checkpointDigest")),
+        "sourceStateKind": _clean_policy_text(source.get("sourceStateKind")),
+        "sourceStateRef": _clean_policy_text(source.get("sourceStateRef")),
+        "sourceStateDigest": _clean_policy_text(source.get("sourceStateDigest")),
+    }
+    if not payload["runId"]:
+        raise CheckpointBranchPolicyError("policy checkpoint branching requires runId")
+    return payload
+
+
+def _policy_slug(value: str) -> str:
+    slug = _POLICY_BRANCH_LABEL_RE.sub("-", value.strip().lower()).strip("-._")
+    return slug[:40] or "branch"
+
+
+def _policy_branch_id_base(
+    *,
+    workflow_id: str,
+    source: Mapping[str, Any],
+    trigger: str,
+) -> str:
+    seed = "|".join(
+        [
+            workflow_id,
+            str(source.get("runId") or ""),
+            str(source.get("logicalStepId") or ""),
+            str(source.get("checkpointRef") or source.get("sourceStateRef") or ""),
+            trigger,
+        ]
+    )
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+    return f"cbr-policy-{digest}"
+
+
+def _policy_instruction_digest(instruction_ref: str) -> str:
+    return f"sha256:{hashlib.sha256(instruction_ref.encode('utf-8')).hexdigest()}"
+
+
+def _policy_work_branch(value: str | None, *, branch_id: str) -> str | None:
+    if not value:
+        return None
+    if "{branchId}" in value:
+        return value.replace("{branchId}", branch_id)
+    return value
 
 
 class CheckpointBranchService:
@@ -208,6 +465,144 @@ class CheckpointBranchService:
 
     def _next_turn_id(self, branch_id: str, count: int) -> str:
         return f"{branch_id}-turn-{count + 1}"
+
+    async def _policy_branch_count_for_source(
+        self,
+        *,
+        workflow_id: str,
+        source: Mapping[str, Any],
+    ) -> int:
+        checkpoint_ref = _clean_policy_text(source.get("checkpointRef"))
+        source_state_ref = _clean_policy_text(source.get("sourceStateRef"))
+        statement = select(func.count()).select_from(WorkflowCheckpointBranch).where(
+            WorkflowCheckpointBranch.workflow_id == workflow_id,
+            WorkflowCheckpointBranch.created_by.like("policy:%"),
+        )
+        if checkpoint_ref:
+            statement = statement.where(
+                WorkflowCheckpointBranch.source_checkpoint_ref == checkpoint_ref
+            )
+        elif source_state_ref:
+            statement = statement.where(
+                WorkflowCheckpointBranch.source_state_ref == source_state_ref
+            )
+        else:
+            raise CheckpointBranchPolicyError(
+                "policy checkpoint branching requires checkpointRef or sourceStateRef"
+            )
+        return (await self._session.execute(statement)).scalar_one()
+
+    async def create_policy_branches(
+        self,
+        *,
+        workflow_id: str,
+        source: Mapping[str, Any],
+        policy: Mapping[str, Any] | None,
+        trigger: str,
+        idempotency_key_prefix: str,
+        created_step_execution_id_prefix: str | None = None,
+    ) -> list[PolicyCheckpointBranchResult]:
+        """Create bounded policy-requested branches through the branch graph path.
+
+        Disabled policies and triggers outside the configured set create no work.
+        Enabled malformed or unsafe policies fail closed before any branch is written.
+        """
+
+        normalized = _validate_checkpoint_branching_policy(policy, trigger=trigger)
+        if normalized is None:
+            return []
+
+        max_branches = normalized["maxBranchesPerCheckpoint"]
+        templates = normalized["branchTemplates"]
+        existing_count = await self._policy_branch_count_for_source(
+            workflow_id=workflow_id,
+            source=source,
+        )
+        if existing_count + len(templates) > max_branches:
+            raise CheckpointBranchPolicyError(
+                "checkpointBranching.maxBranchesPerCheckpoint would be exceeded"
+            )
+
+        results: list[PolicyCheckpointBranchResult] = []
+        source_payload = _policy_source_payload(source, workflow_id=workflow_id)
+        base_id = _policy_branch_id_base(
+            workflow_id=workflow_id,
+            source=source_payload,
+            trigger=trigger,
+        )
+        for index, template in enumerate(templates, start=existing_count + 1):
+            label = template["label"]
+            branch_id = f"{base_id}-{_policy_slug(label)}-{index}"
+            branch_turn_id = f"{branch_id}-turn-1"
+            instruction_ref = template["instructionsRef"]
+            graph = await self.create_branch_graph(
+                {
+                    "branchId": branch_id,
+                    "branchTurnId": branch_turn_id,
+                    "source": source_payload,
+                    "label": label,
+                    "workspacePolicy": normalized["defaultWorkspacePolicy"],
+                    "runtimeContextPolicy": normalized["runtimeContextPolicy"],
+                    "gitRepository": _clean_policy_text(source.get("gitRepository")),
+                    "gitBaseBranch": _clean_policy_text(source.get("gitBaseBranch")),
+                    "gitBaseCommit": _clean_policy_text(source.get("gitBaseCommit")),
+                    "gitWorkBranch": _policy_work_branch(
+                        normalized.get("gitWorkBranch"),
+                        branch_id=branch_id,
+                    ),
+                    "createdBy": (
+                        f"policy:{trigger}:"
+                        f"{CHECKPOINT_BRANCH_POLICY_TRACEABILITY_ISSUES[0]}"
+                    ),
+                    "instructionRef": instruction_ref,
+                    "instructionDigest": _policy_instruction_digest(instruction_ref),
+                    "createdStepExecutionId": (
+                        f"{created_step_execution_id_prefix}:{branch_id}:turn-1"
+                        if created_step_execution_id_prefix
+                        else None
+                    ),
+                    "idempotencyKey": (
+                        f"{idempotency_key_prefix}:checkpointBranching:"
+                        f"{trigger}:{label}"
+                    ),
+                }
+            )
+            results.append(
+                PolicyCheckpointBranchResult(
+                    branch_id=graph.branch.branch_id,
+                    branch_turn_id=graph.turns[0].branch_turn_id,
+                    label=graph.branch.label,
+                )
+            )
+        return results
+
+    async def continue_policy_branch(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        policy: Mapping[str, Any],
+        payload: CheckpointBranchContinueModel | dict[str, Any],
+    ) -> WorkflowCheckpointBranchTurn:
+        normalized = _validate_checkpoint_branching_policy(
+            policy,
+            trigger=None,
+            require_configured_trigger=False,
+        )
+        if normalized is None:
+            raise CheckpointBranchPolicyError(
+                "checkpointBranching must be enabled to continue policy branch"
+            )
+        turn_count = await self._turn_count(branch_id)
+        if turn_count >= normalized["maxTurnsPerBranch"]:
+            raise CheckpointBranchPolicyError(
+                "checkpointBranching.maxTurnsPerBranch would be exceeded"
+            )
+        return await self.continue_branch(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            payload=payload,
+        )
 
     async def _require_turn_on_branch(
         self,
