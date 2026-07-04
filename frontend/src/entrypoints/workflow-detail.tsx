@@ -107,12 +107,13 @@ const WORKFLOW_SIDEBAR_ANIMATED_STATUS = {
   finalizing: FlaskIcon,
 } as const;
 type SidebarAnimatedWorkflowStatus = keyof typeof WORKFLOW_SIDEBAR_ANIMATED_STATUS;
-const WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS: Readonly<Record<SidebarAnimatedWorkflowStatus, number | undefined>> = {
+export const WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS = 1200;
+export const WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS = {
   initializing: undefined,
   executing: 650,
-  planning: 650,
+  planning: 1400,
   finalizing: 650,
-};
+} as const satisfies Readonly<Record<SidebarAnimatedWorkflowStatus, number | undefined>>;
 type WorkflowSidebarStatusIconHandle = LoaderCircleIconHandle | BotIconHandle | RouteIconHandle | FlaskIconHandle;
 
 function AnimatedWorkflowSidebarStatusIcon({
