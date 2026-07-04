@@ -2573,7 +2573,7 @@ def test_list_executions_source_temporal_filters_and_sorts_progress_from_bounded
     assert "ORDER BY" not in list_query
 
 
-def test_list_executions_source_temporal_does_not_hydrate_live_progress() -> None:
+def test_list_executions_source_temporal_hydrates_live_progress_by_default() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -2654,9 +2654,11 @@ def test_list_executions_source_temporal_does_not_hydrate_live_progress() -> Non
     assert response.status_code == 200
     item = response.json()["items"][0]
     assert item["workflowId"] == "mm:wf-live"
-    assert item["runId"] == "run-temporal"
-    assert item["progress"] is None
-    temporal_client.get_workflow_handle.assert_not_called()
+    assert item["runId"] == "run-live"
+    assert item["progress"]["currentStepTitle"] == "Run tests"
+    assert item["progress"]["completed"] == 2
+    assert item["progress"]["total"] == 3
+    temporal_client.get_workflow_handle.assert_called_once_with("mm:wf-live")
 
 
 def test_list_executions_source_temporal_hydrates_live_progress_for_filters() -> None:
