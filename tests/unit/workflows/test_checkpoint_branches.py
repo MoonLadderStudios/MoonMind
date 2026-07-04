@@ -240,6 +240,24 @@ def test_prepare_binding_rejects_unvalidated_provider_workspace() -> None:
     assert exc_info.value.failure_code == "provider_continuation_unsupported"
 
 
+def test_prepare_binding_rejects_same_session_provider_continuation_until_capable(
+) -> None:
+    with pytest.raises(CheckpointBranchGitBindingError) as exc_info:
+        prepare_checkpoint_branch_git_binding(
+            _binding_input(
+                creationMode="external_provider_state",
+                workspacePolicy="continue_from_previous_execution",
+                providerWorkspaceRef="provider://omnigent/session/parent",
+                providerWorkspaceValidated=True,
+            ),
+            known_refs={"feature/mm-1087-source"},
+            current_ref="feature/mm-1087-source",
+        )
+
+    assert exc_info.value.failure_code == "provider_continuation_unsupported"
+    assert "same-session provider continuation" in str(exc_info.value)
+
+
 @pytest.mark.parametrize(
     ("overrides", "known_refs", "current_ref", "failure_code"),
     [

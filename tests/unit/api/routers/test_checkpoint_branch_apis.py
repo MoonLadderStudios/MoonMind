@@ -525,6 +525,36 @@ async def test_checkpoint_branch_api_launch_rejects_archived_branch(
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_branch_api_launch_rejects_raw_runtime_evidence_refs(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1106:create-raw-runtime-evidence"),
+    )
+    branch_id = created.json()["branchId"]
+    turns = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
+    )
+    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
+
+    launched = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
+        f"{branch_turn_id}/launch",
+        json={
+            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:14",
+            "priorEvidenceRefs": ["artifact://manifest/previous", "raw-log-body"],
+            "runtimeRequestRef": "{\"prompt\":\"raw provider payload\"}",
+            "runtimeResultRef": "provider://omnigent/result/1",
+            "diagnosticsRef": "local-diagnostics.json",
+        },
+    )
+
+    assert launched.status_code == 422
+    assert "artifact ref" in str(launched.json()["detail"])
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_api_rejects_launch_raw_context_and_immutable_mutation(
     checkpoint_branch_client: AsyncClient,
 ) -> None:

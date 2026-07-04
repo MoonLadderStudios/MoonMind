@@ -632,12 +632,10 @@ def _validate_creation_mode_and_workspace_policy(
         model.creation_mode == "external_provider_state"
         or bool(model.provider_workspace_ref)
     )
-    if provider_binding_requested and not (
-        model.provider_workspace_ref and model.provider_workspace_validated
-    ):
+    if provider_binding_requested:
         raise CheckpointBranchGitBindingError(
             "provider_continuation_unsupported",
-            "provider workspace binding requires adapter-supported validation",
+            "same-session provider continuation requires an explicit adapter capability",
         )
 
 

@@ -198,7 +198,24 @@ class CheckpointBranchTurnLaunchRequest(BaseModel):
             raise ValueError("priorEvidenceRefs must contain non-empty refs")
         if len(compact) > 25:
             raise ValueError("priorEvidenceRefs must be bounded")
+        non_artifact_refs = [
+            item for item in compact if not item.startswith("artifact://")
+        ]
+        if non_artifact_refs:
+            raise ValueError("priorEvidenceRefs must contain artifact refs")
         return compact
+
+    @field_validator(
+        "runtime_request_ref",
+        "runtime_result_ref",
+        "diagnostics_ref",
+        mode="after",
+    )
+    @classmethod
+    def _runtime_evidence_refs_are_artifacts(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("artifact://"):
+            raise ValueError("runtime evidence refs must be artifact refs")
+        return value
 
     @field_validator("bounded_summaries", mode="after")
     @classmethod
