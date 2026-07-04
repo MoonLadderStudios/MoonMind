@@ -4348,18 +4348,19 @@ function branchActionBlockedReason({
     !selectedBranch && 'Select a checkpoint branch.',
   ]);
   if (baseReason) return baseReason;
+  const branch = selectedBranch!;
   if ((action === 'continue' || action === 'fork' || action === 'archive') && !selectedMutable) {
-    return `Branch state ${formatStatusLabel(selectedBranch.state)} cannot be changed.`;
+    return `Branch state ${formatStatusLabel(branch.state)} cannot be changed.`;
   }
-  if (action === 'compare' && (!againstBranchId || againstBranchId === selectedBranch.branchId)) {
+  if (action === 'compare' && (!againstBranchId || againstBranchId === branch.branchId)) {
     return 'Select a different branch to compare against.';
   }
-  if (action === 'promote' && !selectedBranch.currentHeadStepExecutionId) {
+  if (action === 'promote' && !branch.currentHeadStepExecutionId) {
     return 'Promotion requires a current head step execution.';
   }
   if (
     action === 'publish' &&
-    (!selectedBranch.gitRepository || !selectedBranch.gitBaseBranch || !selectedBranch.gitWorkBranch)
+    (!branch.gitRepository || !branch.gitBaseBranch || !branch.gitWorkBranch)
   ) {
     return 'Publishing requires repository, base branch, and git work branch refs.';
   }
