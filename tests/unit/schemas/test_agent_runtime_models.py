@@ -92,6 +92,197 @@ def test_agent_execution_request_accepts_compact_step_execution_launch_policy() 
     ] == "fresh_agent_run"
 
 
+def _omnigent_branch_step_execution(
+    *,
+    runtime_context_policy: str = "fresh_agent_run",
+    external_provider_continuation: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "workflowId": "wf-1",
+        "runId": "run-1",
+        "logicalStepId": "implement",
+        "executionOrdinal": 2,
+        "stepExecutionId": "wf-1:run-1:implement:execution:2",
+        "reason": "checkpoint_branch",
+        "runtimeContextPolicy": runtime_context_policy,
+        "branch": {
+            "branchId": "cbr-1",
+            "branchTurnId": "cbt-1",
+            "rootCheckpointRef": "artifact://checkpoint/source",
+        },
+    }
+    if external_provider_continuation is not None:
+        payload["externalProviderContinuation"] = external_provider_continuation
+    return payload
+
+
+def test_agent_execution_request_accepts_fresh_omnigent_checkpoint_branch() -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-1",
+        idempotencyKey="wf-1:cbr-1:cbt-1:agent-request",
+        stepExecution=_omnigent_branch_step_execution(),
+        parameters={
+            "omnigent": {
+                "prompt": {"instructionRef": "artifact://instructions/turn"},
+                "checkpointBranch": {
+                    "mode": "fresh_omnigent_session_from_checkpoint",
+                    "workflowId": "wf-1",
+                    "branchId": "cbr-1",
+                    "branchTurnId": "cbt-1",
+                    "sourceCheckpointRef": "artifact://checkpoint/source",
+                    "sourceCheckpointDigest": "sha256:source",
+                    "instructionRef": "artifact://instructions/turn",
+                    "idempotencyKey": "wf-1:cbr-1:cbt-1:omnigent",
+                    "priorSessionRefs": ["artifact://omnigent/prior-session"],
+                    "captureArtifactRefs": {
+                        "stdout": "artifact://omnigent/capture/stdout",
+                        "diagnostics": "artifact://omnigent/capture/diagnostics",
+                    },
+                },
+            }
+        },
+    )
+
+    dumped = request.model_dump(by_alias=True)
+    omnigent = dumped["parameters"]["omnigent"]
+    assert (
+        omnigent["checkpointBranch"]["mode"]
+        == "fresh_omnigent_session_from_checkpoint"
+    )
+    assert omnigent["checkpointBranch"]["idempotencyKey"] == (
+        "wf-1:cbr-1:cbt-1:omnigent"
+    )
+    assert omnigent["prompt"]["instructionRef"] == "artifact://instructions/turn"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    (
+        (
+            {"idempotencyKey": "source-attempt-key"},
+            "Omnigent checkpoint branch idempotencyKey",
+        ),
+        (
+            {"sourceCheckpointRef": "provider://session/parent"},
+            "sourceCheckpointRef must be a MoonMind artifact ref",
+        ),
+    ),
+)
+def test_agent_execution_request_rejects_invalid_omnigent_checkpoint_branch_binding(
+    overrides: dict[str, str],
+    match: str,
+) -> None:
+    checkpoint_branch = {
+        "mode": "fresh_omnigent_session_from_checkpoint",
+        "workflowId": "wf-1",
+        "branchId": "cbr-1",
+        "branchTurnId": "cbt-1",
+        "sourceCheckpointRef": "artifact://checkpoint/source",
+        "instructionRef": "artifact://instructions/turn",
+        "idempotencyKey": "wf-1:cbr-1:cbt-1:omnigent",
+        **overrides,
+    }
+
+    with pytest.raises(ValidationError, match=match):
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="wf-1:cbr-1:cbt-1:agent-request",
+            stepExecution=_omnigent_branch_step_execution(),
+            parameters={
+                "omnigent": {
+                    "prompt": {"instructionRef": "artifact://instructions/turn"},
+                    "checkpointBranch": checkpoint_branch,
+                }
+            },
+        )
+
+
+def test_agent_execution_request_rejects_omnigent_branch_key_reuse() -> None:
+    with pytest.raises(ValidationError, match="must not reuse"):
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="wf-1:cbr-1:cbt-1:omnigent",
+            stepExecution=_omnigent_branch_step_execution(),
+            parameters={
+                "omnigent": {
+                    "prompt": {"instructionRef": "artifact://instructions/turn"},
+                    "checkpointBranch": {
+                        "mode": "fresh_omnigent_session_from_checkpoint",
+                        "workflowId": "wf-1",
+                        "branchId": "cbr-1",
+                        "branchTurnId": "cbt-1",
+                        "sourceCheckpointRef": "artifact://checkpoint/source",
+                        "instructionRef": "artifact://instructions/turn",
+                        "idempotencyKey": "wf-1:cbr-1:cbt-1:omnigent",
+                    },
+                }
+            },
+        )
+
+
+def test_agent_execution_request_rejects_omnigent_continuation_without_capability(
+) -> None:
+    with pytest.raises(ValidationError, match="typed lifecycle activities"):
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            stepExecution=_omnigent_branch_step_execution(
+                runtime_context_policy="external_provider_continuation",
+                external_provider_continuation={"checkpointEvidence": {}},
+            ),
+            parameters={
+                "omnigent": {
+                    "continuation": {
+                        "sourceSessionId": "conv-parent",
+                        "continuationMode": "send_message",
+                    }
+                }
+            },
+        )
+
+
+def test_agent_execution_request_accepts_capability_gated_omnigent_continuation(
+) -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        stepExecution=_omnigent_branch_step_execution(
+            runtime_context_policy="external_provider_continuation",
+            external_provider_continuation={"checkpointEvidence": {}},
+        ),
+        parameters={
+            "omnigent": {
+                "capabilities": {
+                    "typedLifecycleActivities": [
+                        "integration.omnigent.send_message",
+                        "integration.omnigent.harvest_session",
+                    ]
+                },
+                "continuation": {
+                    "sourceSessionId": "conv-parent",
+                    "continuationMode": "send_message",
+                },
+            }
+        },
+    )
+
+    assert (
+        request.step_execution is not None
+        and request.step_execution.runtime_context_policy
+        == "external_provider_continuation"
+    )
+
+
 def test_step_execution_launch_rejects_mismatched_identity_and_secret_keys() -> None:
     with pytest.raises(ValidationError, match="stepExecutionId must match"):
         AgentRuntimeStepExecutionLaunch(

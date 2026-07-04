@@ -11816,6 +11816,8 @@ async def launch_checkpoint_branch_turn(
             provider_session_id=payload.provider_session_id,
             agent_request_ref=payload.runtime_request_ref,
             agent_result_ref=payload.runtime_result_ref,
+            omnigent_prior_session_refs=payload.omnigent_prior_session_refs,
+            omnigent_capture_artifact_refs=payload.omnigent_capture_artifact_refs,
         )
     except ValueError as exc:
         raise HTTPException(

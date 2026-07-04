@@ -81,6 +81,79 @@ ProviderProfileDisabledReason = Literal[
 ProviderProfileAuthMethod = Literal["oauth_volume", "secret_ref", "manual"]
 
 
+class OmnigentCheckpointBranchBinding(BaseModel):
+    """Omnigent v1 checkpoint branch binding for a fresh provider session."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    mode: Literal["fresh_omnigent_session_from_checkpoint"]
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    branch_id: str = Field(..., alias="branchId", min_length=1)
+    branch_turn_id: str = Field(..., alias="branchTurnId", min_length=1)
+    source_checkpoint_ref: str = Field(..., alias="sourceCheckpointRef", min_length=1)
+    source_checkpoint_digest: str | None = Field(
+        None, alias="sourceCheckpointDigest", min_length=1
+    )
+    instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
+    prior_session_refs: list[str] = Field(
+        default_factory=list, alias="priorSessionRefs", max_length=25
+    )
+    capture_artifact_refs: dict[str, Any] = Field(
+        default_factory=dict, alias="captureArtifactRefs"
+    )
+
+    @field_validator(
+        "workflow_id",
+        "branch_id",
+        "branch_turn_id",
+        "source_checkpoint_ref",
+        "source_checkpoint_digest",
+        "instruction_ref",
+        "idempotency_key",
+        mode="before",
+    )
+    @classmethod
+    def _strip_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        return require_non_blank(str(value), field_name="omnigentCheckpointBranch")
+
+    @field_validator("prior_session_refs", mode="after")
+    @classmethod
+    def _validate_prior_session_refs(cls, value: list[str]) -> list[str]:
+        return [
+            require_non_blank(item, field_name="omnigent.priorSessionRefs[]")
+            for item in value
+        ]
+
+    @field_validator("capture_artifact_refs", mode="after")
+    @classmethod
+    def _validate_capture_artifacts(cls, value: dict[str, Any]) -> dict[str, Any]:
+        compact = validate_compact_temporal_mapping(
+            value, field_name="omnigent.captureArtifactRefs"
+        )
+        if _contains_sensitive_key(compact):
+            raise ValueError(
+                "omnigent.captureArtifactRefs must not contain raw credential keys"
+            )
+        return compact
+
+    @model_validator(mode="after")
+    def _validate_binding(self) -> "OmnigentCheckpointBranchBinding":
+        expected_key = (
+            f"{self.workflow_id}:{self.branch_id}:{self.branch_turn_id}:omnigent"
+        )
+        if self.idempotency_key != expected_key:
+            raise ValueError(
+                "Omnigent checkpoint branch idempotencyKey must include workflow, "
+                "branch, and branch turn identity"
+            )
+        if not self.source_checkpoint_ref.startswith("artifact://"):
+            raise ValueError("sourceCheckpointRef must be a MoonMind artifact ref")
+        return self
+
+
 class AgentRuntimeStepExecutionLaunch(BaseModel):
     """Compact adapter-visible launch envelope for one Step Execution."""
 
@@ -603,7 +676,89 @@ class AgentExecutionRequest(BaseModel):
             raise ValueError("parameters must not contain raw credential keys")
         if _contains_sensitive_key(self.workspace_spec):
             raise ValueError("workspaceSpec must not contain raw credential keys")
+        self._validate_omnigent_checkpoint_branch_contract()
         return self
+
+    def _validate_omnigent_checkpoint_branch_contract(self) -> None:
+        omnigent = self.parameters.get("omnigent")
+        if not isinstance(omnigent, Mapping):
+            return
+
+        checkpoint_branch = omnigent.get("checkpointBranch")
+        continuation = omnigent.get("continuation") or omnigent.get(
+            "omnigentContinuation"
+        )
+        if continuation is not None:
+            self._validate_omnigent_provider_continuation_capability(omnigent)
+
+        if checkpoint_branch is None:
+            return
+        binding = OmnigentCheckpointBranchBinding.model_validate(checkpoint_branch)
+        if self.step_execution is None or self.step_execution.branch is None:
+            raise ValueError("Omnigent checkpointBranch requires stepExecution.branch")
+        if self.step_execution.runtime_context_policy != "fresh_agent_run":
+            raise ValueError(
+                "Omnigent v1 checkpoint branches must use fresh_agent_run"
+            )
+        branch = self.step_execution.branch
+        if branch.get("branchId") != binding.branch_id:
+            raise ValueError(
+                "Omnigent checkpointBranch.branchId must match stepExecution.branch"
+            )
+        if branch.get("branchTurnId") != binding.branch_turn_id:
+            raise ValueError(
+                "Omnigent checkpointBranch.branchTurnId must match stepExecution.branch"
+            )
+        if self.step_execution.workflow_id != binding.workflow_id:
+            raise ValueError(
+                "Omnigent checkpointBranch.workflowId must match "
+                "stepExecution.workflowId"
+            )
+        if self.idempotency_key == binding.idempotency_key:
+            raise ValueError(
+                "Agent request idempotencyKey must not reuse Omnigent branch "
+                "session key"
+            )
+        prompt = omnigent.get("prompt")
+        if (
+            not isinstance(prompt, Mapping)
+            or prompt.get("instructionRef") != binding.instruction_ref
+        ):
+            raise ValueError(
+                "Omnigent checkpoint branches require "
+                "parameters.omnigent.prompt.instructionRef"
+            )
+
+    def _validate_omnigent_provider_continuation_capability(
+        self, omnigent: Mapping[str, Any]
+    ) -> None:
+        capabilities = omnigent.get("capabilities")
+        activities = ()
+        if isinstance(capabilities, Mapping):
+            candidate = capabilities.get("typedLifecycleActivities")
+            if isinstance(candidate, list):
+                activities = tuple(str(item) for item in candidate)
+        required = {
+            "integration.omnigent.send_message",
+            "integration.omnigent.harvest_session",
+        }
+        if self.step_execution is None or (
+            self.step_execution.runtime_context_policy
+            != "external_provider_continuation"
+        ):
+            raise ValueError(
+                "Omnigent provider continuation requires external_provider_continuation"
+            )
+        if not required.issubset(set(activities)):
+            raise ValueError(
+                "Omnigent provider continuation requires typed lifecycle activities"
+            )
+        if self.step_execution.external_provider_continuation is None:
+            raise ValueError(
+                "Omnigent provider continuation requires "
+                "externalProviderContinuation evidence"
+            )
+
 
 class AgentRunHandle(BaseModel):
     """Run-handle payload returned by adapter start operations."""

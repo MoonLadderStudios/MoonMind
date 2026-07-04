@@ -175,6 +175,12 @@ class CheckpointBranchTurnLaunchRequest(BaseModel):
     diagnostics_ref: str | None = Field(
         None, alias="diagnosticsRef", min_length=1, max_length=1024
     )
+    omnigent_prior_session_refs: list[str] = Field(
+        default_factory=list, alias="omnigentPriorSessionRefs", max_length=25
+    )
+    omnigent_capture_artifact_refs: dict[str, str] = Field(
+        default_factory=dict, alias="omnigentCaptureArtifactRefs"
+    )
 
     @field_validator(
         "created_step_execution_id",
@@ -208,6 +214,33 @@ class CheckpointBranchTurnLaunchRequest(BaseModel):
             if summary is not None and len(str(summary)) > 1200:
                 raise ValueError("boundedSummaries entries must be bounded")
         return value
+
+    @field_validator("omnigent_prior_session_refs", mode="after")
+    @classmethod
+    def _omnigent_prior_refs_are_bounded(cls, value: list[str]) -> list[str]:
+        refs = [_optional_text(item) for item in value]
+        compact = [item for item in refs if item]
+        if len(compact) != len(value):
+            raise ValueError("omnigentPriorSessionRefs must contain non-empty refs")
+        return compact
+
+    @field_validator("omnigent_capture_artifact_refs", mode="after")
+    @classmethod
+    def _omnigent_capture_refs_are_bounded(
+        cls, value: dict[str, str]
+    ) -> dict[str, str]:
+        compact: dict[str, str] = {}
+        for key, ref in value.items():
+            normalized_key = _optional_text(key)
+            normalized_ref = _optional_text(ref)
+            if not normalized_key or not normalized_ref:
+                raise ValueError(
+                    "omnigentCaptureArtifactRefs must contain non-empty refs"
+                )
+            if len(normalized_key) > 64 or len(normalized_ref) > 1024:
+                raise ValueError("omnigentCaptureArtifactRefs entries must be bounded")
+            compact[normalized_key] = normalized_ref
+        return compact
 
     @model_validator(mode="after")
     def _requires_runtime_evidence(self) -> "CheckpointBranchTurnLaunchRequest":

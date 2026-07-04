@@ -21,6 +21,7 @@ from api_service.services.checkpoint_branch_service import (
     CHECKPOINT_BRANCH_GRAPH_TRACEABILITY_ISSUES,
     SOURCE_TRACEABILITY_ISSUES,
     build_branch_turn_launch_idempotency_key,
+    build_omnigent_checkpoint_branch_idempotency_key,
 )
 from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchCreateModel,
@@ -927,6 +928,81 @@ async def test_checkpoint_branch_service_launches_turn_with_context_manifest_and
     assert len(stored_graph.artifacts) == 7
     assert stored_graph.branch.current_head_step_execution_id == (
         "wf-1:run-branch:implement:execution:4"
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_service_binds_omnigent_checkpoint_branch_evidence(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-omnigent"),
+            "instructionRef": "artifact://instructions/root",
+            "instructionDigest": "sha256:root",
+            "idempotencyKey": "MM-1104:cbr-omnigent:create",
+        }
+    )
+    turn_id = graph.turns[0].branch_turn_id
+    launch_key = build_branch_turn_launch_idempotency_key(
+        workflow_id="wf-1",
+        branch_id="cbr-omnigent",
+        branch_turn_id=turn_id,
+    )
+    omnigent_key = build_omnigent_checkpoint_branch_idempotency_key(
+        workflow_id="wf-1",
+        branch_id="cbr-omnigent",
+        branch_turn_id=turn_id,
+    )
+
+    launched = await service.launch_turn(
+        workflow_id="wf-1",
+        branch_id="cbr-omnigent",
+        branch_turn_id=turn_id,
+        context_bundle_ref="artifact://context/cbr-omnigent-turn-1",
+        step_execution_manifest_ref="artifact://manifest/cbr-omnigent-turn-1",
+        checkpoint_ref="artifact://checkpoint/cbr-omnigent-turn-1",
+        diagnostics_ref="artifact://diagnostics/cbr-omnigent-turn-1",
+        agent_request_ref="artifact://agent-request/cbr-omnigent-turn-1",
+        agent_result_ref="artifact://agent-result/cbr-omnigent-turn-1",
+        created_step_execution_id="wf-1:run-branch:implement:execution:6",
+        provider_session_id="omnigent-session-child",
+        idempotency_key=launch_key,
+        omnigent_prior_session_refs=["artifact://omnigent/prior-session"],
+        omnigent_capture_artifact_refs={
+            "stdout": "artifact://omnigent/capture/stdout",
+            "diagnostics": "artifact://omnigent/capture/diagnostics",
+        },
+    )
+    await checkpoint_branch_session.commit()
+
+    assert launched.provider_session_id == "omnigent-session-child"
+    assert launched.diagnostics["omnigentCheckpointBranch"] == {
+        "mode": "fresh_omnigent_session_from_checkpoint",
+        "idempotencyKey": omnigent_key,
+        "priorSessionRefs": ["artifact://omnigent/prior-session"],
+        "captureArtifactRefs": {
+            "stdout": "artifact://omnigent/capture/stdout",
+            "diagnostics": "artifact://omnigent/capture/diagnostics",
+        },
+    }
+
+    stored_graph = await service.read_branch_graph(
+        workflow_id="wf-1", branch_id="cbr-omnigent"
+    )
+    artifact_by_kind = {
+        artifact.artifact_kind: artifact.artifact_ref
+        for artifact in stored_graph.artifacts
+    }
+    assert artifact_by_kind["runtime.branch_turn.omnigent_prior_session.1"] == (
+        "artifact://omnigent/prior-session"
+    )
+    assert artifact_by_kind["runtime.branch_turn.omnigent_capture.stdout"] == (
+        "artifact://omnigent/capture/stdout"
+    )
+    assert artifact_by_kind["runtime.branch_turn.omnigent_capture.diagnostics"] == (
+        "artifact://omnigent/capture/diagnostics"
     )
 
 

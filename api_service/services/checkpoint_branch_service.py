@@ -53,6 +53,27 @@ def build_branch_turn_launch_idempotency_key(
     return ":".join(parts)
 
 
+def build_omnigent_checkpoint_branch_idempotency_key(
+    *,
+    workflow_id: str,
+    branch_id: str,
+    branch_turn_id: str,
+) -> str:
+    """Construct the Omnigent fresh-session key for one checkpoint branch turn."""
+
+    parts = [
+        workflow_id.strip(),
+        branch_id.strip(),
+        branch_turn_id.strip(),
+        "omnigent",
+    ]
+    if any(not part for part in parts):
+        raise ValueError(
+            "Omnigent checkpoint branch idempotency key requires identities"
+        )
+    return ":".join(parts)
+
+
 @dataclass(frozen=True)
 class CheckpointBranchGitBindingInput:
     """Input for persisting a git binding for a product checkpoint branch."""
@@ -671,6 +692,8 @@ class CheckpointBranchService:
         provider_session_id: str | None = None,
         agent_request_ref: str | None = None,
         agent_result_ref: str | None = None,
+        omnigent_prior_session_refs: list[str] | None = None,
+        omnigent_capture_artifact_refs: dict[str, str] | None = None,
     ) -> WorkflowCheckpointBranchTurn:
         """Launch one persisted branch turn as semantic runtime evidence."""
 
@@ -700,6 +723,16 @@ class CheckpointBranchService:
             )
         if not created_step_execution_id:
             raise ValueError("branch turn launch requires Step Execution evidence")
+        omnigent_key = build_omnigent_checkpoint_branch_idempotency_key(
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            branch_turn_id=turn.branch_turn_id,
+        )
+        if omnigent_key in {turn.idempotency_key, idempotency_key.strip()}:
+            raise ValueError(
+                "Omnigent checkpoint branch idempotency key must be "
+                "branch-turn-specific"
+            )
         launch_values = {
             "context_bundle_ref": context_bundle_ref,
             "step_execution_manifest_ref": step_execution_manifest_ref,
@@ -746,6 +779,21 @@ class CheckpointBranchService:
                 "agentResultRef": agent_result_ref,
             },
         }
+        if omnigent_prior_session_refs or omnigent_capture_artifact_refs:
+            turn.diagnostics["omnigentCheckpointBranch"] = {
+                "mode": "fresh_omnigent_session_from_checkpoint",
+                "idempotencyKey": omnigent_key,
+                "priorSessionRefs": [
+                    ref.strip()
+                    for ref in omnigent_prior_session_refs or []
+                    if ref and ref.strip()
+                ],
+                "captureArtifactRefs": {
+                    key: value.strip()
+                    for key, value in (omnigent_capture_artifact_refs or {}).items()
+                    if value and value.strip()
+                },
+            }
         branch.state = CheckpointBranchState.ACTIVE.value
         branch.current_head_step_execution_id = turn.created_step_execution_id
         if checkpoint_ref:
@@ -785,6 +833,29 @@ class CheckpointBranchService:
                 artifact_kind="runtime.branch_turn.agent_result.json",
                 artifact_ref=agent_result_ref,
             )
+        for index, ref in enumerate(omnigent_prior_session_refs or [], start=1):
+            if ref and ref.strip():
+                await self._upsert_turn_artifact(
+                    branch_id=branch.branch_id,
+                    branch_turn_id=turn.branch_turn_id,
+                    artifact_kind=f"runtime.branch_turn.omnigent_prior_session.{index}",
+                    artifact_ref=ref,
+                )
+        for name, ref in (omnigent_capture_artifact_refs or {}).items():
+            if ref and ref.strip():
+                safe_name = "".join(
+                    char if char.isalnum() or char in {"_", "-"} else "_"
+                    for char in name.strip()
+                )[:64]
+                if safe_name:
+                    await self._upsert_turn_artifact(
+                        branch_id=branch.branch_id,
+                        branch_turn_id=turn.branch_turn_id,
+                        artifact_kind=(
+                            f"runtime.branch_turn.omnigent_capture.{safe_name}"
+                        ),
+                        artifact_ref=ref,
+                    )
         await self._upsert_turn_artifact(
             branch_id=branch.branch_id,
             branch_turn_id=turn.branch_turn_id,
