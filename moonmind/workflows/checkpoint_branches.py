@@ -603,6 +603,16 @@ def _validate_work_branch(work_branch: str, *, product_branch_id: str) -> None:
         )
 
 
+def validate_checkpoint_branch_work_branch(
+    work_branch: str,
+    *,
+    product_branch_id: str,
+) -> None:
+    """Validate a checkpoint branch git work ref with the canonical safety policy."""
+
+    _validate_work_branch(work_branch, product_branch_id=product_branch_id)
+
+
 _CREATION_MODE_WORKSPACE_POLICIES: dict[
     CheckpointBranchCreationMode, frozenset[WorkspacePolicy]
 ] = {

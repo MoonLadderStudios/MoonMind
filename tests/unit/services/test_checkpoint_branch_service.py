@@ -385,6 +385,35 @@ async def test_checkpoint_branch_service_rejects_duplicate_git_work_branch(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "work_branch",
+    [
+        "develop",
+        "refs/heads/mm/wf-1/implement/cbr-first",
+        "mm/wf-1/not sanitized",
+        "cbr-first",
+    ],
+)
+async def test_mm_1101_checkpoint_branch_service_rejects_unsafe_git_work_branch(
+    checkpoint_branch_session: AsyncSession,
+    work_branch: str,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    first = await service.create_branch(_branch_payload(branchId="cbr-first"))
+
+    with pytest.raises(ValueError, match="requires an isolated work branch"):
+        await service.record_git_binding(
+            {
+                "branch_id": first.branch_id,
+                "repository": "repo://moonmind",
+                "base_branch": "main",
+                "base_commit": "abc123",
+                "work_branch": work_branch,
+            }
+        )
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_graph_operations_and_queries(
     checkpoint_branch_session: AsyncSession,
 ) -> None:

@@ -33,11 +33,13 @@ from moonmind.statuses.checkpoint_branch import (
     CheckpointBranchState,
     CheckpointBranchTurnState,
 )
+from moonmind.workflows.checkpoint_branches import (
+    CheckpointBranchGitBindingError,
+    validate_checkpoint_branch_work_branch,
+)
 
 SOURCE_TRACEABILITY_ISSUES = ("MM-1087", "MM-1088")
 CHECKPOINT_BRANCH_GRAPH_TRACEABILITY_ISSUES = ("MM-1087", "MM-1099")
-_PROTECTED_GIT_WORK_BRANCHES = {"", "main", "master", "HEAD"}
-
 
 def build_branch_turn_launch_idempotency_key(
     *,
@@ -917,10 +919,15 @@ class CheckpointBranchService:
         base_branch = model.base_branch.strip()
         base_commit = model.base_commit.strip()
         work_branch = model.work_branch.strip()
-        if work_branch in _PROTECTED_GIT_WORK_BRANCHES:
+        try:
+            validate_checkpoint_branch_work_branch(
+                work_branch,
+                product_branch_id=model.branch_id,
+            )
+        except CheckpointBranchGitBindingError as exc:
             raise ValueError(
                 "checkpoint branch git binding requires an isolated work branch"
-            )
+            ) from exc
         existing = await self._session.execute(
             select(WorkflowCheckpointBranchGitBinding.branch_id).where(
                 WorkflowCheckpointBranchGitBinding.repository == repository,
