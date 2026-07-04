@@ -691,6 +691,14 @@ Resolution fails before runtime launch when:
 7. a Skill body or manifest digest does not match;
 8. a selected Tool is not allowed for the Skill step.
 
+Skill source files may be stored as git symlinks (for example
+`.agents/skills/moonspec-*` linking into the `moonspec` bundle submodule).
+Resolution must dereference symlinks into real content when recording content
+refs — including symlinks flattened to pointer text files by checkouts without
+symlink support — and must fail with an actionable error when a link target is
+missing (for example an uninitialized submodule). Pointer text must never be
+recorded or projected as skill content.
+
 ### 10.4 Provenance
 
 The resolved snapshot must record enough provenance to answer:

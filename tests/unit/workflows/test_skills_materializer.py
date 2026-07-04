@@ -123,6 +123,93 @@ def test_materialize_run_skill_workspace_requires_skill_md(tmp_path):
 
     assert exc.value.code == "missing_skill_md"
 
+def test_materialize_run_skill_workspace_dereferences_flattened_pointer_skill_md(
+    tmp_path,
+):
+    source_root = tmp_path / "repo" / ".agents" / "skills"
+    cache_root = tmp_path / "cache"
+    run_root = tmp_path / "runs" / "run-3b"
+    skill_dir = source_root / "moonspec-verify"
+    target_skill_dir = (
+        tmp_path / "repo" / "moonspec" / "bundle" / "skills" / "moonspec-verify"
+    )
+    skill_dir.mkdir(parents=True)
+    (tmp_path / "repo" / "pyproject.toml").write_text(
+        "[project]\nname='test'\n",
+        encoding="utf-8",
+    )
+    target_skill_dir.mkdir(parents=True)
+    (target_skill_dir / "SKILL.md").write_text(
+        "---\nname: moonspec-verify\ndescription: test\n---\n# Verify\n",
+        encoding="utf-8",
+    )
+    # A git symlink checked out without symlink support leaves a regular file
+    # containing only the relative link target.
+    (skill_dir / "SKILL.md").write_text(
+        "../../../moonspec/bundle/skills/moonspec-verify/SKILL.md",
+        encoding="utf-8",
+    )
+
+    selection = RunSkillSelection(
+        run_id="run-3b",
+        selection_source="job_override",
+        skills=(
+            ResolvedSkill(
+                skill_name="moonspec-verify",
+                source_uri=skill_dir.resolve().as_uri(),
+            ),
+        ),
+    )
+
+    workspace = materialize_run_skill_workspace(
+        selection=selection,
+        run_root=run_root,
+        cache_root=cache_root,
+    )
+
+    assert (
+        workspace.skills[0].cache_path / "SKILL.md"
+    ).read_text(encoding="utf-8") == (
+        "---\nname: moonspec-verify\ndescription: test\n---\n# Verify\n"
+    )
+
+def test_materialize_run_skill_workspace_rejects_flattened_pointer_missing_target(
+    tmp_path,
+):
+    source_root = tmp_path / "repo" / ".agents" / "skills"
+    cache_root = tmp_path / "cache"
+    run_root = tmp_path / "runs" / "run-3c"
+    skill_dir = source_root / "moonspec-verify"
+    skill_dir.mkdir(parents=True)
+    (tmp_path / "repo" / "pyproject.toml").write_text(
+        "[project]\nname='test'\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text(
+        "../../../moonspec/bundle/skills/moonspec-verify/SKILL.md",
+        encoding="utf-8",
+    )
+
+    selection = RunSkillSelection(
+        run_id="run-3c",
+        selection_source="job_override",
+        skills=(
+            ResolvedSkill(
+                skill_name="moonspec-verify",
+                source_uri=skill_dir.resolve().as_uri(),
+            ),
+        ),
+    )
+
+    with pytest.raises(SkillMaterializationError, match="target does not exist") as exc:
+        materialize_run_skill_workspace(
+            selection=selection,
+            run_root=run_root,
+            cache_root=cache_root,
+        )
+
+    assert exc.value.code == "skill_md_flattened_symlink"
+
 def test_materialize_run_skill_workspace_rejects_duplicate_names(tmp_path):
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"

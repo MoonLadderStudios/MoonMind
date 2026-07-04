@@ -182,6 +182,90 @@ async def test_build_skill_bundle_payload_rejects_symlink_escape(tmp_path):
         AgentSkillsActivities._build_skill_bundle_payload(skill_dir)
 
 
+async def test_build_skill_bundle_payload_dereferences_flattened_pointer_files(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    source_skill = repo / "moonspec" / "bundle" / "skills" / "moonspec-verify"
+    source_skill.mkdir(parents=True)
+    (source_skill / "SKILL.md").write_text("# MoonSpec Verify\n", encoding="utf-8")
+    source_agents = source_skill / "agents"
+    source_agents.mkdir()
+    (source_agents / "openai.yaml").write_text("name: verify\n", encoding="utf-8")
+    projected_skill = repo / ".agents" / "skills" / "moonspec-verify"
+    projected_skill.mkdir(parents=True)
+    # A git symlink checked out with core.symlinks=false is a regular file
+    # whose entire content is the relative link target.
+    (projected_skill / "SKILL.md").write_text(
+        "../../../moonspec/bundle/skills/moonspec-verify/SKILL.md",
+        encoding="utf-8",
+    )
+    (projected_skill / "agents").mkdir()
+    (projected_skill / "agents" / "openai.yaml").write_text(
+        "../../../../moonspec/bundle/skills/moonspec-verify/agents/openai.yaml",
+        encoding="utf-8",
+    )
+
+    payload = AgentSkillsActivities._build_skill_bundle_payload(projected_skill)
+
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+        members = {member.name: archive.extractfile(member).read() for member in archive}
+    assert members == {
+        "SKILL.md": b"# MoonSpec Verify\n",
+        "agents/openai.yaml": b"name: verify\n",
+    }
+
+
+async def test_build_skill_bundle_payload_rejects_flattened_pointer_missing_target(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    projected_skill = repo / ".agents" / "skills" / "moonspec-verify"
+    projected_skill.mkdir(parents=True)
+    (projected_skill / "SKILL.md").write_text(
+        "../../../moonspec/bundle/skills/moonspec-verify/SKILL.md",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OSError, match="symlink pointer text"):
+        AgentSkillsActivities._build_skill_bundle_payload(projected_skill)
+
+
+async def test_build_skill_bundle_payload_rejects_untrusted_flattened_pointer_skill_md(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    projected_skill = repo / ".agents" / "skills" / "unsafe"
+    projected_skill.mkdir(parents=True)
+    (projected_skill / "SKILL.md").write_text(
+        "../../../var/secrets/provider-token",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OSError, match="untrusted pointer-shaped text"):
+        AgentSkillsActivities._build_skill_bundle_payload(projected_skill)
+
+
+async def test_build_skill_bundle_payload_rejects_dangling_symlink(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    skill_dir = repo / ".agents" / "skills" / "moonspec-verify"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").symlink_to(
+        "../../../moonspec/bundle/skills/moonspec-verify/SKILL.md"
+    )
+
+    with pytest.raises(OSError, match="symlink target is missing"):
+        AgentSkillsActivities._build_skill_bundle_payload(skill_dir)
+
+
 async def test_build_prompt_index_activity_returns_bundle():
     activities = AgentSkillsActivities()
     ActivityEnvironment()

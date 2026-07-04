@@ -302,6 +302,35 @@ async def test_verify_raises_when_selected_skill_doc_missing(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_verify_raises_when_selected_skill_doc_is_flattened_pointer(
+    tmp_path: Path,
+) -> None:
+    visible = tmp_path / ".agents" / "skills"
+    (visible / "moonspec-verify").mkdir(parents=True)
+    (visible / "moonspec-verify" / "SKILL.md").write_text(
+        "../../../moonspec/bundle/skills/moonspec-verify/SKILL.md",
+        encoding="utf-8",
+    )
+    (visible / "_manifest.json").write_text(
+        json.dumps(
+            {"snapshot_id": "snap-x", "skills": [{"name": "moonspec-verify"}]}
+        ),
+        encoding="utf-8",
+    )
+    skillset = _resolved_skillset(
+        "snap-x",
+        [("moonspec-verify", "art-mv")],
+        {"art-mv": _skill_payload("moonspec-verify")},
+    )
+    with pytest.raises(SkillProjectionError, match="symlink pointer text"):
+        await verify_skill_projection(
+            materialization_metadata={"visiblePath": str(visible)},
+            resolved_skillset=skillset,
+            selected_skill="moonspec-verify",
+        )
+
+
+@pytest.mark.asyncio
 async def test_verify_raises_when_manifest_missing_expected_skill(
     tmp_path: Path,
 ) -> None:
