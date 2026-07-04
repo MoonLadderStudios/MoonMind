@@ -1304,7 +1304,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).not.toBe('page');
   });
 
-  it('MM-1094 renders checkpoint branches, hierarchy hints, turns, and evidence links on the steps tab', async () => {
+  it('MM-1094/MM-1105 renders checkpoint branches, evidence links, and policy blocked action states', async () => {
     window.history.pushState({}, 'Branch Explorer Test', '/workflows/test-123/steps?source=temporal');
     const stepsWithCheckpoint = {
       ...latestStepsSnapshot,
@@ -1400,6 +1400,16 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByRole('list', { name: 'Branch turns' })).toBeTruthy();
     expect(screen.getByText('artifact://branch-summary-a')).toBeTruthy();
     expect(screen.getByText('artifact://checkpoint-head-a')).toBeTruthy();
+    expect(screen.getByText('Create branch unavailable: Branch actions are disabled by workflow policy.')).toBeTruthy();
+    expect(screen.getByText('Branch action unavailable: Branch actions are disabled by workflow policy.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Create branch from checkpoint' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Create branch from checkpoint' }).getAttribute('title')).toBe(
+      'Branch actions are disabled by workflow policy.',
+    );
+    expect((screen.getByRole('button', { name: 'Continue branch' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Continue branch' }).getAttribute('title')).toBe(
+      'Branch actions are disabled by workflow policy.',
+    );
   });
 
   it('MM-1094 submits branch creation from the safety preview checkpoint', async () => {

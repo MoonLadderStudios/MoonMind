@@ -4300,6 +4300,73 @@ function branchCanMutate(branch: CheckpointBranch): boolean {
   return BRANCH_MUTATING_STATES.has(branch.state);
 }
 
+function firstBranchBlockedReason(reasons: Array<string | null | false | undefined>): string | null {
+  return reasons.find((reason): reason is string => Boolean(reason)) ?? null;
+}
+
+function branchCreateBlockedReason({
+  actionsEnabled,
+  busy,
+  selectedSource,
+  draft,
+  publishModeRequiresBranch,
+}: {
+  actionsEnabled: boolean;
+  busy: boolean;
+  selectedSource: StepLedgerRow | null;
+  draft: BranchCreateDraft;
+  publishModeRequiresBranch: boolean;
+}): string | null {
+  return firstBranchBlockedReason([
+    !actionsEnabled && 'Branch actions are disabled by workflow policy.',
+    busy && 'Another workflow action is in progress.',
+    !selectedSource && 'Select a checkpoint with an artifact-backed checkpoint ref.',
+    !draft.label.trim() && 'Enter a branch label.',
+    !draft.instructions.trim() && 'Enter branch instructions.',
+    publishModeRequiresBranch && !draft.gitWorkBranch.trim() && 'Enter a git work branch for the selected publish mode.',
+  ]);
+}
+
+function branchActionBlockedReason({
+  actionsEnabled,
+  busy,
+  selectedBranch,
+  selectedMutable,
+  action,
+  againstBranchId,
+}: {
+  actionsEnabled: boolean;
+  busy: boolean;
+  selectedBranch: CheckpointBranch | null;
+  selectedMutable: boolean;
+  action: 'continue' | 'fork' | 'compare' | 'promote' | 'publish' | 'archive';
+  againstBranchId?: string;
+}): string | null {
+  const baseReason = firstBranchBlockedReason([
+    !actionsEnabled && 'Branch actions are disabled by workflow policy.',
+    busy && 'Another workflow action is in progress.',
+    !selectedBranch && 'Select a checkpoint branch.',
+  ]);
+  if (baseReason) return baseReason;
+  if (!selectedBranch) return 'Select a checkpoint branch.';
+  if ((action === 'continue' || action === 'fork' || action === 'archive') && !selectedMutable) {
+    return `Branch state ${formatStatusLabel(selectedBranch.state)} cannot be changed.`;
+  }
+  if (action === 'compare' && (!againstBranchId || againstBranchId === selectedBranch.branchId)) {
+    return 'Select a different branch to compare against.';
+  }
+  if (action === 'promote' && !selectedBranch.currentHeadStepExecutionId) {
+    return 'Promotion requires a current head step execution.';
+  }
+  if (
+    action === 'publish' &&
+    (!selectedBranch.gitRepository || !selectedBranch.gitBaseBranch || !selectedBranch.gitWorkBranch)
+  ) {
+    return 'Publishing requires repository, base branch, and git work branch refs.';
+  }
+  return null;
+}
+
 function branchPromotionGateVerdict(branch: CheckpointBranch): string {
   return branch.state === 'promotable' || branch.state === 'succeeded' ? 'passed' : branch.state;
 }
@@ -4377,18 +4444,69 @@ function BranchExplorerPanel({
     ))
     : [];
   const publishModeRequiresBranch = draft.publishMode !== 'none';
-  const createDisabled = (
-    !actionsEnabled ||
-    busy ||
-    !selectedSource ||
-    !draft.label.trim() ||
-    !draft.instructions.trim() ||
-    (publishModeRequiresBranch && !draft.gitWorkBranch.trim())
-  );
   const selectedMutable = Boolean(selectedBranch && branchCanMutate(selectedBranch));
-  const promoteDisabled = !actionsEnabled || busy || !selectedBranch?.currentHeadStepExecutionId;
-  const publishDisabled = !actionsEnabled || busy || !selectedBranch?.gitRepository || !selectedBranch?.gitBaseBranch || !selectedBranch?.gitWorkBranch;
-  const compareDisabled = !actionsEnabled || busy || !selectedBranch || !againstBranchId || againstBranchId === selectedBranch.branchId;
+  const createBlockedReason = branchCreateBlockedReason({
+    actionsEnabled,
+    busy,
+    selectedSource,
+    draft,
+    publishModeRequiresBranch,
+  });
+  const continueBlockedReason = branchActionBlockedReason({
+    actionsEnabled,
+    busy,
+    selectedBranch,
+    selectedMutable,
+    action: 'continue',
+  });
+  const forkBlockedReason = branchActionBlockedReason({
+    actionsEnabled,
+    busy,
+    selectedBranch,
+    selectedMutable,
+    action: 'fork',
+  });
+  const compareBlockedReason = branchActionBlockedReason({
+    actionsEnabled,
+    busy,
+    selectedBranch,
+    selectedMutable,
+    action: 'compare',
+    againstBranchId,
+  });
+  const promoteBlockedReason = branchActionBlockedReason({
+    actionsEnabled,
+    busy,
+    selectedBranch,
+    selectedMutable,
+    action: 'promote',
+  });
+  const publishBlockedReason = branchActionBlockedReason({
+    actionsEnabled,
+    busy,
+    selectedBranch,
+    selectedMutable,
+    action: 'publish',
+  });
+  const archiveBlockedReason = branchActionBlockedReason({
+    actionsEnabled,
+    busy,
+    selectedBranch,
+    selectedMutable,
+    action: 'archive',
+  });
+  const createDisabled = Boolean(createBlockedReason);
+  const promoteDisabled = Boolean(promoteBlockedReason);
+  const publishDisabled = Boolean(publishBlockedReason);
+  const compareDisabled = Boolean(compareBlockedReason);
+  const selectedActionBlockedReason = firstBranchBlockedReason([
+    continueBlockedReason,
+    forkBlockedReason,
+    compareBlockedReason,
+    promoteBlockedReason,
+    publishBlockedReason,
+    archiveBlockedReason,
+  ]);
 
   return (
     <section className="stack td-branch-explorer td-evidence-region" aria-label="Branch Explorer">
@@ -4516,6 +4634,7 @@ function BranchExplorerPanel({
         <button
           type="button"
           disabled={createDisabled}
+          title={createBlockedReason || undefined}
           onClick={() => selectedSource && onBranchAction({
             kind: 'create',
             draft,
@@ -4525,6 +4644,7 @@ function BranchExplorerPanel({
         >
           Create branch from checkpoint
         </button>
+        {createBlockedReason ? <p className="notice subtle">Create branch unavailable: {createBlockedReason}</p> : null}
       </div>
 
       {selectedBranch ? (
@@ -4578,13 +4698,18 @@ function BranchExplorerPanel({
             </select>
           </label>
           <div className="button-row">
-            <button type="button" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId) })}>Continue branch</button>
-            <button type="button" className="secondary" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId) })}>Fork from this branch</button>
-            <button type="button" className="secondary" disabled={compareDisabled} onClick={() => onBranchAction({ kind: 'compare', branch: selectedBranch, againstBranchId })}>Compare branches</button>
-            <button type="button" className="secondary" disabled={promoteDisabled} onClick={() => onBranchAction({ kind: 'promote', branch: selectedBranch, competingBranches, idempotencyKey: branchIdempotencyKey('promote', workflowId, selectedBranch.branchId) })}>Promote branch</button>
-            <button type="button" className="secondary" disabled={publishDisabled} onClick={() => onBranchAction({ kind: 'publish', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('publish', workflowId, selectedBranch.branchId) })}>Publish branch</button>
-            <button type="button" className="secondary" disabled={!actionsEnabled || busy || !selectedMutable} onClick={() => onBranchAction({ kind: 'archive', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('archive', workflowId, selectedBranch.branchId) })}>Archive branch</button>
+            <button type="button" disabled={Boolean(continueBlockedReason)} title={continueBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId) })}>Continue branch</button>
+            <button type="button" className="secondary" disabled={Boolean(forkBlockedReason)} title={forkBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId) })}>Fork from this branch</button>
+            <button type="button" className="secondary" disabled={compareDisabled} title={compareBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'compare', branch: selectedBranch, againstBranchId })}>Compare branches</button>
+            <button type="button" className="secondary" disabled={promoteDisabled} title={promoteBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'promote', branch: selectedBranch, competingBranches, idempotencyKey: branchIdempotencyKey('promote', workflowId, selectedBranch.branchId) })}>Promote branch</button>
+            <button type="button" className="secondary" disabled={publishDisabled} title={publishBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'publish', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('publish', workflowId, selectedBranch.branchId) })}>Publish branch</button>
+            <button type="button" className="secondary" disabled={Boolean(archiveBlockedReason)} title={archiveBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'archive', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('archive', workflowId, selectedBranch.branchId) })}>Archive branch</button>
           </div>
+          {selectedActionBlockedReason ? (
+            <p className="notice subtle">
+              Branch action unavailable: {selectedActionBlockedReason}
+            </p>
+          ) : null}
           {latestCompare ? <p className="small">Latest comparison summary: <code className="text-xs break-all">{latestCompare.summaryRef}</code></p> : null}
         </div>
       ) : null}
