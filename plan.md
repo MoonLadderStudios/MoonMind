@@ -100,13 +100,15 @@ Required unit coverage:
 
 ## Integration Test Strategy
 
-Run hermetic integration only if implementation changes cross database migrations, compose-backed services, artifact storage integration, or runtime infrastructure:
+Run focused hermetic integration coverage for the persisted API behavior because this
+story touches database-backed comparison, promotion, operation-ledger, and artifact-ref
+evidence:
 
 ```bash
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_integration.sh
 ```
 
-Integration coverage should verify the same API boundary with a real database session and artifact-ref persistence, but it should not require external provider credentials. Provider verification tests are not required for this story.
+Integration coverage should verify the same API boundary with a real database session and artifact-ref persistence, including comparison idempotency, promotion record persistence, fail-closed audit evidence, promoted branch state, and unchanged competing branches. It should not require external provider credentials. Provider verification tests are not required for this story.
 
 ## Risks
 
