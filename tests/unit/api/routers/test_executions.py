@@ -2661,6 +2661,111 @@ def test_list_executions_source_temporal_hydrates_live_progress_by_default() -> 
     temporal_client.get_workflow_handle.assert_called_once_with("mm:wf-live")
 
 
+def test_list_executions_source_temporal_hydrates_live_progress_concurrently() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+
+    class _EmptyCanonicalResult:
+        def scalars(self) -> "_EmptyCanonicalResult":
+            return self
+
+        def all(self) -> list[TemporalExecutionCanonicalRecord]:
+            return []
+
+    class _Session:
+        async def execute(self, _stmt: object) -> _EmptyCanonicalResult:
+            return _EmptyCanonicalResult()
+
+    app.dependency_overrides[get_async_session] = lambda: _Session()
+    _override_user_dependencies(app, is_superuser=True)
+
+    async def _memo():
+        return {
+            "title": "Live workflow",
+            "summary": "Running tests.",
+        }
+
+    def _workflow(workflow_id: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=workflow_id,
+            run_id=f"run-{workflow_id}",
+            namespace="default",
+            workflow_type="MoonMind.UserWorkflow",
+            status="RUNNING",
+            start_time=datetime(2026, 4, 4, 18, 0, tzinfo=UTC),
+            close_time=None,
+            execution_time=None,
+            search_attributes={
+                "mm_state": "executing",
+                "mm_owner_id": "system",
+                "mm_owner_type": "system",
+                "mm_entry": "run",
+            },
+            memo=_memo,
+        )
+
+    class _WorkflowIterator:
+        current_page = [_workflow("mm:wf-one"), _workflow("mm:wf-two")]
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    active_queries = 0
+    max_active_queries = 0
+
+    class _ConcurrentQueryHandle:
+        def __init__(self, workflow_id: str) -> None:
+            self._workflow_id = workflow_id
+
+        async def query(self, name: str) -> dict[str, object]:
+            nonlocal active_queries, max_active_queries
+            assert name == "get_progress"
+            active_queries += 1
+            max_active_queries = max(max_active_queries, active_queries)
+            try:
+                await asyncio.sleep(0)
+                return {
+                    "total": 2,
+                    "pending": 0,
+                    "ready": 0,
+                    "executing": 1,
+                    "awaitingExternal": 0,
+                    "reviewing": 0,
+                    "completed": 1,
+                    "failed": 0,
+                    "skipped": 0,
+                    "canceled": 0,
+                    "currentStepTitle": self._workflow_id,
+                    "updatedAt": "2026-04-04T18:11:15Z",
+                    "runId": f"live-{self._workflow_id}",
+                }
+            finally:
+                active_queries -= 1
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=2)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+        get_workflow_handle=Mock(
+            side_effect=lambda workflow_id: _ConcurrentQueryHandle(workflow_id)
+        ),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "ownerType": "system"},
+        )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [item["runId"] for item in items] == ["live-mm:wf-one", "live-mm:wf-two"]
+    assert max_active_queries == 2
+
+
 def test_list_executions_source_temporal_hydrates_live_progress_for_filters() -> None:
     app = FastAPI()
     app.include_router(router)
