@@ -578,6 +578,51 @@ def _checkpoint_branch_head_identity(branch: WorkflowCheckpointBranch) -> str:
     )
 
 
+def _require_comparable_checkpoint_lineage(
+    branch: WorkflowCheckpointBranch, other: WorkflowCheckpointBranch
+) -> None:
+    branch_base = str(branch.source_checkpoint_ref or "").strip()
+    other_base = str(other.source_checkpoint_ref or "").strip()
+    if not branch_base or not other_base:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "checkpoint_invalidity",
+                "reason": "base_checkpoint_ref_required",
+            },
+        )
+    if branch_base != other_base:
+        branch_head = str(branch.current_head_checkpoint_ref or "").strip()
+        other_head = str(other.current_head_checkpoint_ref or "").strip()
+        if (
+            other.parent_branch_id == branch.branch_id
+            and branch_head
+            and branch_head == other_base
+        ) or (
+            branch.parent_branch_id == other.branch_id
+            and other_head
+            and other_head == branch_base
+        ):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "incompatible_checkpoint_lineage",
+                "reason": "base_checkpoint_ref_mismatch",
+            },
+        )
+    branch_digest = str(branch.source_checkpoint_digest or "").strip()
+    other_digest = str(other.source_checkpoint_digest or "").strip()
+    if branch_digest and other_digest and branch_digest != other_digest:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "incompatible_checkpoint_lineage",
+                "reason": "base_checkpoint_digest_mismatch",
+            },
+        )
+
+
 def _checkpoint_branch_creation_mode(workspace_policy: str) -> str:
     if workspace_policy == "apply_previous_execution_diff_to_clean_baseline":
         return "from_checkpoint_patch"
@@ -858,6 +903,10 @@ def _branch_comparison_record(
         "branchGateVerdict": branch_gate_verdict,
         "againstGateVerdict": other_gate_verdict,
     }
+    gate_verdict_summaries = {
+        branch.branch_id: branch_gate_verdict,
+        other.branch_id: other_gate_verdict,
+    }
     base_checkpoint_ref: str | dict[str, str | None]
     if branch.source_checkpoint_ref == other.source_checkpoint_ref:
         base_checkpoint_ref = branch.source_checkpoint_ref
@@ -906,6 +955,21 @@ def _branch_comparison_record(
             }
         ),
     )
+    diagnostics_ref = _checkpoint_branch_operation_artifact_ref(
+        operation="checkpoint_branch.compare",
+        workflow_id=workflow_id,
+        branch_id=branch.branch_id,
+        artifact_kind=f"output.branch_comparison.{other.branch_id}.diagnostics.json",
+        digest=_operation_digest(
+            {
+                "branchId": branch.branch_id,
+                "againstBranchId": other.branch_id,
+                "branchHead": _checkpoint_branch_head_identity(branch),
+                "againstHead": _checkpoint_branch_head_identity(other),
+                "recordType": "checkpoint_branch_comparison_diagnostics",
+            }
+        ),
+    )
     evidence_refs = {
         key: value
         for key, value in {
@@ -935,21 +999,29 @@ def _branch_comparison_record(
         if value
     }
     record_payload = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "recordType": "checkpoint_branch_comparison",
         "workflowId": workflow_id,
         "branchId": branch.branch_id,
         "againstBranchId": other.branch_id,
+        "branchIds": [branch.branch_id, other.branch_id],
+        "baseCheckpointRef": base_checkpoint_ref,
         "summaryText": summary_text,
         "summary": summary,
         "quality": quality,
+        "gateVerdictSummaries": gate_verdict_summaries,
         "git": {
             "leftDiffRef": branch_diff_ref,
             "rightDiffRef": against_diff_ref,
             "rangeDiffRef": range_diff_ref,
         },
+        "diffRefs": {
+            "branchDiffRef": branch_diff_ref,
+            "againstDiffRef": against_diff_ref,
+            "rangeDiffRef": range_diff_ref,
+        },
         "evidenceRefs": evidence_refs,
-        "diagnosticsRefs": [],
+        "diagnosticsRefs": [diagnostics_ref],
         "createdAt": datetime.now(UTC).isoformat(),
     }
     record_digest = _operation_digest(record_payload)
@@ -972,10 +1044,14 @@ def _branch_comparison_record(
         )
     )
     record_payload["summaryRef"] = summary_ref
+    record_payload["boundedSummaryRefs"] = [summary_ref]
     record_payload["artifactRefs"] = {
         "output.branch_comparison.summary.json": summary_ref,
         "output.branch_comparison.metadata.json": metadata_ref,
+        "output.branch_comparison.left_diff.patch": branch_diff_ref,
+        "output.branch_comparison.right_diff.patch": against_diff_ref,
         "output.branch_comparison.range_diff.patch": range_diff_ref,
+        "output.branch_comparison.diagnostics.json": diagnostics_ref,
     }
     record_payload["digest"] = record_digest
     return record_payload
@@ -12288,6 +12364,7 @@ async def compare_checkpoint_branches(
     other = await _load_checkpoint_branch(
         session, workflow_id=workflow_id, branch_id=against
     )
+    _require_comparable_checkpoint_lineage(branch, other)
     comparison_record = _branch_comparison_record(
         workflow_id=workflow_id, branch=branch, other=other
     )
@@ -12303,7 +12380,8 @@ async def compare_checkpoint_branches(
     branch_promotion_evidence_digest = _operation_digest(branch.promotion_evidence or {})
     other_promotion_evidence_digest = _operation_digest(other.promotion_evidence or {})
     idempotency_key = (
-        f"checkpoint_branch.compare:{branch.branch_id}:{branch_head}:"
+        f"checkpoint_branch.compare:v{comparison_record.get('schemaVersion', 1)}:"
+        f"{branch.branch_id}:{branch_head}:"
         f"promotion:{branch_promotion_evidence_digest}:"
         f"against:{other.branch_id}:{other_head}:"
         f"promotion:{other_promotion_evidence_digest}"
@@ -12389,42 +12467,91 @@ async def promote_checkpoint_branch(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "idempotency_key_conflict"},
             )
+        if operation.response_payload.get("outcome") == "rejected":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": operation.response_payload.get("code"),
+                    "reason": operation.response_payload.get("reason"),
+                },
+            )
         return _branch_to_model(branch)
-    if branch.state in {"archived", "superseded"}:
+
+    async def _reject_promotion(*, code: str, reason: str) -> None:
+        session.add(
+            WorkflowCheckpointBranchOperation(
+                workflow_id=workflow_id,
+                branch_id=branch.branch_id,
+                operation="checkpoint_branch.promote",
+                idempotency_key=payload.idempotency_key,
+                request_digest=request_digest,
+                response_payload={
+                    "outcome": "rejected",
+                    "code": code,
+                    "reason": reason,
+                    "branchId": branch.branch_id,
+                },
+            )
+        )
+        await session.commit()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "invalid_branch_state", "state": branch.state},
+            detail={"code": code, "reason": reason},
+        )
+
+    if branch.state in {"archived", "superseded"}:
+        await _reject_promotion(
+            code="invalid_branch_state",
+            reason=branch.state,
         )
     if not branch.current_head_step_execution_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "checkpoint_head_missing",
-                "reason": "checkpoint_head_missing",
-            },
+        await _reject_promotion(
+            code="checkpoint_head_missing",
+            reason="checkpoint_head_missing",
         )
     if (
         payload.expected_head_step_execution_id
         != branch.current_head_step_execution_id
     ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "checkpoint_head_mismatch",
-                "reason": "checkpoint_head_mismatch",
-            },
+        await _reject_promotion(
+            code="expected_head_mismatch",
+            reason="expected_head_step_execution_mismatch",
+        )
+    if not branch.current_head_checkpoint_ref:
+        await _reject_promotion(
+            code="checkpoint_invalidity",
+            reason="head_checkpoint_ref_required",
+        )
+    if branch.current_head_commit and not payload.expected_head_commit:
+        await _reject_promotion(
+            code="expected_head_mismatch",
+            reason="expected_head_commit_required",
         )
     if (
-        branch.current_head_commit
-        and payload.expected_head_commit
+        payload.expected_head_commit
         and payload.expected_head_commit != branch.current_head_commit
     ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "git_base_commit_mismatch",
-                "reason": "git_base_commit_mismatch",
-            },
+        await _reject_promotion(
+            code="expected_head_mismatch",
+            reason="expected_head_commit_mismatch",
+        )
+    if payload.policy_evidence.get("freshHeadValidated") is not True:
+        await _reject_promotion(
+            code="expected_head_mismatch",
+            reason="fresh_branch_head_validation_required",
+        )
+    budget_state = str(
+        payload.policy_evidence.get("budgetStatus")
+        or payload.policy_evidence.get("budget_state")
+        or ""
+    ).strip().lower()
+    if payload.policy_evidence.get("budgetExhausted") is True or budget_state in {
+        "budget_exhausted",
+        "exhausted",
+    }:
+        await _reject_promotion(
+            code="budget_exhausted",
+            reason="budget_exhausted",
         )
     accepted_head_step_execution_id = payload.accepted_output_refs.get(
         "headStepExecutionId"
@@ -12433,12 +12560,9 @@ async def promote_checkpoint_branch(
         accepted_head_step_execution_id
         and accepted_head_step_execution_id != branch.current_head_step_execution_id
     ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "accepted_output_refs_mismatch",
-                "reason": "head_step_execution_id_mismatch",
-            },
+        await _reject_promotion(
+            code="accepted_output_refs_mismatch",
+            reason="head_step_execution_id_mismatch",
         )
     accepted_head_checkpoint_ref = payload.accepted_output_refs.get("headCheckpointRef")
     if (
@@ -12446,12 +12570,9 @@ async def promote_checkpoint_branch(
         and branch.current_head_checkpoint_ref
         and accepted_head_checkpoint_ref != branch.current_head_checkpoint_ref
     ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "accepted_output_refs_mismatch",
-                "reason": "head_checkpoint_ref_mismatch",
-            },
+        await _reject_promotion(
+            code="accepted_output_refs_mismatch",
+            reason="head_checkpoint_ref_mismatch",
         )
     gate_verdict = str(
         payload.gate_evidence.get("verdict")
@@ -12459,12 +12580,9 @@ async def promote_checkpoint_branch(
         or ""
     ).strip().lower()
     if gate_verdict not in _PASSING_GATE_VERDICTS:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "side_effect_policy_blocked",
-                "reason": "gate_evidence_not_passing",
-            },
+        await _reject_promotion(
+            code="side_effect_policy_blocked",
+            reason="gate_evidence_not_passing",
         )
     side_effect_state = str(
         payload.side_effect_disposition.get("status")
@@ -12472,17 +12590,14 @@ async def promote_checkpoint_branch(
         or ""
     )
     if side_effect_state not in _SAFE_PROMOTION_SIDE_EFFECT_STATES:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "side_effect_policy_blocked",
-                "reason": "side_effect_disposition_required",
-            },
+        await _reject_promotion(
+            code="side_effect_policy_blocked",
+            reason="side_effect_disposition_required",
         )
     if payload.policy_requires_approval and not payload.approval_evidence:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "approval_required", "reason": "approval_required"},
+        await _reject_promotion(
+            code="approval_required",
+            reason="approval_required",
         )
     promoted_sibling_result = await session.execute(
         select(WorkflowCheckpointBranch).where(
@@ -12493,12 +12608,9 @@ async def promote_checkpoint_branch(
         )
     )
     if promoted_sibling_result.scalar_one_or_none() is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "promoted_branch_conflict",
-                "reason": "promoted_branch_conflict",
-            },
+        await _reject_promotion(
+            code="promoted_branch_conflict",
+            reason="promoted_branch_conflict",
         )
     now = datetime.now(UTC)
     promoted_turn = await _latest_branch_turn_for_step_execution(

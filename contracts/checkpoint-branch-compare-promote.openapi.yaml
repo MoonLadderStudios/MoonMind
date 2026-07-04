@@ -1,0 +1,275 @@
+openapi: 3.1.0
+info:
+  title: Checkpoint Branch Compare and Promote Contract
+  version: 1.0.0
+  description: API contract for MM-1103 checkpoint branch comparison and explicit promotion.
+paths:
+  /api/executions/{workflowId}/checkpoint-branches/{branchId}/compare:
+    get:
+      summary: Compare two checkpoint branches using durable evidence.
+      operationId: compareCheckpointBranches
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: branchId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: against
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Durable comparison record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckpointBranchCompareResponse"
+        "404":
+          description: Workflow or branch was not found for the current user.
+        "409":
+          description: Comparison could not be produced safely.
+  /api/executions/{workflowId}/checkpoint-branches/{branchId}/promote:
+    post:
+      summary: Promote one checkpoint branch result into canonical workflow progress.
+      operationId: promoteCheckpointBranch
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: branchId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckpointBranchPromoteRequest"
+      responses:
+        "200":
+          description: Promoted checkpoint branch.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckpointBranch"
+        "404":
+          description: Workflow or branch was not found for the current user.
+        "409":
+          description: Promotion failed closed because validation, gates, side effects, approval, or idempotency checks failed.
+components:
+  schemas:
+    CheckpointBranchCompareResponse:
+      type: object
+      required:
+        - branchId
+        - againstBranchId
+        - workflowId
+        - branchState
+        - againstState
+        - diagnosticsRefs
+        - comparisonRecord
+      properties:
+        branchId:
+          type: string
+        againstBranchId:
+          type: string
+        workflowId:
+          type: string
+        branchState:
+          type: string
+        againstState:
+          type: string
+        branchHeadStepExecutionId:
+          type:
+            - string
+            - "null"
+        againstHeadStepExecutionId:
+          type:
+            - string
+            - "null"
+        summaryRef:
+          type:
+            - string
+            - "null"
+        diagnosticsRefs:
+          type: array
+          items:
+            type: string
+        comparisonRecord:
+          $ref: "#/components/schemas/CheckpointBranchComparisonRecord"
+    CheckpointBranchComparisonRecord:
+      type: object
+      required:
+        - schemaVersion
+        - recordType
+        - workflowId
+        - branchId
+        - againstBranchId
+        - baseCheckpointRef
+        - summary
+        - quality
+        - git
+        - evidenceRefs
+        - diagnosticsRefs
+        - summaryRef
+        - artifactRefs
+        - digest
+      properties:
+        schemaVersion:
+          type: integer
+          const: 1
+        recordType:
+          type: string
+          const: checkpoint_branch_comparison
+        workflowId:
+          type: string
+        branchId:
+          type: string
+        againstBranchId:
+          type: string
+        baseCheckpointRef:
+          type: string
+        summaryText:
+          type: string
+          maxLength: 1200
+        summary:
+          type: object
+          additionalProperties: true
+        quality:
+          type: object
+          required:
+            - branchGateVerdict
+            - againstGateVerdict
+          properties:
+            branchGateVerdict:
+              type: string
+            againstGateVerdict:
+              type: string
+          additionalProperties: true
+        git:
+          type: object
+          required:
+            - leftDiffRef
+            - rightDiffRef
+            - rangeDiffRef
+          properties:
+            leftDiffRef:
+              type: string
+            rightDiffRef:
+              type: string
+            rangeDiffRef:
+              type: string
+          additionalProperties: true
+        evidenceRefs:
+          type: object
+          additionalProperties: true
+        diagnosticsRefs:
+          type: array
+          items:
+            type: string
+        summaryRef:
+          type: string
+        artifactRefs:
+          type: object
+          required:
+            - output.branch_comparison.summary.json
+            - output.branch_comparison.metadata.json
+            - output.branch_comparison.range_diff.patch
+          additionalProperties:
+            type: string
+        digest:
+          type: string
+    CheckpointBranchPromoteRequest:
+      type: object
+      required:
+        - expectedHeadStepExecutionId
+        - gateEvidence
+        - sideEffectDisposition
+        - idempotencyKey
+      properties:
+        expectedHeadStepExecutionId:
+          type: string
+        expectedHeadCommit:
+          type:
+            - string
+            - "null"
+        acceptedOutputRefs:
+          type: object
+          additionalProperties: true
+        gateEvidence:
+          type: object
+          additionalProperties: true
+        sideEffectDisposition:
+          type: object
+          additionalProperties: true
+        downstreamInvalidation:
+          type: object
+          additionalProperties: true
+        approvalEvidence:
+          type:
+            - object
+            - "null"
+          additionalProperties: true
+        policyEvidence:
+          type: object
+          description: Promotion policy evidence. A budget-exhausted policy state must fail closed.
+          additionalProperties: true
+        policyRequiresApproval:
+          type: boolean
+          default: false
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 512
+    CheckpointBranch:
+      type: object
+      required:
+        - branchId
+        - workflowId
+        - state
+      properties:
+        branchId:
+          type: string
+        workflowId:
+          type: string
+        state:
+          type: string
+        currentHeadStepExecutionId:
+          type:
+            - string
+            - "null"
+        currentHeadCheckpointRef:
+          type:
+            - string
+            - "null"
+        currentHeadCommit:
+          type:
+            - string
+            - "null"
+        pullRequestUrl:
+          type:
+            - string
+            - "null"
+        publishStatus:
+          type:
+            - string
+            - "null"
+        promotedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        artifactRefs:
+          type: object
+          additionalProperties: true

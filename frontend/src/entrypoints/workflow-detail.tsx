@@ -7709,7 +7709,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             competingBranchIds: request.competingBranches.map((branch) => branch.branchId),
           },
           approvalEvidence: null,
-          policyEvidence: { requestedFrom: 'workflow-detail' },
+          policyEvidence: { requestedFrom: 'workflow-detail', freshHeadValidated: true },
           policyRequiresApproval: false,
           idempotencyKey: request.idempotencyKey,
         };

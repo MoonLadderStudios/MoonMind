@@ -1,0 +1,119 @@
+{
+  "handoffType": "jira-orchestrate-intake",
+  "updatedAt": "2026-07-04T00:00:00Z",
+  "jiraIssueKey": "MM-1103",
+  "classification": {
+    "inputType": "single-story feature request",
+    "reason": "The trusted Jira preset brief identifies one Jira Story for comparing checkpoint branches and explicitly promoting one branch result after validation, gate, side-effect, approval, and fresh head checks pass."
+  },
+  "intent": "runtime implementation workflow",
+  "sourceStory": {
+    "summary": "Compare branches and explicitly promote one result",
+    "sourceDesignPath": "docs/Workflows/CheckpointBranchSystem.md",
+    "sourceSections": [
+      "2.4 Branches are candidates until promoted",
+      "6.3 Promotion",
+      "9.4 Publish vs promote",
+      "13. Branch comparison",
+      "14. Security and safety",
+      "16. Artifact requirements",
+      "20. Desired end state"
+    ],
+    "claimIds": [
+      "docs-workflows-checkpoint-branch-system#s2-4-promotion",
+      "docs-workflows-checkpoint-branch-system#s6-lifecycle",
+      "docs-workflows-checkpoint-branch-system#s9-4-publish-promote",
+      "docs-workflows-checkpoint-branch-system#s13-comparison",
+      "docs-workflows-checkpoint-branch-system#s14-safety",
+      "docs-workflows-checkpoint-branch-system#s16-artifacts",
+      "docs-workflows-checkpoint-branch-system#s20-end"
+    ],
+    "coverageIds": [
+      "DESIGN-REQ-005",
+      "DESIGN-REQ-014",
+      "DESIGN-REQ-015",
+      "DESIGN-REQ-017",
+      "DESIGN-REQ-021"
+    ]
+  },
+  "canonicalInput": {
+    "trustedSource": "moonmind.jira.get_issue",
+    "jiraPresetBrief": "MM-1103: Compare branches and explicitly promote one result",
+    "sourceDesignClassification": "canonical declarative document",
+    "acceptanceCriteria": [
+      "Comparison produces artifacts containing branch ids, base checkpoint ref, diff refs, gate verdict summaries, diagnostics refs, and bounded summary refs.",
+      "Promotion records branch id, turn id, Step Execution id, accepted output refs, git/PR refs, gate verdict refs, side-effect disposition refs, invalidation effects, and approval evidence.",
+      "Promotion requires expected head validation, passed gates, applicable approval, and fresh branch-head validation.",
+      "Promotion does not delete competing branches and publication remains separate from canonical acceptance."
+    ],
+    "requirements": [
+      "Implement comparison artifact generation and compare API behavior.",
+      "Implement promotion operation with explicit policy gates and audit artifacts.",
+      "Fail closed on approval_required, side_effect_policy_blocked, budget_exhausted, checkpoint invalidity, or expected-head mismatch."
+    ]
+  },
+  "artifactResumeInspection": {
+    "status": "existing_moonspec_artifacts_found",
+    "checkedLocations": [
+      "artifacts/",
+      "docs/tmp/",
+      "repository root MoonSpec artifacts"
+    ],
+    "checkedPatterns": [
+      "MM-1103",
+      "1103",
+      "checkpoint",
+      "branch",
+      "moonspec",
+      "verification"
+    ],
+    "validArtifactsToPreserve": [
+      "spec.md",
+      "plan.md",
+      "research.md",
+      "data-model.md",
+      "quickstart.md",
+      "contracts/checkpoint-branch-compare-promote.openapi.yaml",
+      "tasks.md"
+    ],
+    "evidence": [
+      "spec.md contains the MM-1103 trusted preset brief, functional requirements FR-001 through FR-012, acceptance scenarios, traceability, and out-of-scope boundaries.",
+      "plan.md, research.md, data-model.md, quickstart.md, and contracts/checkpoint-branch-compare-promote.openapi.yaml contain planning, data model, operator quickstart, and API contract artifacts for MM-1103.",
+      "tasks.md marks tasks 1 through 7 complete, including comparison tests, promotion gate tests, integration tests, implementation tasks, API contract updates, and targeted validation.",
+      "tasks.md leaves task 8 unchecked: final MoonSpec verification for MM-1103 has not been executed or resolved.",
+      "No final MM-1103 MoonSpec verification report artifact was found in the searched repository locations."
+    ],
+    "resumeFrom": "Verify",
+    "nextStageReason": "Verify is the first incomplete stage because valid Specify, Plan, Tasks, implementation, and targeted validation artifacts already exist and must be preserved; tasks.md explicitly leaves final MoonSpec verification incomplete."
+  },
+  "stageGateStatus": {
+    "Specify": "COMPLETE",
+    "Plan": "COMPLETE",
+    "Tasks": "COMPLETE",
+    "Align": "COMPLETE_BY_EXISTING_ARTIFACTS",
+    "Implement": "COMPLETE_BY_EXISTING_TASK_STATUS",
+    "Verify": "INCOMPLETE",
+    "DocReconcile": "NOT_STARTED"
+  },
+  "stageExecution": {
+    "performedInThisStep": false,
+    "reason": "This managed step is limited to Jira Orchestrate intake classification and artifact resume inspection. It must not run specification, planning, task generation, implementation, verification, publishing, pull request creation, or Jira transitions."
+  },
+  "downstreamInstructions": {
+    "useBriefAsCanonicalInput": true,
+    "treatImplementationDocumentAsRuntimeSourceRequirements": true,
+    "sourceDesignPath": "docs/Workflows/CheckpointBranchSystem.md",
+    "resumeFromFirstIncompleteStage": "Verify",
+    "runAsRuntimeImplementationWorkflow": true,
+    "doNotRegenerateValidLaterStageArtifacts": true,
+    "preserveExistingArtifacts": [
+      "spec.md",
+      "plan.md",
+      "research.md",
+      "data-model.md",
+      "quickstart.md",
+      "contracts/checkpoint-branch-compare-promote.openapi.yaml",
+      "tasks.md"
+    ]
+  }
+}

@@ -19,7 +19,9 @@ from api_service.db.models import (
     Base,
     TemporalExecutionCanonicalRecord,
     TemporalWorkflowType,
+    WorkflowCheckpointBranch,
     WorkflowCheckpointBranchArtifact,
+    WorkflowCheckpointBranchOperation,
 )
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
@@ -214,4 +216,159 @@ async def test_checkpoint_branch_launch_persists_minimum_artifact_refs_without_d
         "runtime.branch_turn.agent_request.json",
         "runtime.branch_turn.agent_result.json",
         "runtime.branch_turn.context_bundle.json",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_and_promotion_audit_evidence_persists(
+    tmp_path,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/promotion.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_maker() as session:
+        session.add(
+            TemporalExecutionCanonicalRecord(
+                workflow_id="mm:wf-branch",
+                run_id="run-branch",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                entry="api",
+            )
+        )
+        for branch_id in ("cbr-left", "cbr-right"):
+            session.add(
+                WorkflowCheckpointBranch(
+                    branch_id=branch_id,
+                    workflow_id="mm:wf-branch",
+                    root_workflow_id="mm:wf-branch",
+                    source_run_id="run-branch",
+                    source_checkpoint_boundary="after_execution",
+                    source_checkpoint_ref="artifact://checkpoints/base",
+                    label=branch_id,
+                    workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+                    runtime_context_policy="fresh_agent_run",
+                    state="succeeded",
+                    branch_kind="root",
+                    current_head_step_execution_id=f"{branch_id}:execution:1",
+                    current_head_checkpoint_ref=f"artifact://checkpoints/{branch_id}",
+                    current_head_commit=f"{branch_id}-head",
+                )
+            )
+        comparison_refs = {
+            "output.branch_comparison.summary.json": (
+                "artifact://checkpoint-branch-comparisons/mm:wf-branch/cbr-left/"
+                "digest/output.branch_comparison.summary.json"
+            ),
+            "output.branch_comparison.left_diff.patch": (
+                "artifact://checkpoint-branch-comparisons/mm:wf-branch/cbr-left/"
+                "digest/output.branch_comparison.left_diff.patch"
+            ),
+            "output.branch_comparison.right_diff.patch": (
+                "artifact://checkpoint-branch-comparisons/mm:wf-branch/cbr-left/"
+                "digest/output.branch_comparison.right_diff.patch"
+            ),
+            "output.branch_comparison.range_diff.patch": (
+                "artifact://checkpoint-branch-comparisons/mm:wf-branch/cbr-left/"
+                "digest/output.branch_comparison.range_diff.patch"
+            ),
+            "output.branch_comparison.diagnostics.json": (
+                "artifact://checkpoint-branch-comparisons/mm:wf-branch/cbr-left/"
+                "digest/output.branch_comparison.diagnostics.json"
+            ),
+        }
+        session.add(
+            WorkflowCheckpointBranchOperation(
+                workflow_id="mm:wf-branch",
+                branch_id="cbr-left",
+                operation="checkpoint_branch.compare",
+                idempotency_key="mm-1103:compare",
+                request_digest="sha256:compare-request",
+                response_payload={
+                    "recordType": "checkpoint_branch_comparison",
+                    "branchId": "cbr-left",
+                    "againstBranchId": "cbr-right",
+                    "artifactRefs": comparison_refs,
+                    "diagnosticsRefs": [
+                        comparison_refs[
+                            "output.branch_comparison.diagnostics.json"
+                        ]
+                    ],
+                },
+            )
+        )
+        for artifact_kind, artifact_ref in comparison_refs.items():
+            session.add(
+                WorkflowCheckpointBranchArtifact(
+                    branch_id="cbr-left",
+                    artifact_kind=artifact_kind,
+                    artifact_ref=artifact_ref,
+                    digest="sha256:compare",
+                )
+            )
+        session.add(
+            WorkflowCheckpointBranchOperation(
+                workflow_id="mm:wf-branch",
+                branch_id="cbr-left",
+                operation="checkpoint_branch.promote",
+                idempotency_key="mm-1103:promote-rejected",
+                request_digest="sha256:promote-rejected",
+                response_payload={
+                    "outcome": "rejected",
+                    "code": "side_effect_policy_blocked",
+                    "reason": "gate_evidence_not_passing",
+                    "branchId": "cbr-left",
+                },
+            )
+        )
+        session.add(
+            WorkflowCheckpointBranchArtifact(
+                branch_id="cbr-left",
+                artifact_kind="output.branch_promotion.record.json",
+                artifact_ref="artifact://checkpoint-branch-promotions/record",
+                digest="sha256:promotion",
+            )
+        )
+        session.add(
+            WorkflowCheckpointBranchArtifact(
+                branch_id="cbr-left",
+                artifact_kind="output.branch_promotion.downstream_invalidation.json",
+                artifact_ref="artifact://checkpoint-branch-promotions/invalidation",
+                digest="sha256:promotion",
+            )
+        )
+        await session.commit()
+
+        operations = (
+            await session.execute(
+                select(WorkflowCheckpointBranchOperation).order_by(
+                    WorkflowCheckpointBranchOperation.idempotency_key
+                )
+            )
+        ).scalars().all()
+        artifacts = (
+            await session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == "cbr-left"
+                )
+            )
+        ).scalars().all()
+
+    await engine.dispose()
+
+    assert [operation.operation for operation in operations] == [
+        "checkpoint_branch.compare",
+        "checkpoint_branch.promote",
+    ]
+    assert operations[0].response_payload["artifactRefs"] == comparison_refs
+    assert operations[1].response_payload["outcome"] == "rejected"
+    assert sorted(artifact.artifact_kind for artifact in artifacts) == [
+        "output.branch_comparison.diagnostics.json",
+        "output.branch_comparison.left_diff.patch",
+        "output.branch_comparison.range_diff.patch",
+        "output.branch_comparison.right_diff.patch",
+        "output.branch_comparison.summary.json",
+        "output.branch_promotion.downstream_invalidation.json",
+        "output.branch_promotion.record.json",
     ]
