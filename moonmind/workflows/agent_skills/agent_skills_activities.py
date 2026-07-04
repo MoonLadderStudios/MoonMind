@@ -151,13 +151,32 @@ class AgentSkillsActivities:
         if not (skill_dir / "SKILL.md").is_file():
             raise OSError(f"skill source path is missing SKILL.md: {skill_dir}")
 
+        allowed_root = AgentSkillsActivities._skill_bundle_allowed_root(skill_dir)
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
             for path in sorted(skill_dir.rglob("*")):
-                if path.is_symlink() or not path.is_file():
+                if not path.is_file():
                     continue
-                archive.add(path, arcname=str(path.relative_to(skill_dir)))
+                source_path = path
+                if path.is_symlink():
+                    source_path = path.resolve(strict=True)
+                    try:
+                        source_path.relative_to(allowed_root)
+                    except ValueError as exc:
+                        raise OSError(
+                            "skill bundle symlink escapes allowed root: "
+                            f"{path} -> {source_path}"
+                        ) from exc
+                archive.add(source_path, arcname=str(path.relative_to(skill_dir)))
         return buffer.getvalue()
+
+    @staticmethod
+    def _skill_bundle_allowed_root(skill_dir: Path) -> Path:
+        resolved = skill_dir.resolve(strict=False)
+        for candidate in (resolved, *resolved.parents):
+            if (candidate / ".git").exists() or (candidate / "pyproject.toml").exists():
+                return candidate.resolve(strict=False)
+        return resolved
 
     async def _persist_resolved_skillset_manifest(
         self,

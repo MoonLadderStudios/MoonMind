@@ -1,11 +1,1 @@
-# Generated from moonspec/bundle/commands/gemini/moonspec.tasks.toml; edit MoonSpec repo instead.
-description = "Generate a TDD-first MoonSpec task breakdown."
-
-prompt = """
-Use the `moonspec-tasks` skill to generate `tasks.md` for the active one-story MoonSpec feature.
-
-User input:
-{{args}}
-
-Use MoonSpec skill IDs and command IDs only: `moonspec-*` and `/moonspec.*`.
-"""
+../../moonspec/bundle/commands/gemini/moonspec.tasks.toml

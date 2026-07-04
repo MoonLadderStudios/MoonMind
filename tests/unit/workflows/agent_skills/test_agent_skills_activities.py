@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 import io
+import os
 import tarfile
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -132,6 +133,54 @@ async def test_resolve_skills_activity_persists_file_backed_skill_content(
         ]
     manifest = artifact_service.payloads["art-2"].decode("utf-8")
     assert '"content_ref": "art-1"' in manifest
+
+
+async def test_build_skill_bundle_payload_materializes_repo_local_symlinked_files(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    source_skill = repo / "moonspec" / "bundle" / "skills" / "moonspec-plan"
+    source_skill.mkdir(parents=True)
+    (source_skill / "SKILL.md").write_text("# MoonSpec Plan\n", encoding="utf-8")
+    source_agents = source_skill / "agents"
+    source_agents.mkdir()
+    (source_agents / "openai.yaml").write_text("name: plan\n", encoding="utf-8")
+    projected_skill = repo / ".agents" / "skills" / "moonspec-plan"
+    projected_skill.mkdir(parents=True)
+    (projected_skill / "SKILL.md").symlink_to(
+        "../../../moonspec/bundle/skills/moonspec-plan/SKILL.md"
+    )
+    (projected_skill / "agents").mkdir()
+    (projected_skill / "agents" / "openai.yaml").symlink_to(
+        "../../../../moonspec/bundle/skills/moonspec-plan/agents/openai.yaml"
+    )
+
+    payload = AgentSkillsActivities._build_skill_bundle_payload(projected_skill)
+
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+        members = {member.name: archive.extractfile(member).read() for member in archive}
+    assert members == {
+        "SKILL.md": b"# MoonSpec Plan\n",
+        "agents/openai.yaml": b"name: plan\n",
+    }
+
+
+async def test_build_skill_bundle_payload_rejects_symlink_escape(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    outside = tmp_path / "outside.md"
+    outside.write_text("# Outside\n", encoding="utf-8")
+    skill_dir = repo / ".agents" / "skills" / "unsafe"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Unsafe\n", encoding="utf-8")
+    (skill_dir / "outside.md").symlink_to(os.path.relpath(outside, skill_dir))
+
+    with pytest.raises(OSError, match="skill bundle symlink escapes allowed root"):
+        AgentSkillsActivities._build_skill_bundle_payload(skill_dir)
+
 
 async def test_build_prompt_index_activity_returns_bundle():
     activities = AgentSkillsActivities()

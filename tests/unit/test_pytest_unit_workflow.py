@@ -57,3 +57,11 @@ def test_required_unit_workflow_runs_status_token_audit() -> None:
     command = _run_command("ci-required", "Audit status token domains")
 
     assert "tools/audit_status_tokens.py --fail-on-unknown" in command
+
+
+def test_required_unit_workflow_checks_out_moonspec_submodule() -> None:
+    workflow = _load_workflow()
+    checkout = workflow["jobs"]["ci-required"]["steps"][0]
+
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"]["submodules"] == "recursive"

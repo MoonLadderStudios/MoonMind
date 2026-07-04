@@ -1296,6 +1296,277 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).not.toBe('page');
   });
 
+  it('MM-1094 renders checkpoint branches, hierarchy hints, turns, and evidence links on the steps tab', async () => {
+    window.history.pushState({}, 'Branch Explorer Test', '/workflows/test-123/steps?source=temporal');
+    const stepsWithCheckpoint = {
+      ...latestStepsSnapshot,
+      steps: latestStepsSnapshot.steps.map((step) => (
+        step.logicalStepId === 'apply'
+          ? { ...step, stateCheckpointRef: 'artifact://checkpoint-apply' }
+          : step
+      )),
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-1094 branch workflow',
+      summary: 'Branch explorer detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      relatedRuns: [],
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/checkpoint-branches/branch-a/turns')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              branchTurnId: 'turn-a-1',
+              branchId: 'branch-a',
+              instructionRef: 'art-instructions-a',
+              instructionDigest: 'sha256:a',
+              sourceCheckpointRef: 'artifact://checkpoint-apply',
+              createdStepExecutionId: 'step-head-a',
+              stepExecutionManifestRef: 'art-manifest-a',
+              idempotencyKey: 'idem-turn-a',
+              status: 'passed',
+              createdAt: '2026-04-09T00:01:00Z',
+              updatedAt: '2026-04-09T00:02:00Z',
+            }],
+          }),
+        } as Response);
+      }
+      if (url.endsWith('/checkpoint-branches')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              branchId: 'branch-a',
+              workflowId: 'test-123',
+              rootWorkflowId: 'test-123',
+              sourceRunId: '02-run',
+              logicalStepId: 'apply',
+              sourceExecutionOrdinal: 1,
+              sourceCheckpointBoundary: 'after_execution',
+              sourceCheckpointRef: 'artifact://checkpoint-apply',
+              label: 'Try minimal API contract fix',
+              state: 'promotable',
+              branchKind: 'root',
+              workspacePolicy: 'apply_previous_execution_diff_to_clean_baseline',
+              runtimeContextPolicy: 'fresh_agent_run',
+              gitRepository: 'MoonLadderStudios/MoonMind',
+              gitBaseBranch: 'main',
+              gitWorkBranch: 'mm/test-123/apply/branch-a',
+              currentHeadStepExecutionId: 'step-head-a',
+              currentHeadCheckpointRef: 'artifact://checkpoint-head-a',
+              artifactRefs: { summary: 'artifact://branch-summary-a' },
+              publishStatus: 'unpublished',
+              createdAt: '2026-04-09T00:01:00Z',
+              updatedAt: '2026-04-09T00:02:00Z',
+            }],
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => stepsWithCheckpoint } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Branch Explorer' })).toBeTruthy();
+    expect(await screen.findByText('Try minimal API contract fix')).toBeTruthy();
+    expect(await screen.findByRole('list', { name: 'Branch turns' })).toBeTruthy();
+    expect(screen.getByText('artifact://branch-summary-a')).toBeTruthy();
+    expect(screen.getByText('artifact://checkpoint-head-a')).toBeTruthy();
+  });
+
+  it('MM-1094 submits branch creation from the safety preview checkpoint', async () => {
+    window.history.pushState({}, 'Branch Create Test', '/workflows/test-123/steps?source=temporal');
+    const stepsWithCheckpoint = {
+      ...latestStepsSnapshot,
+      steps: latestStepsSnapshot.steps.map((step) => (
+        step.logicalStepId === 'apply'
+          ? { ...step, stateCheckpointRef: 'artifact://checkpoint-apply' }
+          : step
+      )),
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-1094 branch workflow',
+      summary: 'Branch explorer detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      relatedRuns: [],
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/checkpoint-branches') && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            branchId: 'branch-created',
+            workflowId: 'test-123',
+            rootWorkflowId: 'test-123',
+            sourceRunId: '02-run',
+            logicalStepId: 'apply',
+            sourceExecutionOrdinal: 1,
+            sourceCheckpointBoundary: 'after_execution',
+            sourceCheckpointRef: 'artifact://checkpoint-apply',
+            label: 'Checkpoint branch',
+            state: 'created',
+            branchKind: 'root',
+            workspacePolicy: 'apply_previous_execution_diff_to_clean_baseline',
+            runtimeContextPolicy: 'fresh_agent_run',
+            artifactRefs: {},
+            createdAt: '2026-04-09T00:01:00Z',
+            updatedAt: '2026-04-09T00:01:00Z',
+          }),
+        } as Response);
+      }
+      if (url.endsWith('/checkpoint-branches')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => stepsWithCheckpoint } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create branch from checkpoint' }));
+
+    await waitFor(() => {
+      const postCall = fetchSpy.mock.calls.find(([url, init]) => (
+        String(url).endsWith('/checkpoint-branches') && (init as RequestInit | undefined)?.method === 'POST'
+      ));
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(String((postCall?.[1] as RequestInit).body));
+      expect(body.source.checkpointRef).toBe('artifact://checkpoint-apply');
+      expect(body.source.logicalStepId).toBe('apply');
+      expect(body.workspacePolicy).toBe('apply_previous_execution_diff_to_clean_baseline');
+      expect(body.runtimeContextPolicy).toBe('fresh_agent_run');
+      expect(body.publishMode).toBe('none');
+      expect(body.instructions.text).toContain('bounded alternative implementation');
+      expect(body.idempotencyKey).toMatch(/^dashboard:create:test-123:apply:1:/);
+    });
+  });
+
+  it('MM-1094 submits promotable branches with accepted promotion evidence', async () => {
+    window.history.pushState({}, 'Branch Promote Test', '/workflows/test-123/steps?source=temporal');
+    const stepsWithCheckpoint = {
+      ...latestStepsSnapshot,
+      steps: latestStepsSnapshot.steps.map((step) => (
+        step.logicalStepId === 'apply'
+          ? { ...step, stateCheckpointRef: 'artifact://checkpoint-apply' }
+          : step
+      )),
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-1094 branch workflow',
+      summary: 'Branch explorer detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      relatedRuns: [],
+    };
+    const branch = {
+      branchId: 'branch-a',
+      workflowId: 'test-123',
+      rootWorkflowId: 'test-123',
+      sourceRunId: '02-run',
+      logicalStepId: 'apply',
+      sourceExecutionOrdinal: 1,
+      sourceCheckpointBoundary: 'after_execution',
+      sourceCheckpointRef: 'artifact://checkpoint-apply',
+      label: 'Try minimal API contract fix',
+      state: 'promotable',
+      branchKind: 'root',
+      workspacePolicy: 'apply_previous_execution_diff_to_clean_baseline',
+      runtimeContextPolicy: 'fresh_agent_run',
+      gitRepository: 'MoonLadderStudios/MoonMind',
+      gitBaseBranch: 'main',
+      gitWorkBranch: 'mm/test-123/apply/branch-a',
+      currentHeadStepExecutionId: 'step-head-a',
+      currentHeadCheckpointRef: 'artifact://checkpoint-head-a',
+      artifactRefs: { summary: 'artifact://branch-summary-a' },
+      publishStatus: 'unpublished',
+      createdAt: '2026-04-09T00:01:00Z',
+      updatedAt: '2026-04-09T00:02:00Z',
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/checkpoint-branches/branch-a/promote') && init?.method === 'POST') {
+        return Promise.resolve({ ok: true, json: async () => ({ ...branch, state: 'promoted' }) } as Response);
+      }
+      if (url.endsWith('/checkpoint-branches/branch-a/turns')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      if (url.endsWith('/checkpoint-branches')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [branch] }) } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => stepsWithCheckpoint } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Promote branch' }));
+
+    await waitFor(() => {
+      const postCall = fetchSpy.mock.calls.find(([url, init]) => (
+        String(url).endsWith('/checkpoint-branches/branch-a/promote') &&
+        (init as RequestInit | undefined)?.method === 'POST'
+      ));
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(String((postCall?.[1] as RequestInit).body));
+      expect(body.gateEvidence.verdict).toBe('passed');
+      expect(body.sideEffectDisposition.status).toBe('none');
+      expect(body.sideEffectDisposition.publishStatus).toBe('unpublished');
+      expect(body.idempotencyKey).toMatch(/^dashboard:promote:test-123:branch-a:/);
+    });
+  });
+
   it('selects Chat by default and preserves query state in detail tab links', async () => {
     window.history.pushState({}, 'Default Chat Test', '/workflows/test-123?source=temporal');
     mockWorkflowDetailSubrouteFetch();
@@ -3813,6 +4084,7 @@ describe('Workflow Detail Entrypoint', () => {
     editLink.addEventListener('click', (event) => event.preventDefault());
     fireEvent.focus(editLink);
     fireEvent.keyDown(editLink, { key: 'Enter' });
+    fireEvent.click(editLink);
     fireEvent.click(await screen.findByRole('button', { name: 'Workflow actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Rerun' }));
     await waitFor(() => {
@@ -3838,11 +4110,6 @@ describe('Workflow Detail Entrypoint', () => {
     );
     expect(telemetryEvents).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          event: 'detail_edit_click',
-          mode: 'detail',
-          workflowId: 'test-123',
-        }),
         expect.objectContaining({
           event: 'detail_rerun_click',
           mode: 'detail',

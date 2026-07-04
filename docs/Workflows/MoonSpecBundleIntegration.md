@@ -1,13 +1,13 @@
 # MoonSpec Bundle Integration
 
 MoonSpec workflow assets are sourced from the root-level `moonspec` git submodule.
-MoonMind keeps the current runtime paths stable by projecting the pinned bundle
-revision into the paths the application already reads.
+MoonMind keeps the current runtime paths stable by linking files from the pinned
+bundle revision into the paths the application already reads.
 
 ## Source Of Truth
 
-Edit MoonSpec workflow behavior in the MoonSpec repository, not in projected
-MoonMind files. The projected paths are generated from:
+Edit MoonSpec workflow behavior in the MoonSpec repository, not as independent
+MoonMind copies. The projected paths are file-level symbolic links from:
 
 - `moonspec/bundle/skills/` to `.agents/skills/`
 - `moonspec/bundle/templates/` to `.specify/templates/`
@@ -30,31 +30,37 @@ git submodule update --init --recursive
 ```
 
 CI checks out submodules and verifies that `moonspec/bundle/moonspec.bundle.yaml`
-exists.
+exists before checking the symlink projection.
 
 ## Projection
 
-Check committed projections:
+Check linked projections:
 
 ```bash
-python3 tools/sync_moonspec_submodule.py --check
+python3 tools/link_moonspec_submodule.py --check --prune
 ```
 
-Refresh committed projections after bumping the submodule:
+Refresh linked projections after bumping the submodule:
 
 ```bash
-python3 tools/sync_moonspec_submodule.py --write
+python3 tools/link_moonspec_submodule.py --write --prune --replace-generated
 ```
 
-Projected files include a generated header. Direct edits to those files should
-be moved upstream into MoonSpec, then re-projected into MoonMind from the pinned
-submodule revision.
+The projector creates one relative symlink per mapped source file and preserves
+mixed MoonMind-owned directories. It refuses unsafe source or target path
+escapes, refuses to replace directories, and only replaces old generated
+MoonSpec projection files when `--replace-generated` is provided. Stale symlinks
+that point into `moonspec/bundle` can be removed with `--prune`.
+
+The previous `tools/sync_moonspec_submodule.py` generated-copy projector is
+deprecated. MoonSpec-owned projected files should not contain MoonMind-injected
+generated headers unless those headers exist in the MoonSpec source itself.
 
 ## Bumping MoonSpec
 
 1. Update the MoonSpec repository and merge the upstream MoonSpec PR.
 2. In MoonMind, update `moonspec` to the desired MoonSpec commit.
-3. Run `python3 tools/sync_moonspec_submodule.py --write`.
-4. Run `python3 tools/sync_moonspec_submodule.py --check`.
+3. Run `python3 tools/link_moonspec_submodule.py --write --prune --replace-generated`.
+4. Run `python3 tools/link_moonspec_submodule.py --check --prune`.
 5. Run the targeted MoonMind tests for projection, preset seeding, scheduling,
    and any touched runtime/API/UI surface.

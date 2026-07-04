@@ -4,6 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
+
 MODULE_PATH = (
     Path(__file__).resolve().parents[3] / "tools" / "sync_moonspec_submodule.py"
 )
@@ -15,50 +16,36 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(mod)
 
 
-def test_projection_plan_reads_moonspec_submodule_manifest() -> None:
-    files, unexpected = mod._planned_files(mod.DEFAULT_SOURCE, "moonmind")
-    targets = {item.target.relative_to(mod.REPO_ROOT).as_posix() for item in files}
-
-    assert ".agents/skills/moonspec-doc-reconcile/agents/openai.yaml" in targets
-    assert ".gemini/commands/moonspec.orchestrate.toml" in targets
-    assert ".gemini/commands/speckit.*.toml" in unexpected
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
-def test_top_level_directory_projection_manages_target_directory() -> None:
-    files, _unexpected = mod._planned_files(mod.DEFAULT_SOURCE, "moonmind")
-    gemini_command = next(
-        item
-        for item in files
-        if item.target.relative_to(mod.REPO_ROOT).as_posix()
-        == ".gemini/commands/moonspec.orchestrate.toml"
+def test_deprecated_sync_write_fails_before_touching_projection(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    repo = tmp_path / "repo"
+    source = repo / "moonspec"
+    bundle = source / "bundle"
+    monkeypatch.setattr(mod, "REPO_ROOT", repo)
+    monkeypatch.setattr(mod, "DEFAULT_SOURCE", source)
+    _write(
+        bundle / "moonspec.bundle.yaml",
+        "schemaVersion: 1\nprojections:\n  moonmind:\n    path: projections/moonmind.yaml\n",
     )
-
-    assert gemini_command.managed_root.relative_to(mod.REPO_ROOT).as_posix() == (
-        ".gemini/commands"
+    _write(
+        bundle / "projections/moonmind.yaml",
+        "schemaVersion: 1\nconsumer: moonmind\nmappings:\n"
+        "  - from: source.md\n"
+        "    to: target.md\n"
+        "    mode: file\n",
     )
+    _write(bundle / "source.md", "# Source\n")
 
+    result = mod.main(["--source", str(source), "--write"])
 
-def test_markdown_header_preserves_skill_front_matter() -> None:
-    text = "---\nname: moonspec-test\n---\n# Body\n"
-    result = mod._with_header(
-        Path("SKILL.md"),
-        Path("skills/moonspec-test/SKILL.md"),
-        text,
-    )
-
-    assert result.startswith("---\nname: moonspec-test\n---\n")
-    assert (
-        "Generated from moonspec/bundle/skills/moonspec-test/SKILL.md"
-        in result
-    )
-
-
-def test_shell_header_preserves_shebang() -> None:
-    text = "#!/usr/bin/env bash\nset -e\n"
-    result = mod._with_header(
-        Path("check-prerequisites.sh"),
-        Path("scripts/bash/check-prerequisites.sh"),
-        text,
-    )
-
-    assert result.startswith("#!/usr/bin/env bash\n# Generated from")
+    assert result == 1
+    assert not (repo / "target.md").exists()
+    assert "--write is no longer supported" in capsys.readouterr().err

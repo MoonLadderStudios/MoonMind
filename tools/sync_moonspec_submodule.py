@@ -12,6 +12,10 @@ from typing import Any
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+DEPRECATION_NOTICE = (
+    "tools/sync_moonspec_submodule.py is deprecated; use "
+    "tools/link_moonspec_submodule.py for canonical MoonSpec projection."
+)
 DEFAULT_SOURCE = REPO_ROOT / "moonspec"
 LOCAL_UNEXPECTED = (
     ".specify/templates/constitution-template.md",
@@ -220,7 +224,9 @@ def _drift(files: list[PlannedFile], unexpected_patterns: list[str]) -> list[str
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Sync MoonSpec submodule projection")
+    parser = argparse.ArgumentParser(
+        description="Deprecated generated-copy MoonSpec projection"
+    )
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--projection", default="moonmind")
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -228,12 +234,18 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
 
+    print(DEPRECATION_NOTICE, file=sys.stderr)
+    if args.write:
+        print(
+            "ERROR: --write is no longer supported by the deprecated copy-based "
+            "projection; use tools/link_moonspec_submodule.py instead.",
+            file=sys.stderr,
+        )
+        return 1
+
     source_root = args.source.resolve()
     try:
         files, unexpected_patterns = _planned_files(source_root, args.projection)
-        if args.write:
-            _write_projection(files)
-            _remove_stale(files, unexpected_patterns)
         drift = _drift(files, unexpected_patterns)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -245,7 +257,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {item}", file=sys.stderr)
         if not args.write:
             print(
-                "Run: python3 tools/sync_moonspec_submodule.py --write",
+                "Canonical projection uses: "
+                "python3 tools/link_moonspec_submodule.py --write --prune --replace-generated",
                 file=sys.stderr,
             )
         return 1
