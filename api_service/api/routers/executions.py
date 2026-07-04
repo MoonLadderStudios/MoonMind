@@ -857,6 +857,10 @@ def _branch_comparison_record(
         "branchGateVerdict": branch_gate_verdict,
         "againstGateVerdict": other_gate_verdict,
     }
+    gate_verdict_summaries = {
+        branch.branch_id: branch_gate_verdict,
+        other.branch_id: other_gate_verdict,
+    }
     base_checkpoint_ref: str | dict[str, str | None]
     if branch.source_checkpoint_ref == other.source_checkpoint_ref:
         base_checkpoint_ref = branch.source_checkpoint_ref
@@ -954,12 +958,20 @@ def _branch_comparison_record(
         "workflowId": workflow_id,
         "branchId": branch.branch_id,
         "againstBranchId": other.branch_id,
+        "branchIds": [branch.branch_id, other.branch_id],
+        "baseCheckpointRef": base_checkpoint_ref,
         "summaryText": summary_text,
         "summary": summary,
         "quality": quality,
+        "gateVerdictSummaries": gate_verdict_summaries,
         "git": {
             "leftDiffRef": branch_diff_ref,
             "rightDiffRef": against_diff_ref,
+            "rangeDiffRef": range_diff_ref,
+        },
+        "diffRefs": {
+            "branchDiffRef": branch_diff_ref,
+            "againstDiffRef": against_diff_ref,
             "rangeDiffRef": range_diff_ref,
         },
         "evidenceRefs": evidence_refs,
@@ -986,6 +998,7 @@ def _branch_comparison_record(
         )
     )
     record_payload["summaryRef"] = summary_ref
+    record_payload["boundedSummaryRefs"] = [summary_ref]
     record_payload["artifactRefs"] = {
         "output.branch_comparison.summary.json": summary_ref,
         "output.branch_comparison.metadata.json": metadata_ref,
@@ -12290,21 +12303,25 @@ async def promote_checkpoint_branch(
         != branch.current_head_step_execution_id
     ):
         await _reject_promotion(
-            code="checkpoint_head_mismatch",
-            reason="checkpoint_head_mismatch",
+            code="expected_head_mismatch",
+            reason="expected_head_step_execution_mismatch",
+        )
+    if branch.current_head_commit and not payload.expected_head_commit:
+        await _reject_promotion(
+            code="expected_head_mismatch",
+            reason="expected_head_commit_required",
         )
     if (
         branch.current_head_commit
-        and payload.expected_head_commit
         and payload.expected_head_commit != branch.current_head_commit
     ):
         await _reject_promotion(
-            code="git_base_commit_mismatch",
-            reason="git_base_commit_mismatch",
+            code="expected_head_mismatch",
+            reason="expected_head_commit_mismatch",
         )
-    if payload.policy_evidence.get("freshHeadValidated") is False:
+    if payload.policy_evidence.get("freshHeadValidated") is not True:
         await _reject_promotion(
-            code="checkpoint_head_mismatch",
+            code="expected_head_mismatch",
             reason="fresh_branch_head_validation_required",
         )
     budget_state = str(

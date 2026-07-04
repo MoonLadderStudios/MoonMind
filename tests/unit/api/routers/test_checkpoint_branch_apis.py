@@ -201,6 +201,7 @@ async def _set_branch_head(
     client: AsyncClient,
     branch_id: str,
     step_execution_id: str = "mm:wf-branch:run:implement:execution:2",
+    head_commit: str | None = None,
 ) -> None:
     async for session in client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
@@ -212,6 +213,8 @@ async def _set_branch_head(
         )
         branch = result.scalar_one()
         branch.current_head_step_execution_id = step_execution_id
+        if head_commit is not None:
+            branch.current_head_commit = head_commit
         await session.commit()
 
 
@@ -726,6 +729,22 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
         "branchGateVerdict": "unknown",
         "againstGateVerdict": "unknown",
     }
+    assert comparison["comparisonRecord"]["branchIds"] == [branch_id, fork_id]
+    assert comparison["comparisonRecord"]["baseCheckpointRef"] == (
+        "artifact://checkpoints/after-implement"
+    )
+    assert comparison["comparisonRecord"]["gateVerdictSummaries"] == {
+        branch_id: "unknown",
+        fork_id: "unknown",
+    }
+    assert comparison["comparisonRecord"]["boundedSummaryRefs"] == [
+        comparison["summaryRef"]
+    ]
+    assert set(comparison["comparisonRecord"]["diffRefs"]) == {
+        "branchDiffRef",
+        "againstDiffRef",
+        "rangeDiffRef",
+    }
     assert comparison["comparisonRecord"]["artifactRefs"][
         "output.branch_comparison.metadata.json"
     ].startswith("artifact://checkpoint-branch-comparisons/")
@@ -739,6 +758,7 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
             "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
             "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
             "sideEffectDisposition": {"status": "isolated"},
+            "policyEvidence": {"freshHeadValidated": True},
             "idempotencyKey": "mm-1091:promote-before-recompare",
         },
     )
@@ -799,6 +819,7 @@ async def test_checkpoint_branch_promotion_requires_head_gate_side_effects_and_a
             "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
             "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
             "sideEffectDisposition": {"status": "isolated"},
+            "policyEvidence": {"freshHeadValidated": True},
             "policyRequiresApproval": True,
             "idempotencyKey": "mm-1091:promote-missing-approval",
         },
@@ -815,6 +836,7 @@ async def test_checkpoint_branch_promotion_requires_head_gate_side_effects_and_a
             },
             "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
             "sideEffectDisposition": {"status": "isolated"},
+            "policyEvidence": {"freshHeadValidated": True},
             "idempotencyKey": "mm-1091:promote-conflicting-accepted-refs",
         },
     )
@@ -830,6 +852,7 @@ async def test_checkpoint_branch_promotion_requires_head_gate_side_effects_and_a
             "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
             "sideEffectDisposition": {"status": "isolated"},
             "approvalEvidence": {"artifactRef": "artifact://approval"},
+            "policyEvidence": {"freshHeadValidated": True},
             "policyRequiresApproval": True,
             "idempotencyKey": "mm-1091:promote",
         },
@@ -903,12 +926,81 @@ async def test_checkpoint_branch_promotion_requires_head_gate_side_effects_and_a
             "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
             "sideEffectDisposition": {"status": "isolated"},
             "approvalEvidence": {"artifactRef": "artifact://approval"},
+            "policyEvidence": {"freshHeadValidated": True},
             "policyRequiresApproval": True,
             "idempotencyKey": "mm-1091:promote-head-mismatch",
         },
     )
     assert head_mismatch.status_code == 409
-    assert head_mismatch.json()["detail"]["code"] == "checkpoint_head_mismatch"
+    assert head_mismatch.json()["detail"]["code"] == "expected_head_mismatch"
+    assert head_mismatch.json()["detail"]["reason"] == (
+        "expected_head_step_execution_mismatch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_promotion_requires_fresh_and_expected_git_head(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1103:create-promote-head-validation"),
+    )
+    branch_id = created.json()["branchId"]
+    await _set_branch_head(
+        checkpoint_branch_client,
+        branch_id,
+        head_commit="branch-head-1",
+    )
+
+    missing_fresh_validation = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
+        json={
+            "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
+            "expectedHeadCommit": "branch-head-1",
+            "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
+            "sideEffectDisposition": {"status": "isolated"},
+            "idempotencyKey": "mm-1103:promote-missing-fresh-head",
+        },
+    )
+    assert missing_fresh_validation.status_code == 409
+    assert missing_fresh_validation.json()["detail"] == {
+        "code": "expected_head_mismatch",
+        "reason": "fresh_branch_head_validation_required",
+    }
+
+    missing_expected_commit = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
+        json={
+            "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
+            "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
+            "sideEffectDisposition": {"status": "isolated"},
+            "policyEvidence": {"freshHeadValidated": True},
+            "idempotencyKey": "mm-1103:promote-missing-expected-commit",
+        },
+    )
+    assert missing_expected_commit.status_code == 409
+    assert missing_expected_commit.json()["detail"] == {
+        "code": "expected_head_mismatch",
+        "reason": "expected_head_commit_required",
+    }
+
+    stale_expected_commit = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
+        json={
+            "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
+            "expectedHeadCommit": "stale-head",
+            "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
+            "sideEffectDisposition": {"status": "isolated"},
+            "policyEvidence": {"freshHeadValidated": True},
+            "idempotencyKey": "mm-1103:promote-stale-expected-commit",
+        },
+    )
+    assert stale_expected_commit.status_code == 409
+    assert stale_expected_commit.json()["detail"] == {
+        "code": "expected_head_mismatch",
+        "reason": "expected_head_commit_mismatch",
+    }
 
 
 @pytest.mark.asyncio
@@ -1059,6 +1151,7 @@ async def test_checkpoint_branch_api_fails_closed_for_invalid_source_provider_bu
             "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
             "gateEvidence": {"verdict": "failed", "artifactRef": "artifact://gate"},
             "sideEffectDisposition": {"status": "isolated"},
+            "policyEvidence": {"freshHeadValidated": True},
             "idempotencyKey": "mm-1091:bad-gate",
         },
     )
@@ -1071,6 +1164,7 @@ async def test_checkpoint_branch_api_fails_closed_for_invalid_source_provider_bu
             "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
             "gateEvidence": {"verdict": "passed", "artifactRef": "artifact://gate"},
             "sideEffectDisposition": {"status": "unsafe"},
+            "policyEvidence": {"freshHeadValidated": True},
             "idempotencyKey": "mm-1091:unsafe-side-effects",
         },
     )
@@ -1097,6 +1191,7 @@ async def test_checkpoint_branch_promotion_rejection_persists_audit_without_adva
             "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
             "gateEvidence": {"verdict": "failed", "artifactRef": "artifact://gate"},
             "sideEffectDisposition": {"status": "isolated"},
+            "policyEvidence": {"freshHeadValidated": True},
             "idempotencyKey": "mm-1103:rejected-promotion-audit",
         },
     )
