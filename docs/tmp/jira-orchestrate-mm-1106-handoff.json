@@ -1,0 +1,137 @@
+{
+  "handoffType": "jira-orchestrate-submission",
+  "createdAt": "2026-07-04T00:00:00Z",
+  "jiraIssueKey": "MM-1106",
+  "classification": {
+    "inputType": "single-story feature request",
+    "reason": "The trusted Jira preset brief is one In Progress Jira Story for expanding tests around remaining checkpoint branch product slices and unresolved decisions. It references a canonical design document for runtime source requirements, but the orchestration input is the single Jira story MM-1106 rather than a broad new design breakdown or an existing feature directory."
+  },
+  "sourceStory": {
+    "id": "MM-1106",
+    "summary": "Expand tests to cover the remaining checkpoint branch product slices and unresolved decisions",
+    "sourceJiraIssue": "MM-1106",
+    "sourceDesignPath": "docs/Workflows/CheckpointBranchSystem.md",
+    "sourceSections": [
+      "5. Core invariants",
+      "17. Migration and rollout",
+      "18. Testing requirements",
+      "19. Open questions"
+    ],
+    "claimIds": [
+      "docs-workflows-checkpoint-branch-system#s17-rollout",
+      "docs-workflows-checkpoint-branch-system#s18-tests",
+      "docs-workflows-checkpoint-branch-system#s19-open",
+      "docs-workflows-checkpoint-branch-system#s5-invariants"
+    ],
+    "coverageIds": [
+      "DESIGN-REQ-015",
+      "DESIGN-REQ-018",
+      "DESIGN-REQ-019",
+      "DESIGN-REQ-020"
+    ]
+  },
+  "preset": {
+    "slug": "jira-orchestrate",
+    "version": "1.0.0",
+    "scope": "global"
+  },
+  "repository": "MoonLadderStudios/MoonMind",
+  "targetRuntime": "codex_cli",
+  "idempotencyKey": "jira-orchestrate:MM-1106",
+  "artifactResumeInspection": {
+    "status": "no_existing_feature_artifacts_found",
+    "checkedLocations": [
+      "artifacts/",
+      "var/",
+      "docs/tmp/"
+    ],
+    "checkedPatterns": [
+      "MM-1106",
+      "1106",
+      "checkpoint-branch",
+      "checkpoint_branch",
+      "CheckpointBranch",
+      "moonspec",
+      "story-breakdowns",
+      "doc-slices"
+    ],
+    "resumeFrom": "jira-orchestrate runtime workflow submission",
+    "notes": [
+      "No existing MM-1106 MoonSpec feature directory, story breakdown, doc-slice, or Jira Orchestrate handoff artifact was found in the workspace.",
+      "Because no valid later-stage MoonSpec artifacts were present, the runtime Jira Orchestrate workflow should start from the Jira preset brief and inspect/resume any durable artifacts available in its own execution context before generating new stage outputs.",
+      "Jira Orchestrate must run as a runtime implementation workflow; this handoff does not perform implementation inline."
+    ]
+  },
+  "submissionStatus": "not_submitted_from_this_workspace",
+  "localBlockers": [
+    {
+      "command": "curl -fsS http://localhost:8000/api/health",
+      "reason": "The local MoonMind API service is not available in this managed workspace, so the Jira Orchestrate runtime workflow cannot be submitted here.",
+      "evidence": "curl: (7) Failed to connect to localhost port 8000"
+    },
+    {
+      "command": "docker ps --format '{{.Names}} {{.Status}}' | head -50",
+      "reason": "No running MoonMind containers were visible from this workspace.",
+      "evidence": "Command returned no container rows."
+    }
+  ],
+  "createExecutionPayload": {
+    "type": "task",
+    "payload": {
+      "repository": "MoonLadderStudios/MoonMind",
+      "targetRuntime": "codex_cli",
+      "publishMode": "pr",
+      "idempotencyKey": "jira-orchestrate:MM-1106",
+      "integration": "jira",
+      "task": {
+        "title": "Run Jira Orchestrate for MM-1106",
+        "instructions": "Run Jira Orchestrate for MM-1106.\n\nUse the trusted Jira preset brief for MM-1106 as the canonical MoonSpec orchestration input.\n\nClassify this input as a single-story feature request. Treat docs/Workflows/CheckpointBranchSystem.md as runtime source requirements, especially sections 5, 17, 18, and 19 and claim IDs docs-workflows-checkpoint-branch-system#s17-rollout, docs-workflows-checkpoint-branch-system#s18-tests, docs-workflows-checkpoint-branch-system#s19-open, and docs-workflows-checkpoint-branch-system#s5-invariants.\n\nInspect existing MoonSpec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts. Jira Orchestrate always runs as a runtime implementation workflow; do not implement inline inside this orchestration handoff.",
+        "runtime": {
+          "mode": "codex_cli"
+        },
+        "publish": {
+          "mode": "pr"
+        },
+        "inputs": {
+          "jira_issue_key": "MM-1106",
+          "source_design_path": "docs/Workflows/CheckpointBranchSystem.md",
+          "constraints": "Use the trusted Jira preset brief as canonical input. Treat docs/Workflows/CheckpointBranchSystem.md as runtime source requirements. Classify as a single-story feature request. Inspect existing MoonSpec artifacts and resume from the first incomplete stage. Add targeted schema, service, runtime, git, promotion, and provider tests only as implementation slices exist. Keep rollout phases as implementation sequencing rather than durable API behavior. Track unresolved open questions as blockers, assumptions, approval gates, or acceptance criteria rather than hidden fallbacks."
+        },
+        "taskTemplate": {
+          "slug": "jira-orchestrate",
+          "version": "1.0.0",
+          "scope": "global"
+        },
+        "presetSchedule": {
+          "source": "jira-preset-brief",
+          "reason": "trusted_jira_orchestrate_input",
+          "presetSlug": "jira-orchestrate",
+          "presetVersion": "1.0.0",
+          "jiraIssueKey": "MM-1106",
+          "sourceStoryId": "MM-1106",
+          "sourceDesignPath": "docs/Workflows/CheckpointBranchSystem.md"
+        }
+      }
+    }
+  },
+  "canonicalJiraBriefSummary": {
+    "summary": "Expand tests to cover the remaining checkpoint branch product slices and unresolved decisions",
+    "issueType": "Story",
+    "status": "In Progress",
+    "assignee": "Nate Sticco",
+    "acceptanceCriteria": [
+      "Schema tests reject missing checkpoint refs, missing instruction refs/digests, post-launch turn mutation, identity conflation, and raw large or sensitive compact state.",
+      "Checkpoint validation tests cover valid, missing, corrupted, plan-mismatched, policy-mismatched, and unauthorized checkpoints.",
+      "Git isolation tests cover branch creation, deterministic sanitized names, protected refs, idempotent reuse, mismatched metadata failure, and fork isolation.",
+      "Runtime tests verify new Step Executions, follow-up turns, forks, branch-turn idempotency keys, and artifact preservation.",
+      "Promotion tests cover expected-head validation, gate requirements, invalidation records, and non-deletion of competitors.",
+      "Omnigent/provider tests cover fresh-session branch turns, instruction refs, diagnostic-only provider ids, capability-gated same-session continuation rejection, and capture artifact binding.",
+      "Capabilities with unresolved design questions are disabled, approval-gated, or represented with explicit clarification evidence."
+    ],
+    "alreadyImplementedEvidence": [
+      "tests/unit/services/test_checkpoint_branch_service.py covers source checkpoint validation, child lineage, manifest metadata, branch/turn/artifact/git binding persistence, cross-branch validation, duplicate git work branch rejection, and Step Execution identity distinction.",
+      "tests/unit/workflows/temporal/workflows/test_run_step_ledger.py covers generic external_provider_continuation evidence, but not checkpoint-branch-specific provider behavior."
+    ],
+    "remainingWork": "The persistence slice has useful unit coverage, but tests for checkpoint validation, runtime branch turns, git isolation, APIs, promotion, UI, and Omnigent branch execution remain missing until those slices exist."
+  }
+}
