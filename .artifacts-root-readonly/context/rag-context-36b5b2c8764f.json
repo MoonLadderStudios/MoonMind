@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/scripts/ensure_codex_config.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Ensure the Codex config enforces managed runtime defaults.\n2. frontend/src/components/WorkflowRowActionsMenu.tsx (score: 1.000, trust: canonical)\n    line 173: `${apiBase}/executions/${encodeURIComponent(workflowId)}?source=temporal`,\n3. docs/Workflows/CheckpointBranchSystem.md (score: 1.000, trust: canonical)\n    line 38: 3. isolate code changes with git branches or worktrees;\n4. moonmind/summarization/repo_summary.py (score: 1.000, trust: canonical)\n    line 14: \".vscode\",\n5. moonmind/summarization/readme_generator.py (score: 1.000, trust: canonical)\n    line 43: repo_path (str): The absolute path to the code repository.\n6. moonmind/integrations/pentest/models.py (score: 1.000, trust: canonical)\n    line 12: from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit\n7. moonmind/security/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Shared security contracts for MoonMind runtime code.\"\"\"\n8. moonmind/integrations/jira/client.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Low-level Jira REST client with bounded retries and sanitized errors.\"\"\"",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/scripts/ensure_codex_config.py",
+      "text": "line 1: \"\"\"Ensure the Codex config enforces managed runtime defaults.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "frontend/src/components/WorkflowRowActionsMenu.tsx",
+      "text": "line 173: `${apiBase}/executions/${encodeURIComponent(workflowId)}?source=temporal`,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 173,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/CheckpointBranchSystem.md",
+      "text": "line 38: 3. isolate code changes with git branches or worktrees;",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 38,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/summarization/repo_summary.py",
+      "text": "line 14: \".vscode\",",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 14,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/summarization/readme_generator.py",
+      "text": "line 43: repo_path (str): The absolute path to the code repository.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 43,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/pentest/models.py",
+      "text": "line 12: from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 12,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/security/__init__.py",
+      "text": "line 1: \"\"\"Shared security contracts for MoonMind runtime code.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/integrations/jira/client.py",
+      "text": "line 1: \"\"\"Low-level Jira REST client with bounded retries and sanitized errors.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-07-04T03:17:43Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
