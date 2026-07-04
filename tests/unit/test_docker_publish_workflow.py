@@ -6,6 +6,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "docker-publish.yml"
+DOCKERFILE_PATH = REPO_ROOT / "api_service" / "Dockerfile"
 
 def _load_workflow() -> dict:
     assert WORKFLOW_PATH.exists(), f"Missing workflow: {WORKFLOW_PATH}"
@@ -35,6 +36,27 @@ def test_docker_publish_generates_version_before_platform_builds() -> None:
 
     build_job = workflow["jobs"]["build"]
     assert build_job["needs"] == "metadata"
+
+
+def test_docker_publish_checks_out_moonspec_submodule() -> None:
+    workflow = _load_workflow()
+
+    checkout = workflow["jobs"]["build"]["steps"][0]
+
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"]["submodules"] == "recursive"
+
+
+def test_app_image_build_validates_moonspec_bundle_content() -> None:
+    dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+    copy_index = dockerfile.index("COPY moonspec /app/moonspec/")
+    guard_index = dockerfile.index("/app/moonspec/bundle/moonspec.bundle.yaml")
+
+    assert copy_index < guard_index
+    assert "/app/moonspec/bundle/skills/moonspec-verify/SKILL.md" in dockerfile
+    assert "/app/.agents/skills/moonspec-verify/SKILL.md" in dockerfile
+
 
 def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
     workflow = _load_workflow()

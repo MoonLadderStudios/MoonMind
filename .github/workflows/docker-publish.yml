@@ -44,6 +44,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Set up Python
         if: matrix.platform == 'linux/amd64'
