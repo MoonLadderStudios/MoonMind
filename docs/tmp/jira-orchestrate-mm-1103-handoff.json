@@ -1,6 +1,6 @@
 {
   "handoffType": "jira-orchestrate-intake",
-  "createdAt": "2026-07-04T00:00:00Z",
+  "updatedAt": "2026-07-04T00:00:00Z",
   "jiraIssueKey": "MM-1103",
   "classification": {
     "inputType": "single-story feature request",
@@ -53,12 +53,11 @@
     ]
   },
   "artifactResumeInspection": {
-    "status": "no_existing_feature_artifacts_found",
+    "status": "existing_moonspec_artifacts_found",
     "checkedLocations": [
       "artifacts/",
-      "var/artifacts/",
       "docs/tmp/",
-      "/work/agent_jobs/mm:81b43b87-9600-4864-9a74-47f22174a11f/artifacts"
+      "repository root MoonSpec artifacts"
     ],
     "checkedPatterns": [
       "MM-1103",
@@ -66,24 +65,34 @@
       "checkpoint",
       "branch",
       "moonspec",
-      "story-breakdown"
+      "verification"
+    ],
+    "validArtifactsToPreserve": [
+      "spec.md",
+      "plan.md",
+      "research.md",
+      "data-model.md",
+      "quickstart.md",
+      "contracts/checkpoint-branch-compare-promote.openapi.yaml",
+      "tasks.md"
     ],
     "evidence": [
-      "No local artifacts/jira-orchestrate-brief.json file exists; the canonical brief came from the trusted inline MoonMind Jira tool payload.",
-      "No MM-1103, 1103, checkpoint, branch, moonspec, or story-breakdown artifacts were present under artifacts/ or var/artifacts/.",
-      "The job artifact directory did not contain matching MoonSpec or story-breakdown files for MM-1103.",
-      "Existing docs/tmp Jira Orchestrate handoffs cover other issues only and do not provide MM-1103 MoonSpec stage artifacts."
+      "spec.md contains the MM-1103 trusted preset brief, functional requirements FR-001 through FR-012, acceptance scenarios, traceability, and out-of-scope boundaries.",
+      "plan.md, research.md, data-model.md, quickstart.md, and contracts/checkpoint-branch-compare-promote.openapi.yaml contain planning, data model, operator quickstart, and API contract artifacts for MM-1103.",
+      "tasks.md marks tasks 1 through 7 complete, including comparison tests, promotion gate tests, integration tests, implementation tasks, API contract updates, and targeted validation.",
+      "tasks.md leaves task 8 unchecked: final MoonSpec verification for MM-1103 has not been executed or resolved.",
+      "No final MM-1103 MoonSpec verification report artifact was found in the searched repository locations."
     ],
-    "resumeFrom": "Specify",
-    "nextStageReason": "The Specify gate is the first incomplete gate because no active MM-1103 feature directory, spec.md, plan.md, tasks.md, verification report, or valid later-stage MoonSpec artifact was found to preserve."
+    "resumeFrom": "Verify",
+    "nextStageReason": "Verify is the first incomplete stage because valid Specify, Plan, Tasks, implementation, and targeted validation artifacts already exist and must be preserved; tasks.md explicitly leaves final MoonSpec verification incomplete."
   },
   "stageGateStatus": {
-    "Specify": "INCOMPLETE",
-    "Plan": "NOT_STARTED",
-    "Tasks": "NOT_STARTED",
-    "Align": "NOT_STARTED",
-    "Implement": "NOT_STARTED",
-    "Verify": "NOT_STARTED",
+    "Specify": "COMPLETE",
+    "Plan": "COMPLETE",
+    "Tasks": "COMPLETE",
+    "Align": "COMPLETE_BY_EXISTING_ARTIFACTS",
+    "Implement": "COMPLETE_BY_EXISTING_TASK_STATUS",
+    "Verify": "INCOMPLETE",
     "DocReconcile": "NOT_STARTED"
   },
   "stageExecution": {
@@ -94,8 +103,17 @@
     "useBriefAsCanonicalInput": true,
     "treatImplementationDocumentAsRuntimeSourceRequirements": true,
     "sourceDesignPath": "docs/Workflows/CheckpointBranchSystem.md",
-    "resumeFromFirstIncompleteStage": "Specify",
+    "resumeFromFirstIncompleteStage": "Verify",
     "runAsRuntimeImplementationWorkflow": true,
-    "doNotRegenerateValidLaterStageArtifacts": true
+    "doNotRegenerateValidLaterStageArtifacts": true,
+    "preserveExistingArtifacts": [
+      "spec.md",
+      "plan.md",
+      "research.md",
+      "data-model.md",
+      "quickstart.md",
+      "contracts/checkpoint-branch-compare-promote.openapi.yaml",
+      "tasks.md"
+    ]
   }
 }
