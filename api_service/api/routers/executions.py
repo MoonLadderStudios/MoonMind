@@ -1445,6 +1445,23 @@ def _validate_branch_policy(
         )
 
 
+def _validate_branch_turn_launch_policy(
+    branch: WorkflowCheckpointBranch,
+    turn: WorkflowCheckpointBranchTurn,
+) -> None:
+    if "external_provider_continuation" in {
+        branch.runtime_context_policy,
+        turn.runtime_context_policy,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "provider_continuation_unsupported",
+                "reason": "provider_continuation_unsupported",
+            },
+        )
+
+
 async def _load_checkpoint_branch(
     session: AsyncSession,
     *,
@@ -11955,6 +11972,8 @@ async def launch_checkpoint_branch_turn(
             existing_op.response_payload.get("immutableLaunchFields"),
         )
         return _turn_to_model(turn)
+
+    _validate_branch_turn_launch_policy(branch, turn)
 
     context_payload = {
         "workflowId": workflow_id,
