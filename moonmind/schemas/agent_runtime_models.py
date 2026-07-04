@@ -714,11 +714,6 @@ class AgentExecutionRequest(BaseModel):
                 "Omnigent checkpointBranch.workflowId must match "
                 "stepExecution.workflowId"
             )
-        if self.idempotency_key == binding.idempotency_key:
-            raise ValueError(
-                "Agent request idempotencyKey must not reuse Omnigent branch "
-                "session key"
-            )
         prompt = omnigent.get("prompt")
         if (
             not isinstance(prompt, Mapping)

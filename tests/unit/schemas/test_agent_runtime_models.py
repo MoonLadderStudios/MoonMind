@@ -201,29 +201,30 @@ def test_agent_execution_request_rejects_invalid_omnigent_checkpoint_branch_bind
         )
 
 
-def test_agent_execution_request_rejects_omnigent_branch_key_reuse() -> None:
-    with pytest.raises(ValidationError, match="must not reuse"):
-        AgentExecutionRequest(
-            agentKind="external",
-            agentId="omnigent",
-            correlationId="corr-1",
-            idempotencyKey="wf-1:cbr-1:cbt-1:omnigent",
-            stepExecution=_omnigent_branch_step_execution(),
-            parameters={
-                "omnigent": {
-                    "prompt": {"instructionRef": "artifact://instructions/turn"},
-                    "checkpointBranch": {
-                        "mode": "fresh_omnigent_session_from_checkpoint",
-                        "workflowId": "wf-1",
-                        "branchId": "cbr-1",
-                        "branchTurnId": "cbt-1",
-                        "sourceCheckpointRef": "artifact://checkpoint/source",
-                        "instructionRef": "artifact://instructions/turn",
-                        "idempotencyKey": "wf-1:cbr-1:cbt-1:omnigent",
-                    },
-                }
-            },
-        )
+def test_agent_execution_request_accepts_omnigent_branch_provider_key() -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-1",
+        idempotencyKey="wf-1:cbr-1:cbt-1:omnigent",
+        stepExecution=_omnigent_branch_step_execution(),
+        parameters={
+            "omnigent": {
+                "prompt": {"instructionRef": "artifact://instructions/turn"},
+                "checkpointBranch": {
+                    "mode": "fresh_omnigent_session_from_checkpoint",
+                    "workflowId": "wf-1",
+                    "branchId": "cbr-1",
+                    "branchTurnId": "cbt-1",
+                    "sourceCheckpointRef": "artifact://checkpoint/source",
+                    "instructionRef": "artifact://instructions/turn",
+                    "idempotencyKey": "wf-1:cbr-1:cbt-1:omnigent",
+                },
+            }
+        },
+    )
+
+    assert request.idempotency_key == "wf-1:cbr-1:cbt-1:omnigent"
 
 
 def test_agent_execution_request_rejects_omnigent_continuation_without_capability(

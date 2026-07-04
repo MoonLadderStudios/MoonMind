@@ -1171,6 +1171,23 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             {"instructionRef": "artifact://instructions/turn-omnigent"},
         )
         self.assertEqual(
+            request.parameters["omnigent"]["checkpointBranch"],
+            {
+                "mode": "fresh_omnigent_session_from_checkpoint",
+                "workflowId": "test-wf-id",
+                "branchId": "branch-omnigent",
+                "branchTurnId": "turn-omnigent",
+                "sourceCheckpointRef": "artifact://checkpoint/source",
+                "sourceCheckpointDigest": "sha256:" + "a" * 64,
+                "instructionRef": "artifact://instructions/turn-omnigent",
+                "idempotencyKey": (
+                    "test-wf-id:branch-omnigent:turn-omnigent:omnigent"
+                ),
+                "priorSessionRefs": [],
+                "captureArtifactRefs": {},
+            },
+        )
+        self.assertEqual(
             request.parameters["omnigent"]["capture"],
             {"workspaceFiles": True},
         )
