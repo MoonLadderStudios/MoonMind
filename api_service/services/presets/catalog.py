@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import socket
@@ -39,6 +40,10 @@ from moonmind.capabilities.input_contracts import (
     normalize_capability_input_contract,
 )
 from moonmind.config.settings import settings
+from moonmind.workflows.checkpoint_branches import (
+    CheckpointBranchGitBindingError,
+    _validate_work_branch,
+)
 
 _FORBIDDEN_STEP_KEYS = frozenset(
     {
@@ -169,6 +174,34 @@ _TOOL_METADATA_KEYS = frozenset(
     }
 )
 _COMMAND_TOOL_MARKERS = ("command", "shell", "bash")
+_CHECKPOINT_BRANCHING_SUPPORTED_TRIGGERS = frozenset(
+    {
+        "gate_additional_work_needed",
+        "failed_step",
+        "operator_requested",
+    }
+)
+_CHECKPOINT_BRANCHING_WORKSPACE_POLICIES = frozenset(
+    {
+        "restore_pre_execution",
+        "apply_previous_execution_diff_to_clean_baseline",
+        "start_from_last_passed_commit",
+        "fresh_branch_from_source",
+    }
+)
+_CHECKPOINT_BRANCHING_RUNTIME_CONTEXT_POLICIES = frozenset(
+    {
+        "fresh_agent_run",
+        "reuse_session_new_epoch",
+        "reuse_session_same_epoch",
+    }
+)
+_CHECKPOINT_BRANCHING_SIDE_EFFECT_POLICIES = frozenset(
+    {
+        "isolated",
+        "none",
+    }
+)
 logger = logging.getLogger(__name__)
 
 class _StatsdEmitter:
@@ -1174,6 +1207,8 @@ def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
         ("uiSchema", "uiSchema"),
         ("ui_schema", "uiSchema"),
         ("defaults", "defaults"),
+        ("checkpointBranching", "checkpointBranching"),
+        ("checkpoint_branching", "checkpointBranching"),
     ):
         value = item.get(source_key)
         if isinstance(value, Mapping):
@@ -1182,7 +1217,223 @@ def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
         raise PresetValidationError(
             "Capability schema defaults contain a secret-like value."
         )
-    return annotations
+    return _normalize_preset_annotations(annotations)
+
+
+def _normalize_preset_annotations(annotations: Mapping[str, Any] | None) -> dict[str, Any]:
+    normalized = dict(annotations or {})
+    checkpoint_branching_alias = normalized.pop("checkpoint_branching", None)
+    if (
+        checkpoint_branching_alias is not None
+        and "checkpointBranching" not in normalized
+    ):
+        normalized["checkpointBranching"] = checkpoint_branching_alias
+    checkpoint_branching = normalized.get("checkpointBranching")
+    if checkpoint_branching is not None:
+        normalized["checkpointBranching"] = _normalize_checkpoint_branching_policy(
+            checkpoint_branching
+        )
+    return normalized
+
+
+def _normalize_checkpoint_branching_policy(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise PresetValidationError(
+            "Template checkpointBranching annotation must be an object."
+        )
+
+    enabled = value.get("enabled", False)
+    if enabled is False:
+        return {"enabled": False}
+    if enabled is not True:
+        raise PresetValidationError(
+            "checkpointBranching.enabled must be true or false."
+        )
+
+    triggers = _normalize_checkpoint_branching_triggers(value.get("triggers"))
+    max_branches = _positive_int_field(
+        value.get("maxBranchesPerCheckpoint"),
+        field_name="maxBranchesPerCheckpoint",
+    )
+    max_turns = _positive_int_field(
+        value.get("maxTurnsPerBranch"),
+        field_name="maxTurnsPerBranch",
+    )
+
+    promotion_policy = str(value.get("promotionPolicy") or "").strip()
+    if promotion_policy != "approval_gated":
+        raise PresetValidationError(
+            "checkpointBranching.promotionPolicy must be 'approval_gated'."
+        )
+
+    workspace_policy = str(value.get("defaultWorkspacePolicy") or "").strip()
+    if workspace_policy not in _CHECKPOINT_BRANCHING_WORKSPACE_POLICIES:
+        supported = ", ".join(sorted(_CHECKPOINT_BRANCHING_WORKSPACE_POLICIES))
+        raise PresetValidationError(
+            "checkpointBranching.defaultWorkspacePolicy must be one of: "
+            f"{supported}."
+        )
+
+    runtime_context_policy = str(
+        value.get("runtimeContextPolicy") or "fresh_agent_run"
+    ).strip()
+    if runtime_context_policy not in _CHECKPOINT_BRANCHING_RUNTIME_CONTEXT_POLICIES:
+        supported = ", ".join(sorted(_CHECKPOINT_BRANCHING_RUNTIME_CONTEXT_POLICIES))
+        raise PresetValidationError(
+            "checkpointBranching.runtimeContextPolicy must be one of: "
+            f"{supported}."
+        )
+
+    publish_mode = str(value.get("publishMode") or "none").strip()
+    if publish_mode != "none":
+        raise PresetValidationError(
+            "checkpointBranching.publishMode must be 'none'; promotion remains "
+            "approval-gated."
+        )
+
+    side_effect_policy = str(value.get("sideEffectPolicy") or "isolated").strip()
+    if side_effect_policy not in _CHECKPOINT_BRANCHING_SIDE_EFFECT_POLICIES:
+        supported = ", ".join(sorted(_CHECKPOINT_BRANCHING_SIDE_EFFECT_POLICIES))
+        raise PresetValidationError(
+            "checkpointBranching.sideEffectPolicy must be one of: "
+            f"{supported}."
+        )
+
+    budget = value.get("maxBudgetUsd")
+    if budget is not None:
+        try:
+            budget_value = float(budget)
+        except (TypeError, ValueError) as exc:
+            raise PresetValidationError(
+                "checkpointBranching.maxBudgetUsd must be a positive number."
+            ) from exc
+        if not math.isfinite(budget_value):
+            raise PresetValidationError(
+                "checkpointBranching.maxBudgetUsd must be a finite number."
+            )
+        if budget_value <= 0:
+            raise PresetValidationError(
+                "checkpointBranching.maxBudgetUsd must be greater than zero."
+            )
+    else:
+        budget_value = None
+
+    requested_work_branch = str(value.get("gitWorkBranch") or "").strip()
+    if requested_work_branch and _is_protected_branch_ref(requested_work_branch):
+        raise PresetValidationError(
+            "checkpointBranching.gitWorkBranch must not target a protected branch."
+        )
+    if requested_work_branch:
+        try:
+            _validate_work_branch(
+                requested_work_branch,
+                product_branch_id="checkpoint-branching-preset-policy",
+            )
+        except CheckpointBranchGitBindingError as exc:
+            raise PresetValidationError(
+                "checkpointBranching.gitWorkBranch must be a sanitized, "
+                "non-protected branch ref."
+            ) from exc
+
+    branch_templates = _normalize_checkpoint_branch_templates(
+        value.get("branchTemplates")
+    )
+    normalized: dict[str, Any] = {
+        "enabled": True,
+        "triggers": triggers,
+        "maxBranchesPerCheckpoint": max_branches,
+        "maxTurnsPerBranch": max_turns,
+        "promotionPolicy": promotion_policy,
+        "defaultWorkspacePolicy": workspace_policy,
+        "runtimeContextPolicy": runtime_context_policy,
+        "publishMode": "none",
+        "sideEffectPolicy": side_effect_policy,
+        "branchTemplates": branch_templates,
+    }
+    if budget_value is not None:
+        normalized["maxBudgetUsd"] = budget_value
+    if requested_work_branch:
+        normalized["gitWorkBranch"] = requested_work_branch
+    return normalized
+
+
+def _normalize_checkpoint_branching_triggers(value: Any) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise PresetValidationError(
+            "checkpointBranching.triggers must be a non-empty list."
+        )
+    triggers: list[str] = []
+    for raw_trigger in value:
+        trigger = str(raw_trigger or "").strip()
+        if not trigger:
+            continue
+        if trigger not in _CHECKPOINT_BRANCHING_SUPPORTED_TRIGGERS:
+            supported = ", ".join(sorted(_CHECKPOINT_BRANCHING_SUPPORTED_TRIGGERS))
+            raise PresetValidationError(
+                f"Unsupported checkpointBranching trigger '{trigger}'. "
+                f"Supported: {supported}."
+            )
+        if trigger not in triggers:
+            triggers.append(trigger)
+    if not triggers:
+        raise PresetValidationError(
+            "checkpointBranching.triggers must include at least one configured trigger."
+        )
+    return triggers
+
+
+def _positive_int_field(value: Any, *, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise PresetValidationError(f"checkpointBranching.{field_name} must be positive.")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise PresetValidationError(
+            f"checkpointBranching.{field_name} must be positive."
+        ) from exc
+    if parsed <= 0:
+        raise PresetValidationError(
+            f"checkpointBranching.{field_name} must be greater than zero."
+        )
+    return parsed
+
+
+def _normalize_checkpoint_branch_templates(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise PresetValidationError(
+            "checkpointBranching.branchTemplates must be a non-empty list."
+        )
+    templates: list[dict[str, str]] = []
+    labels: set[str] = set()
+    for index, raw_template in enumerate(value, start=1):
+        if not isinstance(raw_template, Mapping):
+            raise PresetValidationError(
+                f"checkpointBranching.branchTemplates[{index}] must be an object."
+            )
+        label = str(raw_template.get("label") or "").strip()
+        instructions_ref = str(raw_template.get("instructionsRef") or "").strip()
+        if not label or not instructions_ref:
+            raise PresetValidationError(
+                "checkpointBranching.branchTemplates require label and instructionsRef."
+            )
+        if label in labels:
+            raise PresetValidationError(
+                f"Duplicate checkpointBranching branch template label '{label}'."
+            )
+        labels.add(label)
+        templates.append({"label": label, "instructionsRef": instructions_ref})
+    if not templates:
+        raise PresetValidationError(
+            "checkpointBranching.branchTemplates must include at least one template."
+        )
+    return templates
+
+
+def _is_protected_branch_ref(ref: str) -> bool:
+    normalized = ref.removeprefix("refs/heads/").lower()
+    return normalized in {"main", "master", "trunk", "develop"} or normalized.startswith(
+        "release/"
+    )
 
 
 def _serialize_template(
@@ -1504,7 +1755,7 @@ class PresetCatalogService:
             required_capabilities=derived_capabilities,
             inputs_schema=validated_inputs,
             steps=validated_steps,
-            annotations=dict(annotations or {}),
+            annotations=_normalize_preset_annotations(annotations),
             max_step_count=max(25, len(validated_steps)),
             release_status=release_status,
             seed_source=seed_source,
@@ -2170,6 +2421,14 @@ class PresetCatalogService:
             raise PresetValidationError(
                 "Template workflowPublish annotation must be an object."
             )
+        annotations = template.annotations or {}
+        checkpoint_branching = annotations.get("checkpointBranching") or annotations.get(
+            "checkpoint_branching"
+        )
+        if checkpoint_branching is not None:
+            checkpoint_branching = _normalize_checkpoint_branching_policy(
+                checkpoint_branching
+            )
 
         if template.release_status is PresetReleaseStatus.INACTIVE:
             warnings.append("Template is marked inactive.")
@@ -2208,6 +2467,8 @@ class PresetCatalogService:
         }
         if isinstance(workflow_publish, Mapping):
             expanded_payload["publish"] = dict(workflow_publish)
+        if isinstance(checkpoint_branching, Mapping):
+            expanded_payload["checkpointBranching"] = dict(checkpoint_branching)
         return expanded_payload
 
     def _resolve_inputs(

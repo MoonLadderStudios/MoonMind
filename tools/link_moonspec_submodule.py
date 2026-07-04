@@ -146,11 +146,48 @@ def _is_generated_projection(path: Path) -> bool:
     return GENERATED_MARKER in text
 
 
+def _is_current_generated_projection(item: PlannedLink) -> bool:
+    if not item.target.is_file() or not _is_generated_projection(item.target):
+        return False
+    try:
+        target_lines = item.target.read_text(encoding="utf-8").splitlines()
+        source_lines = item.source.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return False
+    target_without_marker = _without_generated_marker(target_lines)
+    source_without_marker = _without_generated_marker(source_lines)
+    return target_without_marker == source_without_marker
+
+
+def _without_generated_marker(lines: list[str]) -> list[str]:
+    without_marker: list[str] = []
+    for line in lines:
+        if GENERATED_MARKER in line:
+            continue
+        without_marker.append(line)
+
+    normalized: list[str] = []
+    previous_blank = False
+    for line in without_marker:
+        is_blank = not line.strip()
+        if is_blank and previous_blank:
+            continue
+        normalized.append(line)
+        previous_blank = is_blank
+    while normalized and not normalized[0].strip():
+        normalized.pop(0)
+    while normalized and not normalized[-1].strip():
+        normalized.pop()
+    return normalized
+
+
 def _link_status(item: PlannedLink) -> str | None:
     if not item.target.exists() and not item.target.is_symlink():
         return f"missing: {item.target.relative_to(REPO_ROOT)}"
     if item.target.is_dir() and not item.target.is_symlink():
         return f"directory blocks projected file: {item.target.relative_to(REPO_ROOT)}"
+    if _is_current_generated_projection(item):
+        return None
     if not item.target.is_symlink():
         return f"not a symlink: {item.target.relative_to(REPO_ROOT)}"
     link_text = os.readlink(item.target)

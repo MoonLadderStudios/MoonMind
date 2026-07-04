@@ -106,6 +106,210 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
     assert set(expanded["capabilities"]) >= {"codex", "docker"}
     assert expanded["appliedTemplate"]["slug"] == "pr-check"
     assert "version" not in expanded["appliedTemplate"]
+    assert "checkpointBranching" not in expanded
+
+async def test_checkpoint_branching_policy_expands_only_when_enabled(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="branch-exploration",
+                title="Branch Exploration",
+                description="Template with bounded branch exploration",
+                scope="global",
+                scope_ref=None,
+                tags=["checkpoint-branch"],
+                inputs_schema=[],
+                steps=[{"title": "Inspect", "instructions": "Inspect checkpoint"}],
+                annotations={
+                    "checkpointBranching": {
+                        "enabled": True,
+                        "triggers": [
+                            "failed_step",
+                            "failed_step",
+                            "operator_requested",
+                        ],
+                        "maxBranchesPerCheckpoint": 3,
+                        "maxTurnsPerBranch": 4,
+                        "promotionPolicy": "approval_gated",
+                        "defaultWorkspacePolicy": (
+                            "apply_previous_execution_diff_to_clean_baseline"
+                        ),
+                        "branchTemplates": [
+                            {
+                                "label": "minimal_fix",
+                                "instructionsRef": "art_template_minimal_fix",
+                            }
+                        ],
+                        "maxBudgetUsd": "5.50",
+                    }
+                },
+                required_capabilities=["codex"],
+                created_by=user_id,
+            )
+
+            expanded = await service.expand_template(
+                slug="branch-exploration",
+                scope="global",
+                scope_ref=None,
+                inputs={},
+                context={},
+            )
+
+    assert expanded["checkpointBranching"] == {
+        "enabled": True,
+        "triggers": ["failed_step", "operator_requested"],
+        "maxBranchesPerCheckpoint": 3,
+        "maxTurnsPerBranch": 4,
+        "promotionPolicy": "approval_gated",
+        "defaultWorkspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+        "runtimeContextPolicy": "fresh_agent_run",
+        "publishMode": "none",
+        "sideEffectPolicy": "isolated",
+        "branchTemplates": [
+            {
+                "label": "minimal_fix",
+                "instructionsRef": "art_template_minimal_fix",
+            }
+        ],
+        "maxBudgetUsd": 5.5,
+    }
+
+async def test_disabled_checkpoint_branching_policy_is_explicitly_carried(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="branch-disabled",
+                title="Branch Disabled",
+                description="Template with disabled branch exploration",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[{"title": "Run", "instructions": "Run normally"}],
+                annotations={"checkpointBranching": {"enabled": False}},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            expanded = await service.expand_template(
+                slug="branch-disabled",
+                scope="global",
+                scope_ref=None,
+                inputs={},
+                context={},
+            )
+
+    assert expanded["checkpointBranching"] == {"enabled": False}
+
+async def test_checkpoint_branching_policy_expands_from_snake_case_annotation(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            session.add(
+                Preset(
+                    slug="branch-legacy-snake",
+                    title="Branch Legacy Snake",
+                    description="Template with legacy snake_case annotation",
+                    scope_type=PresetScopeType.GLOBAL,
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[{"title": "Run", "instructions": "Run normally"}],
+                    annotations={
+                        "checkpoint_branching": {
+                            "enabled": True,
+                            "triggers": ["failed_step"],
+                            "maxBranchesPerCheckpoint": 2,
+                            "maxTurnsPerBranch": 3,
+                            "promotionPolicy": "approval_gated",
+                            "defaultWorkspacePolicy": (
+                                "apply_previous_execution_diff_to_clean_baseline"
+                            ),
+                            "branchTemplates": [
+                                {
+                                    "label": "minimal_fix",
+                                    "instructionsRef": "art_template_minimal_fix",
+                                }
+                            ],
+                        }
+                    },
+                    required_capabilities=[],
+                    created_by=user_id,
+                )
+            )
+            await session.commit()
+
+            service = PresetCatalogService(session)
+            expanded = await service.expand_template(
+                slug="branch-legacy-snake",
+                scope="global",
+                scope_ref=None,
+                inputs={},
+                context={},
+            )
+
+    assert expanded["checkpointBranching"]["enabled"] is True
+    assert expanded["checkpointBranching"]["triggers"] == ["failed_step"]
+
+@pytest.mark.parametrize(
+    ("policy_patch", "message"),
+    [
+        ({"enabled": "true"}, "enabled"),
+        ({"triggers": ["unexpected_trigger"]}, "Unsupported checkpointBranching trigger"),
+        ({"maxBranchesPerCheckpoint": 0}, "maxBranchesPerCheckpoint"),
+        ({"maxTurnsPerBranch": 0}, "maxTurnsPerBranch"),
+        ({"promotionPolicy": "auto_promote"}, "promotionPolicy"),
+        ({"runtimeContextPolicy": "external_provider_continuation"}, "runtimeContextPolicy"),
+        ({"publishMode": "branch"}, "publishMode"),
+        ({"sideEffectPolicy": "shared_workspace"}, "sideEffectPolicy"),
+        ({"maxBudgetUsd": 0}, "maxBudgetUsd"),
+        ({"maxBudgetUsd": "NaN"}, "maxBudgetUsd"),
+        ({"maxBudgetUsd": "Infinity"}, "maxBudgetUsd"),
+        ({"gitWorkBranch": "main"}, "gitWorkBranch"),
+        ({"gitWorkBranch": "production"}, "gitWorkBranch"),
+        ({"gitWorkBranch": ".foo/bar"}, "gitWorkBranch"),
+        ({"gitWorkBranch": "mm/MM 1087/not-sanitized"}, "gitWorkBranch"),
+        ({"branchTemplates": []}, "branchTemplates"),
+    ],
+)
+async def test_checkpoint_branching_policy_fails_closed(
+    tmp_path, policy_patch, message
+):
+    user_id = uuid4()
+    policy = {
+        "enabled": True,
+        "triggers": ["failed_step"],
+        "maxBranchesPerCheckpoint": 2,
+        "maxTurnsPerBranch": 3,
+        "promotionPolicy": "approval_gated",
+        "defaultWorkspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+        "branchTemplates": [
+            {"label": "minimal_fix", "instructionsRef": "art_template_minimal_fix"}
+        ],
+    }
+    policy.update(policy_patch)
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            with pytest.raises(PresetValidationError, match=message):
+                await service.create_template(
+                    slug="branch-policy-invalid",
+                    title="Branch Policy Invalid",
+                    description="Invalid branch policy",
+                    scope="global",
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[{"title": "Run", "instructions": "Run normally"}],
+                    annotations={"checkpointBranching": policy},
+                    required_capabilities=[],
+                    created_by=user_id,
+                )
 
 async def test_create_template_strips_tool_version_identity(tmp_path):
     user_id = uuid4()
