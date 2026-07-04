@@ -116,6 +116,7 @@ components:
         - workflowId
         - branchId
         - againstBranchId
+        - baseCheckpointRef
         - summary
         - quality
         - git
@@ -136,6 +137,8 @@ components:
         branchId:
           type: string
         againstBranchId:
+          type: string
+        baseCheckpointRef:
           type: string
         summaryText:
           type: string
