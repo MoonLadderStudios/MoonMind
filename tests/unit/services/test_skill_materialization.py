@@ -129,6 +129,47 @@ async def test_materializer_projects_only_selected_skills(tmp_path: Path):
     assert (visible_dir / "_shared" / "publish_evidence.py").is_file()
     assert not (visible_dir / "unselected_skill").exists()
 
+
+@pytest.mark.asyncio
+async def test_materializer_projects_shared_helper_when_repo_skills_are_preserved(
+    tmp_path: Path,
+):
+    workspace = tmp_path / "repo"
+    repo_skill = workspace / ".agents" / "skills" / "repo_skill"
+    repo_skill.mkdir(parents=True)
+    (repo_skill / "SKILL.md").write_text(
+        "---\nname: repo_skill\ndescription: repo\n---\n",
+        encoding="utf-8",
+    )
+    artifact_service = _StaticArtifactService(
+        {"artifact-alpha": b"---\nname: alpha\ndescription: test\n---\n"}
+    )
+    materializer = AgentSkillMaterializer(
+        str(workspace),
+        artifact_service=artifact_service,
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="repo_preserved_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[_skill("alpha", "artifact-alpha")],
+    )
+
+    result = await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+
+    alias_dir = workspace / ".agents" / "skills"
+    active_dir = tmp_path / "runtime" / "skills_active" / "repo_preserved_snap"
+    assert result.metadata["canonicalAliasAvailable"] is False
+    assert result.metadata["canonicalAliasSkippedReason"] == "repo_authored_skills_present"
+    assert result.metadata["visiblePath"] == str(active_dir)
+    assert (alias_dir / "repo_skill" / "SKILL.md").is_file()
+    assert (alias_dir / "_shared" / "publish_evidence.py").is_file()
+    assert (active_dir / "alpha" / "SKILL.md").is_file()
+
+
 @pytest.mark.asyncio
 async def test_materializer_extracts_skill_bundle_with_companion_files(
     tmp_path: Path,

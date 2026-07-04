@@ -43,6 +43,11 @@ const SELF_MANAGED_PUBLISH_SKILLS = new Set([
   "fix-ci",
   "fix-merge-conflicts",
 ]);
+const SIDE_EFFECT_PUBLISH_DISABLED_SKILLS = new Set([
+  "batch-pr-resolver",
+  "batch-dependabot-resolver",
+  "batch-workflows",
+]);
 const PUBLISH_DISABLED_SKILLS = new Set([
   JIRA_BREAKDOWN_PRESET_SLUG,
   JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG,
@@ -2001,6 +2006,18 @@ function skillPublishMetadataDeclaresAuto(
   );
 }
 
+function skillSideEffectMetadataDeclaresAgentOwned(
+  sideEffect: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!sideEffect) {
+    return false;
+  }
+  return (
+    String(sideEffect.owner || "").trim().toLowerCase() === "agent" &&
+    String(sideEffect.kind || "").trim().length > 0
+  );
+}
+
 function isSelfManagedPublishSkill(
   skillId: string,
   detail?: SkillCapabilityDetail | null,
@@ -2015,13 +2032,30 @@ function isPublishDisabledSkill(skillId: string): boolean {
   return PUBLISH_DISABLED_SKILLS.has(skillId.trim().toLowerCase());
 }
 
+function isRepositoryPublishDisabledSkill(
+  skillId: string,
+  detail?: SkillCapabilityDetail | null,
+): boolean {
+  if (isPublishDisabledSkill(skillId)) {
+    return true;
+  }
+  if (detail?.sideEffect) {
+    return skillSideEffectMetadataDeclaresAgentOwned(detail.sideEffect);
+  }
+  return SIDE_EFFECT_PUBLISH_DISABLED_SKILLS.has(skillId.trim().toLowerCase());
+}
+
 function resolveEffectivePublishSkillId(
   primarySkillId: string,
   appliedTemplates: AppliedTemplateState[],
 ): string {
   for (const template of [...appliedTemplates].reverse()) {
     const slug = String(template.slug || "").trim();
-    if (slug && (isSelfManagedPublishSkill(slug) || isPublishDisabledSkill(slug))) {
+    if (
+      slug &&
+      (isSelfManagedPublishSkill(slug) ||
+        isRepositoryPublishDisabledSkill(slug))
+    ) {
       return slug;
     }
   }
@@ -6200,7 +6234,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       skillsQuery.data?.detailsById[primarySkill] || null;
     if (isSelfManagedPublishSkill(primarySkill, primarySkillDetail)) {
       setPublishMode("auto");
-    } else if (isPublishDisabledSkill(primarySkill)) {
+    } else if (isRepositoryPublishDisabledSkill(primarySkill, primarySkillDetail)) {
       setPublishMode("none");
     }
   }, [skillsQuery.data?.detailsById, steps[0]?.skillId]);
@@ -6604,7 +6638,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     } else if (
       pageMode.mode === "create" &&
       selectedPreset &&
-      isPublishDisabledSkill(selectedPreset.slug)
+      isRepositoryPublishDisabledSkill(selectedPreset.slug)
     ) {
       setPublishMode("none");
     }
@@ -6612,7 +6646,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
   const mergeAutomationAvailable =
     !isSelfManagedPublishSkill(effectiveSkillId, effectiveSkillDetail) &&
-    !isPublishDisabledSkill(effectiveSkillId);
+    !isRepositoryPublishDisabledSkill(effectiveSkillId, effectiveSkillDetail);
   const autoPublishAvailable = isSelfManagedPublishSkill(
     effectiveSkillId,
     effectiveSkillDetail,
@@ -7555,7 +7589,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       setPublishMode("auto");
     } else if (
       pageMode.mode === "create" &&
-      isPublishDisabledSkill(preset.slug)
+      isRepositoryPublishDisabledSkill(preset.slug)
     ) {
       setPublishMode("none");
     }
@@ -8516,7 +8550,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       String(expansion.appliedTemplate?.slug || preset.slug),
     )
       ? ` ${preset.title} manages its own PR/publish flow, so Publish Mode is Auto and merge automation is unavailable.`
-      : "";
+      : isRepositoryPublishDisabledSkill(
+            String(expansion.appliedTemplate?.slug || preset.slug),
+          )
+        ? ` ${preset.title} performs non-repository side effects, so Publish Mode is None.`
+        : "";
     setMessage(
       `Applied preset '${preset.title}' (${expandedSteps.length} steps).${autoFillSuffix}${warningSuffix}${publishConstraintSuffix}`,
     );
@@ -9298,9 +9336,12 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         effectivePublishSkillDetailForSubmit,
       )
         ? "auto"
-        : isPublishDisabledSkill(effectivePublishSkillId)
+        : isRepositoryPublishDisabledSkill(
+            effectivePublishSkillId,
+            effectivePublishSkillDetailForSubmit,
+          )
           ? "none"
-        : normalizedPublishMode;
+          : normalizedPublishMode;
     if (effectivePublishMode === "branch" && !effectiveBranch) {
       setSubmitMessage(
         "Choose a branch before saving or rerunning this publish-mode workflow.",
@@ -10143,7 +10184,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         effectivePublishSkillId,
         effectivePublishSkillDetailForSubmit,
       ) &&
-      !isPublishDisabledSkill(effectivePublishSkillId);
+      !isRepositoryPublishDisabledSkill(
+        effectivePublishSkillId,
+        effectivePublishSkillDetailForSubmit,
+      );
     // Never resolve a provider profile from placeholder data: during a runtime
     // switch refetch `data` still holds the previous runtime's profiles, which
     // must not be submitted under the newly selected runtime.

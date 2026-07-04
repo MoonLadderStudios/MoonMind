@@ -1382,6 +1382,51 @@ def test_auto_publish_fallback_emits_diagnostic(
     ]
 
 
+def test_workflow_skill_publish_metadata_enables_auto_for_unknown_skill() -> None:
+    payload = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "targetRuntime": "codex",
+        "workflow": {
+            "instructions": "Run deployment skill.",
+            "skill": {
+                "id": "deployment-auto-skill",
+                "publish": {
+                    "mode": "auto",
+                    "owner": "agent",
+                    "requiresEvidence": True,
+                },
+            },
+            "publish": {"mode": "auto"},
+        },
+    }
+
+    result = CanonicalWorkflowExecutionPayload.model_validate(payload)
+
+    assert result.task.publish.mode == "auto"
+
+
+def test_workflow_skill_side_effect_metadata_forces_none_for_unknown_skill() -> None:
+    payload = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "targetRuntime": "codex",
+        "workflow": {
+            "instructions": "Queue children.",
+            "skill": {
+                "id": "deployment-batch-skill",
+                "sideEffect": {
+                    "kind": "enqueue_children",
+                    "owner": "agent",
+                    "outcomeArtifact": "artifacts/result.json",
+                },
+            },
+            "publish": {"mode": "pr"},
+        },
+    }
+
+    with pytest.raises(ValidationError, match="non-repository skill"):
+        CanonicalWorkflowExecutionPayload.model_validate(payload)
+
+
 @pytest.mark.parametrize(
     "skill_id",
     ["fix-comments", "fix-ci", "fix-merge-conflicts"],

@@ -812,10 +812,20 @@ def _is_agent_owned_auto_publish_metadata(metadata: Mapping[str, Any]) -> bool:
     )
 
 
-def _auto_publish_capability_source(skill_id: object) -> str:
+def _auto_publish_capability_source(
+    skill_id: object,
+    *,
+    publish_metadata: Mapping[str, Any] | None = None,
+) -> str:
     normalized = _normalize_skill_id(skill_id)
     if not normalized:
         return "none"
+    if publish_metadata is not None:
+        return (
+            "metadata"
+            if _is_agent_owned_auto_publish_metadata(publish_metadata)
+            else "none"
+        )
     metadata = _load_skill_publish_metadata(normalized)
     if metadata is not None:
         return "metadata" if _is_agent_owned_auto_publish_metadata(metadata) else "none"
@@ -866,6 +876,13 @@ def is_non_repository_side_effect_skill(skill_id: object) -> bool:
     return _normalize_skill_id(skill_id) in _NON_REPOSITORY_SIDE_EFFECT_SKILLS
 
 
+def _is_agent_owned_side_effect_metadata(metadata: Mapping[str, Any]) -> bool:
+    return (
+        bool(_clean_str(metadata.get("kind")))
+        and _clean_str(metadata.get("owner")).lower() == "agent"
+    )
+
+
 def _iter_applied_step_templates(value: object) -> list[object]:
     if isinstance(value, Mapping):
         return _safe_list(value.get("appliedStepTemplates"))
@@ -897,13 +914,23 @@ def resolve_publish_mode_for_skill(
     *,
     allow_repository_publish: bool = False,
     diagnostics: list[dict[str, object]] | None = None,
+    publish_metadata: Mapping[str, Any] | None = None,
+    side_effect_metadata: Mapping[str, Any] | None = None,
 ) -> str:
     """Resolve publish mode for a skill while enforcing skill publish constraints."""
 
     normalized_skill_id = _normalize_skill_id(skill_id)
-    auto_publish_source = _auto_publish_capability_source(normalized_skill_id)
+    auto_publish_source = _auto_publish_capability_source(
+        normalized_skill_id,
+        publish_metadata=publish_metadata,
+    )
     is_auto_publish_capable = auto_publish_source in {"metadata", "fallback"}
-    is_non_repository = is_non_repository_side_effect_skill(normalized_skill_id)
+    is_non_repository = is_non_repository_side_effect_skill(
+        normalized_skill_id
+    ) or (
+        side_effect_metadata is not None
+        and _is_agent_owned_side_effect_metadata(side_effect_metadata)
+    )
     if is_auto_publish_capable:
         if auto_publish_source == "fallback" and diagnostics is not None:
             diagnostics.append(_auto_publish_fallback_diagnostic(normalized_skill_id))
@@ -1227,6 +1254,8 @@ class WorkflowSkillSelection(BaseModel):
         None,
         alias="requiredCapabilities",
     )
+    publish: dict[str, Any] | None = Field(None, alias="publish")
+    side_effect: dict[str, Any] | None = Field(None, alias="sideEffect")
 
     @model_validator(mode="before")
     @classmethod
@@ -1254,6 +1283,15 @@ class WorkflowSkillSelection(BaseModel):
             raise WorkflowContractError("task.skill.requiredCapabilities must be a list")
         normalized = _normalize_capabilities(value)
         return normalized or None
+
+    @field_validator("publish", "side_effect", mode="before")
+    @classmethod
+    def _normalize_metadata_mapping(cls, value: object) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise WorkflowContractError("task.skill metadata must be an object")
+        return dict(value)
 
 class WorkflowRuntimeSelection(BaseModel):
     """Runtime mode and optional model/effort overrides."""
@@ -2226,23 +2264,30 @@ class WorkflowExecutionSpec(BaseModel):
     @model_validator(mode="after")
     def _validate_skill_publish_compatibility(self) -> "WorkflowExecutionSpec":
         allow_repository_publish = allows_repository_publish_for_skill_context(self)
-        skill_ids: set[str] = {_normalize_skill_id(self.skill.id)}
+        skills_by_id: dict[str, WorkflowSkillSelection] = {}
+        primary_skill_id = _normalize_skill_id(self.skill.id)
+        if primary_skill_id:
+            skills_by_id[primary_skill_id] = self.skill
         for step in self.steps:
             if step.skill is None:
                 continue
-            skill_ids.add(_normalize_skill_id(step.skill.id))
+            step_skill_id = _normalize_skill_id(step.skill.id)
+            if step_skill_id:
+                skills_by_id[step_skill_id] = step.skill
 
         requested_publish_mode = self.publish.mode if (
             allow_repository_publish or "mode" in self.publish.model_fields_set
         ) else None
         resolved_publish_mode: str | None = None
-        for skill_id in skill_ids:
+        for skill_id, skill_selection in skills_by_id.items():
             if not skill_id or skill_id == "auto":
                 continue
             mode = resolve_publish_mode_for_skill(
                 skill_id,
                 requested_publish_mode,
                 allow_repository_publish=allow_repository_publish,
+                publish_metadata=skill_selection.publish,
+                side_effect_metadata=skill_selection.side_effect,
             )
             if (
                 resolved_publish_mode is None
@@ -2734,10 +2779,20 @@ def build_canonical_workflow_view(
     skill_node = workflow_payload.get("skill") or {}
     skill = skill_node if isinstance(skill_node, Mapping) else {}
     skill_id = skill.get("id") or skill.get("name")
+    skill_publish_metadata = (
+        skill.get("publish") if isinstance(skill.get("publish"), Mapping) else None
+    )
+    skill_side_effect_metadata = (
+        skill.get("sideEffect")
+        if isinstance(skill.get("sideEffect"), Mapping)
+        else None
+    )
     publish_mode = resolve_publish_mode_for_skill(
         skill_id,
         publish_mode_candidate,
         allow_repository_publish=allows_repository_publish_for_skill_context(workflow_payload),
+        publish_metadata=skill_publish_metadata,
+        side_effect_metadata=skill_side_effect_metadata,
     )
     publish_node["mode"] = publish_mode
     if publish_mode == "pr":

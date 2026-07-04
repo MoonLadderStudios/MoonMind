@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -31,6 +32,11 @@ from pr_resolve_contract import (  # noqa: E402
     now_utc_iso,
     parse_reason,
     remediation_next_step,
+)
+
+SECRET_LIKE_RE = re.compile(
+    r"(ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|"
+    r"(?i:token|password)=\S+)"
 )
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -473,7 +479,14 @@ def _write_publish_evidence_fallback(reason: str) -> None:
     )
 
 
-def _write_auto_publish_evidence(result_path: Path) -> None:
+def _redact_diagnostic_text(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return SECRET_LIKE_RE.sub("[redacted]", text)[:1000]
+
+
+def _write_auto_publish_evidence(result_path: Path, snapshot_path: Path) -> None:
     helper = SCRIPT_DIR.parent.parent / "_shared" / "publish_evidence.py"
     if not helper.is_file():
         _write_publish_evidence_fallback("publish_evidence_helper_missing")
@@ -486,6 +499,8 @@ def _write_auto_publish_evidence(result_path: Path) -> None:
                 "from-pr-resolver-result",
                 "--result",
                 str(result_path),
+                "--snapshot",
+                str(snapshot_path),
             ],
             capture_output=True,
             text=True,
@@ -496,6 +511,12 @@ def _write_auto_publish_evidence(result_path: Path) -> None:
         _write_publish_evidence_fallback("publish_evidence_generation_failed")
         return
     if result.returncode != 0:
+        stderr_msg = _redact_diagnostic_text(result.stderr)
+        if stderr_msg:
+            print(
+                f"publish evidence helper failed: {stderr_msg}",
+                file=sys.stderr,
+            )
         _write_publish_evidence_fallback("publish_evidence_generation_failed")
 
 
@@ -648,7 +669,7 @@ def main() -> None:
     result_path.write_text(
         json.dumps(result_payload, indent=2) + "\n", encoding="utf-8"
     )
-    _write_auto_publish_evidence(result_path)
+    _write_auto_publish_evidence(result_path, snapshot_path)
     print(json.dumps(result_payload, indent=2))
     raise SystemExit(exit_code)
 

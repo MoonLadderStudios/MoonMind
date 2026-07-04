@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,10 +16,21 @@ SCHEMA_VERSION = "moonmind.publish.auto.v1"
 DEFAULT_ARTIFACTS_DIR = Path("artifacts")
 DEFAULT_RESULT_PATH = DEFAULT_ARTIFACTS_DIR / "publish_result.json"
 DEFAULT_PR_RESOLVER_SNAPSHOT_PATH = Path("var/pr_resolver/snapshot.json")
+SECRET_LIKE_RE = re.compile(
+    r"(ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|"
+    r"(?i:token|password)=\S+)"
+)
 
 
 class PublishEvidenceError(RuntimeError):
     """Raised when canonical publish evidence cannot be proven."""
+
+
+def _redact_diagnostic_text(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return SECRET_LIKE_RE.sub("[redacted]", text)[:1000]
 
 
 def _run_text(cmd: list[str], *, timeout: int = 60) -> str:
@@ -33,7 +45,9 @@ def _run_text(cmd: list[str], *, timeout: int = 60) -> str:
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PublishEvidenceError(f"command unavailable: {cmd[0]}") from exc
     if result.returncode != 0:
-        raise PublishEvidenceError(f"command failed: {' '.join(cmd[:3])}")
+        stderr_msg = _redact_diagnostic_text(result.stderr)
+        suffix = f": {stderr_msg}" if stderr_msg else ""
+        raise PublishEvidenceError(f"command failed: {' '.join(cmd[:3])}{suffix}")
     return (result.stdout or "").strip()
 
 
@@ -171,13 +185,14 @@ def _verify_exact_remote_head(branch: str) -> tuple[str, str, list[str]]:
 
 
 def _verify_pr_merged(pr_url: str) -> tuple[dict[str, Any], list[str]]:
-    if not pr_url:
+    selector = _text(pr_url)
+    if not selector:
         raise PublishEvidenceError("prUrl is required for merged publish evidence")
     command = [
         "gh",
         "pr",
         "view",
-        pr_url,
+        selector,
         "--json",
         "state,mergedAt,mergeCommit,url,headRefName,headRefOid",
     ]
@@ -209,9 +224,16 @@ def _evidence_payload(
 ) -> dict[str, Any]:
     if not _text(skill_id):
         raise PublishEvidenceError("skill-id is required")
-    if not _text(repository):
+    is_terminal_failure = status in {"blocked", "failed"}
+    repository_value = _text(repository)
+    branch_value = _text(branch)
+    if not repository_value and is_terminal_failure:
+        repository_value = "unknown/unknown"
+    if not branch_value and is_terminal_failure:
+        branch_value = "unknown"
+    if not repository_value:
         raise PublishEvidenceError("repo is required")
-    if not _text(branch):
+    if not branch_value:
         raise PublishEvidenceError("branch is required")
     return {
         "schemaVersion": SCHEMA_VERSION,
@@ -220,8 +242,8 @@ def _evidence_payload(
         "skillId": skill_id,
         "status": status,
         "action": action,
-        "repository": repository,
-        "branch": branch,
+        "repository": repository_value,
+        "branch": branch_value,
         "localHead": local_head or None,
         "remoteBranchHead": remote_branch_head or None,
         "remoteVerified": bool(remote_verified),
@@ -431,6 +453,42 @@ def _resolver_pr_url(result: Mapping[str, Any], snapshot: Mapping[str, Any]) -> 
     )
 
 
+def _resolver_pr_selector(result: Mapping[str, Any], snapshot: Mapping[str, Any]) -> str:
+    final = _result_final(result)
+    pr = _snapshot_pr(snapshot)
+    return _first_text(
+        result.get("pr"),
+        result.get("pr_number"),
+        result.get("prNumber"),
+        result.get("pr_selector"),
+        result.get("prSelector"),
+        final.get("pr"),
+        final.get("pr_number"),
+        final.get("prNumber"),
+        final.get("pr_selector"),
+        final.get("prSelector"),
+        pr.get("number"),
+        _resolver_pr_url(result, snapshot),
+    )
+
+
+def _resolve_verified_merged_pr_url(
+    result: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+) -> str:
+    pr_url = _resolver_pr_url(result, snapshot)
+    if pr_url:
+        return pr_url
+    selector = _resolver_pr_selector(result, snapshot)
+    if not selector:
+        return ""
+    try:
+        payload, _commands = _verify_pr_merged(selector)
+    except PublishEvidenceError:
+        return ""
+    return _text(payload.get("url"))
+
+
 def _resolver_repo(result: Mapping[str, Any], snapshot: Mapping[str, Any]) -> str:
     final = _result_final(result)
     pr_url = _resolver_pr_url(result, snapshot)
@@ -509,6 +567,7 @@ def from_pr_resolver_result(
     pr_url = _resolver_pr_url(result, snapshot)
 
     if disposition in {"merged", "already_merged"} or status == "merged":
+        pr_url = _resolve_verified_merged_pr_url(result, snapshot)
         if not pr_url:
             return write_blocked(
                 skill_id="pr-resolver",
@@ -533,6 +592,21 @@ def from_pr_resolver_result(
                 reason="remote_merge_verification_unavailable",
                 artifacts_dir=artifacts_dir,
             )
+
+    if disposition == "reenter_gate" and status in {
+        "blocked",
+        "attempts_exhausted",
+        "failed",
+    }:
+        return write_blocked(
+            skill_id="pr-resolver",
+            repo=repo,
+            branch=branch,
+            reason=reason
+            if reason != "unknown"
+            else f"unresolved_pr_resolver_state:{status}",
+            artifacts_dir=artifacts_dir,
+        )
 
     if disposition == "reenter_gate":
         try:

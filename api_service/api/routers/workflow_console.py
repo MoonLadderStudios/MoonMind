@@ -54,6 +54,7 @@ from moonmind.capabilities.input_contracts import (
 from moonmind.services.skill_resolution import (
     extract_publish_metadata_from_skill_markdown,
     extract_required_capabilities_from_skill_markdown,
+    extract_side_effect_metadata_from_skill_markdown,
 )
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
@@ -379,20 +380,6 @@ def _skill_input_contract_ref(skill_id: str, contract_digest: str | None) -> str
         ref = f"{ref}?digest={quote(contract_digest, safe='')}"
     return ref
 
-def _skill_frontmatter_from_markdown(markdown: str) -> dict[str, Any]:
-    lines = markdown.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    frontmatter_lines: list[str] = []
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        frontmatter_lines.append(line)
-    else:
-        return {}
-    parsed = yaml.safe_load("\n".join(frontmatter_lines)) or {}
-    return parsed if isinstance(parsed, dict) else {}
-
 def _schema_inline_size(input_schema: dict[str, Any]) -> int:
     return len(
         json.dumps(input_schema, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -489,10 +476,11 @@ async def _file_backed_skill_option(
             skill_name=skill_id,
             source_label=str(skill_file),
         ) or None
-        frontmatter = _skill_frontmatter_from_markdown(skill_markdown) or {}
-        metadata = frontmatter.get("metadata") if isinstance(frontmatter, dict) else {}
-        if isinstance(metadata, dict) and isinstance(metadata.get("sideEffect"), dict):
-            side_effect = dict(metadata["sideEffect"])
+        side_effect = extract_side_effect_metadata_from_skill_markdown(
+            skill_markdown,
+            skill_name=skill_id,
+            source_label=str(skill_file),
+        ) or None
         source = {
             "kind": "file",
             "path": str(skill_file),

@@ -15,9 +15,33 @@ from moonmind.services.skill_resolution import (
     LocalSkillLoader,
     RepoSkillLoader,
     DeploymentSkillLoader,
+    extract_side_effect_metadata_from_skill_markdown,
 )
 
 pytestmark = [pytest.mark.asyncio]
+
+
+async def test_extract_side_effect_metadata_from_skill_markdown():
+    markdown = """---
+name: batch-skill
+metadata:
+  sideEffect:
+    kind: enqueue_children
+    owner: agent
+    outcomeArtifact: artifacts/result.json
+---
+# Batch Skill
+"""
+
+    assert extract_side_effect_metadata_from_skill_markdown(
+        markdown,
+        skill_name="batch-skill",
+    ) == {
+        "kind": "enqueue_children",
+        "owner": "agent",
+        "outcomeArtifact": "artifacts/result.json",
+    }
+
 
 async def test_resolver_can_resolve_empty_selector():
     resolver = AgentSkillResolver()

@@ -171,6 +171,11 @@ class AgentSkillMaterializer:
                             if self._is_repo_authored_skills_dir(alias_dir)
                             else links.agents_skills_error or "canonical_alias_unavailable"
                         )
+                        if alias_skipped_reason == "repo_authored_skills_present":
+                            self._project_builtin_support_directory(
+                                alias_dir=alias_dir,
+                                active_dir=active_dir,
+                            )
                 except (OSError, SkillWorkspaceError) as ex:
                     raise RuntimeError(
                         self._projection_error_message(alias_dir, cause=str(ex))
@@ -287,6 +292,26 @@ class AgentSkillMaterializer:
         if target.exists() or target.is_symlink():
             self._remove_directory_path(target)
         shutil.copytree(shared_dir, target, symlinks=False)
+
+    def _project_builtin_support_directory(
+        self,
+        *,
+        alias_dir: Path,
+        active_dir: Path,
+    ) -> None:
+        shared_dir = active_dir / "_shared"
+        if not shared_dir.is_dir():
+            shared_dir = self._builtin_shared_skill_support_dir() or shared_dir
+        if not shared_dir.is_dir():
+            return
+        alias_dir.mkdir(parents=True, exist_ok=True)
+        target = alias_dir / "_shared"
+        if target.exists() or target.is_symlink():
+            return
+        try:
+            target.symlink_to(shared_dir, target_is_directory=True)
+        except OSError:
+            shutil.copytree(shared_dir, target, symlinks=False)
 
     @staticmethod
     def _manifest_skill_entry(entry: Any) -> dict[str, Any]:
