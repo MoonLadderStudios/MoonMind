@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. frontend/vite.config.ts (score: 1.000, trust: canonical)\n    line 3: import { resolve } from 'path';\n2. docs/DocumentationArchitecture.md (score: 1.000, trust: canonical)\n    line 6: **Purpose:** Establish the single canonical taxonomy that names the document types a MoonSpec durable docs tree uses, the authority rules that resolve conflicts between canonical documents of the same class, and where design rationale must live — so that anyone classifying, writing, or reconciling a doc has one authoritative vocabulary, one set of viewpoints, one precedence ladder, and one module-boundary policy to apply.\n3. docs/_viewpoints/ModuleArchitectureView.template.md (score: 1.000, trust: canonical)\n    line 29: The important paths through the module (request handling, background work, error paths).\n4. docs/Workflows/RemediationVerificationCadence.md (score: 1.000, trust: canonical)\n    line 193: collecting_evidence -> diagnosing -> acting -> verifying -> resolved/escalated/failed\n5. docs/Workflows/WorkflowEditingSystem.md (score: 1.000, trust: canonical)\n    line 59: Failed and canceled terminal executions are first-class rerun candidates. When the backend exposes rerun capability for one of these executions, the operator must be able to reopen its Workflow inputs as an editable draft, change the relevant fields, and submit the updated draft as a new rerun request.\n6. docs/Workflows/PrMergeAutomation.md (score: 1.000, trust: canonical)\n    line 1: # PR Merge Automation - Child Workflow Resolver Strategy\n7. docs/Steps/SlashCommands.md (score: 1.000, trust: canonical)\n    line 35: MoonMind currently passes workflow instructions into managed runtime launch paths. Codex CLI appends `request.instruction_ref` as the positional prompt to `codex exec`, while Claude Code appends `request.instruction_ref` after `-p --dangerously-skip-permissions`.\n8. docs/Steps/SkillsOnDemand.md (score: 1.000, trust: canonical)\n    line 6: Canonical for: managed-agent requests for additional agent skills during execution",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "frontend/vite.config.ts",
+      "text": "line 3: import { resolve } from 'path';",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/DocumentationArchitecture.md",
+      "text": "line 6: **Purpose:** Establish the single canonical taxonomy that names the document types a MoonSpec durable docs tree uses, the authority rules that resolve conflicts between canonical documents of the same class, and where design rationale must live — so that anyone classifying, writing, or reconciling a doc has one authoritative vocabulary, one set of viewpoints, one precedence ladder, and one module-boundary policy to apply.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/_viewpoints/ModuleArchitectureView.template.md",
+      "text": "line 29: The important paths through the module (request handling, background work, error paths).",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 29,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/RemediationVerificationCadence.md",
+      "text": "line 193: collecting_evidence -> diagnosing -> acting -> verifying -> resolved/escalated/failed",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 193,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/WorkflowEditingSystem.md",
+      "text": "line 59: Failed and canceled terminal executions are first-class rerun candidates. When the backend exposes rerun capability for one of these executions, the operator must be able to reopen its Workflow inputs as an editable draft, change the relevant fields, and submit the updated draft as a new rerun request.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 59,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/PrMergeAutomation.md",
+      "text": "line 1: # PR Merge Automation - Child Workflow Resolver Strategy",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Steps/SlashCommands.md",
+      "text": "line 35: MoonMind currently passes workflow instructions into managed runtime launch paths. Codex CLI appends `request.instruction_ref` as the positional prompt to `codex exec`, while Claude Code appends `request.instruction_ref` after `-p --dangerously-skip-permissions`.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 35,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Steps/SkillsOnDemand.md",
+      "text": "line 6: Canonical for: managed-agent requests for additional agent skills during execution",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-07-04T03:48:21Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
