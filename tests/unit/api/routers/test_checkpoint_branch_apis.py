@@ -779,7 +779,7 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
         ).scalars().all()
 
     assert len(comparison_operations) == 2
-    assert len(comparison_artifacts) == 6
+    assert len(comparison_artifacts) == 12
 
 
 @pytest.mark.asyncio
@@ -853,7 +853,9 @@ async def test_checkpoint_branch_promotion_requires_head_gate_side_effects_and_a
             await session.execute(
                 select(WorkflowCheckpointBranchOperation).where(
                     WorkflowCheckpointBranchOperation.operation
-                    == "checkpoint_branch.promote"
+                    == "checkpoint_branch.promote",
+                    WorkflowCheckpointBranchOperation.idempotency_key
+                    == "mm-1091:promote",
                 )
             )
         ).scalar_one()
@@ -1079,6 +1081,57 @@ async def test_checkpoint_branch_api_fails_closed_for_invalid_source_provider_bu
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_branch_promotion_rejection_persists_audit_without_advancing(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1103:create-rejected-promotion-audit"),
+    )
+    branch_id = created.json()["branchId"]
+    await _set_branch_head(checkpoint_branch_client, branch_id)
+
+    rejected = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/promote",
+        json={
+            "expectedHeadStepExecutionId": "mm:wf-branch:run:implement:execution:2",
+            "gateEvidence": {"verdict": "failed", "artifactRef": "artifact://gate"},
+            "sideEffectDisposition": {"status": "isolated"},
+            "idempotencyKey": "mm-1103:rejected-promotion-audit",
+        },
+    )
+
+    assert rejected.status_code == 409
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = (
+            await session.execute(
+                select(WorkflowCheckpointBranch).where(
+                    WorkflowCheckpointBranch.branch_id == branch_id
+                )
+            )
+        ).scalar_one()
+        operation = (
+            await session.execute(
+                select(WorkflowCheckpointBranchOperation).where(
+                    WorkflowCheckpointBranchOperation.idempotency_key
+                    == "mm-1103:rejected-promotion-audit"
+                )
+            )
+        ).scalar_one()
+
+    assert branch.state != "promoted"
+    assert operation.operation == "checkpoint_branch.promote"
+    assert operation.response_payload == {
+        "outcome": "rejected",
+        "code": "side_effect_policy_blocked",
+        "reason": "gate_evidence_not_passing",
+        "branchId": branch_id,
+    }
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_api_fails_closed_for_non_owner(
     checkpoint_branch_denied_client: AsyncClient,
 ) -> None:
@@ -1133,6 +1186,53 @@ async def test_checkpoint_branch_compare_records_operation_payload(
     assert operation.response_payload["artifactRefs"][
         "output.branch_comparison.range_diff.patch"
     ].startswith("artifact://checkpoint-branch-comparisons/")
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_compare_returns_only_bounded_artifact_refs(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1103:create-bounded-compare"),
+    )
+    forked = await checkpoint_branch_client.post(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/fork",
+        json={
+            "label": "Forked branch",
+            "instructions": {"text": "Fork for bounded comparison."},
+            "idempotencyKey": "mm-1103:fork-bounded-compare",
+        },
+    )
+
+    compared = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/compare",
+        params={"against": forked.json()["branchId"]},
+    )
+
+    assert compared.status_code == 200
+    body = compared.json()
+    record = body["comparisonRecord"]
+    artifact_refs = record["artifactRefs"]
+    assert record["evidenceRefs"]["baseCheckpointRef"] == (
+        "artifact://checkpoints/after-implement"
+    )
+    assert set(artifact_refs) >= {
+        "output.branch_comparison.summary.json",
+        "output.branch_comparison.metadata.json",
+        "output.branch_comparison.left_diff.patch",
+        "output.branch_comparison.right_diff.patch",
+        "output.branch_comparison.range_diff.patch",
+        "output.branch_comparison.diagnostics.json",
+    }
+    assert body["summaryRef"] == artifact_refs["output.branch_comparison.summary.json"]
+    assert body["diagnosticsRefs"] == [
+        artifact_refs["output.branch_comparison.diagnostics.json"]
+    ]
+    assert "diff" not in record
+    assert "diagnostics" not in record
+    assert "password=" not in str(body).lower()
+    assert "token=" not in str(body).lower()
 
 
 @pytest.mark.asyncio
