@@ -205,6 +205,56 @@ async def test_disabled_checkpoint_branching_policy_is_explicitly_carried(tmp_pa
 
     assert expanded["checkpointBranching"] == {"enabled": False}
 
+async def test_checkpoint_branching_policy_expands_from_snake_case_annotation(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            session.add(
+                Preset(
+                    slug="branch-legacy-snake",
+                    title="Branch Legacy Snake",
+                    description="Template with legacy snake_case annotation",
+                    scope_type=PresetScopeType.GLOBAL,
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[{"title": "Run", "instructions": "Run normally"}],
+                    annotations={
+                        "checkpoint_branching": {
+                            "enabled": True,
+                            "triggers": ["failed_step"],
+                            "maxBranchesPerCheckpoint": 2,
+                            "maxTurnsPerBranch": 3,
+                            "promotionPolicy": "approval_gated",
+                            "defaultWorkspacePolicy": (
+                                "apply_previous_execution_diff_to_clean_baseline"
+                            ),
+                            "branchTemplates": [
+                                {
+                                    "label": "minimal_fix",
+                                    "instructionsRef": "art_template_minimal_fix",
+                                }
+                            ],
+                        }
+                    },
+                    required_capabilities=[],
+                    created_by=user_id,
+                )
+            )
+            await session.commit()
+
+            service = PresetCatalogService(session)
+            expanded = await service.expand_template(
+                slug="branch-legacy-snake",
+                scope="global",
+                scope_ref=None,
+                inputs={},
+                context={},
+            )
+
+    assert expanded["checkpointBranching"]["enabled"] is True
+    assert expanded["checkpointBranching"]["triggers"] == ["failed_step"]
+
 @pytest.mark.parametrize(
     ("policy_patch", "message"),
     [
@@ -217,7 +267,12 @@ async def test_disabled_checkpoint_branching_policy_is_explicitly_carried(tmp_pa
         ({"publishMode": "branch"}, "publishMode"),
         ({"sideEffectPolicy": "shared_workspace"}, "sideEffectPolicy"),
         ({"maxBudgetUsd": 0}, "maxBudgetUsd"),
+        ({"maxBudgetUsd": "NaN"}, "maxBudgetUsd"),
+        ({"maxBudgetUsd": "Infinity"}, "maxBudgetUsd"),
         ({"gitWorkBranch": "main"}, "gitWorkBranch"),
+        ({"gitWorkBranch": "production"}, "gitWorkBranch"),
+        ({"gitWorkBranch": ".foo/bar"}, "gitWorkBranch"),
+        ({"gitWorkBranch": "mm/MM 1087/not-sanitized"}, "gitWorkBranch"),
         ({"branchTemplates": []}, "branchTemplates"),
     ],
 )

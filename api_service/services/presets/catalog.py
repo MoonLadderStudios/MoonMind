@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import socket
@@ -39,6 +40,10 @@ from moonmind.capabilities.input_contracts import (
     normalize_capability_input_contract,
 )
 from moonmind.config.settings import settings
+from moonmind.workflows.checkpoint_branches import (
+    CheckpointBranchGitBindingError,
+    _validate_work_branch,
+)
 
 _FORBIDDEN_STEP_KEYS = frozenset(
     {
@@ -1217,6 +1222,12 @@ def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
 
 def _normalize_preset_annotations(annotations: Mapping[str, Any] | None) -> dict[str, Any]:
     normalized = dict(annotations or {})
+    checkpoint_branching_alias = normalized.pop("checkpoint_branching", None)
+    if (
+        checkpoint_branching_alias is not None
+        and "checkpointBranching" not in normalized
+    ):
+        normalized["checkpointBranching"] = checkpoint_branching_alias
     checkpoint_branching = normalized.get("checkpointBranching")
     if checkpoint_branching is not None:
         normalized["checkpointBranching"] = _normalize_checkpoint_branching_policy(
@@ -1296,6 +1307,10 @@ def _normalize_checkpoint_branching_policy(value: Any) -> dict[str, Any]:
             raise PresetValidationError(
                 "checkpointBranching.maxBudgetUsd must be a positive number."
             ) from exc
+        if not math.isfinite(budget_value):
+            raise PresetValidationError(
+                "checkpointBranching.maxBudgetUsd must be a finite number."
+            )
         if budget_value <= 0:
             raise PresetValidationError(
                 "checkpointBranching.maxBudgetUsd must be greater than zero."
@@ -1308,6 +1323,17 @@ def _normalize_checkpoint_branching_policy(value: Any) -> dict[str, Any]:
         raise PresetValidationError(
             "checkpointBranching.gitWorkBranch must not target a protected branch."
         )
+    if requested_work_branch:
+        try:
+            _validate_work_branch(
+                requested_work_branch,
+                product_branch_id="checkpoint-branching-preset-policy",
+            )
+        except CheckpointBranchGitBindingError as exc:
+            raise PresetValidationError(
+                "checkpointBranching.gitWorkBranch must be a sanitized, "
+                "non-protected branch ref."
+            ) from exc
 
     branch_templates = _normalize_checkpoint_branch_templates(
         value.get("branchTemplates")
@@ -2395,7 +2421,10 @@ class PresetCatalogService:
             raise PresetValidationError(
                 "Template workflowPublish annotation must be an object."
             )
-        checkpoint_branching = (template.annotations or {}).get("checkpointBranching")
+        annotations = template.annotations or {}
+        checkpoint_branching = annotations.get("checkpointBranching") or annotations.get(
+            "checkpoint_branching"
+        )
         if checkpoint_branching is not None:
             checkpoint_branching = _normalize_checkpoint_branching_policy(
                 checkpoint_branching
