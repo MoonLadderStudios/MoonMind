@@ -230,6 +230,13 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _read_candidate_text(path: Path) -> str | None:
+    try:
+        return _read_text(path)
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+
+
 def _relative(path: Path, root: Path = REPO_ROOT) -> Path:
     try:
         return path.resolve().relative_to(root.resolve())
@@ -438,7 +445,9 @@ def audit_archived_workflow_status_refs(root: Path) -> list[AuditFinding]:
             continue
         if rel.as_posix().startswith("tests/"):
             continue
-        text = _read_text(path)
+        text = _read_candidate_text(path)
+        if text is None:
+            continue
         for line_number, line in enumerate(text.splitlines(), start=1):
             if needle in line:
                 findings.append(
@@ -460,9 +469,12 @@ def audit_repository(root: Path = REPO_ROOT) -> list[AuditFinding]:
     findings: list[AuditFinding] = []
     for path in _iter_candidate_files(root):
         rel = _relative(path, root)
+        text = _read_candidate_text(path)
+        if text is None:
+            continue
         findings.extend(
             audit_text_for_status_tokens(
-                _read_text(path),
+                text,
                 path=rel,
                 allowed_tokens=allowed_tokens,
                 require_domain_path=True,

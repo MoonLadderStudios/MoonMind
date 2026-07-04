@@ -108,6 +108,28 @@ def test_status_domain_audit_prunes_ignored_dirs_relative_to_repo_root(
     assert "var/moonmind/workflows/temporal/ignored.py" not in candidates
 
 
+def test_status_domain_audit_skips_broken_symlink_candidates(tmp_path: Path) -> None:
+    docs = tmp_path / "docs" / "Workflows"
+    docs.mkdir(parents=True)
+    (tmp_path / status_domain_audit.WORKFLOW_STATE_DOC).parent.mkdir(parents=True)
+    (tmp_path / status_domain_audit.WORKFLOW_STATE_DOC).write_text(
+        "### 5.1 `mm_state` value set\n\n```text\nrunning\n```\n",
+        encoding="utf-8",
+    )
+    (tmp_path / status_domain_audit.STEP_STATUS_DOC).write_text(
+        "The canonical v1 step statuses are:\n\n"
+        "| Status | Meaning |\n"
+        "| --- | --- |\n"
+        "| `running` | In progress. |\n",
+        encoding="utf-8",
+    )
+    (docs / "MoonSpecDocumentModel.md").symlink_to(
+        Path("../../moonspec/bundle/docs/MoonSpecDocumentModel.md")
+    )
+
+    assert status_domain_audit.audit_repository(tmp_path) == []
+
+
 def test_status_domain_audit_blocks_generic_global_status_vocabulary() -> None:
     findings = status_domain_audit.audit_text_for_status_tokens(
         "GLOBAL_STATUS_VOCABULARY = {'running'}\n",
