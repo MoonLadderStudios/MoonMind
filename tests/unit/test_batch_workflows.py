@@ -440,11 +440,12 @@ def test_normalize_publish_mode_falls_back_to_pr():
     assert module["_normalize_publish_mode"]("bogus") == "pr"
 
 
-def test_batch_workflows_parent_is_self_managed_publish():
+def test_batch_workflows_parent_is_side_effect_only_publish():
     # The parent orchestration queues children and performs no repo publish, so
-    # its own publish mode is resolved to agent-owned auto publishing.
-    assert is_self_managed_publish_skill("batch-workflows") is True
-    assert resolve_publish_mode_for_skill("batch-workflows", None) == "auto"
-    assert resolve_publish_mode_for_skill("batch-workflows", "auto") == "auto"
+    # its own publish mode is not resolved to agent-owned repository publishing.
+    assert is_self_managed_publish_skill("batch-workflows") is False
+    assert resolve_publish_mode_for_skill("batch-workflows", None) == "none"
+    with pytest.raises(WorkflowContractError):
+        resolve_publish_mode_for_skill("batch-workflows", "auto")
     with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill("batch-workflows", "pr")

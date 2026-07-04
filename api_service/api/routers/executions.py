@@ -7406,7 +7406,17 @@ async def _load_deployment_skill_metadata(
     stmt = select(AgentSkillDefinition).where(
         AgentSkillDefinition.slug.in_(sorted(skill_names))
     )
-    result = await session.execute(stmt)
+    try:
+        result = await session.execute(stmt)
+    except Exception as ex:
+        logger.warning(
+            "Deployment skill metadata unavailable; continuing without catalog publish metadata.",
+            extra={
+                "skill_count": len(skill_names),
+                "error_type": type(ex).__name__,
+            },
+        )
+        return {}
     definitions = list(result.scalars().all())
     artifact_refs = {
         str(definition.artifact_ref)
@@ -7415,19 +7425,23 @@ async def _load_deployment_skill_metadata(
     }
     if not artifact_refs:
         return {}
-    artifact_stmt = select(
-        TemporalArtifact.artifact_id,
-        TemporalArtifact.metadata_json,
-    ).where(TemporalArtifact.artifact_id.in_(artifact_refs))
-    artifact_result = await session.execute(artifact_stmt)
-    metadata_by_ref = {
-        str(artifact_id): metadata
-        for artifact_id, metadata in artifact_result.all()
-        if isinstance(metadata, Mapping)
-    }
     metadata_by_skill: dict[str, dict[str, Any]] = {}
     for definition in definitions:
-        metadata = metadata_by_ref.get(str(definition.artifact_ref or ""))
+        artifact_ref = str(definition.artifact_ref or "").strip()
+        if not artifact_ref:
+            continue
+        try:
+            artifact = await session.get(TemporalArtifact, artifact_ref)
+        except Exception as ex:
+            logger.warning(
+                "Deployment skill metadata artifact unavailable; continuing without catalog publish metadata.",
+                extra={
+                    "skill": str(definition.slug),
+                    "error_type": type(ex).__name__,
+                },
+            )
+            continue
+        metadata = getattr(artifact, "metadata_json", None)
         if isinstance(metadata, Mapping):
             metadata_by_skill[str(definition.slug)] = dict(metadata)
     return metadata_by_skill
