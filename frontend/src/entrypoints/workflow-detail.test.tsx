@@ -1586,6 +1586,85 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('MM-1105 does not show a global branch notice for action-specific blockers', async () => {
+    window.history.pushState({}, 'Branch Notice Test', '/workflows/test-123/steps?source=temporal');
+    const stepsWithCheckpoint = {
+      ...latestStepsSnapshot,
+      steps: latestStepsSnapshot.steps.map((step) => (
+        step.logicalStepId === 'apply'
+          ? { ...step, stateCheckpointRef: 'artifact://checkpoint-apply' }
+          : step
+      )),
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-1105 branch workflow',
+      summary: 'Branch explorer detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      relatedRuns: [],
+    };
+    const branch = {
+      branchId: 'branch-a',
+      workflowId: 'test-123',
+      rootWorkflowId: 'test-123',
+      sourceRunId: '02-run',
+      logicalStepId: 'apply',
+      sourceExecutionOrdinal: 1,
+      sourceCheckpointBoundary: 'after_execution',
+      sourceCheckpointRef: 'artifact://checkpoint-apply',
+      label: 'Archived checkpoint branch',
+      state: 'archived',
+      branchKind: 'root',
+      workspacePolicy: 'apply_previous_execution_diff_to_clean_baseline',
+      runtimeContextPolicy: 'fresh_agent_run',
+      gitRepository: 'MoonLadderStudios/MoonMind',
+      gitBaseBranch: 'main',
+      gitWorkBranch: 'mm/test-123/apply/branch-a',
+      currentHeadStepExecutionId: 'step-head-a',
+      currentHeadCheckpointRef: 'artifact://checkpoint-head-a',
+      artifactRefs: { summary: 'artifact://branch-summary-a' },
+      publishStatus: 'unpublished',
+      createdAt: '2026-04-09T00:01:00Z',
+      updatedAt: '2026-04-09T00:02:00Z',
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/checkpoint-branches/branch-a/turns')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      if (url.endsWith('/checkpoint-branches')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [branch] }) } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => stepsWithCheckpoint } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(await screen.findByText('Archived checkpoint branch')).toBeTruthy();
+    expect(screen.queryByText(/Branch action unavailable:/)).toBeNull();
+    expect((screen.getByRole('button', { name: 'Continue branch' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Continue branch' }).getAttribute('title')).toBe(
+      'Branch state archived cannot be changed.',
+    );
+    expect((screen.getByRole('button', { name: 'Publish branch' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('selects Chat by default and preserves query state in detail tab links', async () => {
     window.history.pushState({}, 'Default Chat Test', '/workflows/test-123?source=temporal');
     mockWorkflowDetailSubrouteFetch();

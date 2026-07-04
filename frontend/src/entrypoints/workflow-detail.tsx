@@ -4348,7 +4348,6 @@ function branchActionBlockedReason({
     !selectedBranch && 'Select a checkpoint branch.',
   ]);
   if (baseReason) return baseReason;
-  if (!selectedBranch) return 'Select a checkpoint branch.';
   if ((action === 'continue' || action === 'fork' || action === 'archive') && !selectedMutable) {
     return `Branch state ${formatStatusLabel(selectedBranch.state)} cannot be changed.`;
   }
@@ -4500,12 +4499,8 @@ function BranchExplorerPanel({
   const publishDisabled = Boolean(publishBlockedReason);
   const compareDisabled = Boolean(compareBlockedReason);
   const selectedActionBlockedReason = firstBranchBlockedReason([
-    continueBlockedReason,
-    forkBlockedReason,
-    compareBlockedReason,
-    promoteBlockedReason,
-    publishBlockedReason,
-    archiveBlockedReason,
+    !actionsEnabled && 'Branch actions are disabled by workflow policy.',
+    busy && 'Another workflow action is in progress.',
   ]);
 
   return (
