@@ -10479,8 +10479,9 @@ async def list_executions(
                 canonical_rows = (await session.execute(stmt)).scalars().all()
                 canonical_map = {row.workflow_id: row for row in canonical_rows}
 
-            items = []
+            items: list[ExecutionModel] = []
             if page:
+                live_progress_queries: list[tuple[int, str]] = []
                 for wf in page:
                     payload = await map_temporal_state_to_projection(wf)
                     canonical_record = canonical_map.get(wf.id)
@@ -10511,23 +10512,29 @@ async def list_executions(
                             getattr(record_obj, "started_at", None) or datetime.now(UTC)
                         )
                     execution = _serialize_execution_list_item(record_obj)
-                    if (
-                        _execution_uses_live_workflow_queries(execution)
-                        and (
-                            _request_has_progress_filters(request)
-                            or sort in {"progress", "progressPct"}
+                    if _execution_uses_live_workflow_queries(execution):
+                        live_progress_queries.append((len(items), wf.id))
+                    items.append(execution)
+
+                if live_progress_queries:
+                    progress_results = await asyncio.gather(
+                        *(
+                            _load_execution_progress(
+                                temporal_client=temporal_client,
+                                workflow_id=workflow_id,
+                            )
+                            for _, workflow_id in live_progress_queries
                         )
-                    ):
-                        progress, queried_run_id = await _load_execution_progress(
-                            temporal_client=temporal_client,
-                            workflow_id=wf.id,
-                        )
+                    )
+                    for (item_index, _workflow_id), (
+                        progress,
+                        queried_run_id,
+                    ) in zip(live_progress_queries, progress_results, strict=True):
                         update: dict[str, object] = {"progress": progress}
                         if queried_run_id:
                             update["run_id"] = queried_run_id
                             update["temporal_run_id"] = queried_run_id
-                        execution = execution.model_copy(update=update)
-                    items.append(execution)
+                        items[item_index] = items[item_index].model_copy(update=update)
 
                 if _request_has_progress_filters(request):
                     items = [
