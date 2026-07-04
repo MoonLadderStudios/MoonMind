@@ -678,14 +678,18 @@ class DockerCodexManagedSessionController:
     def _docker_name_conflict(exc: RuntimeError, container_name: str) -> bool:
         detail = str(exc).lower()
         name = str(container_name or "").strip().lower()
-        if not name:
-            return False
-        return (
+        has_name_conflict = (
             "conflict" in detail
             and "container name" in detail
             and "already in use" in detail
-            and name in detail
         )
+        if not has_name_conflict:
+            return False
+        if not name:
+            return False
+        if name in detail:
+            return True
+        return "[redacted]" in detail
 
     async def _cleanup_docker_sidecar_resources(
         self,

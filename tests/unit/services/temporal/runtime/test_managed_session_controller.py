@@ -571,6 +571,7 @@ async def test_launch_session_recreates_sidecar_after_name_conflict(
     commands: list[tuple[str, ...]] = []
     sidecar_run_attempts = 0
     sidecar_name = "moonmind-session-sess-1-docker"
+    redacted_sidecar_name = "moonmind-session-sess-[REDACTED]-docker"
 
     async def _fake_runner(
         command: tuple[str, ...],
@@ -596,7 +597,8 @@ async def test_launch_session_recreates_sidecar_after_name_conflict(
                         125,
                         "",
                         'docker: Error response from daemon: Conflict. '
-                        f'The container name "/{sidecar_name}" is already in use '
+                        f'The container name "/{redacted_sidecar_name}" '
+                        "is already in use "
                         'by container "old-sidecar". You have to remove '
                         "(or rename) that container to be able to reuse that name.",
                     )
