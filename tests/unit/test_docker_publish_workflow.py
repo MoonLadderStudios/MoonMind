@@ -41,9 +41,16 @@ def test_docker_publish_generates_version_before_platform_builds() -> None:
 def test_docker_publish_checks_out_moonspec_submodule() -> None:
     workflow = _load_workflow()
 
-    checkout = workflow["jobs"]["build"]["steps"][0]
+    checkout = next(
+        (
+            step
+            for step in workflow["jobs"]["build"]["steps"]
+            if step.get("uses", "").startswith("actions/checkout@")
+        ),
+        None,
+    )
 
-    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout is not None, "Checkout step not found"
     assert checkout["with"]["submodules"] == "recursive"
 
 
