@@ -1,0 +1,747 @@
+{
+  "source": {
+    "title": "Workflow List Display Modes",
+    "path": "docs/UI/WorkflowListDisplayModes.md",
+    "referencePath": "docs/UI/WorkflowListDisplayModes.md",
+    "sourceDocumentClass": "canonical-declarative",
+    "jiraIssueKey": "MM-1111",
+    "originalDesignText": "# Workflow List Display Modes\n\nStatus: Proposed declarative UI contract  \nOwners: MoonMind Engineering  \nLast updated: 2026-07-03  \nCanonical for: Workflows/Create list display modes, masthead list-mode control, workflow sidebar/table visual continuity, and first-workflow selection fallback when the list is hidden\n\n**Implementation tracking:** Rollout task lists, ticket breakdowns, and local handoff notes belong under `docs/tmp/`, Jira, or gitignored implementation notes. This document defines the durable product and UI contract for the shared workflow-list display system.\n\n---\n\n## 1. Purpose\n\nMoonMind should expose workflow navigation as one declarative display system with three mutually exclusive list presentations:\n\n| User label | Internal mode | Meaning |\n| --- | --- | --- |\n| No list | `hidden` | Hide the workflow list and show only the primary surface. |\n| Sidebar list | `sidebar` | Show the workflow list as a left sidebar beside the primary surface. |\n| Full screen table | `table` | Show the full Workflows table as the primary surface. |\n\nFor the first implementation, the system applies only to the Workflows and Create surfaces:\n\n1. Workflows detail surfaces may show **No list** or **Sidebar list**.\n2. The Workflows list route is the **Full screen table** state.\n3. The Create page may show **No list** or **Sidebar list**.\n4. Selecting **Full screen table** from Create navigates to the Workflows page.\n5. Future pages may opt into the same system by declaring how each mode composes with their primary surface.\n\nThe interaction should feel like changing how much of the same workflow list is visible, not like jumping between unrelated pages. The sidebar must read as the natural collapsed form of the full table's first column.\n\n---\n\n## 2. Relationship to existing UI contracts\n\nThis document narrows and supersedes only the list-display mode and masthead control portions of the existing workflow workspace design. It does not replace the page-specific content contracts.\n\nUse these documents together:\n\n- `docs/UI/DashboardSPAArchitecture.md` remains canonical for the persistent SPA shell, route ownership, providers, and same-origin API model.\n- `docs/UI/DashboardDesignSystem.md` remains canonical for visual language, focus states, motion posture, glass/matte treatment, and shared tokens.\n- `docs/UI/WorkflowsListPage.md` remains canonical for table columns, filters, sorting, pagination, mobile cards, row data, and list API behavior.\n- `docs/UI/WorkflowDetailsPage.md` remains canonical for workflow detail content, tabs, actions, evidence, logs, artifacts, and recovery states.\n- `docs/UI/CreatePage.md` remains canonical for workflow authoring, step composition, schema-driven inputs, publishing controls, and submission.\n- `docs/UI/WorkflowWorkspaceSidebar.md` remains canonical for the desktop list-to-detail workspace foundation where it does not conflict with this three-mode system.\n\nWhen this document conflicts with an older sidebar control rule, this document wins for the new system. In particular, the old separate `Hide workflow sidebar`, `Open workflow sidebar`, and `Expand workflow list` controls should collapse into the shared masthead radio group for pages covered by this design.\n\n---\n\n## 3. Declarative model\n\nThe UI should represent list display as a small, typed state machine rather than scattered page-specific booleans.\n\n```ts\nexport type WorkflowListDisplayMode = 'hidden' | 'sidebar' | 'table';\n\nexport type WorkflowListDisplaySurface =\n  | 'workflows-table'\n  | 'workflow-detail'\n  | 'workflow-start'\n  | 'future-dashboard-surface';\n\nexport type WorkflowListSelection = {\n  workflowId: string | null;\n  source: 'route' | 'last-selected' | 'first-visible-row' | 'none';\n};\n```\n\nThe mode registry should be data-first:\n\n```ts\nexport const WORKFLOW_LIST_DISPLAY_MODES = [\n  {\n    value: 'hidden',\n    label: 'No list',\n    icon: Square,\n    listRegion: 'none',\n  },\n  {\n    value: 'sidebar',\n    label: 'Sidebar list',\n    icon: PanelLeft,\n    listRegion: 'sidebar',\n  },\n  {\n    value: 'table',\n    label: 'Full screen table',\n    icon: Rows3,\n    listRegion: 'primary-surface',\n  },\n] satisfies ListDisplayModeDefinition[];\n```\n\nMode resolution is declarative:\n\n```ts\ntype ResolvedWorkflowListDisplay = {\n  requestedMode: WorkflowListDisplayMode;\n  effectiveMode: WorkflowListDisplayMode;\n  surface: WorkflowListDisplaySurface;\n  routeAction: 'none' | 'navigate-workflows' | 'navigate-selected-detail' | 'resolve-first-workflow';\n  primarySurface: 'workflow-detail' | 'workflow-start' | 'workflow-table' | 'empty-workflows';\n  listSurface: 'none' | 'sidebar' | 'table';\n};\n```\n\nRules:\n\n1. `requestedMode` is what the user selected in the masthead control.\n2. `effectiveMode` is the mode that can actually render on the current route after required navigation or first-row resolution.\n3. `table` always means the Workflows list page as the primary surface.\n4. `sidebar` always means the workflow list is visible in a left rail and the current page's primary surface remains visible to the right.\n5. `hidden` always means no workflow list region is rendered.\n6. Route-derived selection is stronger than remembered selection.\n7. Remembered selection is stronger than first-row fallback.\n8. First-row fallback is used only when a mode requires a Workflow Detail surface and there is no selected workflow yet.\n\n---\n\n## 4. Route and presentation matrix\n\n| Current route family | Selected mode | Required route result | Primary surface | List surface |\n| --- | --- | --- | --- | --- |\n| `/workflows` | `table` | Stay on `/workflows`. | Full Workflows table. | Table. |\n| `/workflows` | `sidebar` | Navigate to selected workflow detail, or first visible workflow when none is selected. | Workflow Detail. | Sidebar. |\n| `/workflows` | `hidden` | Navigate to selected workflow detail, or first visible workflow when none is selected. | Workflow Detail. | None. |\n| `/workflows/{workflowId}` and detail subroutes | `table` | Navigate to `/workflows` with safe list context preserved. | Full Workflows table. | Table. |\n| `/workflows/{workflowId}` and detail subroutes | `sidebar` | Stay on current detail route. | Workflow Detail. | Sidebar. |\n| `/workflows/{workflowId}` and detail subroutes | `hidden` | Stay on current detail route. | Workflow Detail. | None. |\n| `/workflows/new` | `table` | Navigate to `/workflows`. | Full Workflows table. | Table. |\n| `/workflows/new` | `sidebar` | Stay on `/workflows/new`. | Create page. | Sidebar. |\n| `/workflows/new` | `hidden` | Stay on `/workflows/new`. | Create page. | None. |\n\nRules:\n\n1. The Workflows page is the only full-screen table page in the initial system.\n2. The Create page never embeds the full table; choosing `table` from Create navigates to `/workflows`.\n3. Choosing `hidden` from the Workflows table must not leave the user on an empty table-less `/workflows` page. It must resolve a Workflow Detail target.\n4. If no workflow has been selected yet, choosing `hidden` from the Workflows table loads the Workflow Detail for the first item in the current effective list.\n5. If no workflow has been selected yet, choosing `sidebar` from the Workflows table should also resolve to a detail target so the sidebar has a primary Workflows surface beside it.\n6. If the current list has no selectable workflows, the UI stays on `/workflows`, keeps the table/list empty state visible, and announces that there is no workflow to open.\n7. Detail subroutes preserve their subroute when switching between `hidden` and `sidebar`.\n8. Switching from any detail subroute to `table` returns to `/workflows`; it does not keep a hidden detail pane mounted.\n9. Switching from Create to `table` must respect the Create page's draft-preservation and unsaved-change policy. The mode control must not silently discard a draft.\n\n---\n\n## 5. First-workflow fallback\n\nThe first-workflow fallback makes the **No list** mode safe when the user has not yet selected a workflow.\n\nResolution order:\n\n1. Use the workflow ID in the current route when the route already identifies a workflow.\n2. Otherwise use the last workflow explicitly selected during the current dashboard session when that workflow is still authorized.\n3. Otherwise fetch or reuse the current Workflows list query and choose the first selectable row after the active filters, sort, source, page size, and cursor rules have been applied.\n4. If no row exists, show the Workflows empty state and keep the table available.\n\nRules:\n\n1. \"First item\" means the first visible workflow row in the same list the user was looking at, not an arbitrary newest workflow from a different query.\n2. The fallback may use cached list data if it exactly matches the current effective list query.\n3. If the list query is loading, the control may enter a resolving state with accessible text such as `Opening first workflow...`.\n4. If the list query fails, show a recoverable list error and do not navigate to a guessed workflow.\n5. The fallback must never expose workflows outside the current user's authorization scope.\n6. A selected workflow that is absent from the current filtered list may still be opened from remembered selection only if the detail API authorizes it; the sidebar should label it as the current workflow rather than implying it matches active filters.\n\n---\n\n## 6. Masthead radio control\n\nThe list display control belongs in the global dashboard masthead immediately to the right of the MoonMind title.\n\nPlacement:\n\n```text\n[MoonMind logo + MoonMind title] [list display radio group] [route nav links] [version/meta]\n```\n\nFor the current masthead layout, this means the control is visually attached to the brand area before the route navigation begins. It should not be placed inside page content, inside the workflow sidebar, or inside the Workflows table toolbar.\n\nControl contract:\n\n| Mode | Icon | Accessible label | Tooltip/title |\n| --- | --- | --- | --- |\n| `hidden` | `Square` | `No list` | `No list` |\n| `sidebar` | `PanelLeft` | `Sidebar list` | `Sidebar list` |\n| `table` | `Rows3` | `Full screen table` | `Full screen table` |\n\nRules:\n\n1. Use Lucide icons with the canonical icon names `Square`, `PanelLeft`, and `Rows3`.\n2. The control is a radio group, not three unrelated buttons.\n3. It should expose `role=\"radiogroup\"` with an accessible name such as `Workflow list display`.\n4. Each option should expose native radio semantics or `role=\"radio\"` with `aria-checked`.\n5. The selected option is the resolved current mode after navigation settles.\n6. Keyboard users can use Tab to enter the group and arrow keys to move between options.\n7. Each icon-only control needs an accessible name and visible focus state.\n8. Hover, selected, and focus states use the dashboard control styling tokens.\n9. On pages that do not participate in this system yet, the control may be hidden or disabled. Hiding is preferred until a page declares mode behavior.\n10. On mobile, the first implementation may hide the control and keep the existing mobile card/detail model. If shown later, it must not expose desktop-only sidebar affordances that do not render.\n\n---\n\n## 7. Surface composition\n\n### 7.1 Workflows detail with no list\n\n`hidden` mode on a workflow detail route renders only the Workflow Details surface inside the dashboard content panel.\n\nRules:\n\n1. No workflow list, sidebar, list header, or list divider is rendered.\n2. The Workflow Details route, tabs, actions, and data fetching remain unchanged.\n3. The detail page may use the width previously occupied by the sidebar.\n4. The masthead radio group remains available so the user can reopen the sidebar or return to the table.\n5. The selected workflow ID remains the route parameter, not a hidden local-only state.\n\n### 7.2 Workflows detail with sidebar list\n\n`sidebar` mode on a workflow detail route renders:\n\n1. the sidebar list on the left;\n2. the existing Workflow Details surface on the right;\n3. the same route-derived selected workflow and detail subroute.\n\nRules:\n\n1. The sidebar is owned by the workspace/layout composition layer, not by the detail page body.\n2. Sidebar row links navigate to canonical workflow detail URLs.\n3. The active workflow row uses `aria-current=\"page\"`.\n4. Sidebar list failures do not prevent the selected detail from rendering.\n5. Detail failures do not erase a successfully loaded sidebar.\n\n### 7.3 Create with no list\n\n`hidden` mode on `/workflows/new` renders the Create page alone.\n\nRules:\n\n1. No workflow list, sidebar, list header, or list divider is rendered.\n2. Create page draft state, schema-driven forms, validation, and submit behavior remain owned by `docs/UI/CreatePage.md`.\n3. The masthead radio group remains available so the user can open the sidebar or navigate to the table.\n\n### 7.4 Create with sidebar list\n\n`sidebar` mode on `/workflows/new` renders:\n\n1. the sidebar list on the left;\n2. the Create page on the right.\n\nRules:\n\n1. The sidebar shows workflows using the same compact/list-row data as the Workflows table.\n2. The Create form remains the primary surface and must not be squeezed into an unusable width.\n3. Clicking a workflow row in the sidebar navigates to that workflow's detail route; it does not select a workflow inside the Create form.\n4. The Create draft should be preserved according to the Create page's draft persistence model before sidebar navigation leaves the route.\n5. The sidebar must be optional; Create remains fully usable in `hidden` mode.\n\n### 7.5 Full screen table\n\n`table` mode renders the Workflows list page.\n\nRules:\n\n1. `/workflows` is the canonical URL.\n2. The table owns filters, sorting, view options, column visibility, pagination, active filter chips, loading states, empty states, and mobile cards.\n3. No Workflow Detail pane remains active in the UI.\n4. No Create form remains mounted as a hidden pane.\n5. When entered from sidebar mode, the table should reuse list query state and scroll position where practical.\n\n---\n\n## 8. Sidebar-as-table-slice visual contract\n\nThe sidebar is not a separate visual invention. It is the collapsed form of the full Workflows table.\n\nThe sidebar should render as a one-column table slice:\n\n```text\n┌──────────────────────────────┐\n│ Workflow                     │  ← same header row styling as table\n├──────────────────────────────┤\n│ Workflow row 1               │  ← same row height as table\n├──────────────────────────────┤\n│ Workflow row 2               │\n├──────────────────────────────┤\n│ Workflow row 3               │\n└──────────────────────────────┘\n```\n\nRules:\n\n1. The first visible row in the sidebar is a header row labeling the first column.\n2. The header label should be `Workflow` unless the Workflows table changes the first column label.\n3. Header typography, casing, background, border, padding, and hover/focus exclusions match the full table header.\n4. Sidebar body rows use the exact same block size as full table body rows.\n5. The table and sidebar must share row metric tokens rather than duplicating pixel values.\n6. Recommended shared tokens:\n\n```css\n:root {\n  --workflow-list-header-row-height: 2.75rem;\n  --workflow-list-body-row-height: 4rem;\n  --workflow-list-column-workflow-width: 20rem;\n  --workflow-list-divider-width: 1px;\n  --workflow-list-divider-color: rgb(var(--mm-border) / 0.72);\n}\n```\n\n7. The sidebar's right divider uses the same width, color, and vertical rhythm as the table's column divider or row grid line.\n8. The sidebar should align its header baseline, row top edges, row bottom borders, and active row background with the full table's first column.\n9. The full table's first column should be width-compatible with the sidebar so switching modes feels like revealing or hiding additional columns to the right.\n10. The sidebar row content may hide secondary table columns, but it must not introduce extra vertical metadata that changes row height.\n11. Titles clamp within the shared row height; overflow must not make individual sidebar rows taller than table rows.\n12. Status icons or compact supplements may appear inside the Workflow cell only if they also fit the shared row height.\n13. Empty, loading, and error sidebar states should preserve the header row and divider so the list region still feels like the same table slice.\n\nImplementation guidance:\n\n1. Prefer a shared `WorkflowListTableFrame` or `WorkflowListRows` primitive that can render `variant=\"table\"` and `variant=\"sidebar\"`.\n2. If semantic `<table>` markup remains practical, the sidebar may render a one-column `<table>` with the same `<thead>` and `<tbody>` row primitives.\n3. If div/grid markup is used for virtualization or layout reasons, preserve table-equivalent semantics with roles and accessible labels.\n4. Do not style the sidebar as a card stack, menu, or unrelated navigation rail.\n\n---\n\n## 9. Motion and continuity\n\nSwitching between `sidebar` and `table` should feel like expanding or collapsing the same list.\n\nRules:\n\n1. Header row height is constant before, during, and after the transition.\n2. Body row height is constant before, during, and after the transition.\n3. The sidebar right divider becomes the table's first-column divider or aligns with it during expansion.\n4. The full table reveals additional columns to the right of the Workflow column.\n5. The primary surface to the right of the sidebar withdraws when entering `table` mode; it should not shove rows vertically.\n6. Avoid large page-slide animations.\n7. In reduced-motion mode, the mode change snaps or uses near-instant opacity changes.\n8. When the same list query and row set are used, preserve vertical scroll position where practical.\n9. If table and sidebar cannot share scroll position because of pagination or virtualization, preserve the selected row and focus target instead.\n10. The route may change, but the dashboard shell and masthead remain mounted.\n\n---\n\n## 10. State persistence\n\nThe system should remember user intent without making URLs confusing.\n\nRecommended persisted preferences:\n\n```ts\ntype DashboardWorkflowListPreferences = {\n  workflowListDisplayMode?: 'hidden' | 'sidebar' | 'table';\n  lastSelectedWorkflowId?: string;\n};\n```\n\nRules:\n\n1. Persist the last explicit list display mode in dashboard preferences.\n2. Persist the last explicitly selected workflow ID for first-row fallback avoidance.\n3. Do not put `hidden` or `sidebar` mode in the workflow detail path; detail URLs remain canonical workflow URLs.\n4. Full table mode is naturally represented by `/workflows`.\n5. Query parameters may preserve list filters, sort, page size, cursor, and safe return context according to the Workflows list contract.\n6. Query parameters must not include raw prompts, full Create drafts, secrets, presigned URLs, logs, artifacts, or large detail payloads.\n7. On direct desktop visits to `/workflows/{workflowId}`, default to the persisted mode when it is `hidden` or `sidebar`; otherwise default to `sidebar` so navigation context is visible.\n8. On direct desktop visits to `/workflows/new`, default to the persisted mode when it is `hidden` or `sidebar`; otherwise default to `hidden` so authoring remains focused.\n9. On direct visits to `/workflows`, effective mode is `table` regardless of persisted preference until the user selects another mode.\n\n---\n\n## 11. Data fetching and cache reuse\n\nThe sidebar and full table should share a list data model.\n\nRules:\n\n1. The full table and sidebar use the same authorized workflow list API family.\n2. The sidebar should reuse cached Workflows list data when the query parameters match.\n3. The first-workflow fallback uses the same list query as the table the user was viewing.\n4. Selected detail data is fetched independently from list data.\n5. Create page data and draft state are independent from list data.\n6. List refetching must not steal focus from the Create form, Workflow Detail, or masthead mode control.\n7. Live updates may refresh row content, but they must preserve active selection, row height, and focus.\n8. Sidebar empty, loading, and error states are scoped to the sidebar list region and do not blank the primary surface.\n9. Table empty, loading, and error states remain owned by the Workflows list page.\n\n---\n\n## 12. Accessibility requirements\n\nRules:\n\n1. The masthead mode selector is reachable by keyboard immediately after the MoonMind brand link.\n2. The mode selector has a stable accessible name such as `Workflow list display`.\n3. Each option announces its label and checked state.\n4. Changing to a mode that navigates routes must move focus deterministically after navigation.\n5. Choosing `hidden` from `/workflows` with no prior selection announces first-workflow resolution or failure.\n6. The sidebar list has an accessible name such as `Workflow navigation`.\n7. The sidebar header row is not announced as a selectable workflow.\n8. Workflow row links include enough text to identify the workflow.\n9. Active workflow links expose `aria-current=\"page\"`.\n10. Color is not the only active, hover, selected, or focus indicator.\n11. Mobile users must not encounter hidden desktop-only sidebar controls in the accessibility tree.\n12. Unsaved Create draft warnings, when required, must be accessible before route-changing mode changes complete.\n\n---\n\n## 13. Empty, loading, and error states\n\n| State | Behavior |\n| --- | --- |\n| Table loading | Show the Workflows list loading state in table mode. |\n| Sidebar loading | Keep the sidebar header/divider visible and show compact loading rows or `Loading workflows...`. |\n| First-workflow resolving | Keep the selected radio interaction acknowledged and announce `Opening first workflow...`. |\n| First-workflow not found | Stay on `/workflows`, show the empty list state, and keep table mode available. |\n| Sidebar list empty beside Create | Show the sidebar header plus `No workflows match the current list filters.`; Create remains usable. |\n| Sidebar list error beside Detail | Show retry inside sidebar; Detail remains usable when authorized. |\n| Sidebar list error beside Create | Show retry inside sidebar; Create remains usable. |\n| Detail error with sidebar | Show existing Workflow Details error; sidebar remains usable when it can load. |\n| Create unsaved draft before table navigation | Use the Create page's draft preservation or unsaved-change confirmation model before leaving `/workflows/new`. |\n\nRules:\n\n1. Sidebar empty/loading/error states preserve the table-slice frame.\n2. Sidebar recovery retries only sidebar list data.\n3. Detail recovery retries only detail data.\n4. Table recovery retries the Workflows list page data.\n5. Mode controls remain available unless a route guard intentionally blocks navigation to protect user data.\n\n---\n\n## 14. Future extension model\n\nOther pages may adopt this system later by registering a surface contract.\n\n```ts\ntype WorkflowListDisplaySurfaceContract = {\n  surface: WorkflowListDisplaySurface;\n  supportsHidden: boolean;\n  supportsSidebar: boolean;\n  supportsTable: boolean;\n  hiddenPrimarySurface: ReactNode;\n  sidebarPrimarySurface: ReactNode;\n  onTableMode: 'navigate-workflows' | 'render-local-table' | 'unsupported';\n};\n```\n\nRules:\n\n1. A page must declare mode behavior before the masthead control appears on that page.\n2. Unsupported modes should not appear enabled.\n3. Pages outside Workflows/Create should not receive accidental workflow sidebars just because they are dashboard routes.\n4. Future non-workflow lists may reuse the visual pattern, but they should define their own list entity, route, and selection semantics.\n5. The Workflows table remains the canonical table target for workflow entities.\n\n---\n\n## 15. Testing contract\n\nImplementation should add or preserve tests for these behaviors:\n\n1. The masthead renders the list display radio group immediately after the MoonMind brand on Workflows and Create surfaces.\n2. The radio group exposes `No list`, `Sidebar list`, and `Full screen table` options with the `Square`, `PanelLeft`, and `Rows3` icons.\n3. `/workflows` resolves to `table` mode.\n4. Choosing `hidden` from `/workflows` with a previously selected workflow navigates to that workflow detail and hides the list.\n5. Choosing `hidden` from `/workflows` with no previous selection opens the first visible workflow detail and hides the list.\n6. Choosing `hidden` from `/workflows` with an empty list stays on the Workflows empty state and does not guess an ID.\n7. Choosing `sidebar` from a workflow detail route shows the sidebar without changing the selected detail route.\n8. Choosing `hidden` from a workflow detail route hides the sidebar without changing the selected detail route.\n9. Choosing `table` from a workflow detail route navigates to `/workflows` and unmounts the detail pane.\n10. Choosing `sidebar` from `/workflows/new` shows the workflow sidebar beside the Create page.\n11. Choosing `hidden` from `/workflows/new` shows the Create page without a workflow list.\n12. Choosing `table` from `/workflows/new` navigates to `/workflows` after respecting Create draft preservation rules.\n13. The sidebar renders a header row labeled `Workflow` before workflow rows.\n14. Sidebar header styling matches the Workflows table first-column header styling.\n15. Sidebar row height equals Workflows table row height.\n16. Sidebar divider styling matches the table divider styling.\n17. Switching from sidebar to table preserves list query context where practical.\n18. Sidebar list failure does not prevent Workflow Detail or Create from rendering.\n19. Detail failure does not erase the sidebar list.\n20. Keyboard users can operate the masthead radio group and receive deterministic focus after navigation.\n21. Reduced-motion settings disable large layout animations.\n22. Unauthorized workflows never appear in table rows, sidebar rows, first-row fallback, remembered selections, or pinned current rows.\n"
+  },
+  "sourceDocumentClass": "canonical-declarative",
+  "extractedAt": "2026-07-05T01:33:54.859572Z",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "canonicalClaims": [
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-001",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "1. Purpose"
+      ],
+      "summary": "Workflow navigation is represented as three mutually exclusive modes: hidden, sidebar, and table, initially for Workflows and Create surfaces."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-002",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "2. Relationship to existing UI contracts"
+      ],
+      "summary": "This contract narrows older sidebar controls and composes with existing dashboard, list, detail, create, and workspace UI contracts."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-003",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "3. Declarative model"
+      ],
+      "summary": "The UI uses typed display mode, surface, selection, registry, and resolved display models instead of scattered page booleans."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-004",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "4. Route and presentation matrix"
+      ],
+      "summary": "Each supported route family has deterministic required route results, primary surfaces, and list surfaces for every selected mode."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-005",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "5. First-workflow fallback"
+      ],
+      "summary": "When a detail target is required and no workflow is selected, the system resolves route selection, remembered selection, then first row from the current effective list, or keeps the table empty state."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-006",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "6. Masthead radio control"
+      ],
+      "summary": "The global masthead contains an accessible icon radio group for No list, Sidebar list, and Full screen table on participating pages."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-007",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "7. Surface composition"
+      ],
+      "summary": "Hidden, sidebar, and table modes compose with Workflow Detail and Create surfaces without changing page-owned content contracts or hiding stale panes."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-008",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "8. Sidebar-as-table-slice visual contract"
+      ],
+      "summary": "The sidebar renders as the Workflows table first-column slice with shared row metrics, header styling, divider styling, semantics, and state frame."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-009",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "9. Motion and continuity"
+      ],
+      "summary": "Mode changes preserve row geometry, selected row or scroll/focus context, shell continuity, and reduced-motion behavior."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-010",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "10. State persistence"
+      ],
+      "summary": "Dashboard preferences remember explicit mode and last selected workflow while keeping canonical URLs and avoiding unsafe query payloads."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-011",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "11. Data fetching and cache reuse"
+      ],
+      "summary": "Sidebar and table share the authorized workflow list API/cache model while detail and Create data remain independent and focus-safe."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-012",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "12. Accessibility requirements"
+      ],
+      "summary": "The mode selector, sidebar navigation, route-changing interactions, active rows, mobile behavior, and draft warnings are accessible."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-013",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "13. Empty, loading, and error states"
+      ],
+      "summary": "Table, sidebar, first-workflow, detail, and Create state failures are scoped recoverably without blanking unrelated primary surfaces."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-014",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "14. Future extension model"
+      ],
+      "summary": "Future pages can opt in only through explicit surface contracts; unsupported modes are not accidentally exposed."
+    },
+    {
+      "id": "CLAIM-docs-ui-workflowlistdisplaymodes-015",
+      "path": "docs/UI/WorkflowListDisplayModes.md",
+      "sections": [
+        "15. Testing contract"
+      ],
+      "summary": "Implementation coverage must verify masthead controls, routing, fallbacks, sidebar visuals, continuity, failure isolation, keyboard behavior, reduced motion, and authorization boundaries."
+    }
+  ],
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Three-mode workflow list system",
+      "type": "requirement",
+      "source_section": "1. Purpose",
+      "explanation": "Expose hidden, sidebar, and table as the only workflow list display modes for Workflows and Create."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Existing UI contract precedence",
+      "type": "constraint",
+      "source_section": "2. Relationship to existing UI contracts",
+      "explanation": "Keep page-specific contracts canonical and replace older separate sidebar controls with the shared masthead mode control where this design applies."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Typed mode state machine",
+      "type": "state-model",
+      "source_section": "3. Declarative model",
+      "explanation": "Model requested mode, effective mode, surface, route action, primary surface, and list surface through typed data-first definitions."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Route presentation resolution",
+      "type": "requirement",
+      "source_section": "4. Route and presentation matrix",
+      "explanation": "Resolve each mode selection from table, detail, subroute, and Create routes into deterministic navigation and composition outcomes."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "First-workflow fallback",
+      "type": "state-model",
+      "source_section": "5. First-workflow fallback",
+      "explanation": "Use route ID, authorized remembered selection, then current-list first visible row; never guess on empty or failed lists."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Masthead radio group",
+      "type": "requirement",
+      "source_section": "6. Masthead radio control",
+      "explanation": "Place an accessible Lucide icon radio group beside the MoonMind title with canonical labels and radio semantics."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Mode-specific surface composition",
+      "type": "requirement",
+      "source_section": "7. Surface composition",
+      "explanation": "Compose hidden/sidebar/table with Workflow Detail and Create without moving page-owned behavior into the list layer or keeping hidden stale panes."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Sidebar table-slice visuals",
+      "type": "requirement",
+      "source_section": "8. Sidebar-as-table-slice visual contract",
+      "explanation": "Render the sidebar as a one-column table slice sharing header, body row, divider, width, semantics, and metric tokens with the Workflows table."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Continuity and motion",
+      "type": "requirement",
+      "source_section": "9. Motion and continuity",
+      "explanation": "Make sidebar/table switching feel like expanding or collapsing the same list while respecting reduced motion."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Preference persistence and URL safety",
+      "type": "constraint",
+      "source_section": "10. State persistence",
+      "explanation": "Persist explicit mode and selected workflow while preserving canonical URLs and excluding unsafe or bulky query payloads."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Shared list data model",
+      "type": "integration",
+      "source_section": "11. Data fetching and cache reuse",
+      "explanation": "Share authorized workflow list API/cache data between table and sidebar while fetching detail and Create independently."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Accessibility",
+      "type": "requirement",
+      "source_section": "12. Accessibility requirements",
+      "explanation": "Ensure keyboard order, names, checked state, focus after navigation, active row semantics, and accessible draft warnings."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Scoped loading/error/empty states",
+      "type": "requirement",
+      "source_section": "13. Empty, loading, and error states",
+      "explanation": "Keep table, sidebar, first-workflow, detail, and Create failures scoped with available recovery and mode controls."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Future surface contracts",
+      "type": "integration",
+      "source_section": "14. Future extension model",
+      "explanation": "Require future pages to declare support before exposing workflow list modes, and keep workflow entities targeted at the Workflows table."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Verification expectations",
+      "type": "requirement",
+      "source_section": "15. Testing contract",
+      "explanation": "Test routing, controls, visuals, continuity, state isolation, accessibility, reduced motion, and authorization boundaries."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Implement the workflow list display state model and route resolution",
+      "shortName": "list-mode-resolution",
+      "description": "As a dashboard user, I need the selected workflow list display mode to resolve predictably on Workflows, Workflow Detail, detail subroutes, and Create so changing modes never strands me on an invalid or empty primary surface.",
+      "sourceReference": {
+        "path": "docs/UI/WorkflowListDisplayModes.md",
+        "title": "Workflow List Display Modes",
+        "sections": [
+          "1. Purpose",
+          "2. Relationship to existing UI contracts",
+          "3. Declarative model",
+          "4. Route and presentation matrix"
+        ],
+        "claimIds": [
+          "CLAIM-docs-ui-workflowlistdisplaymodes-001",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-002",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-003",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-004"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004"
+        ]
+      },
+      "independentTest": "Unit-test the resolver with every matrix row and verify requestedMode, effectiveMode, routeAction, primarySurface, and listSurface for Workflows, detail/subroute, and Create inputs.",
+      "acceptanceCriteria": [
+        "A typed WorkflowListDisplayMode registry exposes hidden, sidebar, and table with canonical labels, icons, and list regions.",
+        "The resolver returns table mode as the Workflows list primary surface whenever /workflows is effective.",
+        "Selecting hidden or sidebar from /workflows resolves to a selected or first workflow detail when one can be opened.",
+        "Selecting table from any detail route or from Create navigates to /workflows and unmounts non-table primary panes.",
+        "Older covered-page sidebar controls are replaced by the shared mode model instead of remaining as separate controls."
+      ],
+      "requirements": [
+        "Represent list display through requested/effective mode data rather than page-local booleans.",
+        "Apply the route and presentation matrix exactly for /workflows, /workflows/{workflowId} subroutes, and /workflows/new.",
+        "Preserve detail subroutes when switching only between hidden and sidebar on detail routes."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "Defines the initial mode set and participating surfaces."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Ensures older sidebar affordances collapse into this shared model."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Owns the state machine and registry contracts."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Owns all route-to-surface resolution behavior."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Existing route helpers can be extended without changing canonical URL shapes."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Add safe first-workflow fallback and selection memory",
+      "shortName": "first-workflow-fallback",
+      "description": "As a user switching away from the full table, I need MoonMind to open the current or remembered workflow when authorized, otherwise the first visible list row, without guessing or leaking unauthorized workflows.",
+      "sourceReference": {
+        "path": "docs/UI/WorkflowListDisplayModes.md",
+        "title": "Workflow List Display Modes",
+        "sections": [
+          "4. Route and presentation matrix",
+          "5. First-workflow fallback",
+          "10. State persistence",
+          "11. Data fetching and cache reuse"
+        ],
+        "claimIds": [
+          "CLAIM-docs-ui-workflowlistdisplaymodes-004",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-005",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-010",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-011"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "independentTest": "Mock current route, session preferences, authorized detail response, list cache, list loading, list failure, and empty list cases; verify the selected target and no-navigation outcomes.",
+      "acceptanceCriteria": [
+        "Fallback resolution prefers route workflow ID, then last explicitly selected authorized workflow, then first visible row from the current effective list query.",
+        "When the matching list is loading, the UI exposes a resolving state such as Opening first workflow...",
+        "When the list fails or has no rows, the UI stays on /workflows and does not navigate to a guessed workflow ID.",
+        "Remembered selections absent from active filters may open only after detail authorization succeeds and are labeled as current rather than filter-matching.",
+        "The fallback never exposes unauthorized workflows in remembered, first-row, sidebar, table, or pinned-current states."
+      ],
+      "requirements": [
+        "Persist lastSelectedWorkflowId from explicit user workflow selections.",
+        "Use the exact current list query or matching cache for first-row fallback.",
+        "Keep detail data authorization separate from list row presence."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Provides detail target resolution for hidden/sidebar from the table."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "Owns fallback order and failure behavior."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "Owns selected workflow preference persistence."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Owns query/cache reuse for first-row fallback."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Authorization can be confirmed through existing detail API behavior."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Render the masthead workflow list display radio group",
+      "shortName": "masthead-mode-control",
+      "description": "As a keyboard and pointer user, I need a single masthead radio control for workflow list visibility so I can change between No list, Sidebar list, and Full screen table from participating pages.",
+      "sourceReference": {
+        "path": "docs/UI/WorkflowListDisplayModes.md",
+        "title": "Workflow List Display Modes",
+        "sections": [
+          "6. Masthead radio control",
+          "12. Accessibility requirements"
+        ],
+        "claimIds": [
+          "CLAIM-docs-ui-workflowlistdisplaymodes-006",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-012"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-012"
+        ]
+      },
+      "independentTest": "Render the dashboard masthead on Workflows, detail, and Create surfaces; assert control placement, role, accessible name, radio options, icons, checked state, keyboard operation, focus styles, and mobile hiding behavior.",
+      "acceptanceCriteria": [
+        "The control appears immediately after the MoonMind brand area and before route navigation on participating desktop pages.",
+        "The control uses Square, PanelLeft, and Rows3 Lucide icons with No list, Sidebar list, and Full screen table labels/tooltips.",
+        "The control exposes radiogroup semantics named Workflow list display and each option announces label plus checked state.",
+        "Tab enters the group, arrow keys change options, and visible focus styling follows dashboard control tokens.",
+        "Non-participating pages hide or disable the control, with hiding preferred, and mobile users do not encounter unusable desktop-only sidebar controls."
+      ],
+      "requirements": [
+        "Use one radio group rather than unrelated buttons.",
+        "Reflect the resolved mode after navigation settles.",
+        "Provide deterministic focus behavior after route-changing selections."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "Owns masthead placement, labels, icons, and radio semantics."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "Owns keyboard, accessible names, checked state, and focus requirements."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "The dashboard masthead component already centralizes brand and route navigation layout."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Compose hidden, sidebar, and table surfaces for Detail and Create",
+      "shortName": "surface-composition",
+      "description": "As a dashboard user, I need each mode to compose with Workflow Detail and Create without disrupting those pages own data, draft, tab, action, or error behavior.",
+      "sourceReference": {
+        "path": "docs/UI/WorkflowListDisplayModes.md",
+        "title": "Workflow List Display Modes",
+        "sections": [
+          "7. Surface composition",
+          "13. Empty, loading, and error states"
+        ],
+        "claimIds": [
+          "CLAIM-docs-ui-workflowlistdisplaymodes-007",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-013"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-013"
+        ]
+      },
+      "independentTest": "Exercise detail and Create routes in hidden/sidebar/table mode with successful, loading, empty, and error list/detail/create states; assert primary surfaces remain or unmount exactly as specified.",
+      "acceptanceCriteria": [
+        "Hidden detail renders Workflow Details alone with the selected workflow ID still sourced from the route.",
+        "Sidebar detail renders the list on the left and existing detail surface on the right; sidebar failures do not erase authorized detail content.",
+        "Hidden Create renders Create alone and keeps form behavior owned by the Create page contract.",
+        "Sidebar Create renders workflow navigation beside Create, keeps Create usable, and sidebar row clicks navigate to workflow detail after draft preservation rules are respected.",
+        "Table mode renders /workflows only, with no hidden detail pane or Create form left mounted."
+      ],
+      "requirements": [
+        "Own sidebar composition in the workspace/layout layer rather than in detail or Create page bodies.",
+        "Keep detail, Create, and list error recovery scoped to their own data regions.",
+        "Respect Create draft preservation or unsaved-change confirmation before route-changing mode selections complete."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Owns page composition and unmounting rules for modes."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "Owns scoped loading, empty, and error behavior across regions."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-003"
+      ],
+      "assumptions": [
+        "Create draft preservation is defined by the existing Create page contract referenced by the source document."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Build sidebar list as a Workflows table slice",
+      "shortName": "sidebar-table-slice",
+      "description": "As a user moving between sidebar and full table, I need the sidebar to look and behave like the first column of the Workflows table so the mode change feels continuous.",
+      "sourceReference": {
+        "path": "docs/UI/WorkflowListDisplayModes.md",
+        "title": "Workflow List Display Modes",
+        "sections": [
+          "8. Sidebar-as-table-slice visual contract",
+          "9. Motion and continuity"
+        ],
+        "claimIds": [
+          "CLAIM-docs-ui-workflowlistdisplaymodes-008",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-009"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009"
+        ]
+      },
+      "independentTest": "Visual/component-test the table and sidebar variants with matching header row, body row heights, divider styling, active row, loading/empty/error frame, reduced motion, and scroll/focus preservation behavior.",
+      "acceptanceCriteria": [
+        "The sidebar has a header row labeled Workflow before any selectable workflow rows.",
+        "Sidebar header typography, casing, background, border, padding, and non-hover behavior match the full table first-column header.",
+        "Sidebar and table share row metric tokens for header height, body row height, workflow column width, divider width, and divider color.",
+        "Sidebar rows have the same block size as full table rows and clamp titles or compact supplements without increasing row height.",
+        "Switching between sidebar and table preserves row geometry, aligns the divider, avoids large page-slide animations, and respects reduced-motion settings."
+      ],
+      "requirements": [
+        "Prefer shared row/frame primitives capable of rendering table and sidebar variants.",
+        "Preserve table-equivalent semantics if div/grid markup is required.",
+        "Do not present the sidebar as cards, a menu, or an unrelated navigation rail."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "Owns visual and semantic table-slice contract."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "Owns continuity, motion, and reduced-motion expectations."
+        }
+      ],
+      "dependencies": [
+        "STORY-004"
+      ],
+      "assumptions": [
+        "The existing Workflows table exposes reusable row data sufficient for a one-column variant."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Persist workflow list preferences and reuse authorized list data",
+      "shortName": "preferences-data-reuse",
+      "description": "As a returning dashboard user, I need MoonMind to remember my list display intent and reuse safe list data without polluting URLs or interrupting work in Detail or Create.",
+      "sourceReference": {
+        "path": "docs/UI/WorkflowListDisplayModes.md",
+        "title": "Workflow List Display Modes",
+        "sections": [
+          "10. State persistence",
+          "11. Data fetching and cache reuse"
+        ],
+        "claimIds": [
+          "CLAIM-docs-ui-workflowlistdisplaymodes-010",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-011"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "independentTest": "Test direct visits and mode changes with persisted preferences, query parameters, matching and non-matching caches, live updates, and focus-sensitive Create/detail interactions.",
+      "acceptanceCriteria": [
+        "Dashboard preferences persist the last explicit workflowListDisplayMode and lastSelectedWorkflowId.",
+        "Direct desktop visits to detail default to persisted hidden/sidebar mode, otherwise sidebar; direct Create visits default to persisted hidden/sidebar mode, otherwise hidden.",
+        "Direct visits to /workflows resolve to table regardless of persisted preference until the user selects another mode.",
+        "Workflow detail URLs do not include hidden/sidebar mode, and query parameters never include raw prompts, full drafts, secrets, presigned URLs, logs, artifacts, or large detail payloads.",
+        "Sidebar and table share the authorized workflow list API/cache model, while list refetches and live updates preserve active selection, row height, and focus."
+      ],
+      "requirements": [
+        "Represent full table mode naturally through /workflows.",
+        "Reuse cached Workflows list data only when query parameters match.",
+        "Keep selected detail and Create data independent from list data."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "Owns persisted preferences and URL safety constraints."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Owns shared list API/cache reuse and data independence."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Dashboard preferences already have a durable client-side or server-backed storage mechanism."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Add opt-in future surface contracts and coverage tests",
+      "shortName": "surface-contract-tests",
+      "description": "As a maintainer, I need future pages to opt into workflow list modes explicitly and the current implementation to have regression tests for the routing, UI, accessibility, visual, and authorization contract.",
+      "sourceReference": {
+        "path": "docs/UI/WorkflowListDisplayModes.md",
+        "title": "Workflow List Display Modes",
+        "sections": [
+          "14. Future extension model",
+          "15. Testing contract",
+          "12. Accessibility requirements"
+        ],
+        "claimIds": [
+          "CLAIM-docs-ui-workflowlistdisplaymodes-014",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-015",
+          "CLAIM-docs-ui-workflowlistdisplaymodes-012"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-012"
+        ]
+      },
+      "independentTest": "Run the targeted frontend test suite covering the source testing contract plus a contract test proving non-participating pages do not expose the masthead control or sidebar modes accidentally.",
+      "acceptanceCriteria": [
+        "A surface contract declares whether each future page supports hidden, sidebar, and table modes before the masthead control appears there.",
+        "Unsupported modes are not enabled, and pages outside Workflows/Create do not receive accidental workflow sidebars.",
+        "Future non-workflow lists may reuse visual patterns only with their own entity, route, and selection semantics.",
+        "Tests cover the 22 listed behaviors from masthead rendering through authorization boundaries.",
+        "The Workflows table remains the canonical table target for workflow entities."
+      ],
+      "requirements": [
+        "Keep future extension as a declaration, not implicit route sniffing.",
+        "Preserve accessibility test coverage for keyboard operation, focus, active row state, hidden mobile controls, and draft warnings.",
+        "Include authorization boundary tests for table rows, sidebar rows, first-row fallback, remembered selections, and pinned current rows."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "Owns future opt-in surface contract and unsupported mode behavior."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "Owns the implementation testing expectations."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "Carries accessibility verification into regression coverage."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-003",
+        "STORY-004",
+        "STORY-005",
+        "STORY-006"
+      ],
+      "assumptions": [
+        "Frontend tests can assert Lucide icon usage through accessible labels, component props, or stable test identifiers if SVG internals are brittle."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "CLAIM-docs-ui-workflowlistdisplaymodes-001": [
+      "STORY-001"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-002": [
+      "STORY-001"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-003": [
+      "STORY-001"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-004": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-005": [
+      "STORY-002"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-010": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-011": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-006": [
+      "STORY-003"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-012": [
+      "STORY-003",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003",
+      "STORY-007"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-007": [
+      "STORY-004"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-013": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-004"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-008": [
+      "STORY-005"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-009": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-005"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-014": [
+      "STORY-007"
+    ],
+    "CLAIM-docs-ui-workflowlistdisplaymodes-015": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-007"
+    ]
+  }
+}
