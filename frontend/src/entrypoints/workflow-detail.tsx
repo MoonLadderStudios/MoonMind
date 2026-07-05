@@ -4683,26 +4683,6 @@ function StepTimingChip({ row }: { row: StepLedgerRow }) {
   return <span className="step-timing-chip">{stepTimingLabel(row)}</span>;
 }
 
-function StepDurationBar({
-  row,
-  maxDurationMs,
-}: {
-  row: StepLedgerRow;
-  maxDurationMs: number;
-}) {
-  const valueMs = rowTimingValueMs(row);
-  const percent =
-    valueMs !== null && valueMs > 0 && maxDurationMs > 0
-      ? Math.max(4, Math.min(100, (valueMs / maxDurationMs) * 100))
-      : 0;
-  const label = valueMs === null ? 'Step duration unavailable' : `Step duration ${formatDurationMs(valueMs)}`;
-  return (
-    <div className="step-duration-bar" aria-label={label}>
-      <span className="step-duration-bar-fill" style={{ width: `${percent}%` }} />
-    </div>
-  );
-}
-
 function StepTimingDetails({ row }: { row: StepLedgerRow }) {
   const timing = row.timing;
   const valueMs = rowTimingValueMs(row);
@@ -4748,63 +4728,6 @@ function StepTimingOverview({ rows }: { rows: StepLedgerRow[] }) {
         Completed steps <strong>{overview.completed} of {overview.total}</strong>
       </span>
     </div>
-  );
-}
-
-function timelineInstant(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function StepDurationTimeline({ rows }: { rows: StepLedgerRow[] }) {
-  const items = rows.map((row) => {
-    const timing = row.timing;
-    const startMs = timelineInstant(timing?.startedAt ?? row.startedAt);
-    const endMs =
-      timelineInstant(timing?.endedAt) ??
-      timelineInstant(timing?.serverNow) ??
-      timelineInstant(row.updatedAt);
-    const durationMs = rowTimingValueMs(row);
-    return { row, startMs, endMs, durationMs };
-  });
-  const startedItems = items.filter(
-    (item): item is typeof item & { startMs: number; endMs: number; durationMs: number } =>
-      item.startMs !== null && item.endMs !== null && item.durationMs !== null,
-  );
-  const timelineStart = startedItems.length > 0 ? Math.min(...startedItems.map((item) => item.startMs)) : 0;
-  const timelineEnd = startedItems.length > 0 ? Math.max(...startedItems.map((item) => item.endMs)) : timelineStart + 1;
-  const spanMs = timelineEnd > timelineStart ? timelineEnd - timelineStart : 1;
-
-  return (
-    <section className="step-duration-timeline" aria-label="Step duration timeline">
-      <ol className="step-duration-timeline-list">
-        {items.map((item) => {
-          const hasTiming = item.startMs !== null && item.durationMs !== null;
-          const startMs = item.startMs ?? timelineStart;
-          const durationMs = item.durationMs ?? 0;
-          const left = hasTiming ? Math.max(0, ((startMs - timelineStart) / spanMs) * 100) : 0;
-          const width = hasTiming ? Math.max(4, Math.min(100 - left, (durationMs / spanMs) * 100)) : 0;
-          return (
-            <li key={item.row.logicalStepId} className="step-duration-timeline-row">
-              <span className="step-duration-timeline-title">{item.row.title}</span>
-              <span
-                className="step-duration-timeline-track"
-                aria-label={`${item.row.title}: ${stepTimingLabel(item.row)}`}
-              >
-                {hasTiming ? (
-                  <span
-                    className="step-duration-timeline-bar"
-                    style={{ insetInlineStart: `${left}%`, width: `${width}%` }}
-                  />
-                ) : null}
-              </span>
-              <span className="step-duration-timeline-label">{stepTimingLabel(item.row)}</span>
-            </li>
-          );
-        })}
-      </ol>
-    </section>
   );
 }
 
@@ -5058,7 +4981,6 @@ function StepLedgerRowCard({
   expanded,
   onToggle,
   isLast,
-  maxDurationMs,
   routes,
   branches,
 }: {
@@ -5074,7 +4996,6 @@ function StepLedgerRowCard({
   expanded: boolean;
   onToggle: () => void;
   isLast: boolean;
-  maxDurationMs: number;
   routes: AgentRunRouteTemplates;
   branches: CheckpointBranch[];
 }) {
@@ -5110,7 +5031,6 @@ function StepLedgerRowCard({
           {!expanded && row.summary ? (
             <p className="step-tl-summary">{row.summary}</p>
           ) : null}
-          {!expanded ? <StepDurationBar row={row} maxDurationMs={maxDurationMs} /> : null}
           {!expanded && row.dependsOn && row.dependsOn.length > 0 ? (
             <p className="step-tl-summary">Prior step evidence: {row.dependsOn.join(', ')}</p>
           ) : null}
@@ -7123,7 +7043,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   });
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
   const [chatOptimisticMessages, setChatOptimisticMessages] = useState<OptimisticChatSessionMessage[]>([]);
-  const [stepTimelineVisible, setStepTimelineVisible] = useState(false);
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
   const [remediationMode, setRemediationMode] = useState(DEFAULT_REMEDIATION_MODE);
   const [remediationAuthority, setRemediationAuthority] = useState(DEFAULT_REMEDIATION_AUTHORITY);
@@ -8523,43 +8442,26 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               ) : stepsQuery.data ? (
                 <>
                   <StepTimingOverview rows={stepsQuery.data.steps} />
-                  <button
-                    type="button"
-                    className="step-duration-timeline-toggle"
-                    onClick={() => setStepTimelineVisible((current) => !current)}
-                  >
-                    {stepTimelineVisible ? 'Hide step duration timeline' : 'Show step duration timeline'}
-                  </button>
-                  {stepTimelineVisible ? <StepDurationTimeline rows={stepsQuery.data.steps} /> : null}
                   <div className="step-tl-list">
-                    {(() => {
-                      const maxDurationMs = Math.max(
-                        0,
-                        ...stepsQuery.data.steps
-                          .map((item) => rowTimingValueMs(item))
-                          .filter((value): value is number => value !== null),
-                      );
-                      return stepsQuery.data.steps.map((row, idx) => (
-                        <StepLedgerRowCard
-                          key={row.logicalStepId}
-                          apiBase={payload.apiBase}
-                          logStreamingEnabled={logStreamingEnabled}
-                          sessionTimelineEnabled={sessionTimelineEnabled}
-                          structuredHistoryEnabled={structuredHistoryEnabled}
-                          row={row}
-                          workflowId={workflowId}
-                          runId={latestRunId}
-                          sourceTemporal={sourceTemporal}
-                          historyPollInterval={!isTerminalExecution ? detailPoll : false}
-                          expanded={Boolean(expandedSteps[row.logicalStepId])}
-                          onToggle={() => toggleStep(row.logicalStepId)}
-                          isLast={idx === stepsQuery.data.steps.length - 1}
-                          maxDurationMs={maxDurationMs}
-                          routes={agentRunRoutes}
-                          branches={branchesByStep.get(stepBranchKey(row)) ?? []}
-                        />
-                      ));
-                    })()}
+                    {stepsQuery.data.steps.map((row, idx) => (
+                      <StepLedgerRowCard
+                        key={row.logicalStepId}
+                        apiBase={payload.apiBase}
+                        logStreamingEnabled={logStreamingEnabled}
+                        sessionTimelineEnabled={sessionTimelineEnabled}
+                        structuredHistoryEnabled={structuredHistoryEnabled}
+                        row={row}
+                        workflowId={workflowId}
+                        runId={latestRunId}
+                        sourceTemporal={sourceTemporal}
+                        historyPollInterval={!isTerminalExecution ? detailPoll : false}
+                        expanded={Boolean(expandedSteps[row.logicalStepId])}
+                        onToggle={() => toggleStep(row.logicalStepId)}
+                        isLast={idx === stepsQuery.data.steps.length - 1}
+                        routes={agentRunRoutes}
+                        branches={branchesByStep.get(stepBranchKey(row)) ?? []}
+                      />
+                    ))}
                   </div>
                   <BranchExplorerPanel
                     apiBase={payload.apiBase}
