@@ -420,9 +420,11 @@ function DashboardLiveUpdateProvider({
 
 function WorkflowListDisplayModeControl({
   effectiveMode,
+  status,
   onSelect,
 }: {
   effectiveMode: WorkflowListDisplayMode;
+  status?: string | null | undefined;
   onSelect: (mode: WorkflowListDisplayMode) => void;
 }) {
   return (
@@ -448,6 +450,11 @@ function WorkflowListDisplayModeControl({
           </button>
         );
       })}
+      {status ? (
+        <span className="sr-only" role="status">
+          {status}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -455,10 +462,12 @@ function WorkflowListDisplayModeControl({
 function DashboardNavigation({
   uiInfo,
   workflowListMode,
+  workflowListDisplayStatus,
   onWorkflowListModeSelect,
 }: {
   uiInfo: DashboardUiInfo | null;
   workflowListMode: WorkflowListDisplayMode | null;
+  workflowListDisplayStatus?: string | null | undefined;
   onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -490,6 +499,7 @@ function DashboardNavigation({
       {workflowListMode ? (
         <WorkflowListDisplayModeControl
           effectiveMode={workflowListMode}
+          status={workflowListDisplayStatus}
           onSelect={onWorkflowListModeSelect}
         />
       ) : null}
@@ -565,12 +575,14 @@ function AppShell({
   dataWidePanel,
   uiInfo,
   workflowListMode,
+  workflowListDisplayStatus,
   onWorkflowListModeSelect,
   children,
 }: {
   dataWidePanel: boolean;
   uiInfo: DashboardUiInfo | null;
   workflowListMode: WorkflowListDisplayMode | null;
+  workflowListDisplayStatus?: string | null | undefined;
   onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
   children: ReactNode;
 }) {
@@ -593,6 +605,7 @@ function AppShell({
           <DashboardNavigation
             uiInfo={uiInfo}
             workflowListMode={workflowListMode}
+            workflowListDisplayStatus={workflowListDisplayStatus}
             onWorkflowListModeSelect={onWorkflowListModeSelect}
           />
         </div>
@@ -723,6 +736,7 @@ function RoutedDashboardPage({
         dataWidePanel={false}
         uiInfo={uiInfo}
         workflowListMode={null}
+        workflowListDisplayStatus={resolutionStatus}
         onWorkflowListModeSelect={handleWorkflowListModeSelect}
       >
         <UnknownPage page={location.pathname} />
@@ -736,6 +750,7 @@ function RoutedDashboardPage({
         dataWidePanel={route.dataWidePanel}
         uiInfo={uiInfo}
         workflowListMode={resolvedDisplay?.effectiveMode ?? null}
+        workflowListDisplayStatus={resolutionStatus ?? resolvedDisplay?.status}
         onWorkflowListModeSelect={handleWorkflowListModeSelect}
       >
         <LoadingPage />
@@ -763,6 +778,7 @@ function RoutedDashboardPage({
       dataWidePanel={layout.dataWidePanel === true}
       uiInfo={uiInfo}
       workflowListMode={resolvedDisplay?.effectiveMode ?? null}
+      workflowListDisplayStatus={resolutionStatus ?? resolvedDisplay?.status}
       onWorkflowListModeSelect={handleWorkflowListModeSelect}
     >
       <PageContent key={routeKey} payload={routedPayload} />

@@ -12952,7 +12952,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       data-sidebar-collapsed="false"
       data-workflow-list-display-mode="sidebar"
     >
-      <WorkflowWorkspaceSidebarPanel payload={payload} search={search} />
+      <WorkflowWorkspaceSidebarPanel payload={payload} search={search} defaultSource="temporal" />
       <main className="workflow-start-primary" aria-label="Create workflow">
         <WorkflowStartPageContent payload={payload} />
       </main>

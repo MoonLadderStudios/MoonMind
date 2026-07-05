@@ -2063,9 +2063,8 @@ tbody tr:hover {
 .workflow-list-data-slab .queue-table-wrapper {
   position: relative;
   z-index: 5;
-  width: calc(100% + 2rem);
-  max-width: none;
-  margin-inline: -1rem;
+  width: 100%;
+  max-width: 100%;
   border: 0;
   border-radius: 0;
   background: transparent;

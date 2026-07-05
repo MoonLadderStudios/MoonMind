@@ -361,10 +361,13 @@ function useWorkflowDetailSubroute(
   return [subroute, navigate];
 }
 
-function workflowWorkspaceListQuery(search: URLSearchParams): string {
+function workflowWorkspaceListQuery(search: URLSearchParams, defaultSource?: string): string {
   const pageSize = search.get('limit') || search.get('pageSize') || '25';
   const params = workflowListContextParams(search);
   params.delete('limit');
+  if (defaultSource && !params.has('source')) {
+    params.set('source', defaultSource);
+  }
   params.set('pageSize', pageSize);
   return params.toString();
 }
@@ -635,16 +638,18 @@ export function WorkflowWorkspaceSidebarPanel({
   search,
   activeWorkflowId = null,
   pinnedCurrentRow = null,
+  defaultSource,
 }: {
   payload: BootPayload;
   search: URLSearchParams;
   activeWorkflowId?: string | null;
   pinnedCurrentRow?: WorkflowWorkspaceRow | null;
+  defaultSource?: string;
 }) {
   const cfg = readDashboardConfig(payload);
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
-  const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
+  const listQuery = useMemo(() => workflowWorkspaceListQuery(search, defaultSource), [defaultSource, search]);
   const [sidebarFilterText, setSidebarFilterText] = useState('');
   const workflowsQuery = useQuery({
     queryKey: ['workflow-workspace-sidebar', listQuery],
