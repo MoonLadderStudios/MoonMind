@@ -494,7 +494,7 @@ function WorkflowSidebarHeader({
   setFilterText,
 }: {
   filterText: string;
-  setFilterText: Dispatch<SetStateAction<string>>;
+  setFilterText: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const filterRef = useRef<HTMLDivElement | null>(null);
@@ -597,7 +597,7 @@ function WorkflowSidebar({
   pinnedCurrentRow: WorkflowWorkspaceRow | null;
   search: URLSearchParams;
   filterText: string;
-  setFilterText: Dispatch<SetStateAction<string>>;
+  setFilterText: (value: string) => void;
 }) {
   return (
     <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
@@ -648,8 +648,8 @@ export function WorkflowWorkspaceSidebarPanel({
   const [sidebarFilterText, setSidebarFilterText] = useState('');
   const workflowsQuery = useQuery({
     queryKey: ['workflow-workspace-sidebar', listQuery],
-    queryFn: async () => {
-      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
+    queryFn: async ({ signal }) => {
+      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`, { signal });
       if (!response.ok) {
         throw new Error(`Failed to fetch workflows: ${response.statusText}`);
       }
@@ -659,10 +659,12 @@ export function WorkflowWorkspaceSidebarPanel({
     refetchInterval: listEnabled ? listPoll : false,
   });
   const rows = workflowsQuery.data?.items || [];
-  const filteredRows = rows.filter((row) => (
-    workflowWorkspaceRowId(row)
-    && workflowSidebarMatchesFilter(row, sidebarFilterText)
-  ));
+  const filteredRows = useMemo(() => (
+    rows.filter((row) => (
+      workflowWorkspaceRowId(row)
+      && workflowSidebarMatchesFilter(row, sidebarFilterText)
+    ))
+  ), [rows, sidebarFilterText]);
 
   return (
     <WorkflowSidebar
@@ -700,8 +702,8 @@ export function WorkflowWorkspaceShell({
   const [sidebarFilterText, setSidebarFilterText] = useState('');
   const workflowsQuery = useQuery({
     queryKey: ['workflow-workspace-sidebar', listQuery],
-    queryFn: async () => {
-      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
+    queryFn: async ({ signal }) => {
+      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`, { signal });
       if (!response.ok) {
         throw new Error(`Failed to fetch workflows: ${response.statusText}`);
       }
@@ -729,10 +731,12 @@ export function WorkflowWorkspaceShell({
   });
   const rows = workflowsQuery.data?.items || [];
   const activeInList = rows.some((row) => workflowWorkspaceRowId(row) === workflowId);
-  const filteredRows = rows.filter((row) => (
-    workflowWorkspaceRowId(row)
-    && workflowSidebarMatchesFilter(row, sidebarFilterText)
-  ));
+  const filteredRows = useMemo(() => (
+    rows.filter((row) => (
+      workflowWorkspaceRowId(row)
+      && workflowSidebarMatchesFilter(row, sidebarFilterText)
+    ))
+  ), [rows, sidebarFilterText]);
   const pinnedCurrentRow = selectedWorkflowQuery.data && !activeInList
     ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
     : null;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useLocation } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { LoadingPlaceholder } from "../components/dashboard/LoadingPlaceholder";
@@ -12936,9 +12937,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
 export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const displayMode = readWorkflowListDisplayMode(payload);
+  const { search: searchString } = useLocation();
   const search = useMemo(
-    () => new URLSearchParams(typeof window !== "undefined" ? window.location.search : ""),
-    [],
+    () => new URLSearchParams(searchString),
+    [searchString],
   );
   if (displayMode !== "sidebar") {
     return <WorkflowStartPageContent payload={payload} />;
