@@ -2616,8 +2616,10 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('Not started')).toBeTruthy();
     expect(screen.getAllByText('Ready').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Timing unavailable')).toBeTruthy();
-    expect(screen.getByLabelText('Step duration 1m 42s')).toBeTruthy();
-    expect(screen.getByLabelText('Step duration 3m 11s')).toBeTruthy();
+    expect(screen.queryByLabelText('Step duration 1m 42s')).toBeNull();
+    expect(screen.queryByLabelText('Step duration 3m 11s')).toBeNull();
+    expect(screen.queryByText('Show step duration timeline')).toBeNull();
+    expect(screen.queryByText('Hide step duration timeline')).toBeNull();
     expect(screen.getByLabelText('Step timing overview').textContent).toContain(
       'Current step Run tests · 3m 11s so far',
     );
@@ -2638,13 +2640,6 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(timingSection).getByText('Ended:')).toBeTruthy();
     expect(within(timingSection).getByText('Elapsed:')).toBeTruthy();
     expect(within(timingSection).getByText('Last update:')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show step duration timeline' }));
-    const timeline = screen.getByRole('region', { name: 'Step duration timeline' });
-    expect(within(timeline).getByText('Gather context')).toBeTruthy();
-    expect(within(timeline).getByText('Run tests')).toBeTruthy();
-    expect(within(timeline).getByText('3m 11s so far')).toBeTruthy();
-    expect(screen.getByText('Hide step duration timeline')).toBeTruthy();
   });
 
   it('MM-801 renders Artifacts as the focused report and artifact route', async () => {
