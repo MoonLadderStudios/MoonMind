@@ -396,7 +396,7 @@ describe('Dashboard shared entry', () => {
 
   it.each([
     ['/workflows', 'Workflow list route loaded', 'Full screen table'],
-    ['/workflows/new', 'Workflow start route loaded', 'Sidebar list'],
+    ['/workflows/new', 'Workflow start route loaded', 'No list'],
     [
       '/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95',
       'Workflow detail route loaded: /workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95',
@@ -469,7 +469,7 @@ describe('Dashboard shared entry', () => {
     });
   });
 
-  it('MM-1114 resolves create routes from the sidebar preference and keeps pointer selection inside the radio group', async () => {
+  it('MM-1114 keeps unsupported sidebar mode disabled on create routes', async () => {
     window.localStorage.setItem(
       DASHBOARD_PREFERENCES_STORAGE_KEY,
       JSON.stringify({
@@ -486,16 +486,16 @@ describe('Dashboard shared entry', () => {
     const noList = screen.getByRole('radio', { name: 'No list' }) as HTMLInputElement;
     const sidebarList = screen.getByRole('radio', { name: 'Sidebar list' }) as HTMLInputElement;
     expect(noList.checked).toBe(true);
+    expect(sidebarList.disabled).toBe(true);
 
     fireEvent.click(sidebarList);
 
     await waitFor(() => {
-      expect(sidebarList.checked).toBe(true);
-      expect(document.activeElement).toBe(sidebarList);
+      expect(noList.checked).toBe(true);
     });
     expect(group.contains(sidebarList)).toBe(true);
     expect(JSON.parse(window.localStorage.getItem(DASHBOARD_PREFERENCES_STORAGE_KEY) ?? '{}')).toMatchObject({
-      preferences: { workflowWorkspaceSidebarCollapsed: false },
+      preferences: { workflowWorkspaceSidebarCollapsed: true },
     });
     expect(screen.queryByRole('button', { name: /hide workflow sidebar|open workflow sidebar|expand workflow list/i })).toBeNull();
   });
@@ -758,7 +758,7 @@ describe('Dashboard shared entry', () => {
 
   it('MM-1114 hides the desktop workflow list display control at the mobile masthead breakpoint', async () => {
     expect(dashboardCss).toMatch(
-      /@media \(max-width: 1180px\)\s*\{[\s\S]*\.workflow-list-display-control\s*\{[^}]*display:\s*none/s,
+      /@media \(max-width: 767px\)\s*\{[\s\S]*\.workflow-list-display-control\s*\{[^}]*display:\s*none/s,
     );
   });
 
@@ -1809,14 +1809,14 @@ describe('Dashboard shared entry', () => {
     expect(darkBlock).toContain('--mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.95);');
   });
 
-  it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {
+  it('keeps the masthead mobile breakpoint isolated from the shared mobile layout rules', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/dashboard.css`,
       'utf8',
     );
 
-    const mastheadBreakpointStart = dashboardCss.indexOf('@media (max-width: 1180px)');
+    const mastheadBreakpointStart = dashboardCss.indexOf('@media (max-width: 767px)');
     const sharedMobileStart = dashboardCss.indexOf('@media (max-width: 900px)');
     const mastheadResponsive = dashboardCss.slice(
       mastheadBreakpointStart,

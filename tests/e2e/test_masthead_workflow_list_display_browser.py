@@ -92,12 +92,8 @@ def test_mm1114_keyboard_changes_options_and_restores_route_focus(server) -> Non
             expect(page.get_by_role("radiogroup", name="Workflow list display")).to_be_visible(timeout=15_000)
 
             page.get_by_role("link", name="MoonMind workflows").focus()
-            page.keyboard.press("Tab")
-            expect(page.get_by_role("radio", name="Sidebar list")).to_be_focused()
-
-            page.keyboard.press("ArrowLeft")
             expect(page.get_by_role("radio", name="No list")).to_be_checked()
-            expect(page.get_by_role("radio", name="No list")).to_be_focused()
+            expect(page.get_by_role("radio", name="Sidebar list")).to_be_disabled()
 
             page.get_by_role("radio", name="Full screen table").click()
             page.wait_for_url("**/workflows")

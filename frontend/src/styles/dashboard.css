@@ -7111,7 +7111,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 767px) {
   .masthead {
     display: flex;
     justify-content: flex-start;
@@ -7412,8 +7412,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 /* The detail is a centered, width-bounded container in a stable grid column.
- * Sidebar collapse hides the navigation in its reserved left column, so the
- * detail only reflows when the viewport is compressed below 85rem. */
+ * Sidebar collapse hides the navigation and lets the detail use the full
+ * desktop shell width. */
 .workflow-workspace-detail {
   min-width: 0;
   width: 100%;
@@ -7421,7 +7421,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-inline: auto;
 }
 
-@media (min-width: 768px) and (max-width: 85rem) {
+@media (min-width: 768px) {
   .workflow-workspace-shell[data-sidebar-collapsed="true"] {
     grid-template-columns: minmax(0, 1fr);
   }

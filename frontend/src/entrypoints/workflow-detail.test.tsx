@@ -1147,7 +1147,7 @@ describe('Workflow Detail Entrypoint', () => {
       /\.workflow-workspace-shell\s*\{[^}]*grid-template-columns:\s*minmax\(14rem,\s*17rem\) minmax\(0,\s*1fr\);/,
     );
     expect(dashboardCss).toMatch(
-      /@media \(min-width:\s*768px\) and \(max-width:\s*85rem\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+      /@media \(min-width:\s*768px\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
     );
     expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.workflow-workspace-shell,[\s\S]*\.workflow-workspace-sidebar,[\s\S]*\.workflow-workspace-detail[\s\S]*transition:\s*none !important;[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,

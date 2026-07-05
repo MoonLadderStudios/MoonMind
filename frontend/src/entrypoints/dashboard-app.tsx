@@ -47,7 +47,7 @@ import {
   dispatchWorkflowListDisplayModeChange,
   type WorkflowListDisplayMode,
 } from '../lib/workflowListDisplayMode';
-import { workflowDetailHref } from '../lib/workflowListContext';
+import { workflowDetailHref, workflowListHrefFromContext } from '../lib/workflowListContext';
 import { readDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
 import { DashboardAlerts } from './dashboard-alerts';
 
@@ -215,6 +215,9 @@ function resolvedWorkflowListDisplayMode(pathname: string): WorkflowListDisplayM
   }
   if (isWorkflowTableRoute(pathname)) {
     return 'table';
+  }
+  if (isWorkflowStartPath(pathname)) {
+    return 'hidden';
   }
   return readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar';
 }
@@ -397,9 +400,11 @@ function DashboardLiveUpdateProvider({
 }
 
 function WorkflowListDisplayControl({
+  disabledModes = [],
   mode,
   onModeChange,
 }: {
+  disabledModes?: readonly WorkflowListDisplayMode[];
   mode: WorkflowListDisplayMode;
   onModeChange: (mode: WorkflowListDisplayMode) => void;
 }) {
@@ -407,6 +412,7 @@ function WorkflowListDisplayControl({
     <div className="workflow-list-display-control" role="radiogroup" aria-label="Workflow list display">
       {WORKFLOW_LIST_DISPLAY_MODES.map((definition) => {
         const Icon = definition.icon;
+        const disabled = disabledModes.includes(definition.value);
         return (
           <label
             key={definition.value}
@@ -418,7 +424,12 @@ function WorkflowListDisplayControl({
               name="workflow-list-display"
               value={definition.value}
               checked={mode === definition.value}
-              onChange={() => onModeChange(definition.value)}
+              disabled={disabled}
+              onChange={() => {
+                if (!disabled) {
+                  onModeChange(definition.value);
+                }
+              }}
             />
             <Icon
               className="workflow-list-display-option-icon"
@@ -443,6 +454,9 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
   });
   const [pendingFocusMode, setPendingFocusMode] = useState<WorkflowListDisplayMode | null>(null);
   const isWorkflowDetail = isWorkflowDetailRoute(location.pathname);
+  const disabledWorkflowListDisplayModes = isWorkflowStartPath(location.pathname)
+    ? (['sidebar'] as const)
+    : [];
   const buildId = typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim() ? uiInfo.buildId : null;
 
   useEffect(() => {
@@ -476,7 +490,9 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
     setPendingFocusMode(mode);
     if (mode === 'table') {
       setSelectedMode('table');
-      navigate('/workflows');
+      navigate(
+        workflowListHrefFromContext(new URLSearchParams(location.search), { markDetailReturn: isWorkflowDetail }),
+      );
       return;
     }
 
@@ -516,7 +532,11 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
       </Link>
 
       {selectedMode ? (
-        <WorkflowListDisplayControl mode={selectedMode} onModeChange={handleWorkflowListDisplayChange} />
+        <WorkflowListDisplayControl
+          disabledModes={disabledWorkflowListDisplayModes}
+          mode={selectedMode}
+          onModeChange={handleWorkflowListDisplayChange}
+        />
       ) : null}
 
       <button
