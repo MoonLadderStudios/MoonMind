@@ -672,15 +672,17 @@ function RoutedDashboardPage({
   }, [location.pathname]);
 
   const handleWorkflowListModeSelect = async (mode: WorkflowListDisplayMode) => {
+    const selectedMode =
+      location.pathname.replace(/\/$/, '') === '/workflows/new' && mode === 'sidebar' ? 'hidden' : mode;
     const search = new URLSearchParams(location.search);
     pendingRequestRef.current = null;
     setResolutionStatus(null);
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: mode === 'hidden' });
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
 
-    if (location.pathname.replace(/\/$/, '') === '/workflows' && mode !== 'table') {
+    if (location.pathname.replace(/\/$/, '') === '/workflows' && selectedMode !== 'table') {
       const requestId = Symbol();
       pendingRequestRef.current = requestId;
-      setRequestedMode(mode);
+      setRequestedMode(selectedMode);
       setResolutionStatus('Opening first workflow...');
       try {
         const rememberedId = lastSelectedWorkflowId?.trim() || '';
@@ -712,14 +714,14 @@ function RoutedDashboardPage({
     const resolved = resolveWorkflowListDisplay({
       pathname: location.pathname,
       search: location.search,
-      requestedMode: mode,
+      requestedMode: selectedMode,
       selectedWorkflowId: lastSelectedWorkflowId,
       firstVisibleWorkflowId: null,
     });
     if (!resolved) {
       return;
     }
-    setRequestedMode(mode);
+    setRequestedMode(selectedMode);
     if (resolved.selection.workflowId) {
       setLastSelectedWorkflowId(resolved.selection.workflowId);
     }

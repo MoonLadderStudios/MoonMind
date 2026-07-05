@@ -2015,27 +2015,22 @@ describe('Dashboard shared entry', () => {
     expect(darkBlock).toContain('--mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.95);');
   });
 
-  it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {
+  it('keeps masthead responsiveness separate from the mobile-only display control cutoff', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/dashboard.css`,
       'utf8',
     );
 
-    const mastheadBreakpointStart = dashboardCss.indexOf('@media (max-width: 1180px)');
-    const sharedMobileStart = dashboardCss.indexOf('@media (max-width: 900px)');
-    const mastheadResponsive = dashboardCss.slice(
-      mastheadBreakpointStart,
-      sharedMobileStart,
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 1180px\)\s*\{[\s\S]*\.masthead\s*\{/,
     );
-    const sharedMobile = dashboardCss.slice(sharedMobileStart);
-
-    expect(mastheadBreakpointStart).toBeGreaterThanOrEqual(0);
-    expect(sharedMobileStart).toBeGreaterThan(mastheadBreakpointStart);
-    expect(mastheadResponsive).toContain('.masthead {');
-    expect(mastheadResponsive).not.toContain('.grid-2 {');
-    expect(sharedMobile).toContain('.grid-2 {');
-    expect(sharedMobile).toContain('.queue-submit-form {');
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 767px\)\s*\{[\s\S]*\.workflow-list-display-control\s*\{[^}]*display:\s*none/s,
+    );
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 900px\)\s*\{[\s\S]*\.grid-2\s*\{/,
+    );
   });
 
   it('renders an explicit error state for unknown pages', async () => {

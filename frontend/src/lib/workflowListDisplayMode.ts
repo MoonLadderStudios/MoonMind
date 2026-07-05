@@ -223,16 +223,17 @@ export function resolveWorkflowListDisplay(
         status: null,
       };
     }
+    const effectiveMode = requestedMode === 'sidebar' ? 'hidden' : requestedMode;
     return {
       requestedMode,
-      effectiveMode: requestedMode,
+      effectiveMode,
       surface: 'workflow-start',
       routeAction: 'none',
       primarySurface: 'workflow-start',
-      listSurface: requestedMode === 'hidden' ? 'none' : 'sidebar',
+      listSurface: 'none',
       selection: { workflowId: null, source: 'none' },
       targetPath: pathWithSearch('/workflows/new', input.search),
-      status: null,
+      status: requestedMode === 'sidebar' ? 'Sidebar list is unavailable on Create.' : null,
     };
   }
 

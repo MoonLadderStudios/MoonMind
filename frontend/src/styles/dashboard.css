@@ -7231,6 +7231,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @media (max-width: 767px) {
+  .workflow-list-display-control {
+    display: none;
+  }
+
   .panel:has(.workflow-detail-page) {
     max-width: none;
     margin-top: 0.5rem;
@@ -7415,10 +7419,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   grid-column: 1 / -1;
 }
 
-@media (min-width: 768px) and (max-width: 85rem) {
+@media (min-width: 768px) {
   .workflow-workspace-shell[data-sidebar-collapsed="true"] {
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 1rem;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
