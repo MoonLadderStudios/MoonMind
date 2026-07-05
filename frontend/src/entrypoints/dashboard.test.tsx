@@ -502,7 +502,10 @@ describe('Dashboard shared entry', () => {
 
   it('MM-1114 navigates route-changing workflow list display selections and restores focus deterministically', async () => {
     window.history.replaceState({}, '', '/workflows?source=temporal');
-    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+    const { queryClient } = renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+    queryClient.setQueryData(['workflow-list'], {
+      items: [{ workflowId: 'mm:97d44980-355c-4300-96a7-0ad166440d95' }],
+    });
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
 

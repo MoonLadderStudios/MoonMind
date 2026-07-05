@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import threading
 import time
 from contextlib import contextmanager
@@ -17,7 +18,7 @@ if not os.getenv("RUN_E2E_TESTS"):
 from playwright.sync_api import expect, sync_playwright
 
 from api_service.auth_providers import get_current_user
-from api_service.db.base import get_async_session
+from api_service.db.base import Base, get_async_session
 from api_service.db.models import User
 from api_service.main import app as main_app
 
@@ -42,6 +43,13 @@ def server():
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+
+    async def create_tables() -> None:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    asyncio.run(create_tables())
+
     async_session_maker = async_sessionmaker(bind=engine, expire_on_commit=False)
     main_app.dependency_overrides[get_async_session] = lambda: async_session_maker()
 

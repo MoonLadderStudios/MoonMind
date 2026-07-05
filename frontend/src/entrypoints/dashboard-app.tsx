@@ -19,7 +19,7 @@ import {
   useLocation,
   useNavigate,
 } from 'react-router-dom';
-import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QueryErrorResetBoundary, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
 import {
   MoonIcon,
@@ -47,6 +47,7 @@ import {
   dispatchWorkflowListDisplayModeChange,
   type WorkflowListDisplayMode,
 } from '../lib/workflowListDisplayMode';
+import { workflowDetailHref } from '../lib/workflowListContext';
 import { readDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
 import { DashboardAlerts } from './dashboard-alerts';
 
@@ -78,6 +79,13 @@ const WORKFLOW_LIST_DISPLAY_MODES = [
 
 type SharedLayoutConfig = {
   dataWidePanel?: boolean;
+};
+
+type WorkflowListQueryData = {
+  items?: Array<{
+    taskId?: string;
+    workflowId?: string;
+  }>;
 };
 
 type NavIconProps = {
@@ -211,15 +219,18 @@ function resolvedWorkflowListDisplayMode(pathname: string): WorkflowListDisplayM
   return readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar';
 }
 
-function firstWorkflowDetailHrefFromPage(): string | null {
-  const link = document.querySelector<HTMLAnchorElement>(
-    'a[href^="/workflows/"]:not([href^="/workflows/new"])',
-  );
-  if (!link) {
-    return null;
+function firstWorkflowDetailHrefFromCache(queryClient: QueryClient, source: URLSearchParams): string | null {
+  const workflowListQueries = queryClient.getQueriesData<WorkflowListQueryData>({
+    queryKey: ['workflow-list'],
+  });
+  for (const [, data] of workflowListQueries) {
+    const firstWorkflow = data?.items?.find((row) => row.workflowId || row.taskId);
+    const workflowId = firstWorkflow?.workflowId || firstWorkflow?.taskId;
+    if (workflowId) {
+      return workflowDetailHref(workflowId, source);
+    }
   }
-  const url = new URL(link.href, window.location.origin);
-  return `${url.pathname}${url.search}${url.hash}`;
+  return null;
 }
 
 function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
@@ -401,7 +412,6 @@ function WorkflowListDisplayControl({
             key={definition.value}
             className="workflow-list-display-option"
             title={definition.label}
-            aria-label={definition.label}
           >
             <input
               type="radio"
@@ -424,16 +434,14 @@ function WorkflowListDisplayControl({
 }
 
 function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [selectedMode, setSelectedMode] = useState<WorkflowListDisplayMode | null>(() => {
-    if (typeof window === 'undefined') {
-      return null;
-    }
-    return resolvedWorkflowListDisplayMode(window.location.pathname);
+    return resolvedWorkflowListDisplayMode(location.pathname);
   });
   const [pendingFocusMode, setPendingFocusMode] = useState<WorkflowListDisplayMode | null>(null);
-  const navigate = useNavigate();
-  const location = useLocation();
   const isWorkflowDetail = isWorkflowDetailRoute(location.pathname);
   const buildId = typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim() ? uiInfo.buildId : null;
 
@@ -473,7 +481,7 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
     }
 
     if (isWorkflowTableRoute(pathname)) {
-      const firstWorkflowHref = firstWorkflowDetailHrefFromPage();
+      const firstWorkflowHref = firstWorkflowDetailHrefFromCache(queryClient, new URLSearchParams(location.search));
       if (firstWorkflowHref) {
         updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: mode === 'hidden' });
         dispatchWorkflowListDisplayModeChange(mode);
