@@ -82,6 +82,108 @@ async def test_managed_session_request_preserves_explicit_empty_inputs() -> None
     assert request.parameters == {}
     assert request.workspace_spec == {}
 
+
+async def test_publish_terminal_result_compacts_replayed_moonspec_verify_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = _managed_session_request()
+    large_evidence = "verified evidence " * 2000
+
+    async def fake_publish_activity(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "summary": "Completed.",
+            "outputRefs": [],
+            "diagnosticsRef": "art_agent_result",
+            "metadata": {
+                "gateResultRef": "art_gate_result",
+                "moonSpecVerifyArtifactRef": "art_gate_result",
+                "moonSpecVerify": {
+                    "schemaVersion": 1,
+                    "verdict": "FULLY_IMPLEMENTED",
+                    "recommendedNextAction": "advance",
+                    "recoverableInCurrentRuntime": True,
+                    "remainingWork": [],
+                    "requirementCoverage": [
+                        {
+                            "requirement": "large verification evidence",
+                            "evidence": large_evidence,
+                        }
+                    ],
+                    "gateResultRef": "art_gate_result",
+                },
+            },
+        }
+
+    run._execute_routed_activity = fake_publish_activity  # type: ignore[method-assign]
+
+    result = await run._publish_terminal_result(
+        request=request,
+        result=AgentRunResult(summary="Completed."),
+    )
+
+    assert result.metadata["moonSpecVerify"]["verdict"] == "FULLY_IMPLEMENTED"
+    assert result.metadata["moonSpecVerify"]["gateResultRef"] == "art_gate_result"
+    assert "requirementCoverage" not in result.metadata["moonSpecVerify"]
+    assert run._terminal_result_payload_compacted_for_history is True
+    AgentRunResult(**result.model_dump(mode="json", by_alias=True))
+
+
+async def test_publish_terminal_result_releases_slot_after_compacted_replay_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = _managed_session_request()
+    large_evidence = "verified evidence " * 2000
+    signals: list[tuple[str, dict[str, Any]]] = []
+
+    class FakeManagerHandle:
+        async def signal(self, name: str, payload: dict[str, Any]) -> None:
+            signals.append((name, payload))
+
+    async def fake_publish_activity(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "summary": "Completed.",
+            "outputRefs": [],
+            "diagnosticsRef": "art_agent_result",
+            "metadata": {
+                "moonSpecVerify": {
+                    "verdict": "FULLY_IMPLEMENTED",
+                    "recommendedNextAction": "advance",
+                    "requirementCoverage": [
+                        {
+                            "requirement": "large verification evidence",
+                            "evidence": large_evidence,
+                        }
+                    ],
+                    "gateResultRef": "art_gate_result",
+                },
+            },
+        }
+
+    run._execute_routed_activity = fake_publish_activity  # type: ignore[method-assign]
+
+    result = await run._publish_terminal_result_with_compacted_replay_cleanup(
+        request=request,
+        result=AgentRunResult(summary="Completed."),
+        manager_handle=FakeManagerHandle(),
+    )
+
+    assert result.metadata["moonSpecVerify"]["verdict"] == "FULLY_IMPLEMENTED"
+    assert run._terminal_result_payload_compacted_for_history is False
+    assert signals == [
+        (
+            "release_slot",
+            {
+                "requester_workflow_id": "wf-agent-run-1",
+                "profile_id": "codex-default",
+            },
+        )
+    ]
+
+
 async def test_profile_resolution_error_summarizes_setup_condition() -> None:
     run = MoonMindAgentRun()
     request = _managed_session_request().model_copy(

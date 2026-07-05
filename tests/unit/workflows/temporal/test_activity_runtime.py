@@ -4958,6 +4958,7 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
             workspace = tmp_path / "workspace"
             verify_path = workspace / "var/artifacts/moonspec-verify/final.json"
             verify_path.parent.mkdir(parents=True)
+            large_evidence = "verified evidence " * 2000
             verify_path.write_text(
                 json.dumps(
                     {
@@ -4966,6 +4967,12 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
                         "recommendedNextAction": "advance",
                         "recoverableInCurrentRuntime": True,
                         "remainingWork": [],
+                        "requirementCoverage": [
+                            {
+                                "requirement": "large verification evidence",
+                                "evidence": large_evidence,
+                            }
+                        ],
                     }
                 ),
                 encoding="utf-8",
@@ -5030,6 +5037,17 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
                 result.metadata["gateResultRef"]
             )
             assert "contractViolations" not in result.metadata["moonSpecVerify"]
+            assert "requirementCoverage" not in result.metadata["moonSpecVerify"]
+            AgentRunResult(**result.model_dump(mode="json", by_alias=True))
+
+            _artifact, artifact_path = await service.read_path(
+                artifact_id=result.metadata["gateResultRef"],
+                principal="system:agent_runtime",
+            )
+            persisted_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            assert persisted_payload["requirementCoverage"][0]["evidence"] == (
+                large_evidence
+            )
 
 
 async def test_agent_runtime_publish_artifacts_flags_moonspec_contract_violations(
@@ -5107,6 +5125,7 @@ async def test_agent_runtime_publish_artifacts_flags_moonspec_contract_violation
 
             violations = result.metadata["moonSpecVerify"]["contractViolations"]
             assert any("create_pull_request" in item for item in violations)
+            AgentRunResult(**result.model_dump(mode="json", by_alias=True))
 
 
 async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_report_body(

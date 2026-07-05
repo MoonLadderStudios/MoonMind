@@ -7108,6 +7108,129 @@ class TemporalAgentRuntimeActivities:
                 )
             return None
 
+        def _compact_moonspec_verify_metadata(
+            gate_payload: Mapping[str, Any],
+            *,
+            gate_result_ref: str,
+            contract_violations: Sequence[str],
+        ) -> dict[str, Any]:
+            """Return the compact gate projection safe to carry in workflow history."""
+
+            def _text(value: Any, *, max_chars: int = 700) -> str | None:
+                if not isinstance(value, str):
+                    return None
+                text = value.strip()
+                if not text:
+                    return None
+                if len(text) > max_chars:
+                    return text[: max_chars - 3].rstrip() + "..."
+                return text
+
+            def _scalar(value: Any) -> Any:
+                if isinstance(value, str):
+                    return _text(value)
+                if value is None or isinstance(value, (bool, int, float)):
+                    return value
+                return None
+
+            def _text_list(
+                value: Any,
+                *,
+                max_items: int = 20,
+                max_chars: int = 400,
+            ) -> list[str]:
+                if not isinstance(value, list):
+                    return []
+                compact: list[str] = []
+                for item in value:
+                    text = _text(item, max_chars=max_chars)
+                    if text:
+                        compact.append(text)
+                    if len(compact) >= max_items:
+                        break
+                return compact
+
+            def _text_mapping(value: Any) -> dict[str, str]:
+                if not isinstance(value, Mapping):
+                    return {}
+                compact: dict[str, str] = {}
+                for raw_key, raw_value in value.items():
+                    key = _text(str(raw_key), max_chars=120)
+                    text = _text(raw_value, max_chars=400)
+                    if key and text:
+                        compact[key] = text
+                    if len(compact) >= 20:
+                        break
+                return compact
+
+            compact: dict[str, Any] = {"gateResultRef": gate_result_ref}
+            scalar_keys = (
+                "schemaVersion",
+                "verdict",
+                "gateVerdict",
+                "gate_verdict",
+                "moonSpecVerdict",
+                "moonspecVerdict",
+                "verificationVerdict",
+                "verification_verdict",
+                "confidence",
+                "recommendedNextAction",
+                "recommended_next_action",
+                "targetLogicalStepId",
+                "target_logical_step_id",
+                "workspacePolicyRecommendation",
+                "workspace_policy_recommendation",
+                "recoverableInCurrentRuntime",
+                "recoverable_in_current_runtime",
+                "invalid",
+                "degraded",
+                "remainingWorkRef",
+                "remaining_work_ref",
+                "diagnosticsRef",
+                "diagnostics_ref",
+                "verificationReportRef",
+                "verification_report_ref",
+                "reportRef",
+                "report_ref",
+            )
+            for key in scalar_keys:
+                value = _scalar(gate_payload.get(key))
+                if value is not None:
+                    compact[key] = value
+
+            for key in ("feedback", "summary", "message", "downgradeReason"):
+                value = _text(gate_payload.get(key), max_chars=900)
+                if value:
+                    compact[key] = value
+
+            for key in ("invalidatedRefs", "invalidated_refs"):
+                refs = _text_list(gate_payload.get(key))
+                if refs:
+                    compact[key] = refs
+                    break
+            for key in ("blockingEvidenceRefs", "blocking_evidence_refs"):
+                refs = _text_list(gate_payload.get(key))
+                if refs:
+                    compact[key] = refs
+                    break
+
+            validated_refs = _text_mapping(
+                gate_payload.get("validatedRefs")
+                or gate_payload.get("validated_refs")
+            )
+            if validated_refs:
+                compact["validatedRefs"] = validated_refs
+
+            compact_violations = _text_list(
+                list(contract_violations),
+                max_items=10,
+                max_chars=700,
+            )
+            if compact_violations:
+                compact["contractViolations"] = compact_violations
+
+            return compact
+
         async def _publish_moonspec_verify_artifact() -> dict[str, Any]:
             verify_path = _metadata_text(
                 "verify_artifact_path",
@@ -7182,8 +7305,13 @@ class TemporalAgentRuntimeActivities:
                 },
             )
             gate_payload["gateResultRef"] = verify_ref.artifact_id
+            compact_gate_payload = _compact_moonspec_verify_metadata(
+                gate_payload,
+                gate_result_ref=verify_ref.artifact_id,
+                contract_violations=contract_violations,
+            )
             return {
-                "moonSpecVerify": gate_payload,
+                "moonSpecVerify": compact_gate_payload,
                 "gateResultRef": verify_ref.artifact_id,
                 "moonSpecVerifyArtifactRef": verify_ref.artifact_id,
             }
