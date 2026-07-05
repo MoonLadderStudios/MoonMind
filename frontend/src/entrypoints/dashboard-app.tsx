@@ -424,7 +424,7 @@ function WorkflowListDisplayModeControl({
   onSelect,
 }: {
   effectiveMode: WorkflowListDisplayMode;
-  status: string | null;
+  status?: string | null | undefined;
   onSelect: (mode: WorkflowListDisplayMode) => void;
 }) {
   return (
@@ -432,7 +432,6 @@ function WorkflowListDisplayModeControl({
       className="workflow-list-display-control"
       role="group"
       aria-label="Workflow list display"
-      aria-busy={status === 'Opening first workflow...' ? 'true' : undefined}
     >
       {WORKFLOW_LIST_DISPLAY_MODES.map((mode) => {
         const Icon = iconForWorkflowListMode(mode.icon);
@@ -452,7 +451,7 @@ function WorkflowListDisplayModeControl({
         );
       })}
       {status ? (
-        <span className="workflow-list-display-status" role="status">
+        <span className="sr-only" role="status">
           {status}
         </span>
       ) : null}
@@ -463,12 +462,12 @@ function WorkflowListDisplayModeControl({
 function DashboardNavigation({
   uiInfo,
   workflowListMode,
-  workflowListStatus,
+  workflowListDisplayStatus,
   onWorkflowListModeSelect,
 }: {
   uiInfo: DashboardUiInfo | null;
   workflowListMode: WorkflowListDisplayMode | null;
-  workflowListStatus: string | null;
+  workflowListDisplayStatus?: string | null | undefined;
   onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -500,7 +499,7 @@ function DashboardNavigation({
       {workflowListMode ? (
         <WorkflowListDisplayModeControl
           effectiveMode={workflowListMode}
-          status={workflowListStatus}
+          status={workflowListDisplayStatus}
           onSelect={onWorkflowListModeSelect}
         />
       ) : null}
@@ -576,14 +575,14 @@ function AppShell({
   dataWidePanel,
   uiInfo,
   workflowListMode,
-  workflowListStatus,
+  workflowListDisplayStatus,
   onWorkflowListModeSelect,
   children,
 }: {
   dataWidePanel: boolean;
   uiInfo: DashboardUiInfo | null;
   workflowListMode: WorkflowListDisplayMode | null;
-  workflowListStatus: string | null;
+  workflowListDisplayStatus?: string | null | undefined;
   onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
   children: ReactNode;
 }) {
@@ -606,7 +605,7 @@ function AppShell({
           <DashboardNavigation
             uiInfo={uiInfo}
             workflowListMode={workflowListMode}
-            workflowListStatus={workflowListStatus}
+            workflowListDisplayStatus={workflowListDisplayStatus}
             onWorkflowListModeSelect={onWorkflowListModeSelect}
           />
         </div>
@@ -737,7 +736,7 @@ function RoutedDashboardPage({
         dataWidePanel={false}
         uiInfo={uiInfo}
         workflowListMode={null}
-        workflowListStatus={null}
+        workflowListDisplayStatus={resolutionStatus}
         onWorkflowListModeSelect={handleWorkflowListModeSelect}
       >
         <UnknownPage page={location.pathname} />
@@ -751,7 +750,7 @@ function RoutedDashboardPage({
         dataWidePanel={route.dataWidePanel}
         uiInfo={uiInfo}
         workflowListMode={resolvedDisplay?.effectiveMode ?? null}
-        workflowListStatus={resolutionStatus ?? resolvedDisplay?.status ?? null}
+        workflowListDisplayStatus={resolutionStatus ?? resolvedDisplay?.status}
         onWorkflowListModeSelect={handleWorkflowListModeSelect}
       >
         <LoadingPage />
@@ -779,7 +778,7 @@ function RoutedDashboardPage({
       dataWidePanel={layout.dataWidePanel === true}
       uiInfo={uiInfo}
       workflowListMode={resolvedDisplay?.effectiveMode ?? null}
-      workflowListStatus={resolutionStatus ?? resolvedDisplay?.status ?? null}
+      workflowListDisplayStatus={resolutionStatus ?? resolvedDisplay?.status}
       onWorkflowListModeSelect={handleWorkflowListModeSelect}
     >
       <PageContent key={routeKey} payload={routedPayload} />
@@ -852,7 +851,6 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
             dataWidePanel={false}
             uiInfo={uiInfo}
             workflowListMode={null}
-            workflowListStatus={null}
             onWorkflowListModeSelect={() => undefined}
           >
             <UnknownPage page={window.location.pathname} />

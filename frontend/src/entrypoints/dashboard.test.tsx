@@ -1895,7 +1895,7 @@ describe('Dashboard shared entry', () => {
     );
   });
 
-  it('keeps the masthead brand left, navigation centered, and version aligned right on desktop', async () => {
+  it('keeps the masthead brand and list display grouped left, with version aligned right on desktop', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/dashboard.css`,
@@ -1903,10 +1903,13 @@ describe('Dashboard shared entry', () => {
     );
 
     expect(dashboardCss).toMatch(
-      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\);/s,
+      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*auto\s+auto\s+minmax\(0,\s*1fr\)\s+auto;/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /\.workflow-list-display-control\s*\{[^}]*justify-self:\s*start;/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-nav\s*\{[^}]*align-self:\s*stretch;[^}]*justify-content:\s*center;[^}]*justify-self:\s*center;/s,
@@ -1914,6 +1917,7 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).toMatch(
       /\.masthead-title-meta\s*\{[^}]*justify-self:\s*end;[^}]*justify-content:\s*flex-end;/s,
     );
+    expect(cssRuleBlock(dashboardCss, '.masthead-title-meta .version-badge')).toContain('white-space: nowrap;');
   });
 
   it('keeps navigation positions stable across route selection changes', async () => {

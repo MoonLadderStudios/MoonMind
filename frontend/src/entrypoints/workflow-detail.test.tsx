@@ -710,6 +710,27 @@ describe('Workflow Detail Entrypoint', () => {
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
   });
 
+  it('filters the reusable workflow workspace sidebar from its header control', async () => {
+    window.history.pushState({}, 'Workspace Sidebar Filter Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(within(sidebar).getByText('Workflow')).toBeTruthy();
+    expect(await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i })).toBeTruthy();
+    expect(await within(sidebar).findByRole('link', { name: /Another workflow/i })).toBeTruthy();
+
+    fireEvent.click(within(sidebar).getByRole('button', { name: 'Workflow sidebar filter. No filter applied.' }));
+    fireEvent.change(screen.getByLabelText('Workflow sidebar filter value'), {
+      target: { value: 'Another' },
+    });
+
+    expect(within(sidebar).queryByRole('link', { name: /MM-997 selected workflow/i })).toBeNull();
+    expect(within(sidebar).getByRole('link', { name: /Another workflow/i })).toBeTruthy();
+  });
+
   it('MM-999 pins the selected workflow above sidebar rows when it is outside the filtered result', async () => {
     window.history.pushState({}, 'Workspace Pinned Current Test', '/workflows/test-123?source=temporal&stateIn=completed');
     mockDesktopViewport(true);

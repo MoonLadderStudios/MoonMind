@@ -9,6 +9,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
@@ -36,6 +37,14 @@ import {
 vi.mock("../lib/navigation", () => ({
   navigateTo: vi.fn(),
 }));
+
+function renderWorkflowStartPage(payload: BootPayload) {
+  return renderWithClient(
+    <MemoryRouter initialEntries={[`${window.location.pathname}${window.location.search}`]}>
+      <WorkflowStartPage payload={payload} />
+    </MemoryRouter>,
+  );
+}
 
 describe("buildEditParametersPatch", () => {
   it("uses submitted runtime fields as authoritative when canonical edit metadata is cleared", () => {
@@ -147,16 +156,12 @@ describe("WorkflowStartPage loading placeholders", () => {
       },
     };
 
-    renderWithClient(
-      <WorkflowStartPage
-        payload={{
+    renderWorkflowStartPage({
           ...mockPayload,
           initialData: {
             dashboardConfig,
           },
-        }}
-      />,
-    );
+        });
 
     expect(screen.getByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     expect(screen.getByText("Workflow start editable draft loading placeholder").closest('[role="status"]')).toBeTruthy();
@@ -209,34 +214,26 @@ describe("WorkflowStartPage workflow list display modes", () => {
   });
 
   it("renders Create without a workflow list in hidden mode", () => {
-    renderWithClient(
-      <WorkflowStartPage
-        payload={{
+    renderWorkflowStartPage({
           ...mockPayload,
           initialData: {
             ...(mockPayload.initialData as Record<string, unknown>),
             workflowListDisplayMode: "hidden",
           },
-        }}
-      />,
-    );
+        });
 
     expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
     expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
   });
 
   it("renders Create with the workflow list as a sidebar in sidebar mode", async () => {
-    renderWithClient(
-      <WorkflowStartPage
-        payload={{
+    renderWorkflowStartPage({
           ...mockPayload,
           initialData: {
             ...(mockPayload.initialData as Record<string, unknown>),
             workflowListDisplayMode: "sidebar",
           },
-        }}
-      />,
-    );
+        });
 
     const sidebar = await screen.findByRole("complementary", { name: "Workflow navigation" });
     expect((await within(sidebar).findByRole("link", { name: /Sidebar workflow/i })).getAttribute("href")).toBe(

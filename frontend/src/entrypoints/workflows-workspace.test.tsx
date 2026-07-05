@@ -88,6 +88,24 @@ describe('WorkflowsWorkspacePage', () => {
     expect(screen.queryByTestId('workflow-workspace-shell')).toBeNull();
   });
 
+  it('renders first-workflow resolution status in the workflow detail loading area', () => {
+    window.history.pushState({}, 'Workspace Opening Test', '/workflows');
+
+    renderWorkspace({
+      page: 'dashboard',
+      apiBase: '/api',
+      initialData: {
+        workflowListDisplayMode: 'sidebar',
+        workflowListDisplayStatus: 'Opening first workflow...',
+      },
+    });
+
+    expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+    expect(screen.getByText('Opening first workflow...')).toBeTruthy();
+    expect(screen.getByTestId('loading-placeholder-detail')).toBeTruthy();
+    expect(screen.queryByTestId('workflow-list-page')).toBeNull();
+  });
+
   it('passes the resolved hidden/sidebar mode into detail workspace composition', () => {
     renderWorkspace({
       page: 'dashboard',

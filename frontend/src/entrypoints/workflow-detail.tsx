@@ -22,6 +22,7 @@ import {
   RouteIcon,
   type RouteIconHandle,
 } from 'lucide-animated';
+import { ListFilter } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
@@ -360,10 +361,13 @@ function useWorkflowDetailSubroute(
   return [subroute, navigate];
 }
 
-function workflowWorkspaceListQuery(search: URLSearchParams): string {
+function workflowWorkspaceListQuery(search: URLSearchParams, defaultSource?: string): string {
   const pageSize = search.get('limit') || search.get('pageSize') || '25';
   const params = workflowListContextParams(search);
   params.delete('limit');
+  if (defaultSource && !params.has('source')) {
+    params.set('source', defaultSource);
+  }
   params.set('pageSize', pageSize);
   return params.toString();
 }
@@ -409,12 +413,12 @@ function WorkflowSidebarRow({
   pinned = false,
 }: {
   row: WorkflowWorkspaceRow;
-  activeWorkflowId: string;
+  activeWorkflowId: string | null | undefined;
   search: URLSearchParams;
   pinned?: boolean;
 }) {
   const workflowId = workflowWorkspaceRowId(row);
-  const active = workflowId === activeWorkflowId;
+  const active = Boolean(activeWorkflowId) && workflowId === activeWorkflowId;
   const status = row.rawState || row.state || row.status || 'unknown';
   const title = row.title?.trim() || workflowId || 'Untitled workflow';
   return (
@@ -444,7 +448,7 @@ function WorkflowSidebarList({
   pinned = false,
 }: {
   rows: WorkflowWorkspaceRow[];
-  activeWorkflowId: string;
+  activeWorkflowId: string | null | undefined;
   search: URLSearchParams;
   ariaLabel?: string;
   pinned?: boolean;
@@ -471,21 +475,136 @@ function WorkflowSidebarList({
   );
 }
 
+function workflowSidebarMatchesFilter(row: WorkflowWorkspaceRow, filter: string): boolean {
+  const normalized = filter.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  return [
+    row.title,
+    row.workflowId,
+    row.taskId,
+    row.repository,
+    row.targetRuntime,
+    row.rawState,
+    row.state,
+    row.status,
+  ].some((value) => String(value || '').toLowerCase().includes(normalized));
+}
+
+function WorkflowSidebarHeader({
+  filterText,
+  setFilterText,
+}: {
+  filterText: string;
+  setFilterText: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const filterRef = useRef<HTMLDivElement | null>(null);
+  const active = filterText.trim().length > 0;
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && filterRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  return (
+    <header className="workflow-workspace-sidebar-header">
+      <span className="workflow-workspace-sidebar-header-title">Workflow</span>
+      <div className="workflow-workspace-sidebar-filter" ref={filterRef}>
+        <button
+          type="button"
+          className={`workflow-list-column-filter-button${active ? ' is-active' : ''}`}
+          aria-label={active ? `Workflow sidebar filter: ${filterText}` : 'Workflow sidebar filter. No filter applied.'}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <ListFilter
+            className="workflow-list-column-filter-icon"
+            size={15}
+            aria-hidden="true"
+          />
+        </button>
+        {open ? (
+          <div
+            className="workflow-workspace-sidebar-filter-popover workflow-list-column-filter-popover"
+            role="dialog"
+            aria-label="Workflow sidebar filter"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation();
+                setOpen(false);
+              }
+            }}
+          >
+            <div className="workflow-list-column-filter-title">Workflow filter</div>
+            <label className="workflow-list-filter-control">
+              <span>Workflow</span>
+              <input
+                type="search"
+                value={filterText}
+                onChange={(event) => setFilterText(event.target.value)}
+                placeholder="Filter workflows"
+                aria-label="Workflow sidebar filter value"
+                autoFocus
+              />
+            </label>
+            <div className="workflow-list-filter-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setFilterText('')}
+                disabled={!active}
+                aria-label="Reset workflow sidebar filter"
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                aria-label="Apply workflow sidebar filter"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </header>
+  );
+}
+
 function WorkflowSidebar({
   workflowId,
   workflowsQuery,
   filteredRows,
   pinnedCurrentRow,
   search,
+  filterText,
+  setFilterText,
 }: {
-  workflowId: string;
+  workflowId: string | null | undefined;
   workflowsQuery: UseQueryResult<z.infer<typeof WorkflowWorkspaceListResponseSchema>, Error>;
   filteredRows: WorkflowWorkspaceRow[];
   pinnedCurrentRow: WorkflowWorkspaceRow | null;
   search: URLSearchParams;
+  filterText: string;
+  setFilterText: (value: string) => void;
 }) {
   return (
     <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
+      <WorkflowSidebarHeader filterText={filterText} setFilterText={setFilterText} />
       {workflowsQuery.isLoading ? (
         <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
       ) : null}
@@ -514,6 +633,57 @@ function WorkflowSidebar({
   );
 }
 
+export function WorkflowWorkspaceSidebarPanel({
+  payload,
+  search,
+  activeWorkflowId = null,
+  pinnedCurrentRow = null,
+  defaultSource,
+}: {
+  payload: BootPayload;
+  search: URLSearchParams;
+  activeWorkflowId?: string | null;
+  pinnedCurrentRow?: WorkflowWorkspaceRow | null;
+  defaultSource?: string;
+}) {
+  const cfg = readDashboardConfig(payload);
+  const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
+  const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
+  const listQuery = useMemo(() => workflowWorkspaceListQuery(search, defaultSource), [defaultSource, search]);
+  const [sidebarFilterText, setSidebarFilterText] = useState('');
+  const workflowsQuery = useQuery({
+    queryKey: ['workflow-workspace-sidebar', listQuery],
+    queryFn: async ({ signal }) => {
+      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`, { signal });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch workflows: ${response.statusText}`);
+      }
+      return WorkflowWorkspaceListResponseSchema.parse(await response.json());
+    },
+    enabled: listEnabled,
+    refetchInterval: listEnabled ? listPoll : false,
+  });
+  const rows = workflowsQuery.data?.items || [];
+  const filteredRows = useMemo(() => (
+    rows.filter((row) => (
+      workflowWorkspaceRowId(row)
+      && workflowSidebarMatchesFilter(row, sidebarFilterText)
+    ))
+  ), [rows, sidebarFilterText]);
+
+  return (
+    <WorkflowSidebar
+      workflowId={activeWorkflowId}
+      workflowsQuery={workflowsQuery}
+      filteredRows={filteredRows}
+      pinnedCurrentRow={pinnedCurrentRow}
+      search={search}
+      filterText={sidebarFilterText}
+      setFilterText={setSidebarFilterText}
+    />
+  );
+}
+
 export function WorkflowWorkspaceShell({
   payload,
   workflowId,
@@ -531,13 +701,14 @@ export function WorkflowWorkspaceShell({
   const effectiveDisplayMode = displayMode ?? (
     readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
   );
-  const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
   const sourceTemporal = search.get('source') === 'temporal';
   const encodedWorkflowId = encodeURIComponent(workflowId);
+  const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
+  const [sidebarFilterText, setSidebarFilterText] = useState('');
   const workflowsQuery = useQuery({
     queryKey: ['workflow-workspace-sidebar', listQuery],
-    queryFn: async () => {
-      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
+    queryFn: async ({ signal }) => {
+      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`, { signal });
       if (!response.ok) {
         throw new Error(`Failed to fetch workflows: ${response.statusText}`);
       }
@@ -565,7 +736,12 @@ export function WorkflowWorkspaceShell({
   });
   const rows = workflowsQuery.data?.items || [];
   const activeInList = rows.some((row) => workflowWorkspaceRowId(row) === workflowId);
-  const filteredRows = rows.filter((row) => workflowWorkspaceRowId(row));
+  const filteredRows = useMemo(() => (
+    rows.filter((row) => (
+      workflowWorkspaceRowId(row)
+      && workflowSidebarMatchesFilter(row, sidebarFilterText)
+    ))
+  ), [rows, sidebarFilterText]);
   const pinnedCurrentRow = selectedWorkflowQuery.data && !activeInList
     ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
     : null;
@@ -585,6 +761,8 @@ export function WorkflowWorkspaceShell({
           filteredRows={filteredRows}
           pinnedCurrentRow={pinnedCurrentRow}
           search={search}
+          filterText={sidebarFilterText}
+          setFilterText={setSidebarFilterText}
         />
       ) : null}
       <main className="workflow-workspace-detail" aria-label="Workflow detail">
