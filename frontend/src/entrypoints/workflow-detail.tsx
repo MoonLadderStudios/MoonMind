@@ -8,14 +8,10 @@ import {
   type KeyboardEvent,
   type ReactNode,
   type Ref,
-  type RefObject,
   type SetStateAction,
 } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Anser from 'anser';
-import {
-  ArrowRight,
-} from 'lucide-react';
 import {
   BotIcon,
   type BotIconHandle,
@@ -52,10 +48,8 @@ import {
   taskEditHref,
 } from '../lib/temporalTaskEditing';
 import {
-  markWorkflowListReturnFocusIntent,
   workflowDetailHref,
   workflowListContextParams,
-  workflowListHrefFromContext,
 } from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
@@ -442,65 +436,6 @@ function WorkflowSidebarRow({
   );
 }
 
-function WorkspaceControlIcon({ children }: { children: ReactNode }) {
-  return (
-    <svg
-      className="workflow-workspace-control-icon"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {children}
-    </svg>
-  );
-}
-
-const SIDEBAR_TOGGLE_ICON = (
-  <WorkspaceControlIcon>
-    <rect x="3" y="4" width="18" height="16" rx="2" />
-    <path d="M9 4v16" />
-  </WorkspaceControlIcon>
-);
-
-function WorkflowSidebarControls({
-  closeButtonRef,
-  onClose,
-  search,
-}: {
-  closeButtonRef: RefObject<HTMLButtonElement | null>;
-  onClose: () => void;
-  search: URLSearchParams;
-}) {
-  return (
-    <div className="workflow-workspace-sidebar-controls">
-      <button
-        ref={closeButtonRef}
-        type="button"
-        className="secondary workflow-workspace-close-sidebar workflow-workspace-sidebar-control"
-        onClick={onClose}
-        aria-label="Close sidebar"
-        title="Close sidebar"
-      >
-        {SIDEBAR_TOGGLE_ICON}
-      </button>
-      <a
-        href={workflowListHrefFromContext(search, { markDetailReturn: true })}
-        className="secondary workflow-workspace-expand-list workflow-workspace-sidebar-control"
-        onClick={markWorkflowListReturnFocusIntent}
-        aria-label="Expand to full list"
-        title="Expand to full list"
-      >
-        <ArrowRight aria-hidden="true" focusable="false" />
-      </a>
-    </div>
-  );
-}
-
 function WorkflowSidebarList({
   rows,
   activeWorkflowId,
@@ -542,24 +477,15 @@ function WorkflowSidebar({
   filteredRows,
   pinnedCurrentRow,
   search,
-  closeButtonRef,
-  onClose,
 }: {
   workflowId: string;
   workflowsQuery: UseQueryResult<z.infer<typeof WorkflowWorkspaceListResponseSchema>, Error>;
   filteredRows: WorkflowWorkspaceRow[];
   pinnedCurrentRow: WorkflowWorkspaceRow | null;
   search: URLSearchParams;
-  closeButtonRef: RefObject<HTMLButtonElement | null>;
-  onClose: () => void;
 }) {
   return (
     <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
-      <WorkflowSidebarControls
-        closeButtonRef={closeButtonRef}
-        onClose={onClose}
-        search={search}
-      />
       {workflowsQuery.isLoading ? (
         <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
       ) : null}
@@ -603,8 +529,6 @@ export function WorkflowWorkspaceShell({
   const [sidebarOpen, setSidebarOpen] = useState(
     () => !readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
   );
-  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
-  const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
   const sourceTemporal = search.get('source') === 'temporal';
   const encodedWorkflowId = encodeURIComponent(workflowId);
@@ -648,8 +572,10 @@ export function WorkflowWorkspaceShell({
     const handleDisplayModeChange = (event: Event) => {
       const mode = (event as CustomEvent<WorkflowListDisplayModeChangeDetail>).detail?.mode;
       if (mode === 'hidden') {
+        updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
         setSidebarOpen(false);
       } else if (mode === 'sidebar') {
+        updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
         setSidebarOpen(true);
       }
     };
@@ -671,29 +597,8 @@ export function WorkflowWorkspaceShell({
           filteredRows={filteredRows}
           pinnedCurrentRow={pinnedCurrentRow}
           search={search}
-          closeButtonRef={closeButtonRef}
-          onClose={() => {
-            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
-            setSidebarOpen(false);
-            window.setTimeout(() => openButtonRef.current?.focus(), 0);
-          }}
         />
-      ) : (
-        <button
-          ref={openButtonRef}
-          type="button"
-          className="secondary workflow-workspace-open-sidebar workflow-workspace-sidebar-control"
-          onClick={() => {
-            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
-            setSidebarOpen(true);
-            window.setTimeout(() => closeButtonRef.current?.focus(), 0);
-          }}
-          aria-label="Open workflow sidebar"
-          title="Open workflow sidebar"
-        >
-          {SIDEBAR_TOGGLE_ICON}
-        </button>
-      )}
+      ) : null}
       <main className="workflow-workspace-detail" aria-label="Workflow detail">
         <WorkflowDetailPage payload={payload} />
       </main>
