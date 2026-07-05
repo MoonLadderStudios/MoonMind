@@ -318,7 +318,7 @@ samp {
 
 .workflow-list-display-option:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px rgb(var(--mm-accent-2) / 0.18);
+  box-shadow: var(--mm-control-focus-ring);
 }
 
 .workflow-list-display-option--selected,
