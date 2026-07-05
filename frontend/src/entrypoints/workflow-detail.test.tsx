@@ -728,6 +728,47 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
   });
 
+  it('MM-1113 keeps authorized remembered workflows outside filters in the current group only', async () => {
+    window.history.pushState({}, 'Workspace Remembered Current Test', '/workflows/test-123?source=temporal&stateIn=completed');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetchesWithSelectedOutsideList();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const pinnedGroup = await within(sidebar).findByRole('list', { name: 'Current workflow' });
+    const filterMatchingList = within(sidebar).getByRole('list', { name: 'Workflow navigation list' });
+    expect(within(pinnedGroup).getByRole('link', { name: /MM-999 selected workflow outside filters/i })).toBeTruthy();
+    expect(within(filterMatchingList).queryByRole('link', { name: /MM-999 selected workflow outside filters/i })).toBeNull();
+    expect(within(filterMatchingList).getByRole('link', { name: /Filtered workflow/i })).toBeTruthy();
+  });
+
+  it('MM-1113 renders only authorized sidebar rows returned by the list endpoint', async () => {
+    window.history.pushState({}, 'Workspace Authorized Sidebar Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches({
+      rows: [
+        {
+          workflowId: 'test-123',
+          taskId: 'test-123',
+          source: 'temporal',
+          title: 'Authorized sidebar workflow',
+          status: 'running',
+          state: 'executing',
+          rawState: 'executing',
+          createdAt: '2026-04-09T00:00:00Z',
+        },
+      ],
+    });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(await within(sidebar).findByRole('link', { name: /Authorized sidebar workflow/i })).toBeTruthy();
+    expect(within(sidebar).queryByText(/unauthorized/i)).toBeNull();
+    expect(within(sidebar).queryByRole('link', { name: /unauthorized/i })).toBeNull();
+  });
+
   it('MM-1064 renders compact sidebar status icons for canonical lifecycle states', async () => {
     window.history.pushState({}, 'Workspace Sidebar Icons Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);

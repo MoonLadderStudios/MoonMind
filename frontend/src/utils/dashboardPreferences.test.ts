@@ -202,6 +202,12 @@ describe('dashboardPreferences', () => {
 
       expect(prefs.lastSelectedWorkflowId).toBe('remembered-workflow');
     });
+
+    it('MM-1113 sanitizes invalid last selected workflow values to the default', () => {
+      for (const candidate of [null, undefined, 42, false, {}, []]) {
+        expect(sanitizeDashboardPreferences({ lastSelectedWorkflowId: candidate }).lastSelectedWorkflowId).toBe('');
+      }
+    });
   });
 
   describe('reset behavior (MM-964 reset behavior)', () => {
@@ -210,11 +216,13 @@ describe('dashboardPreferences', () => {
         ...DEFAULT_DASHBOARD_PREFERENCES,
         workflowListDensity: 'compact',
         createExpertMode: true,
+        lastSelectedWorkflowId: 'remembered-workflow',
       });
       expect(storedRaw()).not.toBeNull();
 
       const reset = resetDashboardPreferences();
       expect(reset).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+      expect(reset.lastSelectedWorkflowId).toBe('');
       expect(storedRaw()).toBeNull();
       // A subsequent read also yields defaults.
       expect(readDashboardPreferences()).toEqual(DEFAULT_DASHBOARD_PREFERENCES);

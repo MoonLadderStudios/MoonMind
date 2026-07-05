@@ -587,6 +587,16 @@ describe('Dashboard shared entry', () => {
   it('MM-1113 opens an authorized remembered workflow when leaving the full table', async () => {
     window.history.replaceState({}, '', '/workflows?stateIn=completed&limit=50');
     updateDashboardPreferences({ lastSelectedWorkflowId: 'remembered-123' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions/remembered-123?source=temporal') {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: 'remembered-123' }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
@@ -603,6 +613,65 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/remembered-123?source=temporal');
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions?'))).toBe(false);
     expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+  });
+
+  it('MM-1113 keeps a route-selected workflow when switching detail-compatible modes', async () => {
+    window.history.replaceState({}, '', '/workflows/route-123?stateIn=failed&limit=10');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'remembered-123' });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow detail route loaded: /workflows/route-123')).toBeTruthy();
+    fetchSpy.mockClear();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+    });
+    expect(window.location.pathname).toBe('/workflows/route-123');
+    expect(window.location.search).toBe('?stateIn=failed&limit=10');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/remembered-123'))).toBe(false);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions?'))).toBe(false);
+  });
+
+  it('MM-1113 resolves the first row from the exact current list query context', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/workflows?stateIn=completed&source=jules&limit=50&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&sort=updatedAt',
+    );
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (
+        url ===
+        '/api/executions?stateIn=completed&source=jules&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&pageSize=50'
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [{ workflowId: 'first-query-row', title: 'First query row' }] }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/first-query-row');
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/executions?stateIn=completed&source=jules&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&pageSize=50',
+    );
+    expect(window.location.search).toContain('stateIn=completed');
+    expect(window.location.search).toContain('source=jules');
+    expect(window.location.search).toContain('limit=50');
+    expect(window.location.search).toContain('nextPageToken=cursor-1');
+    expect(window.location.search).not.toContain('sort=updatedAt');
   });
 
   it('MM-1113 ignores unauthorized remembered selections and opens the first visible row', async () => {
@@ -636,6 +705,68 @@ describe('Dashboard shared entry', () => {
     });
     expect(window.location.pathname).not.toBe('/workflows/unauthorized-123');
     expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(false);
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('unauthorized-123');
+  });
+
+  it('MM-1113 never navigates to or renders an unauthorized remembered workflow during fallback', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=completed');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'secret-remembered' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions/secret-remembered?source=temporal') {
+        return Promise.resolve({ ok: false, status: 403, statusText: 'Forbidden' } as Response);
+      }
+      if (url === '/api/executions?stateIn=completed&source=temporal&pageSize=25') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{ workflowId: 'authorized-row', taskId: 'authorized-row', title: 'Authorized row' }],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/authorized-row');
+    });
+    expect(window.location.pathname).not.toBe('/workflows/secret-remembered');
+    expect(screen.queryByText(/secret-remembered/i)).toBeNull();
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('secret-remembered');
+  });
+
+  it('MM-1113 selects only returned authorized first-row data', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=running');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=running&source=temporal&pageSize=25') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [{ taskId: 'authorized-task-row', title: 'Authorized task row' }] }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/authorized-task-row');
+    });
+    expect(window.location.pathname).not.toContain('unauthorized');
+    expect(screen.queryByText(/unauthorized/i)).toBeNull();
   });
 
   it('MM-1113 exposes a resolving state while the matching workflow list is loading', async () => {
@@ -691,6 +822,28 @@ describe('Dashboard shared entry', () => {
 
     expect((await screen.findByRole('status')).textContent).toContain('No workflow to open.');
     expect(window.location.pathname).toBe('/workflows');
+  });
+
+  it('MM-1113 stays on the table and exposes a recoverable state when fallback list loading fails', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=failed');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=failed&source=temporal&pageSize=25') {
+        return Promise.resolve({ ok: false, status: 503, statusText: 'Service Unavailable' } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+
+    expect((await screen.findByRole('status')).textContent).toContain('Workflow list is unavailable.');
+    expect(window.location.pathname).toBe('/workflows');
+    expect(window.location.search).toBe('?stateIn=failed');
   });
 
   it('does not render operational metrics on the workflows home dashboard', async () => {
