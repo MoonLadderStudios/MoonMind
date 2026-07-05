@@ -1151,6 +1151,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(dashboardCss).toMatch(
       /\.workflow-workspace-detail\s*\{[^}]*max-width:\s*66rem;/,
     );
+    expect(dashboardCss).toMatch(
+      /\.workflow-workspace-shell\[data-sidebar-collapsed="true"\] \.workflow-workspace-detail\s*\{[^}]*grid-column:\s*1 \/ -1;/,
+    );
   });
 
   it('MM-997 keeps workflow detail standalone when the workflow list is disabled', async () => {

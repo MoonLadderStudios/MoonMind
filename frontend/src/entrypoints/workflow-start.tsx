@@ -5505,7 +5505,8 @@ function WorkflowStartSidebar({ apiBase }: { apiBase: string }) {
   const workflowsQuery = useQuery({
     queryKey: ["workflow-start-sidebar"],
     queryFn: async ({ signal }): Promise<WorkflowStartSidebarRow[]> => {
-      const response = await fetch(`${apiBase}/executions?pageSize=25`, { signal });
+      const params = new URLSearchParams({ source: "temporal", pageSize: "25" });
+      const response = await fetch(`${apiBase}/executions?${params.toString()}`, { signal });
       if (!response.ok) {
         throw new Error(`Failed to fetch workflows: ${response.statusText}`);
       }
@@ -5542,7 +5543,7 @@ function WorkflowStartSidebar({ apiBase }: { apiBase: string }) {
             const status = row.rawState || row.state || row.status || "unknown";
             return (
               <li key={workflowId}>
-                <a className="workflow-workspace-sidebar-row" href={`/workflows/${encodeURIComponent(workflowId)}`}>
+                <a className="workflow-workspace-sidebar-row" href={`/workflows/${encodeURIComponent(workflowId)}?source=temporal`}>
                   <span className="workflow-workspace-sidebar-row-main">
                     <span className="workflow-workspace-sidebar-title">{title}</span>
                   </span>

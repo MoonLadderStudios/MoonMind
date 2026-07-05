@@ -48,6 +48,7 @@ import {
   resolveWorkflowListDisplay,
   type WorkflowListDisplayMode,
 } from '../lib/workflowListDisplayMode';
+import { readDashboardPreferences } from '../utils/dashboardPreferences';
 import { DashboardAlerts } from './dashboard-alerts';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
@@ -580,7 +581,9 @@ function RoutedDashboardPage({
 }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [requestedMode, setRequestedMode] = useState<WorkflowListDisplayMode>('sidebar');
+  const [requestedMode, setRequestedMode] = useState<WorkflowListDisplayMode>(() => (
+    readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
+  ));
   const [lastSelectedWorkflowId, setLastSelectedWorkflowId] = useState<string | null>(null);
   const route = resolveDashboardRoute(location.pathname);
   const resolvedDisplay = resolveWorkflowListDisplay({
@@ -599,8 +602,11 @@ function RoutedDashboardPage({
   }, [location.pathname]);
 
   useEffect(() => {
-    if (location.pathname.replace(/\/$/, '') === '/workflows') {
+    const normalizedPath = location.pathname.replace(/\/$/, '');
+    if (normalizedPath === '/workflows') {
       setRequestedMode('table');
+    } else if (normalizedPath.startsWith('/workflows/') && normalizedPath !== '/workflows/new') {
+      setRequestedMode((mode) => (mode === 'table' ? 'sidebar' : mode));
     }
   }, [location.pathname]);
 

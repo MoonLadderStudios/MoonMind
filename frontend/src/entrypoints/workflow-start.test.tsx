@@ -240,7 +240,7 @@ describe("WorkflowStartPage workflow list display modes", () => {
 
     const sidebar = await screen.findByRole("complementary", { name: "Workflow navigation" });
     expect((await within(sidebar).findByRole("link", { name: /Sidebar workflow/i })).getAttribute("href")).toBe(
-      "/workflows/mm%3Acreate-sidebar",
+      "/workflows/mm%3Acreate-sidebar?source=temporal",
     );
     expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
   });

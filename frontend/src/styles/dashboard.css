@@ -7402,6 +7402,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-inline: auto;
 }
 
+.workflow-workspace-shell[data-sidebar-collapsed="true"] .workflow-workspace-detail {
+  grid-column: 1 / -1;
+}
+
 @media (min-width: 768px) and (max-width: 85rem) {
   .workflow-workspace-shell[data-sidebar-collapsed="true"] {
     grid-template-columns: auto minmax(0, 1fr);

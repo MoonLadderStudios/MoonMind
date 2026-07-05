@@ -118,7 +118,7 @@ describe('resolveWorkflowListDisplay', () => {
   it('navigates detail routes and create to the workflows table for table mode', () => {
     expect(resolveWorkflowListDisplay({
       pathname: '/workflows/mm%3A123/debug',
-      search: '?source=temporal&limit=10',
+      search: '?source=temporal&limit=10&token=secret&unsafe=1',
       requestedMode: 'table',
     })).toMatchObject({
       effectiveMode: 'table',

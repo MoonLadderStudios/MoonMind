@@ -1,3 +1,5 @@
+import { workflowListContextParams } from './workflowListContext';
+
 export type WorkflowListDisplayMode = 'hidden' | 'sidebar' | 'table';
 
 export type WorkflowListRegion = 'none' | 'sidebar' | 'primary-surface';
@@ -107,6 +109,13 @@ function normalizedSearch(search: string | URLSearchParams | null | undefined): 
 
 function pathWithSearch(pathname: string, search: string | URLSearchParams | null | undefined): string {
   return `${pathname}${normalizedSearch(search)}`;
+}
+
+function workflowListPathFromContext(search: string | URLSearchParams | null | undefined): string {
+  const source = typeof search === 'string' ? new URLSearchParams(search.replace(/^\?/, '')) : search;
+  const params = workflowListContextParams(source ?? new URLSearchParams());
+  const query = params.toString();
+  return query ? `/workflows?${query}` : '/workflows';
 }
 
 function encodeWorkflowDetailPath(workflowId: string, search: string | URLSearchParams | null | undefined): string {
@@ -241,7 +250,7 @@ export function resolveWorkflowListDisplay(
       primarySurface: 'workflow-table',
       listSurface: 'table',
       selection: { workflowId: detail.workflowId, source: 'route' },
-      targetPath: pathWithSearch('/workflows', input.search),
+      targetPath: workflowListPathFromContext(input.search),
       status: null,
     };
   }
