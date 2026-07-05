@@ -105,6 +105,7 @@ async def test_publish_terminal_result_compacts_replayed_moonspec_verify_metadat
                     "recommendedNextAction": "advance",
                     "recoverableInCurrentRuntime": True,
                     "remainingWork": [],
+                    "blockingEvidenceRefs": ("ref-a", "ref-b"),
                     "requirementCoverage": [
                         {
                             "requirement": "large verification evidence",
@@ -125,6 +126,10 @@ async def test_publish_terminal_result_compacts_replayed_moonspec_verify_metadat
 
     assert result.metadata["moonSpecVerify"]["verdict"] == "FULLY_IMPLEMENTED"
     assert result.metadata["moonSpecVerify"]["gateResultRef"] == "art_gate_result"
+    assert result.metadata["moonSpecVerify"]["blockingEvidenceRefs"] == [
+        "ref-a",
+        "ref-b",
+    ]
     assert "requirementCoverage" not in result.metadata["moonSpecVerify"]
     assert run._terminal_result_payload_compacted_for_history is True
     AgentRunResult(**result.model_dump(mode="json", by_alias=True))

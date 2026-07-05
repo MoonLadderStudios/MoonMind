@@ -147,7 +147,7 @@ def _compact_workflow_text_list(
     max_items: int = 20,
     max_chars: int = 400,
 ) -> list[str]:
-    if not isinstance(value, list):
+    if not isinstance(value, (list, tuple)):
         return []
     compact: list[str] = []
     for item in value:
