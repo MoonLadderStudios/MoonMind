@@ -2015,14 +2015,14 @@ describe('Dashboard shared entry', () => {
     expect(darkBlock).toContain('--mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.95);');
   });
 
-  it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {
+  it('keeps the masthead mobile breakpoint isolated from the shared mobile layout rules', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/dashboard.css`,
       'utf8',
     );
 
-    const mastheadBreakpointStart = dashboardCss.indexOf('@media (max-width: 1180px)');
+    const mastheadBreakpointStart = dashboardCss.indexOf('@media (max-width: 767px)');
     const sharedMobileStart = dashboardCss.indexOf('@media (max-width: 900px)');
     const mastheadResponsive = dashboardCss.slice(
       mastheadBreakpointStart,
