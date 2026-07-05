@@ -21,6 +21,7 @@ Read relevant documents in the following order before implementing tasks:
 - **Avoid vendor lock-in.** Provider behavior belongs behind adapters, portable formats, and explicit vendor-specific decisions.
 - **Own context and data.** Ingested context and generated artifacts stay operator-controlled by default; inject only the context each step needs and clear or bound context between steps.
 - **Skills are first-class and low ceremony.** Skills are discoverable, composable, runtime-neutral at the workflow level, and identified by one canonical skill name.
+- **Portable capabilities over MoonMind coupling.** Skills, scripts, Docker assets, and tool contracts should remain runnable outside MoonMind through standard files, CLIs, environment variables, containers, and documented interfaces; MoonMind may orchestrate, configure, observe, and compose them, but MoonMind-only behavior belongs at explicit adapter boundaries, not hidden prerequisites.
 - **Scaffolding is disposable; evidence-based verification is permanent.** Build AI scaffolds to be deleted, swapped, or regenerated, while preserving stable contracts, tests, telemetry, and the Hypothesize → Execute → Verify → Publish → Learn loop.
 - **Runtime behavior is configurable.** Routine operator changes should use documented, namespaced, safe-by-default configuration with deterministic precedence and observable runtime mode switches.
 - **Architecture stays modular.** Add capabilities behind explicit module boundaries and stable contracts; justify cross-cutting changes and speculative abstractions before implementation.
@@ -42,6 +43,7 @@ When writing code that interacts with skills:
 - Keep `.agents/skills/local` as a local-only overlay.
 - Do not mutate checked-in skill folders in place.
 - Keep large skill content out of workflow history (use refs).
+- Keep skills runnable outside MoonMind whenever possible; do not require MoonMind-specific services, paths, metadata, or runtime behavior unless isolated behind an explicit adapter boundary.
 - Add workflow/activity or adapter-boundary tests.
 
 ## Documentation: canonical vs feature artifacts
