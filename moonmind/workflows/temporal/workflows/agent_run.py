@@ -121,6 +121,158 @@ def _setdefault_compact_ref_metadata(
     for key, compact_value in compact_temporal_ref_metadata(field_name, value).items():
         metadata.setdefault(key, compact_value)
 
+
+def _compact_workflow_text(value: Any, *, max_chars: int = 700) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > max_chars:
+        return text[: max_chars - 3].rstrip() + "..."
+    return text
+
+
+def _compact_workflow_scalar(value: Any) -> Any:
+    if isinstance(value, str):
+        return _compact_workflow_text(value)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return None
+
+
+def _compact_workflow_text_list(
+    value: Any,
+    *,
+    max_items: int = 20,
+    max_chars: int = 400,
+) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    compact: list[str] = []
+    for item in value:
+        text = _compact_workflow_text(item, max_chars=max_chars)
+        if text:
+            compact.append(text)
+        if len(compact) >= max_items:
+            break
+    return compact
+
+
+def _compact_workflow_text_mapping(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        return {}
+    compact: dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        key = _compact_workflow_text(str(raw_key), max_chars=120)
+        text = _compact_workflow_text(raw_value, max_chars=400)
+        if key and text:
+            compact[key] = text
+        if len(compact) >= 20:
+            break
+    return compact
+
+
+def _compact_moonspec_verify_for_workflow_history(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    scalar_keys = (
+        "schemaVersion",
+        "verdict",
+        "gateVerdict",
+        "gate_verdict",
+        "moonSpecVerdict",
+        "moonspecVerdict",
+        "verificationVerdict",
+        "verification_verdict",
+        "confidence",
+        "recommendedNextAction",
+        "recommended_next_action",
+        "targetLogicalStepId",
+        "target_logical_step_id",
+        "workspacePolicyRecommendation",
+        "workspace_policy_recommendation",
+        "recoverableInCurrentRuntime",
+        "recoverable_in_current_runtime",
+        "invalid",
+        "degraded",
+        "remainingWorkRef",
+        "remaining_work_ref",
+        "diagnosticsRef",
+        "diagnostics_ref",
+        "verificationReportRef",
+        "verification_report_ref",
+        "reportRef",
+        "report_ref",
+        "gateResultRef",
+        "gate_result_ref",
+        "artifactRef",
+        "artifact_ref",
+    )
+    for key in scalar_keys:
+        field_value = _compact_workflow_scalar(value.get(key))
+        if field_value is not None:
+            compact[key] = field_value
+
+    for key in ("feedback", "summary", "message", "downgradeReason"):
+        text = _compact_workflow_text(value.get(key), max_chars=900)
+        if text:
+            compact[key] = text
+
+    for key in ("invalidatedRefs", "invalidated_refs"):
+        refs = _compact_workflow_text_list(value.get(key))
+        if refs:
+            compact[key] = refs
+            break
+    for key in ("blockingEvidenceRefs", "blocking_evidence_refs"):
+        refs = _compact_workflow_text_list(value.get(key))
+        if refs:
+            compact[key] = refs
+            break
+
+    validated_refs = _compact_workflow_text_mapping(
+        value.get("validatedRefs") or value.get("validated_refs")
+    )
+    if validated_refs:
+        compact["validatedRefs"] = validated_refs
+
+    contract_violations = _compact_workflow_text_list(
+        value.get("contractViolations") or value.get("contract_violations"),
+        max_items=10,
+        max_chars=700,
+    )
+    if contract_violations:
+        compact["contractViolations"] = contract_violations
+
+    return compact
+
+
+def _compact_agent_run_result_payload_for_workflow_history(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    compact_payload = dict(payload)
+    metadata = compact_payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return compact_payload
+
+    compact_metadata = dict(metadata)
+    for key in (
+        "moonSpecVerify",
+        "moonspecVerify",
+        "moonspec_verify",
+        "verificationResult",
+        "verification_result",
+    ):
+        value = compact_metadata.get(key)
+        if isinstance(value, Mapping):
+            compact_metadata[key] = _compact_moonspec_verify_for_workflow_history(
+                value
+            )
+    compact_payload["metadata"] = compact_metadata
+    return compact_payload
+
+
 # Default workflow-level execution timeouts
 DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600      # 1 hour
 DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600    # 6 hours
@@ -446,6 +598,7 @@ class MoonMindAgentRun:
         self._slot_wait_timeout_override_seconds: int | None = None
         self._skip_default_profile_pin_once: bool = False
         self._provider_cooldown_retry_counts: dict[str, int] = {}
+        self._terminal_result_payload_compacted_for_history: bool = False
         self.runtime_selection_updated_event = asyncio.Event()
         self._pending_runtime_selection_update: dict[str, Any] | None = None
         self._paused: bool = False
@@ -1206,12 +1359,47 @@ class MoonMindAgentRun:
 
         return result.model_copy(update={"metadata": metadata})
 
+    async def _publish_terminal_result_with_compacted_replay_cleanup(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+        manager_handle: Any | None = None,
+    ) -> AgentRunResult:
+        terminal_result = await self._publish_terminal_result(
+            request=request,
+            result=result,
+        )
+        if (
+            self._terminal_result_payload_compacted_for_history
+            and request.agent_kind == "managed"
+            and request.execution_profile_ref
+        ):
+            handle = manager_handle
+            if handle is None:
+                runtime_id = self._managed_runtime_id(request.agent_id)
+                manager_id = self._manager_workflow_id(runtime_id)
+                handle = workflow.get_external_workflow_handle(manager_id)
+            # Preserve replay for histories where oversized terminal metadata
+            # raised after artifact publication and the old exception cleanup
+            # emitted this idempotent slot release before failing the task.
+            await handle.signal(
+                "release_slot",
+                self._release_slot_payload(
+                    profile_id=request.execution_profile_ref,
+                    request=request,
+                ),
+            )
+            self._terminal_result_payload_compacted_for_history = False
+        return terminal_result
+
     async def _publish_terminal_result(
         self,
         *,
         request: AgentExecutionRequest,
         result: AgentRunResult,
     ) -> AgentRunResult:
+        self._terminal_result_payload_compacted_for_history = False
         self.final_result = self._enrich_result_metadata(
             request=request,
             result=result,
@@ -1229,7 +1417,18 @@ class MoonMindAgentRun:
                 and "diagnostics_ref" in enriched_result
             ):
                 del enriched_result["diagnostics_ref"]
-            self.final_result = AgentRunResult(**enriched_result)
+            try:
+                self.final_result = AgentRunResult(**enriched_result)
+            except ValueError:
+                compacted_result = (
+                    _compact_agent_run_result_payload_for_workflow_history(
+                        enriched_result
+                    )
+                )
+                if compacted_result == enriched_result:
+                    raise
+                self._terminal_result_payload_compacted_for_history = True
+                self.final_result = AgentRunResult(**compacted_result)
         return self.final_result
 
     def _record_provider_native_pr_metadata(
@@ -2820,7 +3019,7 @@ class MoonMindAgentRun:
                 elapsed = (workflow.now() - overall_start).total_seconds()
                 if elapsed >= timeout_seconds:
                     self.run_status = RunStatus.timed_out
-                    return await self._publish_terminal_result(
+                    return await self._publish_terminal_result_with_compacted_replay_cleanup(
                         request=request,
                         result=self._timed_out_result(
                             request=request,
@@ -3763,7 +3962,7 @@ class MoonMindAgentRun:
                                 request=request,
                             ),
                         )
-                    return await self._publish_terminal_result(
+                    return await self._publish_terminal_result_with_compacted_replay_cleanup(
                         request=request,
                         result=self._timed_out_result(
                             request=request,
@@ -4065,9 +4264,10 @@ class MoonMindAgentRun:
                         update={"metadata": result_metadata}
                     )
 
-                return await self._publish_terminal_result(
+                return await self._publish_terminal_result_with_compacted_replay_cleanup(
                     request=request,
                     result=self.final_result,
+                    manager_handle=manager_handle,
                 )
 
         except asyncio.TimeoutError:

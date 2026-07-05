@@ -120,6 +120,12 @@ describe("WorkflowStartPage loading placeholders", () => {
           json: async () => ({ items: { worker: [] }, legacyItems: [] }),
         } as Response);
       }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
       return Promise.resolve({
         ok: true,
         json: async () => ({}),
@@ -155,6 +161,88 @@ describe("WorkflowStartPage loading placeholders", () => {
     expect(screen.getByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     expect(screen.getByText("Workflow start editable draft loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-form-controls")).toBeTruthy();
+  });
+});
+
+describe("WorkflowStartPage workflow list display modes", () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    window.history.pushState({}, "Create Workflow", "/workflows/new");
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith("/api/executions?")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                workflowId: "mm:create-sidebar",
+                title: "Sidebar workflow",
+                status: "completed",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+        } as Response);
+      }
+      if (url.includes("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("renders Create without a workflow list in hidden mode", () => {
+    renderWithClient(
+      <WorkflowStartPage
+        payload={{
+          ...mockPayload,
+          initialData: {
+            ...(mockPayload.initialData as Record<string, unknown>),
+            workflowListDisplayMode: "hidden",
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
+    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
+  });
+
+  it("renders Create with the workflow list as a sidebar in sidebar mode", async () => {
+    renderWithClient(
+      <WorkflowStartPage
+        payload={{
+          ...mockPayload,
+          initialData: {
+            ...(mockPayload.initialData as Record<string, unknown>),
+            workflowListDisplayMode: "sidebar",
+          },
+        }}
+      />,
+    );
+
+    const sidebar = await screen.findByRole("complementary", { name: "Workflow navigation" });
+    expect((await within(sidebar).findByRole("link", { name: /Sidebar workflow/i })).getAttribute("href")).toBe(
+      "/workflows/mm%3Acreate-sidebar?source=temporal",
+    );
+    expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
   });
 });
 
@@ -637,7 +725,7 @@ describe("WorkflowStart schedule mode entry", () => {
             json: async () => ({ items: [] }),
           } as Response);
         }
-        if (url.startsWith("/api/v1/provider-profiles")) {
+      if (url.includes("/api/v1/provider-profiles")) {
           return Promise.resolve({
             ok: true,
             json: async () => [],

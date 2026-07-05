@@ -22,6 +22,9 @@ import {
   type TemporalTaskEditingExecutionContract,
   type TemporalTaskInputAttachmentRef,
 } from "../lib/temporalTaskEditing";
+import {
+  readWorkflowListDisplayMode,
+} from "../lib/workflowListDisplayMode";
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
@@ -5485,7 +5488,77 @@ function StepContextBar({
   );
 }
 
-export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
+type WorkflowStartSidebarRow = {
+  workflowId?: string;
+  taskId?: string;
+  title?: string;
+  status?: string;
+  state?: string;
+  rawState?: string;
+};
+
+function workflowStartSidebarRowId(row: WorkflowStartSidebarRow): string {
+  return row.workflowId || row.taskId || "";
+}
+
+function WorkflowStartSidebar({ apiBase }: { apiBase: string }) {
+  const workflowsQuery = useQuery({
+    queryKey: ["workflow-start-sidebar"],
+    queryFn: async ({ signal }): Promise<WorkflowStartSidebarRow[]> => {
+      const params = new URLSearchParams({ source: "temporal", pageSize: "25" });
+      const response = await fetch(`${apiBase}/executions?${params.toString()}`, { signal });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch workflows: ${response.statusText}`);
+      }
+      const data = (await response.json()) as { items?: WorkflowStartSidebarRow[] };
+      return Array.isArray(data.items) ? data.items : [];
+    },
+    staleTime: 30_000,
+  });
+
+  return (
+    <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
+      {workflowsQuery.isLoading ? (
+        <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
+      ) : null}
+      {workflowsQuery.isError ? (
+        <div className="workflow-workspace-sidebar-state" role="status">
+          <p>Workflow navigation is unavailable.</p>
+          <button type="button" className="secondary" onClick={() => void workflowsQuery.refetch()}>
+            Retry
+          </button>
+        </div>
+      ) : null}
+      {!workflowsQuery.isLoading && !workflowsQuery.isError && workflowsQuery.data?.length === 0 ? (
+        <p className="workflow-workspace-sidebar-state">No workflows are available.</p>
+      ) : null}
+      {!workflowsQuery.isLoading && !workflowsQuery.isError && workflowsQuery.data?.length ? (
+        <ul className="workflow-workspace-sidebar-list" aria-label="Workflow navigation list">
+          {workflowsQuery.data.map((row) => {
+            const workflowId = workflowStartSidebarRowId(row);
+            if (!workflowId) {
+              return null;
+            }
+            const title = row.title?.trim() || workflowId;
+            const status = row.rawState || row.state || row.status || "unknown";
+            return (
+              <li key={workflowId}>
+                <a className="workflow-workspace-sidebar-row" href={`/workflows/${encodeURIComponent(workflowId)}?source=temporal`}>
+                  <span className="workflow-workspace-sidebar-row-main">
+                    <span className="workflow-workspace-sidebar-title">{title}</span>
+                  </span>
+                  <span className="workflow-workspace-sidebar-status-text">{status}</span>
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </aside>
+  );
+}
+
+function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
   const pageMode = useMemo(
@@ -12929,4 +13002,25 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
+
+export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
+  const displayMode = readWorkflowListDisplayMode(payload);
+  if (displayMode !== "sidebar") {
+    return <WorkflowStartPageContent payload={payload} />;
+  }
+
+  return (
+    <div
+      className="workflow-start-workspace workflow-workspace-shell"
+      data-sidebar-collapsed="false"
+      data-workflow-list-display-mode="sidebar"
+    >
+      <WorkflowStartSidebar apiBase={payload.apiBase} />
+      <main className="workflow-start-primary" aria-label="Create workflow">
+        <WorkflowStartPageContent payload={payload} />
+      </main>
+    </div>
+  );
+}
+
 export default WorkflowStartPage;

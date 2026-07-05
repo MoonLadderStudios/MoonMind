@@ -390,6 +390,45 @@ describe('Dashboard shared entry', () => {
     });
   });
 
+  it('renders one workflow list display radio group on covered workflow surfaces', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+
+    const group = screen.getByRole('group', { name: 'Workflow list display' });
+    expect(group).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'No list' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Full screen table' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
+  });
+
+  it('opens a visible workflow when sidebar mode is selected from the workflows table', async () => {
+    window.history.replaceState({}, '', '/workflows?source=temporal');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95');
+    });
+    expect(await screen.findByText(/Workflow detail route loaded:/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('hides the workflow list display control on unsupported routes', async () => {
+    window.history.replaceState({}, '', '/settings');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Settings permissions:');
+
+    expect(screen.queryByRole('radiogroup', { name: 'Workflow list display' })).toBeNull();
+  });
+
   it('does not register a dashboard proposal review page for MM-859', async () => {
     window.history.replaceState({}, '', '/proposals');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
@@ -602,7 +641,7 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fetchSpy.mockClear();
 
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/remembered-123');
@@ -623,7 +662,7 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow detail route loaded: /workflows/route-123')).toBeTruthy();
     fetchSpy.mockClear();
 
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
     await waitFor(() => {
       expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
@@ -659,7 +698,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/first-query-row');
@@ -698,7 +737,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/visible-456');
@@ -732,7 +771,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/authorized-row');
@@ -760,7 +799,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/authorized-task-row');
@@ -787,7 +826,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
     expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
     const completeList = resolveList;
@@ -818,7 +857,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
     expect((await screen.findByRole('status')).textContent).toContain('No workflow to open.');
     expect(window.location.pathname).toBe('/workflows');
@@ -839,7 +878,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
     expect((await screen.findByRole('status')).textContent).toContain('No workflow to open.');
     expect(window.location.pathname).toBe('/workflows');
@@ -860,7 +899,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
     expect((await screen.findByRole('status')).textContent).toContain('Workflow list is unavailable.');
     expect(window.location.pathname).toBe('/workflows');
@@ -885,7 +924,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
     expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
     fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
     expect(await screen.findByText('Settings permissions:')).toBeTruthy();
@@ -1867,7 +1906,7 @@ describe('Dashboard shared entry', () => {
       /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\);/s,
     );
     expect(dashboardCss).toMatch(
-      /\.masthead-primary\s*\{[^}]*justify-self:\s*start;/s,
+      /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-nav\s*\{[^}]*align-self:\s*stretch;[^}]*justify-content:\s*center;[^}]*justify-self:\s*center;/s,
