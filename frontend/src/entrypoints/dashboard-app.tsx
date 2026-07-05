@@ -1,6 +1,7 @@
 import {
   Suspense,
   lazy,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -20,7 +21,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ScrollText } from 'lucide-react';
+import { PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
 import {
   MoonIcon,
   type MoonIconHandle,
@@ -44,6 +45,15 @@ import {
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
 import { DashboardAlerts } from './dashboard-alerts';
+import {
+  readDashboardPreferences,
+  updateDashboardPreferences,
+} from '../utils/dashboardPreferences';
+import {
+  workflowDetailHref,
+  workflowListApiQueryFromContext,
+  workflowListHrefFromContext,
+} from '../lib/workflowListContext';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
 type PageImport = () => Promise<{ default: PageComponent }>;
@@ -63,6 +73,16 @@ const PAGE_IMPORTS = {
 } satisfies Record<DashboardPage, PageImport>;
 
 const NAV_ICON_SIZE = 16;
+
+type WorkflowListDisplayMode = 'hidden' | 'sidebar' | 'table';
+
+type WorkflowListResolutionState = 'idle' | 'resolving' | 'empty' | 'error';
+
+const WORKFLOW_LIST_DISPLAY_OPTIONS = [
+  { value: 'hidden', label: 'No list', icon: Square },
+  { value: 'sidebar', label: 'Sidebar list', icon: PanelLeft },
+  { value: 'table', label: 'Full screen table', icon: Rows3 },
+] as const;
 
 type SharedLayoutConfig = {
   dataWidePanel?: boolean;
@@ -171,6 +191,48 @@ function AnimatedRouteNavLink({
 
 function isSupportedPage(page: string): page is DashboardPage {
   return Object.hasOwn(PAGE_IMPORTS, page);
+}
+
+function workflowIdFromPathname(pathname: string): string | null {
+  const match = pathname.match(/^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?\/?$/);
+  if (!match?.[1]) {
+    return null;
+  }
+  try {
+    const decoded = decodeURIComponent(match[1]);
+    return decoded.includes('/') ? null : decoded;
+  } catch {
+    return null;
+  }
+}
+
+function workflowRowId(row: unknown): string {
+  if (!row || typeof row !== 'object') {
+    return '';
+  }
+  const record = row as Record<string, unknown>;
+  return String(record.workflowId || record.taskId || '').trim();
+}
+
+async function authorizedWorkflowId(apiBase: string, workflowId: string, search: URLSearchParams): Promise<string | null> {
+  const encoded = encodeURIComponent(workflowId);
+  const source = search.get('source') || 'temporal';
+  const params = new URLSearchParams({ source });
+  const response = await fetch(`${apiBase}/executions/${encoded}?${params}`);
+  if (!response.ok) {
+    return null;
+  }
+  return workflowId;
+}
+
+async function firstVisibleWorkflowId(apiBase: string, search: URLSearchParams): Promise<string | null> {
+  const response = await fetch(`${apiBase}/executions?${workflowListApiQueryFromContext(search)}`);
+  if (!response.ok) {
+    throw new Error(`Failed to resolve first workflow: ${response.statusText}`);
+  }
+  const body = (await response.json()) as { items?: unknown[] };
+  const firstRow = Array.isArray(body.items) ? body.items.find((row) => workflowRowId(row)) : null;
+  return firstRow ? workflowRowId(firstRow) : null;
 }
 
 function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
@@ -338,30 +400,144 @@ function DashboardLiveUpdateProvider({
 
 function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
   const [open, setOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
+  );
+  const [resolutionState, setResolutionState] = useState<WorkflowListResolutionState>('idle');
   const location = useLocation();
+  const navigate = useNavigate();
   const isWorkflowStart = location.pathname.replace(/\/$/, '') === '/workflows/new';
+  const isWorkflowTable = location.pathname.replace(/\/$/, '') === '/workflows';
   const isWorkflowDetail = location.pathname.startsWith('/workflows/') && !isWorkflowStart;
+  const isWorkflowSurface = isWorkflowTable || isWorkflowStart || isWorkflowDetail;
   const buildId = typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim() ? uiInfo.buildId : null;
+  const apiBase = typeof uiInfo?.apiBase === 'string' ? uiInfo.apiBase : '/api';
 
   useEffect(() => {
     setOpen(false);
   }, [location.pathname]);
 
+  useEffect(() => {
+    setResolutionState('idle');
+    setSidebarCollapsed(readDashboardPreferences().workflowWorkspaceSidebarCollapsed);
+  }, [location.pathname, location.search]);
+
+  const currentMode: WorkflowListDisplayMode = isWorkflowTable
+    ? 'table'
+    : sidebarCollapsed
+      ? 'hidden'
+      : 'sidebar';
+
+  const handleWorkflowListModeChange = useCallback(
+    async (mode: WorkflowListDisplayMode) => {
+      if (!isWorkflowSurface || mode === currentMode) {
+        return;
+      }
+      const search = new URLSearchParams(location.search);
+      setResolutionState('idle');
+      if (mode === 'table') {
+        updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
+        setSidebarCollapsed(false);
+        navigate(workflowListHrefFromContext(search, { markDetailReturn: isWorkflowDetail }));
+        return;
+      }
+
+      const nextCollapsed = mode === 'hidden';
+      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: nextCollapsed });
+      setSidebarCollapsed(nextCollapsed);
+
+      const routeWorkflowId = workflowIdFromPathname(location.pathname);
+      if (routeWorkflowId || isWorkflowStart) {
+        return;
+      }
+
+      setResolutionState('resolving');
+      const prefs = readDashboardPreferences();
+      const rememberedId = prefs.lastSelectedWorkflowId.trim();
+      try {
+        const authorizedRememberedId = rememberedId
+          ? await authorizedWorkflowId(apiBase, rememberedId, search)
+          : null;
+        const targetWorkflowId = authorizedRememberedId
+          || await firstVisibleWorkflowId(apiBase, search);
+        if (!targetWorkflowId) {
+          setResolutionState('empty');
+          return;
+        }
+        setResolutionState('idle');
+        navigate(workflowDetailHref(targetWorkflowId, search));
+      } catch {
+        setResolutionState('error');
+      }
+    },
+    [
+      apiBase,
+      currentMode,
+      isWorkflowDetail,
+      isWorkflowSurface,
+      isWorkflowStart,
+      location.pathname,
+      location.search,
+      navigate,
+    ],
+  );
+
+  const resolutionMessage = resolutionState === 'resolving'
+    ? 'Opening first workflow...'
+    : resolutionState === 'empty'
+      ? 'No workflow to open.'
+      : resolutionState === 'error'
+        ? 'Workflow list is unavailable.'
+        : '';
+
   return (
     <header className="masthead">
-      <Link className="masthead-brand" to="/workflows" aria-label="MoonMind workflows">
-        <img
-          className="masthead-logo"
-          src="/static/workflow_console/moonmindlogo.webp"
-          alt="MoonMind owl and moon logo"
-          width="256"
-          height="199"
-        />
-        <h1>
-          <span className="masthead-brand-moon">Moon</span>
-          <span className="masthead-brand-mind">Mind</span>
-        </h1>
-      </Link>
+      <div className="masthead-primary">
+        <Link className="masthead-brand" to="/workflows" aria-label="MoonMind workflows">
+          <img
+            className="masthead-logo"
+            src="/static/workflow_console/moonmindlogo.webp"
+            alt="MoonMind owl and moon logo"
+            width="256"
+            height="199"
+          />
+          <h1>
+            <span className="masthead-brand-moon">Moon</span>
+            <span className="masthead-brand-mind">Mind</span>
+          </h1>
+        </Link>
+
+        {isWorkflowSurface ? (
+          <div
+            className="workflow-list-display-control"
+            role="radiogroup"
+            aria-label="Workflow list display"
+            aria-busy={resolutionState === 'resolving' ? 'true' : undefined}
+          >
+            {WORKFLOW_LIST_DISPLAY_OPTIONS.map(({ value, label, icon: Icon }) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={currentMode === value}
+                aria-label={label}
+                title={label}
+                className="workflow-list-display-option"
+                data-active={currentMode === value ? 'true' : 'false'}
+                disabled={resolutionState === 'resolving'}
+                onClick={() => void handleWorkflowListModeChange(value)}
+              >
+                <Icon aria-hidden="true" focusable="false" />
+              </button>
+            ))}
+            {resolutionMessage ? (
+              <span className="workflow-list-display-status" role="status">
+                {resolutionMessage}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
 
       <button
         className="nav-hamburger"

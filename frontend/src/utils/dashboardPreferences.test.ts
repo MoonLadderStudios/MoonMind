@@ -46,6 +46,7 @@ describe('dashboardPreferences', () => {
         debugFieldsVisible: false,
         workflowWorkspaceSidebarCollapsed: true,
         preferredDetailTab: 'steps',
+        lastSelectedWorkflowId: 'workflow-123',
         defaultRuntime: 'codex_cli',
       });
 
@@ -57,6 +58,7 @@ describe('dashboardPreferences', () => {
       expect(reloaded.createExpertMode).toBe(true);
       expect(reloaded.debugFieldsVisible).toBe(false);
       expect(reloaded.workflowWorkspaceSidebarCollapsed).toBe(true);
+      expect(reloaded.lastSelectedWorkflowId).toBe('workflow-123');
       expect(reloaded.preferredDetailTab).toBe('steps');
     });
 
@@ -110,6 +112,7 @@ describe('dashboardPreferences', () => {
             preferredDetailTab: 'nope', // invalid enum
             liveUpdatesEnabled: 'yes', // wrong type
             workflowWorkspaceSidebarCollapsed: 'yes', // wrong type
+            lastSelectedWorkflowId: '  workflow-456  ',
             createExpertMode: true, // valid
             workflowListColumnVisibility: { repository: false, bogus: true },
             workflowListDefaultStatuses: ['executing', 42, '  failed  ', ''],
@@ -123,6 +126,7 @@ describe('dashboardPreferences', () => {
       expect(prefs.preferredDetailTab).toBe('overview'); // reset
       expect(prefs.liveUpdatesEnabled).toBe(true); // reset to default
       expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(false); // reset to default
+      expect(prefs.lastSelectedWorkflowId).toBe('workflow-456'); // trimmed
       expect(prefs.createExpertMode).toBe(true); // kept
       expect(prefs.workflowListColumnVisibility.repository).toBe(false); // kept
       expect(prefs.workflowListColumnVisibility).not.toHaveProperty('bogus'); // dropped
@@ -189,6 +193,14 @@ describe('dashboardPreferences', () => {
       });
 
       expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(true);
+    });
+
+    it('MM-1113 keeps a valid last selected workflow preference', () => {
+      const prefs = sanitizeDashboardPreferences({
+        lastSelectedWorkflowId: '  remembered-workflow  ',
+      });
+
+      expect(prefs.lastSelectedWorkflowId).toBe('remembered-workflow');
     });
   });
 

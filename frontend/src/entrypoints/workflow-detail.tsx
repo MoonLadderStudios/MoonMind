@@ -49,8 +49,8 @@ import {
 } from '../lib/temporalTaskEditing';
 import {
   markWorkflowListReturnFocusIntent,
+  workflowListApiQueryFromContext,
   workflowDetailHref,
-  workflowListContextParams,
   workflowListHrefFromContext,
 } from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
@@ -363,11 +363,7 @@ function useWorkflowDetailSubroute(
 }
 
 function workflowWorkspaceListQuery(search: URLSearchParams): string {
-  const pageSize = search.get('limit') || search.get('pageSize') || '25';
-  const params = workflowListContextParams(search);
-  params.delete('limit');
-  params.set('pageSize', pageSize);
-  return params.toString();
+  return workflowListApiQueryFromContext(search);
 }
 
 function sidebarStatusLabel(status: string | null | undefined): string {
@@ -419,11 +415,17 @@ function WorkflowSidebarRow({
   const active = workflowId === activeWorkflowId;
   const status = row.rawState || row.state || row.status || 'unknown';
   const title = row.title?.trim() || workflowId || 'Untitled workflow';
+  const rememberSelection = () => {
+    if (workflowId) {
+      updateDashboardPreferences({ lastSelectedWorkflowId: workflowId });
+    }
+  };
   return (
     <li>
       <a
         className={`workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`}
         href={workflowDetailHref(workflowId, search)}
+        onClick={rememberSelection}
         aria-current={active ? 'page' : undefined}
         data-active={active ? 'true' : 'false'}
         data-pinned={pinned ? 'true' : 'false'}

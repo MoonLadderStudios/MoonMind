@@ -240,10 +240,17 @@ samp {
   border-bottom: 1px solid rgb(var(--mm-border) / 0.7);
 }
 
-.masthead-brand {
+.masthead-primary {
   display: inline-flex;
   align-items: center;
   justify-self: start;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.masthead-brand {
+  display: inline-flex;
+  align-items: center;
   gap: 0.55rem;
   min-width: 0;
   color: rgb(var(--mm-ink));
@@ -276,6 +283,67 @@ samp {
 
 .masthead-brand-mind {
   color: inherit;
+}
+
+.workflow-list-display-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.16rem;
+  border: 1px solid rgb(var(--mm-border) / 0.66);
+  border-radius: 0.55rem;
+  background: rgb(var(--mm-panel) / 0.52);
+}
+
+.workflow-list-display-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.42rem;
+  background: transparent;
+  color: rgb(var(--mm-ink) / 0.72);
+  cursor: pointer;
+  transition: background 130ms ease, color 130ms ease;
+}
+
+.workflow-list-display-option svg {
+  width: 1rem;
+  height: 1rem;
+  stroke-width: 2;
+}
+
+.workflow-list-display-option:hover {
+  background: rgb(var(--mm-ink) / 0.06);
+  color: rgb(var(--mm-ink));
+}
+
+.workflow-list-display-option[data-active="true"] {
+  background: rgb(var(--mm-accent) / 0.16);
+  color: rgb(var(--mm-ink));
+}
+
+.workflow-list-display-option:focus-visible {
+  outline: none;
+  box-shadow: var(--mm-control-focus-ring);
+}
+
+.workflow-list-display-option:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.workflow-list-display-status {
+  max-width: 18ch;
+  padding: 0 0.38rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.76rem;
+  line-height: 1.15;
+  white-space: normal;
 }
 
 .masthead-title-meta {
