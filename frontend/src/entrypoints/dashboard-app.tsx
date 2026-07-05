@@ -20,7 +20,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ScrollText } from 'lucide-react';
+import { PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
 import {
   MoonIcon,
   type MoonIconHandle,
@@ -43,6 +43,11 @@ import {
   type DashboardPage,
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
+import {
+  dispatchWorkflowListDisplayModeChange,
+  type WorkflowListDisplayMode,
+} from '../lib/workflowListDisplayMode';
+import { readDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
 import { DashboardAlerts } from './dashboard-alerts';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
@@ -63,6 +68,13 @@ const PAGE_IMPORTS = {
 } satisfies Record<DashboardPage, PageImport>;
 
 const NAV_ICON_SIZE = 16;
+const WORKFLOW_LIST_DISPLAY_ICON_SIZE = 15;
+
+const WORKFLOW_LIST_DISPLAY_MODES = [
+  { value: 'hidden', label: 'No list', icon: Square },
+  { value: 'sidebar', label: 'Sidebar list', icon: PanelLeft },
+  { value: 'table', label: 'Full screen table', icon: Rows3 },
+] as const;
 
 type SharedLayoutConfig = {
   dataWidePanel?: boolean;
@@ -171,6 +183,43 @@ function AnimatedRouteNavLink({
 
 function isSupportedPage(page: string): page is DashboardPage {
   return Object.hasOwn(PAGE_IMPORTS, page);
+}
+
+function isWorkflowStartPath(pathname: string): boolean {
+  return pathname.replace(/\/$/, '') === '/workflows/new';
+}
+
+function isWorkflowDetailRoute(pathname: string): boolean {
+  return pathname.startsWith('/workflows/') && !isWorkflowStartPath(pathname);
+}
+
+function isWorkflowTableRoute(pathname: string): boolean {
+  return pathname.replace(/\/$/, '') === '/workflows';
+}
+
+function isWorkflowListDisplayRoute(pathname: string): boolean {
+  return isWorkflowTableRoute(pathname) || isWorkflowStartPath(pathname) || isWorkflowDetailRoute(pathname);
+}
+
+function resolvedWorkflowListDisplayMode(pathname: string): WorkflowListDisplayMode | null {
+  if (!isWorkflowListDisplayRoute(pathname)) {
+    return null;
+  }
+  if (isWorkflowTableRoute(pathname)) {
+    return 'table';
+  }
+  return readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar';
+}
+
+function firstWorkflowDetailHrefFromPage(): string | null {
+  const link = document.querySelector<HTMLAnchorElement>(
+    'a[href^="/workflows/"]:not([href^="/workflows/new"])',
+  );
+  if (!link) {
+    return null;
+  }
+  const url = new URL(link.href, window.location.origin);
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
@@ -336,16 +385,103 @@ function DashboardLiveUpdateProvider({
   return <>{children}</>;
 }
 
+function WorkflowListDisplayControl({
+  mode,
+  onModeChange,
+}: {
+  mode: WorkflowListDisplayMode;
+  onModeChange: (mode: WorkflowListDisplayMode) => void;
+}) {
+  return (
+    <div className="workflow-list-display-control" role="radiogroup" aria-label="Workflow list display">
+      {WORKFLOW_LIST_DISPLAY_MODES.map((definition) => {
+        const Icon = definition.icon;
+        return (
+          <label
+            key={definition.value}
+            className="workflow-list-display-option"
+            title={definition.label}
+            aria-label={definition.label}
+          >
+            <input
+              type="radio"
+              name="workflow-list-display"
+              value={definition.value}
+              checked={mode === definition.value}
+              onChange={() => onModeChange(definition.value)}
+            />
+            <Icon
+              className="workflow-list-display-option-icon"
+              size={WORKFLOW_LIST_DISPLAY_ICON_SIZE}
+              aria-hidden="true"
+            />
+            <span className="workflow-list-display-option-label">{definition.label}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
   const [open, setOpen] = useState(false);
+  const [selectedMode, setSelectedMode] = useState<WorkflowListDisplayMode | null>(() => {
+    if (typeof window === 'undefined') {
+      return null;
+    }
+    return resolvedWorkflowListDisplayMode(window.location.pathname);
+  });
+  const [pendingFocusMode, setPendingFocusMode] = useState<WorkflowListDisplayMode | null>(null);
+  const navigate = useNavigate();
   const location = useLocation();
-  const isWorkflowStart = location.pathname.replace(/\/$/, '') === '/workflows/new';
-  const isWorkflowDetail = location.pathname.startsWith('/workflows/') && !isWorkflowStart;
+  const isWorkflowDetail = isWorkflowDetailRoute(location.pathname);
   const buildId = typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim() ? uiInfo.buildId : null;
 
   useEffect(() => {
     setOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    setSelectedMode(resolvedWorkflowListDisplayMode(location.pathname));
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!pendingFocusMode) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      const input = document.querySelector<HTMLInputElement>(
+        `input[name="workflow-list-display"][value="${pendingFocusMode}"]`,
+      );
+      input?.focus();
+      setPendingFocusMode(null);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [location.pathname, location.search, pendingFocusMode]);
+
+  const handleWorkflowListDisplayChange = (mode: WorkflowListDisplayMode) => {
+    const pathname = location.pathname;
+    if (!isWorkflowListDisplayRoute(pathname)) {
+      return;
+    }
+
+    setPendingFocusMode(mode);
+    if (mode === 'table') {
+      setSelectedMode('table');
+      navigate('/workflows');
+      return;
+    }
+
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: mode === 'hidden' });
+    dispatchWorkflowListDisplayModeChange(mode);
+    setSelectedMode(mode);
+    if (isWorkflowTableRoute(pathname)) {
+      const firstWorkflowHref = firstWorkflowDetailHrefFromPage();
+      if (firstWorkflowHref) {
+        navigate(firstWorkflowHref);
+      }
+    }
+  };
 
   return (
     <header className="masthead">
@@ -362,6 +498,10 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
           <span className="masthead-brand-mind">Mind</span>
         </h1>
       </Link>
+
+      {selectedMode ? (
+        <WorkflowListDisplayControl mode={selectedMode} onModeChange={handleWorkflowListDisplayChange} />
+      ) : null}
 
       <button
         className="nav-hamburger"

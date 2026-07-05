@@ -42,6 +42,10 @@ import {
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
 import {
+  WORKFLOW_LIST_DISPLAY_MODE_CHANGE_EVENT,
+  type WorkflowListDisplayModeChangeDetail,
+} from '../lib/workflowListDisplayMode';
+import {
   recordTemporalTaskEditingClientEvent,
   taskCompareHref,
   taskEditForRerunHref,
@@ -639,6 +643,19 @@ export function WorkflowWorkspaceShell({
   const pinnedCurrentRow = selectedWorkflowQuery.data && !activeInList
     ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
     : null;
+
+  useEffect(() => {
+    const handleDisplayModeChange = (event: Event) => {
+      const mode = (event as CustomEvent<WorkflowListDisplayModeChangeDetail>).detail?.mode;
+      if (mode === 'hidden') {
+        setSidebarOpen(false);
+      } else if (mode === 'sidebar') {
+        setSidebarOpen(true);
+      }
+    };
+    window.addEventListener(WORKFLOW_LIST_DISPLAY_MODE_CHANGE_EVENT, handleDisplayModeChange);
+    return () => window.removeEventListener(WORKFLOW_LIST_DISPLAY_MODE_CHANGE_EVENT, handleDisplayModeChange);
+  }, []);
 
   return (
     <div

@@ -15,6 +15,10 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { DashboardApp } from './dashboard-app';
 import { navigateTo } from '../lib/navigation';
+import {
+  DASHBOARD_PREFERENCES_STORAGE_KEY,
+  DASHBOARD_PREFERENCES_VERSION,
+} from '../utils/dashboardPreferences';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -287,6 +291,7 @@ describe('Dashboard shared entry', () => {
   });
 
   beforeEach(() => {
+    window.localStorage.clear();
     Object.values(animatedNavIconMocks).forEach((mock) => mock.mockClear());
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -322,6 +327,7 @@ describe('Dashboard shared entry', () => {
     window.WebSocket = originalWebSocket;
     document.querySelectorAll('[data-nav]').forEach((node) => node.remove());
     window.history.replaceState({}, '', '/');
+    window.localStorage.clear();
   });
 
   it('MM-1107 animates lucide nav icons from the whole route link hover', async () => {
@@ -386,6 +392,96 @@ describe('Dashboard shared entry', () => {
       expect(document.querySelector('.panel--data-wide')).toBeTruthy();
       expect(document.querySelector('.dashboard-shell-constrained--data-wide')).toBeTruthy();
     });
+  });
+
+  it('MM-1114 renders the workflow list display radio group after the brand and before route navigation', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+
+    const group = screen.getByRole('radiogroup', { name: 'Workflow list display' });
+    const brand = screen.getByRole('link', { name: 'MoonMind workflows' });
+    const routeNav = screen.getByRole('navigation', { name: 'MoonMind navigation' });
+    expect(brand.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(group.compareDocumentPosition(routeNav) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const noList = screen.getByRole('radio', { name: 'No list' }) as HTMLInputElement;
+    const sidebarList = screen.getByRole('radio', { name: 'Sidebar list' }) as HTMLInputElement;
+    const fullScreenTable = screen.getByRole('radio', { name: 'Full screen table' }) as HTMLInputElement;
+    expect(noList.checked).toBe(false);
+    expect(sidebarList.checked).toBe(false);
+    expect(fullScreenTable.checked).toBe(true);
+    expect(noList.closest('label')?.getAttribute('title')).toBe('No list');
+    expect(sidebarList.closest('label')?.getAttribute('title')).toBe('Sidebar list');
+    expect(fullScreenTable.closest('label')?.getAttribute('title')).toBe('Full screen table');
+    expect(group.querySelectorAll('.workflow-list-display-option-icon')).toHaveLength(3);
+  });
+
+  it('MM-1114 hides the workflow list display radio group on non-participating pages', async () => {
+    window.history.replaceState({}, '', '/settings');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Settings permissions:')).toBeTruthy();
+    expect(screen.queryByRole('radiogroup', { name: 'Workflow list display' })).toBeNull();
+  });
+
+  it('MM-1114 reflects the resolved sidebar mode on workflow detail and persists hidden selections', async () => {
+    window.localStorage.setItem(
+      DASHBOARD_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: DASHBOARD_PREFERENCES_VERSION,
+        preferences: { workflowWorkspaceSidebarCollapsed: false },
+      }),
+    );
+    window.history.replaceState({}, '', '/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(
+      await screen.findByText(
+        'Workflow detail route loaded: /workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95',
+      ),
+    ).toBeTruthy();
+    expect((screen.getByRole('radio', { name: 'Sidebar list' }) as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect((screen.getByRole('radio', { name: 'No list' }) as HTMLInputElement).checked).toBe(true);
+      expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'No list' }));
+    });
+    expect(window.location.pathname).toBe('/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95');
+    expect(JSON.parse(window.localStorage.getItem(DASHBOARD_PREFERENCES_STORAGE_KEY) ?? '{}')).toMatchObject({
+      preferences: { workflowWorkspaceSidebarCollapsed: true },
+    });
+  });
+
+  it('MM-1114 navigates route-changing workflow list display selections and restores focus deterministically', async () => {
+    window.history.replaceState({}, '', '/workflows?source=temporal');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    expect(
+      await screen.findByText(
+        'Workflow detail route loaded: /workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95',
+      ),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect((screen.getByRole('radio', { name: 'Sidebar list' }) as HTMLInputElement).checked).toBe(true);
+      expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Sidebar list' }));
+    });
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Full screen table' }));
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    await waitFor(() => {
+      expect((screen.getByRole('radio', { name: 'Full screen table' }) as HTMLInputElement).checked).toBe(true);
+      expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Full screen table' }));
+    });
+    expect(window.location.pathname).toBe('/workflows');
   });
 
   it('does not register a dashboard proposal review page for MM-859', async () => {
@@ -610,6 +706,12 @@ describe('Dashboard shared entry', () => {
     );
     expect(dashboardCss).toMatch(
       /\.panel\.panel--data-wide\s*\{[^}]*max-width:\s*min\(112rem,\s*calc\(100vw - 2rem\)\)/s,
+    );
+  });
+
+  it('MM-1114 hides the desktop workflow list display control at the mobile masthead breakpoint', async () => {
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 1180px\)\s*\{[\s\S]*\.workflow-list-display-control\s*\{[^}]*display:\s*none/s,
     );
   });
 
