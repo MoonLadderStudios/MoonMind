@@ -11,7 +11,15 @@ vi.mock('./workflow-list', () => ({
 
 vi.mock('./workflow-detail', () => ({
   default: () => <div data-testid="workflow-detail-entrypoint">Workflow detail entrypoint</div>,
-  WorkflowWorkspaceShell: () => <div data-testid="workflow-workspace-shell">Workflow workspace shell</div>,
+  WorkflowWorkspaceShell: ({
+    displayMode,
+  }: {
+    displayMode?: 'hidden' | 'sidebar' | 'table';
+  }) => (
+    <div data-testid="workflow-workspace-shell" data-display-mode={displayMode ?? 'unset'}>
+      Workflow workspace shell
+    </div>
+  ),
 }));
 
 function mockDesktopViewport(matches: boolean) {
@@ -69,5 +77,26 @@ describe('WorkflowsWorkspacePage', () => {
 
     expect(screen.getByTestId('workflow-workspace-shell')).toBeTruthy();
     expect(screen.queryByTestId('workflow-detail-entrypoint')).toBeNull();
+  });
+
+  it('keeps /workflows as the table primary surface', () => {
+    window.history.pushState({}, 'Workspace Table Test', '/workflows');
+
+    renderWorkspace({ page: 'dashboard', apiBase: '/api' });
+
+    expect(screen.getByTestId('workflow-list-page')).toBeTruthy();
+    expect(screen.queryByTestId('workflow-workspace-shell')).toBeNull();
+  });
+
+  it('passes the resolved hidden/sidebar mode into detail workspace composition', () => {
+    renderWorkspace({
+      page: 'dashboard',
+      apiBase: '/api',
+      initialData: {
+        workflowListDisplayMode: 'hidden',
+      },
+    });
+
+    expect(screen.getByTestId('workflow-workspace-shell').getAttribute('data-display-mode')).toBe('hidden');
   });
 });
