@@ -2047,10 +2047,14 @@ describe('Workflows Entrypoint', () => {
     // The slab intentionally allows overflow so the row actions popover
     // can extend below the table without being clipped.
     expect(getComputedStyle(dataSlab as HTMLElement).overflow).toBe('visible');
+    expect(getComputedStyle(tableWrapper as HTMLElement).width).toBe('calc(100% + 2rem)');
+    expect(getComputedStyle(tableWrapper as HTMLElement).marginLeft).toBe('-1rem');
+    expect(getComputedStyle(tableWrapper as HTMLElement).marginRight).toBe('-1rem');
     expect(getComputedStyle(tableWrapper as HTMLElement).overflowX).toBe('auto');
     expect(getComputedStyle(tableWrapper as HTMLElement).overflowY).toBe('visible');
     expect(getComputedStyle(tableWrapper as HTMLElement).scrollPaddingTop).not.toBe('auto');
     expect(getComputedStyle(table as HTMLElement).borderCollapse).toBe('separate');
+    expect(getComputedStyle(table as HTMLElement).width).toBe('100%');
     expect(getComputedStyle(tableHead as HTMLElement).position).toBe('sticky');
     expect(getComputedStyle(tableHead as HTMLElement).top).toBe('0px');
     expect(getComputedStyle(firstHeader as HTMLElement).position).toBe('sticky');

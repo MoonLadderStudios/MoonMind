@@ -420,11 +420,9 @@ function DashboardLiveUpdateProvider({
 
 function WorkflowListDisplayModeControl({
   effectiveMode,
-  status,
   onSelect,
 }: {
   effectiveMode: WorkflowListDisplayMode;
-  status: string | null;
   onSelect: (mode: WorkflowListDisplayMode) => void;
 }) {
   return (
@@ -432,7 +430,6 @@ function WorkflowListDisplayModeControl({
       className="workflow-list-display-control"
       role="group"
       aria-label="Workflow list display"
-      aria-busy={status === 'Opening first workflow...' ? 'true' : undefined}
     >
       {WORKFLOW_LIST_DISPLAY_MODES.map((mode) => {
         const Icon = iconForWorkflowListMode(mode.icon);
@@ -451,11 +448,6 @@ function WorkflowListDisplayModeControl({
           </button>
         );
       })}
-      {status ? (
-        <span className="workflow-list-display-status" role="status">
-          {status}
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -463,12 +455,10 @@ function WorkflowListDisplayModeControl({
 function DashboardNavigation({
   uiInfo,
   workflowListMode,
-  workflowListStatus,
   onWorkflowListModeSelect,
 }: {
   uiInfo: DashboardUiInfo | null;
   workflowListMode: WorkflowListDisplayMode | null;
-  workflowListStatus: string | null;
   onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -500,7 +490,6 @@ function DashboardNavigation({
       {workflowListMode ? (
         <WorkflowListDisplayModeControl
           effectiveMode={workflowListMode}
-          status={workflowListStatus}
           onSelect={onWorkflowListModeSelect}
         />
       ) : null}
@@ -576,14 +565,12 @@ function AppShell({
   dataWidePanel,
   uiInfo,
   workflowListMode,
-  workflowListStatus,
   onWorkflowListModeSelect,
   children,
 }: {
   dataWidePanel: boolean;
   uiInfo: DashboardUiInfo | null;
   workflowListMode: WorkflowListDisplayMode | null;
-  workflowListStatus: string | null;
   onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
   children: ReactNode;
 }) {
@@ -606,7 +593,6 @@ function AppShell({
           <DashboardNavigation
             uiInfo={uiInfo}
             workflowListMode={workflowListMode}
-            workflowListStatus={workflowListStatus}
             onWorkflowListModeSelect={onWorkflowListModeSelect}
           />
         </div>
@@ -737,7 +723,6 @@ function RoutedDashboardPage({
         dataWidePanel={false}
         uiInfo={uiInfo}
         workflowListMode={null}
-        workflowListStatus={null}
         onWorkflowListModeSelect={handleWorkflowListModeSelect}
       >
         <UnknownPage page={location.pathname} />
@@ -751,7 +736,6 @@ function RoutedDashboardPage({
         dataWidePanel={route.dataWidePanel}
         uiInfo={uiInfo}
         workflowListMode={resolvedDisplay?.effectiveMode ?? null}
-        workflowListStatus={resolutionStatus ?? resolvedDisplay?.status ?? null}
         onWorkflowListModeSelect={handleWorkflowListModeSelect}
       >
         <LoadingPage />
@@ -779,7 +763,6 @@ function RoutedDashboardPage({
       dataWidePanel={layout.dataWidePanel === true}
       uiInfo={uiInfo}
       workflowListMode={resolvedDisplay?.effectiveMode ?? null}
-      workflowListStatus={resolutionStatus ?? resolvedDisplay?.status ?? null}
       onWorkflowListModeSelect={handleWorkflowListModeSelect}
     >
       <PageContent key={routeKey} payload={routedPayload} />
@@ -852,7 +835,6 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
             dataWidePanel={false}
             uiInfo={uiInfo}
             workflowListMode={null}
-            workflowListStatus={null}
             onWorkflowListModeSelect={() => undefined}
           >
             <UnknownPage page={window.location.pathname} />

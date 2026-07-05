@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import WorkflowListPage from './workflow-list';
 import WorkflowDetailEntrypoint, { WorkflowWorkspaceShell } from './workflow-detail';
 import {
@@ -61,6 +62,11 @@ function readWorkflowsWorkspaceDashboardConfig(
   return raw?.dashboardConfig;
 }
 
+function readWorkflowListDisplayStatus(payload: BootPayload): string | null {
+  const raw = payload.initialData as { workflowListDisplayStatus?: unknown } | undefined;
+  return typeof raw?.workflowListDisplayStatus === 'string' ? raw.workflowListDisplayStatus : null;
+}
+
 export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const location = useLocation();
   const workflowId = decodeWorkflowIdFromPath(location.pathname);
@@ -71,8 +77,36 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const workspaceShellEnabled = temporalDashboard?.workspaceShellEnabled !== false;
   const listEnabled = temporalDashboard?.listEnabled !== false;
   const displayMode = readWorkflowListDisplayMode(payload);
+  const displayStatus = readWorkflowListDisplayStatus(payload);
 
   if (!workflowId) {
+    if (displayStatus === 'Opening first workflow...') {
+      return (
+        <section
+          className="workflows-workspace-page workflows-workspace-page--selected"
+          aria-label="Workflows workspace"
+          data-jira-issue="MM-1061"
+        >
+          <div
+            className="workflow-workspace-shell"
+            data-sidebar-collapsed="true"
+            data-workflow-list-display-mode={displayMode ?? 'hidden'}
+          >
+            <main className="workflow-workspace-detail" aria-label="Workflow detail">
+              <div className="workflow-workspace-opening-state" role="status">
+                <LoadingPlaceholder
+                  surface="workflow-detail"
+                  region="details"
+                  variant="detail"
+                  preserveContext
+                />
+                <p>{displayStatus}</p>
+              </div>
+            </main>
+          </div>
+        </section>
+      );
+    }
     return (
       <section className="workflows-workspace-page" aria-label="Workflows workspace" data-jira-issue="MM-1061">
         <WorkflowListPage payload={payload} />
