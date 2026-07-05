@@ -472,15 +472,23 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
       return;
     }
 
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: mode === 'hidden' });
-    dispatchWorkflowListDisplayModeChange(mode);
-    setSelectedMode(mode);
     if (isWorkflowTableRoute(pathname)) {
       const firstWorkflowHref = firstWorkflowDetailHrefFromPage();
       if (firstWorkflowHref) {
+        updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: mode === 'hidden' });
+        dispatchWorkflowListDisplayModeChange(mode);
+        setSelectedMode(mode);
         navigate(firstWorkflowHref);
+        return;
       }
+      setPendingFocusMode('table');
+      setSelectedMode('table');
+      return;
     }
+
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: mode === 'hidden' });
+    dispatchWorkflowListDisplayModeChange(mode);
+    setSelectedMode(mode);
   };
 
   return (
