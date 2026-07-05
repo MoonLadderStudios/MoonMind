@@ -8,14 +8,10 @@ import {
   type KeyboardEvent,
   type ReactNode,
   type Ref,
-  type RefObject,
   type SetStateAction,
 } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Anser from 'anser';
-import {
-  ArrowRight,
-} from 'lucide-react';
 import {
   BotIcon,
   type BotIconHandle,
@@ -48,11 +44,13 @@ import {
   taskEditHref,
 } from '../lib/temporalTaskEditing';
 import {
-  markWorkflowListReturnFocusIntent,
   workflowDetailHref,
   workflowListContextParams,
-  workflowListHrefFromContext,
 } from '../lib/workflowListContext';
+import {
+  readWorkflowListDisplayMode,
+  type WorkflowListDisplayMode,
+} from '../lib/workflowListDisplayMode';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -438,65 +436,6 @@ function WorkflowSidebarRow({
   );
 }
 
-function WorkspaceControlIcon({ children }: { children: ReactNode }) {
-  return (
-    <svg
-      className="workflow-workspace-control-icon"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {children}
-    </svg>
-  );
-}
-
-const SIDEBAR_TOGGLE_ICON = (
-  <WorkspaceControlIcon>
-    <rect x="3" y="4" width="18" height="16" rx="2" />
-    <path d="M9 4v16" />
-  </WorkspaceControlIcon>
-);
-
-function WorkflowSidebarControls({
-  closeButtonRef,
-  onClose,
-  search,
-}: {
-  closeButtonRef: RefObject<HTMLButtonElement | null>;
-  onClose: () => void;
-  search: URLSearchParams;
-}) {
-  return (
-    <div className="workflow-workspace-sidebar-controls">
-      <button
-        ref={closeButtonRef}
-        type="button"
-        className="secondary workflow-workspace-close-sidebar workflow-workspace-sidebar-control"
-        onClick={onClose}
-        aria-label="Close sidebar"
-        title="Close sidebar"
-      >
-        {SIDEBAR_TOGGLE_ICON}
-      </button>
-      <a
-        href={workflowListHrefFromContext(search, { markDetailReturn: true })}
-        className="secondary workflow-workspace-expand-list workflow-workspace-sidebar-control"
-        onClick={markWorkflowListReturnFocusIntent}
-        aria-label="Expand to full list"
-        title="Expand to full list"
-      >
-        <ArrowRight aria-hidden="true" focusable="false" />
-      </a>
-    </div>
-  );
-}
-
 function WorkflowSidebarList({
   rows,
   activeWorkflowId,
@@ -538,24 +477,15 @@ function WorkflowSidebar({
   filteredRows,
   pinnedCurrentRow,
   search,
-  closeButtonRef,
-  onClose,
 }: {
   workflowId: string;
   workflowsQuery: UseQueryResult<z.infer<typeof WorkflowWorkspaceListResponseSchema>, Error>;
   filteredRows: WorkflowWorkspaceRow[];
   pinnedCurrentRow: WorkflowWorkspaceRow | null;
   search: URLSearchParams;
-  closeButtonRef: RefObject<HTMLButtonElement | null>;
-  onClose: () => void;
 }) {
   return (
     <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
-      <WorkflowSidebarControls
-        closeButtonRef={closeButtonRef}
-        onClose={onClose}
-        search={search}
-      />
       {workflowsQuery.isLoading ? (
         <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
       ) : null}
@@ -588,19 +518,19 @@ export function WorkflowWorkspaceShell({
   payload,
   workflowId,
   search,
+  displayMode,
 }: {
   payload: BootPayload;
   workflowId: string;
   search: URLSearchParams;
+  displayMode?: WorkflowListDisplayMode | undefined;
 }) {
   const cfg = readDashboardConfig(payload);
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
-  const [sidebarOpen, setSidebarOpen] = useState(
-    () => !readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
+  const effectiveDisplayMode = displayMode ?? (
+    readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
   );
-  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
-  const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
   const sourceTemporal = search.get('source') === 'temporal';
   const encodedWorkflowId = encodeURIComponent(workflowId);
@@ -643,40 +573,20 @@ export function WorkflowWorkspaceShell({
   return (
     <div
       className="workflow-workspace-shell"
-      data-sidebar-collapsed={sidebarOpen ? 'false' : 'true'}
+      data-sidebar-collapsed={effectiveDisplayMode === 'sidebar' ? 'false' : 'true'}
+      data-workflow-list-display-mode={effectiveDisplayMode}
       data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008"
       data-source-issue="MM-975"
     >
-      {sidebarOpen ? (
+      {effectiveDisplayMode === 'sidebar' ? (
         <WorkflowSidebar
           workflowId={workflowId}
           workflowsQuery={workflowsQuery}
           filteredRows={filteredRows}
           pinnedCurrentRow={pinnedCurrentRow}
           search={search}
-          closeButtonRef={closeButtonRef}
-          onClose={() => {
-            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
-            setSidebarOpen(false);
-            window.setTimeout(() => openButtonRef.current?.focus(), 0);
-          }}
         />
-      ) : (
-        <button
-          ref={openButtonRef}
-          type="button"
-          className="secondary workflow-workspace-open-sidebar workflow-workspace-sidebar-control"
-          onClick={() => {
-            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
-            setSidebarOpen(true);
-            window.setTimeout(() => closeButtonRef.current?.focus(), 0);
-          }}
-          aria-label="Open workflow sidebar"
-          title="Open workflow sidebar"
-        >
-          {SIDEBAR_TOGGLE_ICON}
-        </button>
-      )}
+      ) : null}
       <main className="workflow-workspace-detail" aria-label="Workflow detail">
         <WorkflowDetailPage payload={payload} />
       </main>
@@ -9043,9 +8953,17 @@ export function WorkflowDetailEntrypoint({ payload }: { payload: BootPayload }) 
   const search = useMemo(() => new URLSearchParams(typeof window !== 'undefined' ? window.location.search : ''), []);
   const workspaceShellEnabled = cfg?.features?.temporalDashboard?.workspaceShellEnabled !== false;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
+  const displayMode = readWorkflowListDisplayMode(payload);
 
   if (workspaceShellEnabled && listEnabled && isDesktop && workflowId) {
-    return <WorkflowWorkspaceShell payload={payload} workflowId={workflowId} search={search} />;
+    return (
+      <WorkflowWorkspaceShell
+        payload={payload}
+        workflowId={workflowId}
+        search={search}
+        displayMode={displayMode}
+      />
+    );
   }
 
   return <WorkflowDetailPage payload={payload} />;

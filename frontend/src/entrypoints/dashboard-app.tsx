@@ -20,7 +20,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ScrollText } from 'lucide-react';
+import { PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
 import {
   MoonIcon,
   type MoonIconHandle,
@@ -43,6 +43,12 @@ import {
   type DashboardPage,
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
+import {
+  WORKFLOW_LIST_DISPLAY_MODES,
+  resolveWorkflowListDisplay,
+  type WorkflowListDisplayMode,
+} from '../lib/workflowListDisplayMode';
+import { readDashboardPreferences } from '../utils/dashboardPreferences';
 import { DashboardAlerts } from './dashboard-alerts';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
@@ -63,6 +69,7 @@ const PAGE_IMPORTS = {
 } satisfies Record<DashboardPage, PageImport>;
 
 const NAV_ICON_SIZE = 16;
+const LIST_MODE_ICON_SIZE = 15;
 
 type SharedLayoutConfig = {
   dataWidePanel?: boolean;
@@ -171,6 +178,41 @@ function AnimatedRouteNavLink({
 
 function isSupportedPage(page: string): page is DashboardPage {
   return Object.hasOwn(PAGE_IMPORTS, page);
+}
+
+function iconForWorkflowListMode(icon: string) {
+  if (icon === 'Square') {
+    return Square;
+  }
+  if (icon === 'PanelLeft') {
+    return PanelLeft;
+  }
+  return Rows3;
+}
+
+function workflowIdFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?\/?$/);
+  if (!match?.[1] || match[1] === 'new') {
+    return null;
+  }
+  try {
+    const decoded = decodeURIComponent(match[1]);
+    return decoded.includes('/') ? null : decoded;
+  } catch {
+    return null;
+  }
+}
+
+function firstVisibleWorkflowId(): string | null {
+  const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href^="/workflows/"]'));
+  for (const link of links) {
+    const url = new URL(link.href, window.location.origin);
+    const id = workflowIdFromPath(url.pathname);
+    if (id) {
+      return id;
+    }
+  }
+  return null;
 }
 
 function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
@@ -336,7 +378,49 @@ function DashboardLiveUpdateProvider({
   return <>{children}</>;
 }
 
-function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
+function WorkflowListDisplayModeControl({
+  effectiveMode,
+  onSelect,
+}: {
+  effectiveMode: WorkflowListDisplayMode;
+  onSelect: (mode: WorkflowListDisplayMode) => void;
+}) {
+  return (
+    <div
+      className="workflow-list-display-control"
+      role="group"
+      aria-label="Workflow list display"
+    >
+      {WORKFLOW_LIST_DISPLAY_MODES.map((mode) => {
+        const Icon = iconForWorkflowListMode(mode.icon);
+        const checked = effectiveMode === mode.value;
+        return (
+          <button
+            key={mode.value}
+            type="button"
+            aria-pressed={checked}
+            aria-label={mode.label}
+            title={mode.label}
+            className={`workflow-list-display-option${checked ? ' workflow-list-display-option--selected' : ''}`}
+            onClick={() => onSelect(mode.value)}
+          >
+            <Icon size={LIST_MODE_ICON_SIZE} aria-hidden="true" />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DashboardNavigation({
+  uiInfo,
+  workflowListMode,
+  onWorkflowListModeSelect,
+}: {
+  uiInfo: DashboardUiInfo | null;
+  workflowListMode: WorkflowListDisplayMode | null;
+  onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
+}) {
   const [open, setOpen] = useState(false);
   const location = useLocation();
   const isWorkflowStart = location.pathname.replace(/\/$/, '') === '/workflows/new';
@@ -362,6 +446,13 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
           <span className="masthead-brand-mind">Mind</span>
         </h1>
       </Link>
+
+      {workflowListMode ? (
+        <WorkflowListDisplayModeControl
+          effectiveMode={workflowListMode}
+          onSelect={onWorkflowListModeSelect}
+        />
+      ) : null}
 
       <button
         className="nav-hamburger"
@@ -433,10 +524,14 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
 function AppShell({
   dataWidePanel,
   uiInfo,
+  workflowListMode,
+  onWorkflowListModeSelect,
   children,
 }: {
   dataWidePanel: boolean;
   uiInfo: DashboardUiInfo | null;
+  workflowListMode: WorkflowListDisplayMode | null;
+  onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
   children: ReactNode;
 }) {
   return (
@@ -455,7 +550,11 @@ function AppShell({
         </section>
 
         <div className="dashboard-shell-full">
-          <DashboardNavigation uiInfo={uiInfo} />
+          <DashboardNavigation
+            uiInfo={uiInfo}
+            workflowListMode={workflowListMode}
+            onWorkflowListModeSelect={onWorkflowListModeSelect}
+          />
         </div>
 
         <div
@@ -481,11 +580,65 @@ function RoutedDashboardPage({
   isUiInfoPending: boolean;
 }) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const [requestedMode, setRequestedMode] = useState<WorkflowListDisplayMode>(() => (
+    readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
+  ));
+  const [lastSelectedWorkflowId, setLastSelectedWorkflowId] = useState<string | null>(null);
   const route = resolveDashboardRoute(location.pathname);
+  const resolvedDisplay = resolveWorkflowListDisplay({
+    pathname: location.pathname,
+    search: location.search,
+    requestedMode,
+    selectedWorkflowId: lastSelectedWorkflowId,
+    firstVisibleWorkflowId: null,
+  });
+
+  useEffect(() => {
+    const routeWorkflowId = workflowIdFromPath(location.pathname);
+    if (routeWorkflowId) {
+      setLastSelectedWorkflowId(routeWorkflowId);
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const normalizedPath = location.pathname.replace(/\/$/, '');
+    if (normalizedPath === '/workflows') {
+      setRequestedMode('table');
+    } else if (normalizedPath.startsWith('/workflows/') && normalizedPath !== '/workflows/new') {
+      setRequestedMode((mode) => (mode === 'table' ? 'sidebar' : mode));
+    }
+  }, [location.pathname]);
+
+  const handleWorkflowListModeSelect = (mode: WorkflowListDisplayMode) => {
+    const resolved = resolveWorkflowListDisplay({
+      pathname: location.pathname,
+      search: location.search,
+      requestedMode: mode,
+      selectedWorkflowId: lastSelectedWorkflowId,
+      firstVisibleWorkflowId: firstVisibleWorkflowId(),
+    });
+    if (!resolved) {
+      return;
+    }
+    setRequestedMode(mode);
+    if (resolved.selection.workflowId) {
+      setLastSelectedWorkflowId(resolved.selection.workflowId);
+    }
+    const current = `${location.pathname}${location.search}`;
+    if (resolved.targetPath !== current) {
+      navigate(resolved.targetPath);
+    }
+  };
 
   if (!route) {
     return (
-      <AppShell dataWidePanel={false} uiInfo={uiInfo}>
+      <AppShell
+        dataWidePanel={false}
+        uiInfo={uiInfo}
+        workflowListMode={null}
+        onWorkflowListModeSelect={handleWorkflowListModeSelect}
+      >
         <UnknownPage page={location.pathname} />
       </AppShell>
     );
@@ -493,20 +646,39 @@ function RoutedDashboardPage({
 
   if (route.page === 'workflow-start' && isUiInfoPending) {
     return (
-      <AppShell dataWidePanel={route.dataWidePanel} uiInfo={uiInfo}>
+      <AppShell
+        dataWidePanel={route.dataWidePanel}
+        uiInfo={uiInfo}
+        workflowListMode={resolvedDisplay?.effectiveMode ?? null}
+        onWorkflowListModeSelect={handleWorkflowListModeSelect}
+      >
         <LoadingPage />
       </AppShell>
     );
   }
 
   const routedPayload = payloadForDashboardRoute(payload, route, uiInfo);
+  if (resolvedDisplay) {
+    routedPayload.initialData = {
+      ...(routedPayload.initialData && typeof routedPayload.initialData === 'object'
+        ? routedPayload.initialData
+        : {}),
+      workflowListDisplayMode: resolvedDisplay.effectiveMode,
+      workflowListDisplayStatus: resolvedDisplay.status,
+    };
+  }
   const layout = readSharedLayout(routedPayload);
   const routeKey = route.page === 'workflows-workspace'
     ? 'workflows-workspace'
     : `${route.page}:${route.currentPath}${location.search}${location.hash}`;
 
   return (
-    <AppShell dataWidePanel={layout.dataWidePanel === true} uiInfo={uiInfo}>
+    <AppShell
+      dataWidePanel={layout.dataWidePanel === true}
+      uiInfo={uiInfo}
+      workflowListMode={resolvedDisplay?.effectiveMode ?? null}
+      onWorkflowListModeSelect={handleWorkflowListModeSelect}
+    >
       <PageContent key={routeKey} payload={routedPayload} />
     </AppShell>
   );
@@ -573,7 +745,12 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       <Route
         path="*"
         element={
-          <AppShell dataWidePanel={false} uiInfo={uiInfo}>
+          <AppShell
+            dataWidePanel={false}
+            uiInfo={uiInfo}
+            workflowListMode={null}
+            onWorkflowListModeSelect={() => undefined}
+          >
             <UnknownPage page={window.location.pathname} />
           </AppShell>
         }
