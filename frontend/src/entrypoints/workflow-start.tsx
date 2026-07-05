@@ -23,8 +23,7 @@ import {
   type TemporalTaskInputAttachmentRef,
 } from "../lib/temporalTaskEditing";
 import {
-  isWorkflowListDisplayMode,
-  type WorkflowListDisplayMode,
+  readWorkflowListDisplayMode,
 } from "../lib/workflowListDisplayMode";
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
@@ -5502,17 +5501,11 @@ function workflowStartSidebarRowId(row: WorkflowStartSidebarRow): string {
   return row.workflowId || row.taskId || "";
 }
 
-function readWorkflowStartListDisplayMode(payload: BootPayload): WorkflowListDisplayMode | undefined {
-  const raw = payload.initialData as { workflowListDisplayMode?: unknown } | undefined;
-  const value = typeof raw?.workflowListDisplayMode === "string" ? raw.workflowListDisplayMode : "";
-  return isWorkflowListDisplayMode(value) ? value : undefined;
-}
-
 function WorkflowStartSidebar({ apiBase }: { apiBase: string }) {
   const workflowsQuery = useQuery({
     queryKey: ["workflow-start-sidebar"],
-    queryFn: async (): Promise<WorkflowStartSidebarRow[]> => {
-      const response = await fetch(`${apiBase}/executions?pageSize=25`);
+    queryFn: async ({ signal }): Promise<WorkflowStartSidebarRow[]> => {
+      const response = await fetch(`${apiBase}/executions?pageSize=25`, { signal });
       if (!response.ok) {
         throw new Error(`Failed to fetch workflows: ${response.statusText}`);
       }
@@ -13010,7 +13003,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 }
 
 export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
-  const displayMode = readWorkflowStartListDisplayMode(payload);
+  const displayMode = readWorkflowListDisplayMode(payload);
   if (displayMode !== "sidebar") {
     return <WorkflowStartPageContent payload={payload} />;
   }

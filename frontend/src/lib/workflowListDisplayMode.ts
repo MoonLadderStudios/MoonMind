@@ -86,6 +86,12 @@ export function isWorkflowListDisplayMode(value: string): value is WorkflowListD
   return workflowListDisplayModeByValue(value) !== null;
 }
 
+export function readWorkflowListDisplayMode(payload: { initialData?: unknown }): WorkflowListDisplayMode | undefined {
+  const raw = payload.initialData as { workflowListDisplayMode?: unknown } | undefined;
+  const value = typeof raw?.workflowListDisplayMode === 'string' ? raw.workflowListDisplayMode : '';
+  return isWorkflowListDisplayMode(value) ? value : undefined;
+}
+
 function normalizedPathname(pathname: string): string {
   const rawPath = pathname || '/';
   return rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath;

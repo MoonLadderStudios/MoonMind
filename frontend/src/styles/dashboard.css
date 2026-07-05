@@ -322,7 +322,7 @@ samp {
 }
 
 .workflow-list-display-option--selected,
-.workflow-list-display-option[aria-checked="true"] {
+.workflow-list-display-option[aria-pressed="true"] {
   border-color: rgb(var(--mm-accent) / 0.6);
   background: rgb(var(--mm-accent) / 0.14);
   color: rgb(var(--mm-accent));

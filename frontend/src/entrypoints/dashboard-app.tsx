@@ -387,7 +387,7 @@ function WorkflowListDisplayModeControl({
   return (
     <div
       className="workflow-list-display-control"
-      role="radiogroup"
+      role="group"
       aria-label="Workflow list display"
     >
       {WORKFLOW_LIST_DISPLAY_MODES.map((mode) => {
@@ -397,8 +397,7 @@ function WorkflowListDisplayModeControl({
           <button
             key={mode.value}
             type="button"
-            role="radio"
-            aria-checked={checked}
+            aria-pressed={checked}
             aria-label={mode.label}
             title={mode.label}
             className={`workflow-list-display-option${checked ? ' workflow-list-display-option--selected' : ''}`}

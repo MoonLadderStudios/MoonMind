@@ -48,7 +48,7 @@ import {
   workflowListContextParams,
 } from '../lib/workflowListContext';
 import {
-  isWorkflowListDisplayMode,
+  readWorkflowListDisplayMode,
   type WorkflowListDisplayMode,
 } from '../lib/workflowListDisplayMode';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
@@ -8941,12 +8941,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       )}
     </div>
   );
-}
-
-function readWorkflowListDisplayMode(payload: BootPayload): WorkflowListDisplayMode | undefined {
-  const raw = payload.initialData as { workflowListDisplayMode?: unknown } | undefined;
-  const value = typeof raw?.workflowListDisplayMode === 'string' ? raw.workflowListDisplayMode : '';
-  return isWorkflowListDisplayMode(value) ? value : undefined;
 }
 
 export function WorkflowDetailEntrypoint({ payload }: { payload: BootPayload }) {

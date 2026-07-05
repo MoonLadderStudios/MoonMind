@@ -394,11 +394,11 @@ describe('Dashboard shared entry', () => {
 
     await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
 
-    const group = screen.getByRole('radiogroup', { name: 'Workflow list display' });
+    const group = screen.getByRole('group', { name: 'Workflow list display' });
     expect(group).toBeTruthy();
-    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('false');
-    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('false');
-    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('button', { name: 'No list' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Full screen table' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
@@ -409,13 +409,13 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
-    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95');
     });
     expect(await screen.findByText(/Workflow detail route loaded:/)).toBeTruthy();
-    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('true');
   });
 
   it('hides the workflow list display control on unsupported routes', async () => {

@@ -5,8 +5,7 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import WorkflowListPage from './workflow-list';
 import WorkflowDetailEntrypoint, { WorkflowWorkspaceShell } from './workflow-detail';
 import {
-  isWorkflowListDisplayMode,
-  type WorkflowListDisplayMode,
+  readWorkflowListDisplayMode,
 } from '../lib/workflowListDisplayMode';
 
 const DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
@@ -60,12 +59,6 @@ function readWorkflowsWorkspaceDashboardConfig(
 ): WorkflowsWorkspaceDashboardConfig | undefined {
   const raw = payload.initialData as { dashboardConfig?: WorkflowsWorkspaceDashboardConfig } | undefined;
   return raw?.dashboardConfig;
-}
-
-function readWorkflowListDisplayMode(payload: BootPayload): WorkflowListDisplayMode | undefined {
-  const raw = payload.initialData as { workflowListDisplayMode?: unknown } | undefined;
-  const value = typeof raw?.workflowListDisplayMode === 'string' ? raw.workflowListDisplayMode : '';
-  return isWorkflowListDisplayMode(value) ? value : undefined;
 }
 
 export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
