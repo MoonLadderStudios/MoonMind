@@ -9,7 +9,7 @@ Related: `docs/Workflows/SkillAndPlanContracts.md`, `docs/Workflows/WorkflowStep
 
 ## 1. Summary
 
-An optional **approval policy** that, when enabled, injects an automated validation step after every plan-node execution in `MoonMind.UserWorkflow`. An LLM-powered reviewer agent evaluates whether the step's output satisfies the aims described in its inputs. If the review fails, the step is retried with structured feedback about what went wrong.
+An optional **approval policy** that, when enabled, injects an automated validation step after every plan-node execution in `MoonMind.UserWorkflow`. An LLM-powered reviewer agent evaluates whether the step's output satisfies the aims described in its inputs. If the review fails, the gate first returns structured feedback and a bounded adaptation path, then applies the configured terminal policy only after safe adaptation options are exhausted or unavailable.
 
 The feature is designed as a **toggle** — when enabled, the system automatically wraps every eligible step in a review-retry loop without requiring any changes to the plan itself. Non-idempotent tools (e.g., publish steps that create PRs) are exempt by default to prevent duplicate side effects.
 
@@ -22,6 +22,7 @@ The feature is designed as a **toggle** — when enabled, the system automatical
 - **Automatic injection**: Operators toggle the feature on; the approval policy appears after every step transparently.
 - **LLM-powered review**: A dedicated review activity evaluates step outputs against step inputs/aims using an LLM.
 - **Retry with feedback**: Failed reviews feed structured diagnostics back to the step, allowing it to self-correct.
+- **Adaptive gate behavior**: Failed gates distinguish hard safety blockers from readiness blockers that can be retried, remediated, degraded, or published as a draft handoff.
 - **Bounded retries**: Configurable max review attempts per step to prevent runaway cost.
 - **Observable**: Review verdicts, retries, and feedback are visible in the dashboard and workflow history.
 - **Composable with existing policy**: Works alongside `failure_mode` (`FAIL_FAST` / `CONTINUE`), approval gates, and `MoonMind.AgentRun`.
@@ -47,8 +48,11 @@ flowchart TD
         F -->|PASS| D
         F -->|FAIL & retries remaining| G[Inject Feedback]
         G --> B
-        F -->|FAIL & max retries reached| H[Apply failure_mode Policy]
-        H --> D
+        F -->|FAIL & max retries reached| H{Adaptive path available?}
+        H -->|Yes| I[Record evidence & adaptation next step]
+        H -->|No| J[Apply failure_mode Policy]
+        I --> D
+        J --> D
     end
 ```
 
@@ -214,7 +218,12 @@ for index, node in enumerate(ordered_nodes, start=1):
                 f"(attempt {attempt}), retrying with feedback."
             )
         else:
-            # Final attempt also failed review — apply failure_mode policy
+            # Final attempt also failed review — record evidence and choose
+            # an adaptive path before applying terminal failure_mode.
+            gate_outcome = classify_gate_outcome(node, execution_result, review_verdict)
+            if gate_outcome.adaptive_path is not None:
+                record_gate_adaptation(node, gate_outcome)
+                break
             self._handle_step_failure(
                 node, execution_result, review_verdict,
                 f"Step {index} failed review after {max_attempts} attempts"
@@ -252,6 +261,22 @@ Please address the above issues in this attempt.
 ### 5.3 Step-Level vs. Agent-Internal Review
 
 This system operates at the **orchestration level** (between plan steps). It does not interfere with agent-internal reasoning loops within a `MoonMind.AgentRun` execution. The review evaluates the final output of each plan step against the aims expressed in that step's inputs.
+
+### 5.4 Failed Gate Classification
+
+After bounded review retries are exhausted, the gate classifies the remaining failure before applying `failure_mode`.
+
+Hard safety blockers fail closed. They include unsafe or ambiguous side effects, authority-sensitive operations, credential or provider-profile problems, billing-relevant runtime changes, source-authority uncertainty, and any path that would substitute a less-constrained execution mode. These outcomes must not be silently rerouted, downgraded, or published as ready.
+
+Adaptive/readiness blockers may keep the workflow moving when operator intent and safety boundaries are preserved. Examples include missing local dependencies, unavailable external verification, incomplete provider access for non-mutating checks, or a verifier payload that needs bounded corrective feedback. Supported adaptations include retrying with review feedback, inserting remediation or verification steps where the plan model allows them, choosing degraded mode with explicit evidence, or publishing a draft handoff when the downstream side effect is safe and reviewable.
+
+Every failed gate outcome records actionable evidence:
+
+- the failed check and bounded evidence refs
+- whether the blocker is hard-safety or adaptive/readiness
+- the adaptation attempted or why no adaptation is allowed
+- missing validation and concrete next steps for an operator or follow-up workflow
+- the terminal `failure_mode` result when no adaptive path is available
 
 ---
 
@@ -444,11 +469,13 @@ The `reports/run_summary.json` includes approval policy metrics:
 
 | Existing Policy | Interaction |
 |---|---|
-| `failure_mode: FAIL_FAST` | If a step fails all review attempts, `FAIL_FAST` halts the workflow. |
-| `failure_mode: CONTINUE` | If a step fails all review attempts, execution continues to the next step. |
+| `failure_mode: FAIL_FAST` | If a step fails all review attempts and no safe adaptive path is available, `FAIL_FAST` halts the workflow with blocker evidence and next steps. |
+| `failure_mode: CONTINUE` | If a step fails all review attempts and no safe adaptive path is available, execution continues to the next step only after recording blocker evidence and next steps. |
 | Temporal retry policy | Temporal retries handle transient infrastructure errors. Review gate handles semantic/correctness failures. They operate at different levels. |
 | Approval gates | Review gate runs before any approval gate. A step must pass review before reaching an approval checkpoint. |
 | `MoonMind.AgentRun` 429 retry | The 429 retry in `AgentRun` is internal to that workflow. The approval policy evaluates the final output of the child workflow. |
+
+`failure_mode` is a terminal policy, not the first response to a failed gate. A failed review should first consume bounded retry or remediation opportunities. If the remaining blocker is readiness-related and the side effect is safe and reviewable, the gate may choose a degraded or draft handoff path and must annotate it with the missing validation. Hard safety blockers always fail closed.
 
 ### 9.3 Skip List
 
