@@ -25,6 +25,7 @@ Read relevant documents in the following order before implementing tasks:
 - **Runtime behavior is configurable.** Routine operator changes should use documented, namespaced, safe-by-default configuration with deterministic precedence and observable runtime mode switches.
 - **Architecture stays modular.** Add capabilities behind explicit module boundaries and stable contracts; justify cross-cutting changes and speculative abstractions before implementation.
 - **Resilience is evidence-backed.** Prefer retry, reroute, degraded mode, or explicit workaround when operator intent and safety boundaries are preserved; never silently substitute credentials, provider profiles, billing-relevant runtime values, source authority, or less-constrained execution paths.
+- **Gates steer before they stop.** Validation, approval, publish, and readiness gates should preserve safe progress by returning actionable adaptation paths before halting. Prefer bounded retry, reroute, degraded mode, draft publication, or additional verification/remediation steps when operator intent and safety boundaries are preserved. Reserve hard blockers for unsafe, ambiguous, authority-sensitive, credential-sensitive, billing-relevant, source-authority, or less-constrained execution paths.
 - **Continuous improvement is reviewable.** Runs end with structured outcomes and may produce improvement signals, but suggested changes are opt-in and reviewable.
 - **Docs are durable; specs are execution scratch.** Long-lived desired-state knowledge lives in `docs/` and this file. MoonSpec packets, `docs/tmp/`, `artifacts/`, and other run-local handoffs are temporary execution scaffolding.
 - **Canonical docs stay declarative.** Put migration narratives, phased rollout plans, implementation backlogs, and status checklists in `docs/tmp/` or local handoff paths; delete or archive them when complete.
@@ -74,7 +75,7 @@ When writing code that interacts with skills:
 
 ## Pull Request Preparation
 
-- Create non-draft pull requests by default. Use a draft PR only when the user or task explicitly requests a draft.
+- Create non-draft pull requests by default. Use a draft PR only when the user or task explicitly requests a draft, or when the workflow publish policy explicitly allows draft publication for a readiness/publish gate that cannot complete validation in the current environment but can still publish a safe, reviewable handoff with clear missing evidence and next steps.
 
 ## Testing Instructions
 
