@@ -7136,6 +7136,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     display: contents;
   }
 
+  .workflow-list-display-control {
+    display: none;
+  }
+
   .route-nav {
     position: fixed;
     top: 7rem;
