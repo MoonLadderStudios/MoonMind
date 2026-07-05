@@ -56,7 +56,9 @@ describe('WorkflowRowActionsMenu', () => {
         ),
       ).not.toHaveLength(0);
       expect(screen.getByRole('menuitem', { name: expectedActionName })).toBeTruthy();
-      expect(screen.queryByRole('menuitem', { name: 'Remediate' })).toBeNull();
+      if (expectedActionName !== 'Remediate') {
+        expect(screen.queryByRole('menuitem', { name: 'Remediate' })).toBeNull();
+      }
       expect(screen.queryByText('Checking availability…')).toBeNull();
     });
   };
@@ -256,6 +258,61 @@ describe('WorkflowRowActionsMenu', () => {
     const toast = await screen.findByRole('status');
     const action = within(toast).getByRole('link', { name: 'View workflow' });
     expect(action.getAttribute('href')).toBe('/workflows/mm:rerun-created?source=temporal');
+  });
+
+  it('opens Create Workflow with a remediation draft instead of posting directly', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...detailResponse,
+            state: 'failed',
+            repository: 'MoonLadderStudios/MoonMind',
+            targetRuntime: 'codex_cli',
+            resolvedModel: 'gpt-5',
+            effort: 'high',
+            profileId: 'codex-profile',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    await waitForActionAvailability('Remediate');
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remediate' }));
+
+    expect(window.location.pathname).toBe('/workflows/new');
+    const draft = JSON.parse(
+      new URLSearchParams(window.location.search).get('remediationDraft') || '{}',
+    );
+    expect(draft).toMatchObject({
+      repository: 'MoonLadderStudios/MoonMind',
+      runtime: {
+        mode: 'codex_cli',
+        model: 'gpt-5',
+        effort: 'high',
+        profileId: 'codex-profile',
+      },
+      remediation: {
+        target: {
+          workflowId: 'wf-123',
+          runId: 'run-1',
+        },
+        mode: 'snapshot_then_follow',
+        authorityMode: 'approval_gated',
+        actionPolicyRef: 'admin_healer_default',
+      },
+    });
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === '/api/executions/wf-123/remediation' && init?.method === 'POST',
+      ),
+    ).toBe(false);
   });
 
   it('dismisses rerun success toasts manually', async () => {

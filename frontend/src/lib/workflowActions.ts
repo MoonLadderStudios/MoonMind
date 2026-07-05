@@ -30,6 +30,9 @@ export type ExecutionActionCapabilities = z.infer<typeof ExecutionActionsSchema>
 export const DEFAULT_REMEDIATION_MODE = 'snapshot_then_follow';
 export const DEFAULT_REMEDIATION_AUTHORITY = 'approval_gated';
 export const DEFAULT_REMEDIATION_ACTION_POLICY = 'admin_healer_default';
+export const DEFAULT_REMEDIATION_INSTRUCTIONS =
+  'Investigate the target workflow execution, gather evidence, attempt the smallest safe immediate repair if one seems possible, verify the target outcome, then create a reviewable long-term MoonMind or Agent Skill fix if a recurrence-prevention change is identified.';
+export const REMEDIATION_CREATE_DRAFT_PARAM = 'remediationDraft';
 
 export type WorkflowActionMenuItem = {
   id: string;
@@ -321,6 +324,7 @@ function coalesceString(...values: unknown[]): string {
 }
 
 export type RemediationRuntimeInput = {
+  repository?: string | null | undefined;
   targetRuntime?: string | null | undefined;
   profileId?: string | null | undefined;
   model?: string | null | undefined;
@@ -345,6 +349,145 @@ export function buildRemediationRuntimeRequestFields(
   return {
     ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
   };
+}
+
+export type RemediationCreateDraft = {
+  instructions: string;
+  repository?: string;
+  runtime?: {
+    mode?: string;
+    model?: string;
+    effort?: string;
+    profileId?: string;
+  };
+  remediation: {
+    mode: string;
+    authorityMode: string;
+    target: {
+      workflowId: string;
+      runId?: string;
+    };
+    actionPolicyRef?: string;
+    evidencePolicy: {
+      includeStepLedger: boolean;
+      includeDiagnostics: boolean;
+      tailLines: number;
+    };
+    trigger: { type: 'manual' };
+  };
+};
+
+export function buildRemediationCreateDraft({
+  execution,
+  workflowId,
+  runId,
+  mode = DEFAULT_REMEDIATION_MODE,
+  authorityMode = DEFAULT_REMEDIATION_AUTHORITY,
+  actionPolicyRef = DEFAULT_REMEDIATION_ACTION_POLICY,
+}: {
+  execution: RemediationRuntimeInput | null | undefined;
+  workflowId: string;
+  runId?: string | null | undefined;
+  mode?: string;
+  authorityMode?: string;
+  actionPolicyRef?: string | null | undefined;
+}): RemediationCreateDraft {
+  const runtimeFields = buildRemediationRuntimeRequestFields(execution);
+  const runtime = runtimeFields.runtime as RemediationCreateDraft['runtime'] | undefined;
+  const repository = coalesceString(execution?.repository);
+  const normalizedWorkflowId = coalesceString(workflowId);
+  const normalizedRunId = coalesceString(runId);
+  const normalizedActionPolicyRef = coalesceString(actionPolicyRef);
+
+  return {
+    instructions: DEFAULT_REMEDIATION_INSTRUCTIONS,
+    ...(repository ? { repository } : {}),
+    ...(runtime ? { runtime } : {}),
+    remediation: {
+      mode,
+      authorityMode,
+      target: {
+        workflowId: normalizedWorkflowId,
+        ...(normalizedRunId ? { runId: normalizedRunId } : {}),
+      },
+      ...(normalizedActionPolicyRef ? { actionPolicyRef: normalizedActionPolicyRef } : {}),
+      evidencePolicy: {
+        includeStepLedger: true,
+        includeDiagnostics: true,
+        tailLines: 2000,
+      },
+      trigger: { type: 'manual' },
+    },
+  };
+}
+
+export function remediationCreateHref(draft: RemediationCreateDraft): string {
+  const params = new URLSearchParams();
+  params.set(REMEDIATION_CREATE_DRAFT_PARAM, JSON.stringify(draft));
+  return `/workflows/new?${params.toString()}`;
+}
+
+export function readRemediationCreateDraft(
+  search: string,
+): RemediationCreateDraft | null {
+  const params = new URLSearchParams(search);
+  const raw = params.get(REMEDIATION_CREATE_DRAFT_PARAM);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    const remediation = record.remediation;
+    if (!remediation || typeof remediation !== 'object' || Array.isArray(remediation)) {
+      return null;
+    }
+    const remediationRecord = remediation as Record<string, unknown>;
+    const target = remediationRecord.target;
+    if (!target || typeof target !== 'object' || Array.isArray(target)) return null;
+    const targetRecord = target as Record<string, unknown>;
+    const workflowId = coalesceString(targetRecord.workflowId);
+    if (!workflowId) return null;
+
+    const runtime = record.runtime;
+    const runtimeRecord =
+      runtime && typeof runtime === 'object' && !Array.isArray(runtime)
+        ? (runtime as Record<string, unknown>)
+        : {};
+    return {
+      instructions: coalesceString(record.instructions) || DEFAULT_REMEDIATION_INSTRUCTIONS,
+      ...(coalesceString(record.repository) ? { repository: coalesceString(record.repository) } : {}),
+      ...(Object.keys(runtimeRecord).length > 0
+        ? {
+            runtime: {
+              ...(coalesceString(runtimeRecord.mode) ? { mode: coalesceString(runtimeRecord.mode) } : {}),
+              ...(coalesceString(runtimeRecord.model) ? { model: coalesceString(runtimeRecord.model) } : {}),
+              ...(coalesceString(runtimeRecord.effort) ? { effort: coalesceString(runtimeRecord.effort) } : {}),
+              ...(coalesceString(runtimeRecord.profileId) ? { profileId: coalesceString(runtimeRecord.profileId) } : {}),
+            },
+          }
+        : {}),
+      remediation: {
+        mode: coalesceString(remediationRecord.mode) || DEFAULT_REMEDIATION_MODE,
+        authorityMode:
+          coalesceString(remediationRecord.authorityMode) || DEFAULT_REMEDIATION_AUTHORITY,
+        target: {
+          workflowId,
+          ...(coalesceString(targetRecord.runId) ? { runId: coalesceString(targetRecord.runId) } : {}),
+        },
+        ...(coalesceString(remediationRecord.actionPolicyRef)
+          ? { actionPolicyRef: coalesceString(remediationRecord.actionPolicyRef) }
+          : {}),
+        evidencePolicy: {
+          includeStepLedger: true,
+          includeDiagnostics: true,
+          tailLines: 2000,
+        },
+        trigger: { type: 'manual' },
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 export type RemediationEligibilityInput = {

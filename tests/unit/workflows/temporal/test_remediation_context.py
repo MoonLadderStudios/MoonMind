@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
+    TemporalArtifact,
     TemporalArtifactLink,
     TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
@@ -73,6 +74,7 @@ async def _create_target_and_remediation(
     owner_id=None,
     authority_mode: str = "observe_only",
     action_policy_ref: str = "admin_healer_default",
+    artifact_service: TemporalArtifactService | None = None,
 ):
     owner = owner_id or uuid4()
     mock_client_adapter.start_workflow.side_effect = [
@@ -80,7 +82,9 @@ async def _create_target_and_remediation(
         SimpleNamespace(run_id="remediation-run"),
     ]
     execution_service = TemporalExecutionService(
-        session, client_adapter=mock_client_adapter
+        session,
+        client_adapter=mock_client_adapter,
+        artifact_service=artifact_service,
     )
     target = await execution_service.create_execution(
         workflow_type="MoonMind.UserWorkflow",
@@ -117,6 +121,42 @@ async def _create_target_and_remediation(
         idempotency_key=None,
     )
     return target, remediation
+
+@pytest.mark.asyncio
+async def test_create_execution_builds_remediation_context_artifact(
+    tmp_path,
+    mock_client_adapter,
+) -> None:
+    async with temporal_db(tmp_path) as session:
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            artifact_service=artifact_service,
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink,
+            remediation.workflow_id,
+        )
+        assert link is not None
+        assert link.target_workflow_id == target.workflow_id
+        assert link.context_artifact_ref
+
+        artifact = await session.get(TemporalArtifact, link.context_artifact_ref)
+        assert artifact is not None
+        assert artifact.status == TemporalArtifactStatus.COMPLETE
+        assert artifact.metadata_json["artifact_type"] == "remediation.context"
+
+        remediation_record = await session.get(
+            TemporalExecutionCanonicalRecord,
+            remediation.workflow_id,
+        )
+        assert remediation_record is not None
+        assert link.context_artifact_ref in (remediation_record.artifact_refs or [])
 
 def _admin_permissions(**overrides):
     data = {

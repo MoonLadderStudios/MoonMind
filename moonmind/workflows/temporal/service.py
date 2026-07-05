@@ -70,6 +70,10 @@ from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_pol
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.manifest_ingest import (
     MANIFEST_UPDATE_NAMES,
     ManifestIngestValidationError,
@@ -82,6 +86,7 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
     TERMINAL_MANAGED_SESSION_STATUSES,
 )
+from moonmind.workflows.temporal.remediation_context import RemediationContextBuilder
 from moonmind.schemas.managed_session_models import canonical_managed_session_runtime_id
 from moonmind.statuses.integration import (
     INTEGRATION_STATUS_VALUES,
@@ -383,6 +388,7 @@ class TemporalExecutionService:
         run_continue_as_new_step_threshold: int = 500,
         run_continue_as_new_wait_cycle_threshold: int = 200,
         manifest_continue_as_new_phase_threshold: int = 5,
+        artifact_service: TemporalArtifactService | None = None,
     ) -> None:
         self._session = session
         self._namespace = namespace
@@ -407,6 +413,7 @@ class TemporalExecutionService:
             manifest_continue_as_new_phase_threshold
         )
         self._client_adapter = client_adapter or TemporalClientAdapter()
+        self._artifact_service = artifact_service
 
     async def check_system_paused(self) -> bool:
         """Return True if the system-wide worker pause singleton is active.
@@ -1319,6 +1326,20 @@ class TemporalExecutionService:
             logger.exception(
                 "Failed to start Temporal workflow for execution %s", record.workflow_id
             )
+
+        if remediation_link is not None:
+            try:
+                await RemediationContextBuilder(
+                    session=self._session,
+                    artifact_service=self._artifact_service
+                    or TemporalArtifactService(TemporalArtifactRepository(self._session)),
+                ).build_context(remediation_workflow_id=record.workflow_id)
+                await self._session.refresh(record)
+            except Exception:
+                logger.exception(
+                    "Failed to build remediation context artifact for execution %s",
+                    record.workflow_id,
+                )
 
         synced_record = await self._sync_projection_best_effort(record)
         if scheduled_for is not None and isinstance(

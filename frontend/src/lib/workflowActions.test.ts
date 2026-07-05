@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildRemediationCreateDraft,
   buildRemediationRuntimeRequestFields,
   buildWorkflowActionMenuItems,
+  readRemediationCreateDraft,
+  remediationCreateHref,
   isRemediationEligibleTarget,
   type ExecutionActionCapabilities,
   type WorkflowActionHandlers,
@@ -192,6 +195,59 @@ describe('buildRemediationRuntimeRequestFields', () => {
         profileId: 'profile-1',
       },
     });
+  });
+});
+
+describe('remediation create drafts', () => {
+  it('builds a create-page draft with explicit target identity and runtime fields', () => {
+    const draft = buildRemediationCreateDraft({
+      workflowId: 'mm:target',
+      runId: 'run-1',
+      execution: {
+        repository: 'MoonLadderStudios/MoonMind',
+        targetRuntime: 'codex_cli',
+        resolvedModel: 'gpt-5',
+        effort: 'high',
+        profileId: 'codex-profile',
+      },
+    });
+
+    expect(draft).toMatchObject({
+      repository: 'MoonLadderStudios/MoonMind',
+      runtime: {
+        mode: 'codex_cli',
+        model: 'gpt-5',
+        effort: 'high',
+        profileId: 'codex-profile',
+      },
+      remediation: {
+        mode: 'snapshot_then_follow',
+        authorityMode: 'approval_gated',
+        actionPolicyRef: 'admin_healer_default',
+        target: {
+          workflowId: 'mm:target',
+          runId: 'run-1',
+        },
+        evidencePolicy: {
+          includeStepLedger: true,
+          includeDiagnostics: true,
+          tailLines: 2000,
+        },
+        trigger: { type: 'manual' },
+      },
+    });
+  });
+
+  it('round-trips remediation create drafts through the Create Workflow URL', () => {
+    const draft = buildRemediationCreateDraft({
+      workflowId: 'mm:target',
+      runId: 'run-1',
+      execution: { repository: 'MoonLadderStudios/MoonMind' },
+    });
+
+    const href = remediationCreateHref(draft);
+    expect(href.startsWith('/workflows/new?remediationDraft=')).toBe(true);
+    expect(readRemediationCreateDraft(href.slice('/workflows/new'.length))).toEqual(draft);
   });
 });
 

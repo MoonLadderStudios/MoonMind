@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { DashboardActionDialog } from './DashboardActionDialog';
 import { useDashboardToast } from './dashboard/DashboardToast';
 import { formatStatusLabel } from '../utils/formatters';
+import { navigateTo } from '../lib/navigation';
 import { workflowDetailHref } from '../lib/workflowListContext';
 import {
   taskCompareHref,
@@ -12,13 +13,11 @@ import {
   taskEditHref,
 } from '../lib/temporalTaskEditing';
 import {
-  buildRemediationRuntimeRequestFields,
+  buildRemediationCreateDraft,
   buildWorkflowActionMenuItems,
-  DEFAULT_REMEDIATION_ACTION_POLICY,
-  DEFAULT_REMEDIATION_AUTHORITY,
-  DEFAULT_REMEDIATION_MODE,
   ExecutionActionsSchema,
   isRemediationEligibleTarget,
+  remediationCreateHref,
   type WorkflowActionMenuItem,
 } from '../lib/workflowActions';
 import { WorkflowActionsMenu } from './WorkflowActionsMenu';
@@ -289,45 +288,11 @@ export function WorkflowRowActionsMenu({
     onError: onMutationError,
   });
 
-  const createRemediationMutation = useMutation({
-    mutationFn: async () => {
-      const response = await fetch(`${apiBase}/executions/${encodeURIComponent(workflowId)}/remediation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          repository: execution?.repository ?? null,
-          ...buildRemediationRuntimeRequestFields(execution),
-          instructions: `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
-          remediation: {
-            mode: DEFAULT_REMEDIATION_MODE,
-            authorityMode: DEFAULT_REMEDIATION_AUTHORITY,
-            target: { runId: runId || undefined },
-            actionPolicyRef: DEFAULT_REMEDIATION_ACTION_POLICY,
-            evidencePolicy: {
-              includeStepLedger: true,
-              includeDiagnostics: true,
-              tailLines: 2000,
-            },
-            trigger: { type: 'manual' },
-          },
-        }),
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
-      }
-      return response.json();
-    },
-    onSuccess: invalidate,
-    onError: onMutationError,
-  });
-
   const busy =
     updateMutation.isPending ||
     signalMutation.isPending ||
     cancelMutation.isPending ||
-    failedStepResumeMutation.isPending ||
-    createRemediationMutation.isPending;
+    failedStepResumeMutation.isPending;
 
   const editHref = workflowId
     ? actions?.canEditForRerun
@@ -464,7 +429,15 @@ export function WorkflowRowActionsMenu({
         },
         onCreateRemediation: () => {
           setActionError(null);
-          createRemediationMutation.mutate();
+          if (!workflowId || !execution) return;
+          const href = remediationCreateHref(
+            buildRemediationCreateDraft({
+              execution,
+              workflowId,
+              runId,
+            }),
+          );
+          navigateTo(href);
         },
       },
     });
@@ -477,7 +450,6 @@ export function WorkflowRowActionsMenu({
     canShowEditWorkflow,
     cancelMutation,
     compareHref,
-    createRemediationMutation,
     disabledReason,
     detailHref,
     editHref,

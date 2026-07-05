@@ -4338,9 +4338,7 @@ describe('Workflow Detail Entrypoint', () => {
     }
   });
 
-  it('hides the Remediate action off the Artifacts surface where its controls are unavailable', async () => {
-    // The remediation mode/authority/action-policy controls only render on the Artifacts
-    // tab; surfacing Remediate elsewhere would submit default settings without operator choice.
+  it('shows the Remediate action off the Artifacts surface because Create owns the draft controls', async () => {
     window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
     const actionPayload: BootPayload = {
       ...mockPayload,
@@ -4394,9 +4392,9 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
-    const menu = await openWorkflowActionsMenu('Cancel');
+    const menu = await openWorkflowActionsMenu('Remediate');
     expect(within(menu).getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
-    expect(within(menu).queryByRole('menuitem', { name: 'Remediate' })).toBeNull();
+    expect(within(menu).getByRole('menuitem', { name: 'Remediate' })).toBeTruthy();
   });
 
   it('routes menu selections through direct lifecycle handlers', async () => {
@@ -5860,34 +5858,39 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remediate' }));
 
     await waitFor(() => {
-      const remediationCreateCall = fetchSpy.mock.calls.find(
-        ([url, init]) => String(url) === '/api/executions/test-123/remediation' && init?.method === 'POST',
-      );
-      expect(remediationCreateCall).toBeTruthy();
-      const remediationBody = JSON.parse(String(remediationCreateCall?.[1]?.body));
-      expect(remediationBody).not.toHaveProperty('targetRuntime');
-      expect(remediationBody).not.toHaveProperty('profileId');
-      expect(remediationBody).toMatchObject({
-        repository: 'MoonLadderStudios/MoonMind',
-        runtime: {
-          mode: 'claude_code',
-          model: 'claude-opus-4-1-20250805',
-          effort: 'high',
-          profileId: 'claude_anthropic',
-        },
-        remediation: {
-          mode: 'snapshot_then_follow',
-          authorityMode: 'approval_gated',
-          target: { runId: '01-run' },
-          evidencePolicy: {
-            includeStepLedger: true,
-            includeDiagnostics: true,
-            tailLines: 2000,
-          },
-          trigger: { type: 'manual' },
-        },
-      });
+      expect(navigateTo).toHaveBeenCalledWith(expect.stringMatching(/^\/workflows\/new\?/));
     });
+    const href = vi.mocked(navigateTo).mock.calls.at(-1)?.[0] || '';
+    const remediationBody = JSON.parse(
+      new URLSearchParams(href.split('?')[1] || '').get('remediationDraft') || '{}',
+    );
+    expect(remediationBody).not.toHaveProperty('targetRuntime');
+    expect(remediationBody).not.toHaveProperty('profileId');
+    expect(remediationBody).toMatchObject({
+      repository: 'MoonLadderStudios/MoonMind',
+      runtime: {
+        mode: 'claude_code',
+        model: 'claude-opus-4-1-20250805',
+        effort: 'high',
+        profileId: 'claude_anthropic',
+      },
+      remediation: {
+        mode: 'snapshot_then_follow',
+        authorityMode: 'approval_gated',
+        target: { workflowId: 'test-123', runId: '01-run' },
+        evidencePolicy: {
+          includeStepLedger: true,
+          includeDiagnostics: true,
+          tailLines: 2000,
+        },
+        trigger: { type: 'manual' },
+      },
+    });
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) => String(url) === '/api/executions/test-123/remediation' && init?.method === 'POST',
+      ),
+    ).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve remediation action' }));
 
@@ -5904,7 +5907,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('lets operators choose remediation mode, authority, and action policy before submission', async () => {
+  it('lets operators choose remediation mode, authority, and action policy before opening Create', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-remediation-create-choices/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-remediation-create-choices',
@@ -5927,7 +5930,7 @@ describe('Workflow Detail Entrypoint', () => {
       actions: {},
     };
 
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/executions/test-remediation-create-choices/remediations?direction=')) {
         return Promise.resolve({ ok: true, json: async () => ({ direction: 'inbound', items: [] }) } as Response);
@@ -5937,12 +5940,6 @@ describe('Workflow Detail Entrypoint', () => {
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      if (url.includes('/executions/test-remediation-create-choices/remediation') && init?.method === 'POST') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ workflowId: 'mm:remediation-created' }),
-        } as Response);
       }
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
@@ -5961,22 +5958,24 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.change(screen.getByLabelText('Remediation action policy'), {
       target: { value: 'troubleshooting_only' },
     });
-    const menu = await openWorkflowActionsMenu('Remediate');
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remediate' }));
+    const choicesMenu = await openWorkflowActionsMenu('Remediate');
+    fireEvent.click(within(choicesMenu).getByRole('menuitem', { name: 'Remediate' }));
 
     await waitFor(() => {
-      const remediationCreateCall = fetchSpy.mock.calls.find(
-        ([url, init]) =>
-          String(url) === '/api/executions/test-remediation-create-choices/remediation' &&
-          init?.method === 'POST',
-      );
-      expect(remediationCreateCall).toBeTruthy();
-      expect(JSON.parse(String(remediationCreateCall?.[1]?.body))).toMatchObject({
+      expect(navigateTo).toHaveBeenCalledWith(expect.stringMatching(/^\/workflows\/new\?/));
+    });
+    const choicesHref = vi.mocked(navigateTo).mock.calls.at(-1)?.[0] || '';
+    expect(
+      JSON.parse(
+        new URLSearchParams(choicesHref.split('?')[1] || '').get('remediationDraft') || '{}',
+      ),
+    ).toMatchObject({
+        repository: 'MoonLadderStudios/MoonMind',
         remediation: {
           mode: 'snapshot',
           authorityMode: 'observe_only',
           actionPolicyRef: 'troubleshooting_only',
-          target: { runId: '01-run' },
+          target: { workflowId: 'test-remediation-create-choices', runId: '01-run' },
           evidencePolicy: {
             includeStepLedger: true,
             includeDiagnostics: true,
@@ -5984,7 +5983,13 @@ describe('Workflow Detail Entrypoint', () => {
           },
         },
       });
-    });
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === '/api/executions/test-remediation-create-choices/remediation' &&
+          init?.method === 'POST',
+      ),
+    ).toBe(false);
   });
 
   it('hides remediation creation for ineligible completed targets', async () => {

@@ -5354,6 +5354,88 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
+  it("submits remediation drafts through the normal Create Workflow payload", async () => {
+    const params = new URLSearchParams();
+    params.set(
+      "remediationDraft",
+      JSON.stringify({
+        instructions: "Investigate the target workflow with bounded evidence.",
+        repository: "MoonLadderStudios/MoonMind",
+        runtime: {
+          mode: "codex_cli",
+          model: "gpt-5.4",
+          effort: "high",
+          profileId: "codex-profile",
+        },
+        remediation: {
+          mode: "snapshot_then_follow",
+          authorityMode: "approval_gated",
+          target: {
+            workflowId: "mm:target-workflow",
+            runId: "run-1",
+          },
+          actionPolicyRef: "admin_healer_default",
+          evidencePolicy: {
+            includeStepLedger: true,
+            includeDiagnostics: true,
+            tailLines: 2000,
+          },
+          trigger: { type: "manual" },
+        },
+      }),
+    );
+    window.history.pushState({}, "Task Create", `/workflows/new?${params.toString()}`);
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    expect(await screen.findByDisplayValue("Investigate the target workflow with bounded evidence.")).toBeTruthy();
+    expect(screen.getByDisplayValue("MoonLadderStudios/MoonMind")).toBeTruthy();
+    expect(screen.getByDisplayValue("codex_cli")).toBeTruthy();
+    expect(screen.getByDisplayValue("gpt-5.4")).toBeTruthy();
+    expect(screen.getByDisplayValue("high")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload).toMatchObject({
+      repository: "MoonLadderStudios/MoonMind",
+      targetRuntime: "codex_cli",
+      task: {
+        instructions: "Investigate the target workflow with bounded evidence.",
+        runtime: {
+          mode: "codex_cli",
+          model: "gpt-5.4",
+          effort: "high",
+        },
+        remediation: {
+          mode: "snapshot_then_follow",
+          authorityMode: "approval_gated",
+          target: {
+            workflowId: "mm:target-workflow",
+            runId: "run-1",
+          },
+          actionPolicyRef: "admin_healer_default",
+          evidencePolicy: {
+            includeStepLedger: true,
+            includeDiagnostics: true,
+            tailLines: 2000,
+          },
+          trigger: { type: "manual" },
+        },
+      },
+    });
+  });
+
   it("offers repository options while preserving editable repository entry", async () => {
     renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 

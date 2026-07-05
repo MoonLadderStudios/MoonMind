@@ -22,6 +22,7 @@ import {
   type TemporalTaskEditingExecutionContract,
   type TemporalTaskInputAttachmentRef,
 } from "../lib/temporalTaskEditing";
+import { readRemediationCreateDraft } from "../lib/workflowActions";
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
@@ -5492,6 +5493,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     () => resolveTaskSubmitPageMode(window.location.search),
     [],
   );
+  const remediationCreateDraft = useMemo(
+    () => readRemediationCreateDraft(window.location.search),
+    [],
+  );
   const [workflowStartHeadingQuote] = useState(() => randomWorkflowStartHeading());
   const temporalTaskEditingEnabled = Boolean(
     dashboardConfig.features?.temporalDashboard?.temporalWorkflowEditing ??
@@ -5603,12 +5608,15 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     [dashboardConfig.system?.repositoryOptions?.items],
   );
   const initialRepository = useMemo(() => {
+    if (remediationCreateDraft?.repository) {
+      return remediationCreateDraft.repository;
+    }
     const rememberedRepository = repositoryOptionValue(
       repositoryOptions,
       readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY),
     );
     return rememberedRepository || defaultRepository;
-  }, [defaultRepository, repositoryOptions]);
+  }, [defaultRepository, remediationCreateDraft?.repository, repositoryOptions]);
   const defaultPublishMode = String(
     dashboardConfig.system?.defaultPublishMode || "pr",
   );
@@ -5626,7 +5634,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const supportedAgentRuntimes = dashboardConfig.system
     ?.supportedAgentRuntimes || ["codex_cli", "claude_code"];
 
-  const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
+  const [steps, setSteps] = useState<StepState[]>([
+    createStepStateEntry(1, {
+      instructions: remediationCreateDraft?.instructions || "",
+    }),
+  ]);
   const stepsRef = useRef<StepState[]>(steps);
   const [nextStepNumber, setNextStepNumber] = useState(2);
   // MM-964: the create page remembers the operator's guided vs expert default.
@@ -5636,26 +5648,34 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const [showAdvancedStepOptions, setShowAdvancedStepOptions] = useState(
     () => readDashboardPreferences().createExpertMode,
   );
-  const [runtime, setRuntime] = useState(defaultRuntime);
+  const [runtime, setRuntime] = useState(
+    remediationCreateDraft?.runtime?.mode || defaultRuntime,
+  );
   const [model, setModel] = useState(
     String(
-      defaultTaskModelByRuntime[defaultRuntime] ||
+      remediationCreateDraft?.runtime?.model ||
+        defaultTaskModelByRuntime[remediationCreateDraft?.runtime?.mode || defaultRuntime] ||
         dashboardConfig.system?.defaultModel ||
         dashboardConfig.system?.defaultTaskModel ||
         "",
     ),
   );
-  const [modelManualOverride, setModelManualOverride] = useState(false);
+  const [modelManualOverride, setModelManualOverride] = useState(
+    Boolean(remediationCreateDraft?.runtime?.model),
+  );
   const [effort, setEffort] = useState(
     String(
-      defaultTaskEffortByRuntime[defaultRuntime] ||
+      remediationCreateDraft?.runtime?.effort ||
+        defaultTaskEffortByRuntime[remediationCreateDraft?.runtime?.mode || defaultRuntime] ||
         dashboardConfig.system?.defaultEffort ||
         dashboardConfig.system?.defaultTaskEffort ||
         "",
     ),
   );
   const [repository, setRepository] = useState(initialRepository);
-  const [providerProfile, setProviderProfile] = useState("");
+  const [providerProfile, setProviderProfile] = useState(
+    remediationCreateDraft?.runtime?.profileId || "",
+  );
   const [branch, setBranch] = useState("");
   const [branchTouched, setBranchTouched] = useState(false);
   const [publishMode, setPublishMode] = useState(
@@ -6009,14 +6029,23 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       return;
     }
 
-    setEffort(
-      String(
-        defaultTaskEffortByRuntime[runtime] ||
-          dashboardConfig.system?.defaultEffort ||
-          dashboardConfig.system?.defaultTaskEffort ||
-          "",
-      ),
-    );
+    if (
+      !(
+        pageMode.mode === "create" &&
+        remediationCreateDraft?.runtime?.effort &&
+        !runtimeChanged &&
+        !profileChanged
+      )
+    ) {
+      setEffort(
+        String(
+          defaultTaskEffortByRuntime[runtime] ||
+            dashboardConfig.system?.defaultEffort ||
+            dashboardConfig.system?.defaultTaskEffort ||
+            "",
+        ),
+      );
+    }
 
     if (modelManualOverride && !runtimeChanged && !profileChanged) {
       return;
@@ -6050,6 +6079,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     pageMode.mode,
     providerProfilesQuery.data,
     providerProfile,
+    remediationCreateDraft?.runtime?.effort,
     runtime,
   ]);
 
@@ -10256,6 +10286,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         : {}),
       ...(selectedDependencies.length > 0
         ? { dependsOn: selectedDependencies }
+        : {}),
+      ...(remediationCreateDraft?.remediation
+        ? { remediation: remediationCreateDraft.remediation }
         : {}),
     };
 

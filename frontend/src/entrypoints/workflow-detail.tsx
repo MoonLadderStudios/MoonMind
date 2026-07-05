@@ -47,6 +47,7 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
+import { navigateTo } from '../lib/navigation';
 import {
   markWorkflowListReturnFocusIntent,
   workflowDetailHref,
@@ -55,13 +56,14 @@ import {
 } from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
-  buildRemediationRuntimeRequestFields,
+  buildRemediationCreateDraft,
   buildWorkflowActionMenuItems,
   DEFAULT_REMEDIATION_ACTION_POLICY,
   DEFAULT_REMEDIATION_AUTHORITY,
   DEFAULT_REMEDIATION_MODE,
   ExecutionActionsSchema,
   isRemediationEligibleTarget,
+  remediationCreateHref,
   type WorkflowActionMenuItem,
 } from '../lib/workflowActions';
 import {
@@ -7685,44 +7687,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     onError: (error: Error) => setActionError(error.message),
   });
 
-  const createRemediationMutation = useMutation({
-    mutationFn: async () => {
-      const response = await fetch(`${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          repository: execution?.repository ?? null,
-          ...buildRemediationRuntimeRequestFields(execution),
-          instructions: `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
-          remediation: {
-            mode: remediationMode,
-            authorityMode: remediationAuthority,
-            target: {
-              runId: latestRunId || runId || undefined,
-            },
-            actionPolicyRef: remediationActionPolicy.trim() || undefined,
-            evidencePolicy: {
-              includeStepLedger: true,
-              includeDiagnostics: true,
-              tailLines: 2000,
-            },
-            trigger: { type: 'manual' },
-          },
-        }),
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
-      }
-      return response.json();
-    },
-    onSuccess: () => {
-      setActionNotice('Remediation workflow creation submitted.');
-      invalidate();
-    },
-    onError: (error: Error) => setActionError(error.message),
-  });
-
   const remediationApprovalMutation = useMutation({
     mutationFn: async ({
       remediationWorkflowId,
@@ -7946,7 +7910,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     cancelMutation.isPending ||
     failedStepResumeMutation.isPending ||
     selectedStepRecoveryMutation.isPending ||
-    createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending ||
     checkpointBranchMutation.isPending;
   const editHref = workflowId
@@ -7974,10 +7937,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     );
   };
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
-  // The remediation mode/authority/action-policy controls only render on the Artifacts
-  // tab, so only expose the Remediate action there. Surfacing it on other tabs would let
-  // the operator submit with default remediation settings without seeing those controls.
-  const remediationActionAvailable = canCreateRemediation && artifactsTabActive;
+  const remediationActionAvailable = canCreateRemediation;
   const canShowEditWorkflow = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
   const editTaskUnavailableReason = canShowEditWorkflow
     ? null
@@ -8062,7 +8022,18 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       onBypassDependencies,
       onCreateRemediation: () => {
         setActionError(null);
-        createRemediationMutation.mutate();
+        if (!workflowId || !execution) return;
+        const href = remediationCreateHref(
+          buildRemediationCreateDraft({
+            execution,
+            workflowId,
+            runId: latestRunId || runId,
+            mode: remediationMode,
+            authorityMode: remediationAuthority,
+            actionPolicyRef: remediationActionPolicy,
+          }),
+        );
+        navigateTo(href);
       },
     },
   });
