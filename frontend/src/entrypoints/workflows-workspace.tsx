@@ -4,6 +4,9 @@ import { useLocation } from 'react-router-dom';
 import type { BootPayload } from '../boot/parseBootPayload';
 import WorkflowListPage from './workflow-list';
 import WorkflowDetailEntrypoint, { WorkflowWorkspaceShell } from './workflow-detail';
+import {
+  readWorkflowListDisplayMode,
+} from '../lib/workflowListDisplayMode';
 
 const DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
 
@@ -67,6 +70,7 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const temporalDashboard = cfg?.features?.temporalDashboard;
   const workspaceShellEnabled = temporalDashboard?.workspaceShellEnabled !== false;
   const listEnabled = temporalDashboard?.listEnabled !== false;
+  const displayMode = readWorkflowListDisplayMode(payload);
 
   if (!workflowId) {
     return (
@@ -86,7 +90,12 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
       aria-label="Workflows workspace"
       data-jira-issue="MM-1061"
     >
-      <WorkflowWorkspaceShell payload={payload} workflowId={workflowId} search={search} />
+      <WorkflowWorkspaceShell
+        payload={payload}
+        workflowId={workflowId}
+        search={search}
+        displayMode={displayMode}
+      />
     </section>
   );
 }

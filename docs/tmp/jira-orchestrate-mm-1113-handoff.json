@@ -1,0 +1,109 @@
+{
+  "handoffType": "jira-orchestrate-intake",
+  "updatedAt": "2026-07-05T00:00:00Z",
+  "jiraIssueKey": "MM-1113",
+  "sourceIssueTraceability": {
+    "sourceIssueKey": "MM-1111",
+    "preserveInDownstreamArtifacts": true,
+    "reason": "The managed task instruction explicitly requires preserving source issue MM-1111 traceability."
+  },
+  "classification": {
+    "inputType": "single-story feature request",
+    "reason": "The trusted Jira preset brief identifies one Jira Story with one bounded UI behavior change: add first-workflow fallback and selected-workflow memory for mode changes. The brief references a canonical UI design document as runtime source requirements, but it does not ask to split a broad declarative design into multiple independently testable stories or select an existing feature directory."
+  },
+  "intent": "runtime implementation workflow",
+  "sourceStory": {
+    "summary": "Add first-workflow fallback and selected-workflow memory for mode changes",
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "sourceSections": [
+      "4. Route and presentation matrix",
+      "5. First-workflow fallback",
+      "10. State persistence",
+      "11. Data fetching and cache reuse"
+    ],
+    "claimIds": [
+      "CLAIM-docs-ui-workflowlistdisplaymodes-004",
+      "CLAIM-docs-ui-workflowlistdisplaymodes-005",
+      "CLAIM-docs-ui-workflowlistdisplaymodes-010",
+      "CLAIM-docs-ui-workflowlistdisplaymodes-011"
+    ],
+    "coverageIds": [
+      "DESIGN-REQ-004",
+      "DESIGN-REQ-005",
+      "DESIGN-REQ-010",
+      "DESIGN-REQ-011"
+    ]
+  },
+  "canonicalInput": {
+    "trustedSource": "moonmind.jira.get_issue",
+    "jiraPresetBrief": "MM-1113: Add first-workflow fallback and selected-workflow memory for mode changes",
+    "sourceDesignClassification": "canonical declarative UI contract used as runtime source requirements",
+    "acceptanceCriteria": [
+      "Resolve fallback targets in order: route workflow ID, last explicitly selected authorized workflow, then the first visible row from the current effective list query.",
+      "Expose a resolving state such as Opening first workflow... while the matching list is loading.",
+      "Stay on /workflows and avoid guessed navigation when the list fails or has no rows.",
+      "Open remembered selections absent from active filters only after detail authorization succeeds and label them as current rather than filter-matching.",
+      "Add tests proving unauthorized workflows are not exposed through remembered, first-row, sidebar, table, or pinned-current states."
+    ],
+    "requirements": [
+      "Persist lastSelectedWorkflowId from explicit user workflow selections.",
+      "Use the exact current list query or matching cache for first-row fallback.",
+      "Keep detail data authorization separate from list row presence."
+    ],
+    "alreadyImplementedEvidence": [
+      "frontend/src/entrypoints/workflow-detail.tsx derives sidebar list requests from workflowListContextParams and fetches selected workflow detail separately with a distinct workflow-detail query.",
+      "frontend/src/entrypoints/workflow-detail.tsx can pin the current workflow from authorized detail data when the selected workflow is absent from the sidebar list.",
+      "frontend/src/utils/dashboardPreferences.ts persists workflowWorkspaceSidebarCollapsed but has no lastSelectedWorkflowId preference."
+    ]
+  },
+  "artifactResumeInspection": {
+    "status": "no_existing_moonspec_artifacts_found",
+    "checkedLocations": [
+      "artifacts/",
+      "docs/tmp/",
+      "repository root and workspace MoonSpec artifact paths"
+    ],
+    "checkedPatterns": [
+      "MM-1113",
+      "mm-1113",
+      "spec.md",
+      "plan.md",
+      "tasks.md",
+      "research.md",
+      "quickstart.md",
+      "moonspec-verify"
+    ],
+    "validArtifactsToPreserve": [],
+    "evidence": [
+      "No spec.md, plan.md, tasks.md, research.md, or quickstart.md files were found under the repository or job workspace search paths.",
+      "No existing docs/tmp or artifact handoff for MM-1113 was found before this intake handoff.",
+      "The referenced artifacts/jira-orchestrate-brief.json file is absent in this checkout, so this step used the trusted inline MoonMind issue context as the authoritative brief."
+    ],
+    "resumeFrom": "Specify",
+    "nextStageReason": "Specify is the first incomplete MoonSpec stage because there is no active spec.md to pass the specify gate and no later-stage MoonSpec artifacts to preserve."
+  },
+  "stageGateStatus": {
+    "Specify": "INCOMPLETE",
+    "Plan": "NOT_STARTED",
+    "Tasks": "NOT_STARTED",
+    "Align": "NOT_STARTED",
+    "Implement": "NOT_STARTED",
+    "Verify": "NOT_STARTED"
+  },
+  "stageExecution": {
+    "performedInThisStep": false,
+    "reason": "This managed step is limited to Jira Orchestrate intake classification and artifact resume inspection. It must not run specification, planning, task generation, implementation, verification, publishing, pull request creation, or Jira transitions."
+  },
+  "downstreamInstructions": {
+    "useBriefAsCanonicalInput": true,
+    "treatImplementationDocumentAsRuntimeSourceRequirements": true,
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "resumeFromFirstIncompleteStage": "Specify",
+    "runAsRuntimeImplementationWorkflow": true,
+    "doNotRegenerateValidLaterStageArtifacts": true,
+    "preserveSourceIssueTraceability": [
+      "MM-1111",
+      "MM-1113"
+    ]
+  }
+}

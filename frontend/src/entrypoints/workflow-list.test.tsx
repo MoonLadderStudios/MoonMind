@@ -67,6 +67,32 @@ describe('Workflows Entrypoint', () => {
     expect(document.querySelector('.queue-table-wrapper')).toBeTruthy();
   });
 
+  it('MM-1113 renders only authorized workflow rows returned by the list endpoint', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'authorized-table-row',
+            workflowId: 'authorized-table-row',
+            source: 'temporal',
+            title: 'Authorized table workflow',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    expect(await screen.findByRole('row', { name: /Authorized table workflow/i })).toBeTruthy();
+    expect(screen.queryByText(/unauthorized/i)).toBeNull();
+    expect(screen.queryByRole('link', { name: /unauthorized/i })).toBeNull();
+  });
+
   it('shows structured API validation detail when the workflow list request fails', async () => {
     fetchSpy.mockResolvedValue({
       ok: false,

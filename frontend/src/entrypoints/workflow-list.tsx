@@ -1290,6 +1290,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     updateDashboardPreferences({ liveUpdatesEnabled: enabled });
   }, []);
 
+  const rememberExplicitWorkflowSelection = useCallback((workflowId: string) => {
+    if (workflowId) {
+      updateDashboardPreferences({ lastSelectedWorkflowId: workflowId });
+    }
+  }, []);
+
   const handlePageSizeChange = useCallback(
     (size: number) => {
       setPageSize(size);
@@ -2556,6 +2562,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             <a
                               href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                               className="workflow-list-row-title"
+                              onClick={() => rememberExplicitWorkflowSelection(rowWorkflowId(row))}
                             >
                               {row.title}
                             </a>
@@ -2616,6 +2623,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <a
                           href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                           className="queue-card-title"
+                          onClick={() => rememberExplicitWorkflowSelection(rowWorkflowId(row))}
                         >
                           {row.title}
                         </a>
@@ -2654,6 +2662,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                         className="button secondary queue-card-details-action"
                         role="button"
+                        onClick={() => rememberExplicitWorkflowSelection(rowWorkflowId(row))}
                       >
                         View details
                       </a>

@@ -38,10 +38,6 @@ import {
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
 import {
-  WORKFLOW_LIST_DISPLAY_MODE_CHANGE_EVENT,
-  type WorkflowListDisplayModeChangeDetail,
-} from '../lib/workflowListDisplayMode';
-import {
   recordTemporalTaskEditingClientEvent,
   taskCompareHref,
   taskEditForRerunHref,
@@ -51,6 +47,10 @@ import {
   workflowDetailHref,
   workflowListContextParams,
 } from '../lib/workflowListContext';
+import {
+  readWorkflowListDisplayMode,
+  type WorkflowListDisplayMode,
+} from '../lib/workflowListDisplayMode';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -518,16 +518,18 @@ export function WorkflowWorkspaceShell({
   payload,
   workflowId,
   search,
+  displayMode,
 }: {
   payload: BootPayload;
   workflowId: string;
   search: URLSearchParams;
+  displayMode?: WorkflowListDisplayMode | undefined;
 }) {
   const cfg = readDashboardConfig(payload);
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
-  const [sidebarOpen, setSidebarOpen] = useState(
-    () => !readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
+  const effectiveDisplayMode = displayMode ?? (
+    readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
   );
   const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
   const sourceTemporal = search.get('source') === 'temporal';
@@ -568,29 +570,15 @@ export function WorkflowWorkspaceShell({
     ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
     : null;
 
-  useEffect(() => {
-    const handleDisplayModeChange = (event: Event) => {
-      const mode = (event as CustomEvent<WorkflowListDisplayModeChangeDetail>).detail?.mode;
-      if (mode === 'hidden') {
-        updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
-        setSidebarOpen(false);
-      } else if (mode === 'sidebar') {
-        updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
-        setSidebarOpen(true);
-      }
-    };
-    window.addEventListener(WORKFLOW_LIST_DISPLAY_MODE_CHANGE_EVENT, handleDisplayModeChange);
-    return () => window.removeEventListener(WORKFLOW_LIST_DISPLAY_MODE_CHANGE_EVENT, handleDisplayModeChange);
-  }, []);
-
   return (
     <div
       className="workflow-workspace-shell"
-      data-sidebar-collapsed={sidebarOpen ? 'false' : 'true'}
+      data-sidebar-collapsed={effectiveDisplayMode === 'sidebar' ? 'false' : 'true'}
+      data-workflow-list-display-mode={effectiveDisplayMode}
       data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008"
       data-source-issue="MM-975"
     >
-      {sidebarOpen ? (
+      {effectiveDisplayMode === 'sidebar' ? (
         <WorkflowSidebar
           workflowId={workflowId}
           workflowsQuery={workflowsQuery}
@@ -8965,9 +8953,17 @@ export function WorkflowDetailEntrypoint({ payload }: { payload: BootPayload }) 
   const search = useMemo(() => new URLSearchParams(typeof window !== 'undefined' ? window.location.search : ''), []);
   const workspaceShellEnabled = cfg?.features?.temporalDashboard?.workspaceShellEnabled !== false;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
+  const displayMode = readWorkflowListDisplayMode(payload);
 
   if (workspaceShellEnabled && listEnabled && isDesktop && workflowId) {
-    return <WorkflowWorkspaceShell payload={payload} workflowId={workflowId} search={search} />;
+    return (
+      <WorkflowWorkspaceShell
+        payload={payload}
+        workflowId={workflowId}
+        search={search}
+        displayMode={displayMode}
+      />
+    );
   }
 
   return <WorkflowDetailPage payload={payload} />;

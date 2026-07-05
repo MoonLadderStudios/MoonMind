@@ -15,10 +15,7 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { DashboardApp } from './dashboard-app';
 import { navigateTo } from '../lib/navigation';
-import {
-  DASHBOARD_PREFERENCES_STORAGE_KEY,
-  DASHBOARD_PREFERENCES_VERSION,
-} from '../utils/dashboardPreferences';
+import { readDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -291,7 +288,6 @@ describe('Dashboard shared entry', () => {
   });
 
   beforeEach(() => {
-    window.localStorage.clear();
     Object.values(animatedNavIconMocks).forEach((mock) => mock.mockClear());
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -326,8 +322,8 @@ describe('Dashboard shared entry', () => {
     fetchSpy.mockRestore();
     window.WebSocket = originalWebSocket;
     document.querySelectorAll('[data-nav]').forEach((node) => node.remove());
-    window.history.replaceState({}, '', '/');
     window.localStorage.clear();
+    window.history.replaceState({}, '', '/');
   });
 
   it('MM-1107 animates lucide nav icons from the whole route link hover', async () => {
@@ -394,141 +390,43 @@ describe('Dashboard shared entry', () => {
     });
   });
 
-  it.each([
-    ['/workflows', 'Workflow list route loaded', 'Full screen table'],
-    ['/workflows/new', 'Workflow start route loaded', 'No list'],
-    [
-      '/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95',
-      'Workflow detail route loaded: /workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95',
-      'Sidebar list',
-    ],
-  ])('MM-1114 renders the workflow list display radio group after the brand and before route navigation on %s', async (path, expectedText, checkedLabel) => {
-    window.history.replaceState({}, '', path);
+  it('renders one workflow list display radio group on covered workflow surfaces', async () => {
+    window.history.replaceState({}, '', '/workflows');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByText(expectedText)).toBeTruthy();
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
 
-    const group = screen.getByRole('radiogroup', { name: 'Workflow list display' });
-    const brand = screen.getByRole('link', { name: 'MoonMind workflows' });
-    const routeNav = screen.getByRole('navigation', { name: 'MoonMind navigation' });
-    expect(brand.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(group.compareDocumentPosition(routeNav) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-
-    const noList = screen.getByRole('radio', { name: 'No list' }) as HTMLInputElement;
-    const sidebarList = screen.getByRole('radio', { name: 'Sidebar list' }) as HTMLInputElement;
-    const fullScreenTable = screen.getByRole('radio', { name: 'Full screen table' }) as HTMLInputElement;
-    expect(noList.checked).toBe(checkedLabel === 'No list');
-    expect(sidebarList.checked).toBe(checkedLabel === 'Sidebar list');
-    expect(fullScreenTable.checked).toBe(checkedLabel === 'Full screen table');
-    expect(noList.closest('label')?.getAttribute('title')).toBe('No list');
-    expect(sidebarList.closest('label')?.getAttribute('title')).toBe('Sidebar list');
-    expect(fullScreenTable.closest('label')?.getAttribute('title')).toBe('Full screen table');
-    expect(group.querySelectorAll('.workflow-list-display-option-icon')).toHaveLength(3);
-    expect(noList.closest('label')?.querySelector('svg')?.classList.contains('lucide-square')).toBe(true);
-    expect(sidebarList.closest('label')?.querySelector('svg')?.classList.contains('lucide-panel-left')).toBe(true);
-    expect(fullScreenTable.closest('label')?.querySelector('svg')?.classList.contains('lucide-rows-3')).toBe(true);
-    expect(screen.getAllByRole('radiogroup', { name: 'Workflow list display' })).toHaveLength(1);
-    expect(screen.getAllByRole('radio')).toHaveLength(3);
+    const group = screen.getByRole('group', { name: 'Workflow list display' });
+    expect(group).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'No list' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Full screen table' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
   });
 
-  it('MM-1114 hides the workflow list display radio group on non-participating pages', async () => {
+  it('opens a visible workflow when sidebar mode is selected from the workflows table', async () => {
+    window.history.replaceState({}, '', '/workflows?source=temporal');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95');
+    });
+    expect(await screen.findByText(/Workflow detail route loaded:/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('hides the workflow list display control on unsupported routes', async () => {
     window.history.replaceState({}, '', '/settings');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByText('Settings permissions:')).toBeTruthy();
+    await screen.findByText('Settings permissions:');
+
     expect(screen.queryByRole('radiogroup', { name: 'Workflow list display' })).toBeNull();
-  });
-
-  it('MM-1114 reflects the resolved sidebar mode on workflow detail and persists hidden selections', async () => {
-    window.localStorage.setItem(
-      DASHBOARD_PREFERENCES_STORAGE_KEY,
-      JSON.stringify({
-        version: DASHBOARD_PREFERENCES_VERSION,
-        preferences: { workflowWorkspaceSidebarCollapsed: false },
-      }),
-    );
-    window.history.replaceState({}, '', '/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95');
-    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
-
-    expect(
-      await screen.findByText(
-        'Workflow detail route loaded: /workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95',
-      ),
-    ).toBeTruthy();
-    expect((screen.getByRole('radio', { name: 'Sidebar list' }) as HTMLInputElement).checked).toBe(true);
-
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
-
-    await waitFor(() => {
-      expect((screen.getByRole('radio', { name: 'No list' }) as HTMLInputElement).checked).toBe(true);
-      expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'No list' }));
-    });
-    expect(window.location.pathname).toBe('/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95');
-    expect(JSON.parse(window.localStorage.getItem(DASHBOARD_PREFERENCES_STORAGE_KEY) ?? '{}')).toMatchObject({
-      preferences: { workflowWorkspaceSidebarCollapsed: true },
-    });
-  });
-
-  it('MM-1114 keeps unsupported sidebar mode disabled on create routes', async () => {
-    window.localStorage.setItem(
-      DASHBOARD_PREFERENCES_STORAGE_KEY,
-      JSON.stringify({
-        version: DASHBOARD_PREFERENCES_VERSION,
-        preferences: { workflowWorkspaceSidebarCollapsed: true },
-      }),
-    );
-    window.history.replaceState({}, '', '/workflows/new');
-    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
-
-    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
-
-    const group = screen.getByRole('radiogroup', { name: 'Workflow list display' });
-    const noList = screen.getByRole('radio', { name: 'No list' }) as HTMLInputElement;
-    const sidebarList = screen.getByRole('radio', { name: 'Sidebar list' }) as HTMLInputElement;
-    expect(noList.checked).toBe(true);
-    expect(sidebarList.disabled).toBe(true);
-
-    fireEvent.click(sidebarList);
-
-    await waitFor(() => {
-      expect(noList.checked).toBe(true);
-    });
-    expect(group.contains(sidebarList)).toBe(true);
-    expect(JSON.parse(window.localStorage.getItem(DASHBOARD_PREFERENCES_STORAGE_KEY) ?? '{}')).toMatchObject({
-      preferences: { workflowWorkspaceSidebarCollapsed: true },
-    });
-    expect(screen.queryByRole('button', { name: /hide workflow sidebar|open workflow sidebar|expand workflow list/i })).toBeNull();
-  });
-
-  it('MM-1114 navigates route-changing workflow list display selections and restores focus deterministically', async () => {
-    window.history.replaceState({}, '', '/workflows?source=temporal');
-    const { queryClient } = renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
-    queryClient.setQueryData(['workflow-list'], {
-      items: [{ workflowId: 'mm:97d44980-355c-4300-96a7-0ad166440d95' }],
-    });
-
-    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
-
-    expect(
-      await screen.findByText(
-        'Workflow detail route loaded: /workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95',
-      ),
-    ).toBeTruthy();
-    await waitFor(() => {
-      expect((screen.getByRole('radio', { name: 'Sidebar list' }) as HTMLInputElement).checked).toBe(true);
-      expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Sidebar list' }));
-    });
-
-    fireEvent.click(screen.getByRole('radio', { name: 'Full screen table' }));
-
-    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    await waitFor(() => {
-      expect((screen.getByRole('radio', { name: 'Full screen table' }) as HTMLInputElement).checked).toBe(true);
-      expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Full screen table' }));
-    });
-    expect(window.location.pathname).toBe('/workflows');
   });
 
   it('does not register a dashboard proposal review page for MM-859', async () => {
@@ -725,6 +623,328 @@ describe('Dashboard shared entry', () => {
     expect(screen.queryByText('Workflow detail route loaded: /workflows/first/debug')).toBeNull();
   });
 
+  it('MM-1113 opens an authorized remembered workflow when leaving the full table', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=completed&limit=50');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'remembered-123' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions/remembered-123?source=temporal') {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: 'remembered-123' }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fetchSpy.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/remembered-123');
+    });
+    expect(window.location.search).toContain('stateIn=completed');
+    expect(window.location.search).toContain('limit=50');
+    expect(window.location.search).toContain('source=temporal');
+    expect(fetchSpy).toHaveBeenCalledWith('/api/executions/remembered-123?source=temporal');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions?'))).toBe(false);
+    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+  });
+
+  it('MM-1113 keeps a route-selected workflow when switching detail-compatible modes', async () => {
+    window.history.replaceState({}, '', '/workflows/route-123?stateIn=failed&limit=10');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'remembered-123' });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow detail route loaded: /workflows/route-123')).toBeTruthy();
+    fetchSpy.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+    });
+    expect(window.location.pathname).toBe('/workflows/route-123');
+    expect(window.location.search).toBe('?stateIn=failed&limit=10');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/remembered-123'))).toBe(false);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions?'))).toBe(false);
+  });
+
+  it('MM-1113 resolves the first row from the exact current list query context', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/workflows?stateIn=completed&source=jules&limit=50&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&sort=updatedAt',
+    );
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (
+        url ===
+        '/api/executions?stateIn=completed&source=jules&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&pageSize=50'
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [{ workflowId: 'first-query-row', title: 'First query row' }] }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/first-query-row');
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/executions?stateIn=completed&source=jules&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&pageSize=50',
+    );
+    expect(window.location.search).toContain('stateIn=completed');
+    expect(window.location.search).toContain('source=jules');
+    expect(window.location.search).toContain('limit=50');
+    expect(window.location.search).toContain('nextPageToken=cursor-1');
+    expect(window.location.search).not.toContain('sort=updatedAt');
+  });
+
+  it('MM-1113 ignores unauthorized remembered selections and opens the first visible row', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=completed&limit=50');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'unauthorized-123' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions/unauthorized-123?source=temporal') {
+        return Promise.resolve({ ok: false, status: 403, statusText: 'Forbidden' } as Response);
+      }
+      if (url === '/api/executions?stateIn=completed&source=temporal&pageSize=50') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{ workflowId: 'visible-456', taskId: 'visible-456', title: 'Visible authorized row' }],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/visible-456');
+    });
+    expect(window.location.pathname).not.toBe('/workflows/unauthorized-123');
+    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(false);
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('unauthorized-123');
+  });
+
+  it('MM-1113 never navigates to or renders an unauthorized remembered workflow during fallback', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=completed');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'secret-remembered' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions/secret-remembered?source=temporal') {
+        return Promise.resolve({ ok: false, status: 403, statusText: 'Forbidden' } as Response);
+      }
+      if (url === '/api/executions?stateIn=completed&source=temporal&pageSize=25') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{ workflowId: 'authorized-row', taskId: 'authorized-row', title: 'Authorized row' }],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/authorized-row');
+    });
+    expect(window.location.pathname).not.toBe('/workflows/secret-remembered');
+    expect(screen.queryByText(/secret-remembered/i)).toBeNull();
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('secret-remembered');
+  });
+
+  it('MM-1113 selects only returned authorized first-row data', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=running');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=running&source=temporal&pageSize=25') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [{ taskId: 'authorized-task-row', title: 'Authorized task row' }] }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/authorized-task-row');
+    });
+    expect(window.location.pathname).not.toContain('unauthorized');
+    expect(screen.queryByText(/unauthorized/i)).toBeNull();
+  });
+
+  it('MM-1113 exposes a resolving state while the matching workflow list is loading', async () => {
+    window.history.replaceState({}, '', '/workflows?limit=25');
+    let resolveList: ((response: Response) => void) | undefined;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?source=temporal&pageSize=25') {
+        return new Promise<Response>((resolve) => {
+          resolveList = resolve;
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
+    const completeList = resolveList;
+    if (!completeList) {
+      throw new Error('Expected workflow list request to be pending.');
+    }
+    completeList({
+      ok: true,
+      json: async () => ({ items: [{ workflowId: 'first-loading-row' }] }),
+    } as Response);
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/first-loading-row');
+    });
+  });
+
+  it('MM-1113 stays on the table when fallback list resolution fails or has no rows', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=failed');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=failed&source=temporal&pageSize=25') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    expect((await screen.findByRole('status')).textContent).toContain('No workflow to open.');
+    expect(window.location.pathname).toBe('/workflows');
+  });
+
+  it('MM-1113 treats non-object fallback list responses as empty', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=completed');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=completed&source=temporal&pageSize=25') {
+        return Promise.resolve({ ok: true, json: async () => null } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    expect((await screen.findByRole('status')).textContent).toContain('No workflow to open.');
+    expect(window.location.pathname).toBe('/workflows');
+  });
+
+  it('MM-1113 stays on the table and exposes a recoverable state when fallback list loading fails', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=failed');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=failed&source=temporal&pageSize=25') {
+        return Promise.resolve({ ok: false, status: 503, statusText: 'Service Unavailable' } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    expect((await screen.findByRole('status')).textContent).toContain('Workflow list is unavailable.');
+    expect(window.location.pathname).toBe('/workflows');
+    expect(window.location.search).toBe('?stateIn=failed');
+  });
+
+  it('MM-1113 ignores stale fallback navigation after leaving the workflow surface', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=running');
+    let resolveList: ((response: Response) => void) | undefined;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=running&source=temporal&pageSize=25') {
+        return new Promise<Response>((resolve) => {
+          resolveList = resolve;
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
+    fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+    expect(await screen.findByText('Settings permissions:')).toBeTruthy();
+
+    const completeList = resolveList;
+    if (!completeList) {
+      throw new Error('Expected workflow list request to be pending.');
+    }
+    completeList({
+      ok: true,
+      json: async () => ({ items: [{ workflowId: 'stale-row' }] }),
+    } as Response);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/settings');
+    });
+    expect(window.location.search).toBe('');
+    expect(screen.queryByText(/stale-row/i)).toBeNull();
+  });
+
   it('does not render operational metrics on the workflows home dashboard', async () => {
     window.history.replaceState({}, '', '/workflows');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
@@ -754,20 +974,6 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).toMatch(
       /\.panel\.panel--data-wide\s*\{[^}]*max-width:\s*min\(112rem,\s*calc\(100vw - 2rem\)\)/s,
     );
-  });
-
-  it('MM-1114 hides the desktop workflow list display control at the mobile masthead breakpoint', async () => {
-    expect(dashboardCss).toMatch(
-      /@media \(max-width: 767px\)\s*\{[\s\S]*\.workflow-list-display-control\s*\{[^}]*display:\s*none/s,
-    );
-  });
-
-  it('MM-1114 styles workflow list display focus and checked state with dashboard control tokens and non-color indication', async () => {
-    const focusBlock = cssRuleBlock(dashboardCss, '.workflow-list-display-option:has(input:focus-visible)');
-    expect(focusBlock).toContain('box-shadow: var(--mm-control-focus-ring);');
-
-    const checkedBlock = cssRuleBlock(dashboardCss, '.workflow-list-display-option:has(input:checked)');
-    expect(checkedBlock).toContain('box-shadow: inset 0 0 0 1px rgb(var(--mm-accent) / 0.55);');
   });
 
   it('lets edge-to-edge data panels beat the 112rem cap via higher specificity', async () => {
@@ -1809,14 +2015,14 @@ describe('Dashboard shared entry', () => {
     expect(darkBlock).toContain('--mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.95);');
   });
 
-  it('keeps the masthead mobile breakpoint isolated from the shared mobile layout rules', async () => {
+  it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/dashboard.css`,
       'utf8',
     );
 
-    const mastheadBreakpointStart = dashboardCss.indexOf('@media (max-width: 767px)');
+    const mastheadBreakpointStart = dashboardCss.indexOf('@media (max-width: 1180px)');
     const sharedMobileStart = dashboardCss.indexOf('@media (max-width: 900px)');
     const mastheadResponsive = dashboardCss.slice(
       mastheadBreakpointStart,

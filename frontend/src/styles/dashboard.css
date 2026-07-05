@@ -278,6 +278,72 @@ samp {
   color: inherit;
 }
 
+.workflow-list-display-control {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.18rem;
+  border: 1px solid rgb(var(--mm-border) / 0.7);
+  border-radius: 0.55rem;
+  background: rgb(var(--mm-panel) / 0.68);
+}
+
+.workflow-list-display-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 0.42rem;
+  background: transparent;
+  color: rgb(var(--mm-muted));
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+
+.workflow-list-display-option:hover,
+.workflow-list-display-option:focus-visible {
+  border-color: rgb(var(--mm-accent) / 0.45);
+  background: rgb(var(--mm-accent) / 0.1);
+  color: rgb(var(--mm-ink));
+  transform: none;
+  filter: none;
+}
+
+.workflow-list-display-option:focus-visible {
+  outline: none;
+  box-shadow: var(--mm-control-focus-ring);
+}
+
+.workflow-list-display-option--selected,
+.workflow-list-display-option[aria-pressed="true"] {
+  border-color: rgb(var(--mm-accent) / 0.6);
+  background: rgb(var(--mm-accent) / 0.14);
+  color: rgb(var(--mm-accent));
+}
+
+.workflow-list-display-option svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex: 0 0 auto;
+  stroke-width: 2;
+}
+
+.workflow-list-display-status {
+  max-width: 18ch;
+  padding: 0 0.38rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.76rem;
+  line-height: 1.15;
+  white-space: normal;
+}
+
 .masthead-title-meta {
   display: flex;
   align-items: center;
@@ -295,78 +361,6 @@ samp {
 
 .masthead-title-meta .masthead-meta-item {
   max-width: none;
-}
-
-.workflow-list-display-control {
-  display: inline-flex;
-  align-items: center;
-  justify-self: start;
-  gap: 0.18rem;
-  min-width: 0;
-  padding: 0.18rem;
-  border: 1px solid rgb(var(--mm-border) / 0.66);
-  border-radius: 0.56rem;
-  background: rgb(var(--mm-panel) / 0.52);
-  box-shadow: inset 0 1px 0 var(--mm-glass-edge);
-}
-
-.workflow-list-display-option {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  border-radius: 0.42rem;
-  color: rgb(var(--mm-ink) / 0.72);
-  cursor: pointer;
-  transition: background 130ms ease, color 130ms ease, box-shadow 130ms ease;
-}
-
-.workflow-list-display-option:hover {
-  color: rgb(var(--mm-ink));
-  background: rgb(var(--mm-ink) / 0.06);
-}
-
-.workflow-list-display-option:has(input:checked) {
-  color: rgb(var(--mm-ink));
-  background: rgb(var(--mm-accent) / 0.16);
-  box-shadow: inset 0 0 0 1px rgb(var(--mm-accent) / 0.55);
-}
-
-.workflow-list-display-option:has(input:focus-visible) {
-  box-shadow: var(--mm-control-focus-ring);
-}
-
-.workflow-list-display-option input[type="radio"] {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.workflow-list-display-option-icon {
-  position: relative;
-  z-index: 1;
-  width: 0.94rem;
-  height: 0.94rem;
-  pointer-events: none;
-  stroke-width: 2.15;
-}
-
-.workflow-list-display-option-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 .version-badge {
@@ -7111,7 +7105,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 1180px) {
   .masthead {
     display: flex;
     justify-content: flex-start;
@@ -7122,10 +7116,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   .masthead-brand {
     flex: 1 1 auto;
     min-width: 0;
-  }
-
-  .workflow-list-display-control {
-    display: none;
   }
 
   .nav-hamburger {
@@ -7412,13 +7402,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 /* The detail is a centered, width-bounded container in a stable grid column.
- * Sidebar collapse hides the navigation and lets the detail use the full
- * desktop shell width. */
+ * Sidebar collapse hides the navigation in its reserved left column, so the
+ * detail only reflows when the viewport is compressed below 85rem. */
 .workflow-workspace-detail {
   min-width: 0;
   width: 100%;
   max-width: 66rem;
   margin-inline: auto;
+}
+
+.workflow-workspace-shell[data-sidebar-collapsed="true"] .workflow-workspace-detail {
+  grid-column: 1 / -1;
 }
 
 @media (min-width: 768px) {

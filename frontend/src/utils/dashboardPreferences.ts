@@ -70,6 +70,8 @@ export type DashboardPreferences = {
   debugFieldsVisible: boolean;
   /** Whether the desktop workflow detail sidebar is collapsed on reload. */
   workflowWorkspaceSidebarCollapsed: boolean;
+  /** Last workflow explicitly opened by the operator. */
+  lastSelectedWorkflowId: string;
   /** Preferred default workflow detail tab. */
   preferredDetailTab: WorkflowDetailTab;
   /** Preferred runtime default for the create page, where safe. */
@@ -95,6 +97,7 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   createExpertMode: false,
   debugFieldsVisible: true,
   workflowWorkspaceSidebarCollapsed: false,
+  lastSelectedWorkflowId: '',
   preferredDetailTab: 'overview',
   defaultRuntime: '',
   defaultProviderProfile: '',
@@ -188,6 +191,7 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
       value.workflowWorkspaceSidebarCollapsed,
       DEFAULT_DASHBOARD_PREFERENCES.workflowWorkspaceSidebarCollapsed,
     ),
+    lastSelectedWorkflowId: sanitizeString(value.lastSelectedWorkflowId),
     preferredDetailTab: sanitizeDetailTab(value.preferredDetailTab),
     defaultRuntime: sanitizeString(value.defaultRuntime),
     defaultProviderProfile: sanitizeString(value.defaultProviderProfile),
