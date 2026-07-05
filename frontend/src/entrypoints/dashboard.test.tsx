@@ -824,6 +824,27 @@ describe('Dashboard shared entry', () => {
     expect(window.location.pathname).toBe('/workflows');
   });
 
+  it('MM-1113 treats non-object fallback list responses as empty', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=completed');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=completed&source=temporal&pageSize=25') {
+        return Promise.resolve({ ok: true, json: async () => null } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+
+    expect((await screen.findByRole('status')).textContent).toContain('No workflow to open.');
+    expect(window.location.pathname).toBe('/workflows');
+  });
+
   it('MM-1113 stays on the table and exposes a recoverable state when fallback list loading fails', async () => {
     window.history.replaceState({}, '', '/workflows?stateIn=failed');
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
@@ -844,6 +865,45 @@ describe('Dashboard shared entry', () => {
     expect((await screen.findByRole('status')).textContent).toContain('Workflow list is unavailable.');
     expect(window.location.pathname).toBe('/workflows');
     expect(window.location.search).toBe('?stateIn=failed');
+  });
+
+  it('MM-1113 ignores stale fallback navigation after leaving the workflow surface', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=running');
+    let resolveList: ((response: Response) => void) | undefined;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=running&source=temporal&pageSize=25') {
+        return new Promise<Response>((resolve) => {
+          resolveList = resolve;
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
+    fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+    expect(await screen.findByText('Settings permissions:')).toBeTruthy();
+
+    const completeList = resolveList;
+    if (!completeList) {
+      throw new Error('Expected workflow list request to be pending.');
+    }
+    completeList({
+      ok: true,
+      json: async () => ({ items: [{ workflowId: 'stale-row' }] }),
+    } as Response);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/settings');
+    });
+    expect(window.location.search).toBe('');
+    expect(screen.queryByText(/stale-row/i)).toBeNull();
   });
 
   it('does not render operational metrics on the workflows home dashboard', async () => {
@@ -1807,7 +1867,7 @@ describe('Dashboard shared entry', () => {
       /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\);/s,
     );
     expect(dashboardCss).toMatch(
-      /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
+      /\.masthead-primary\s*\{[^}]*justify-self:\s*start;/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-nav\s*\{[^}]*align-self:\s*stretch;[^}]*justify-content:\s*center;[^}]*justify-self:\s*center;/s,

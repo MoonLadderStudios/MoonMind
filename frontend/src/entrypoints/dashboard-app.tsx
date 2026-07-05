@@ -230,8 +230,9 @@ async function firstVisibleWorkflowId(apiBase: string, search: URLSearchParams):
   if (!response.ok) {
     throw new Error(`Failed to resolve first workflow: ${response.statusText}`);
   }
-  const body = (await response.json()) as { items?: unknown[] };
-  const firstRow = Array.isArray(body.items) ? body.items.find((row) => workflowRowId(row)) : null;
+  const body = (await response.json()) as { items?: unknown[] } | null;
+  const items = body && typeof body === 'object' && Array.isArray(body.items) ? body.items : null;
+  const firstRow = items ? items.find((row) => workflowRowId(row)) : null;
   return firstRow ? workflowRowId(firstRow) : null;
 }
 
@@ -404,6 +405,7 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
     () => readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
   );
   const [resolutionState, setResolutionState] = useState<WorkflowListResolutionState>('idle');
+  const pendingRequestRef = useRef<symbol | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
   const isWorkflowStart = location.pathname.replace(/\/$/, '') === '/workflows/new';
@@ -420,6 +422,7 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
   useEffect(() => {
     setResolutionState('idle');
     setSidebarCollapsed(readDashboardPreferences().workflowWorkspaceSidebarCollapsed);
+    pendingRequestRef.current = null;
   }, [location.pathname, location.search]);
 
   const currentMode: WorkflowListDisplayMode = isWorkflowTable
@@ -451,6 +454,8 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
         return;
       }
 
+      const requestId = Symbol();
+      pendingRequestRef.current = requestId;
       setResolutionState('resolving');
       const prefs = readDashboardPreferences();
       const rememberedId = prefs.lastSelectedWorkflowId.trim();
@@ -458,8 +463,14 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
         const authorizedRememberedId = rememberedId
           ? await authorizedWorkflowId(apiBase, rememberedId, search)
           : null;
+        if (pendingRequestRef.current !== requestId) {
+          return;
+        }
         const targetWorkflowId = authorizedRememberedId
           || await firstVisibleWorkflowId(apiBase, search);
+        if (pendingRequestRef.current !== requestId) {
+          return;
+        }
         if (!targetWorkflowId) {
           setResolutionState('empty');
           return;
@@ -467,7 +478,9 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
         setResolutionState('idle');
         navigate(workflowDetailHref(targetWorkflowId, search));
       } catch {
-        setResolutionState('error');
+        if (pendingRequestRef.current === requestId) {
+          setResolutionState('error');
+        }
       }
     },
     [
