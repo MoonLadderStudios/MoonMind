@@ -335,6 +335,15 @@ samp {
   stroke-width: 2;
 }
 
+.workflow-list-display-status {
+  max-width: 18ch;
+  padding: 0 0.38rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.76rem;
+  line-height: 1.15;
+  white-space: normal;
+}
+
 .masthead-title-meta {
   display: flex;
   align-items: center;
