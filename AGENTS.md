@@ -75,7 +75,7 @@ When writing code that interacts with skills:
 
 ## Pull Request Preparation
 
-- Create non-draft pull requests by default. Use a draft PR only when the user or task explicitly requests a draft, or when a readiness/publish gate cannot complete validation in the current environment but can still publish a safe, reviewable handoff with clear missing evidence and next steps.
+- Create non-draft pull requests by default. Use a draft PR only when the user or task explicitly requests a draft, or when the workflow publish policy explicitly allows draft publication for a readiness/publish gate that cannot complete validation in the current environment but can still publish a safe, reviewable handoff with clear missing evidence and next steps.
 
 ## Testing Instructions
 

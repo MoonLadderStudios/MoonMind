@@ -45,13 +45,16 @@ flowchart TD
         C -->|No| D[Record Result & Continue]
         C -->|Yes| E[Review Activity]
         E --> F{Review Verdict}
-        F -->|PASS| D
-        F -->|FAIL & retries remaining| G[Inject Feedback]
+        F -->|PASS or acceptable INCONCLUSIVE| D
+        F -->|FAIL or blocker INCONCLUSIVE & retries remaining| G[Inject Feedback]
         G --> B
-        F -->|FAIL & max retries reached| H{Adaptive path available?}
-        H -->|Yes| I[Record evidence & adaptation next step]
+        F -->|FAIL or blocker INCONCLUSIVE & max retries reached| H{Adaptive path available?}
+        H -->|Yes| I[Execute or schedule adaptive action]
         H -->|No| J[Apply failure_mode Policy]
-        I --> D
+        I --> K{Adaptation outcome}
+        K -->|Remediated or verified| B
+        K -->|Degraded or draft handoff recorded| D
+        K -->|Blocked| J
         J --> D
     end
 ```
@@ -165,7 +168,7 @@ Verdict values: `PASS`, `FAIL`, `INCONCLUSIVE`.
 
 - `PASS` → step is accepted; proceed.
 - `FAIL` → step should be retried with feedback (if retries remain).
-- `INCONCLUSIVE` → treated as `PASS` (conservative; don't block on uncertainty).
+- `INCONCLUSIVE` → accepted only when the review does not identify missing required evidence, unsafe ambiguity, or another gate blocker. Inconclusive reviews caused by missing validation evidence, credential/provider access, or source-authority uncertainty are classified through the same hard/adaptive gate path as failed reviews.
 
 ---
 
@@ -207,10 +210,17 @@ for index, node in enumerate(ordered_nodes, start=1):
             previous_feedback=previous_feedback,
         )
 
-        if review_verdict["verdict"] in ("PASS", "INCONCLUSIVE"):
+        if review_verdict["verdict"] == "PASS":
             break  # Step accepted
 
-        # FAIL — if retries remain, prepare feedback for retry
+        if (
+            review_verdict["verdict"] == "INCONCLUSIVE"
+            and not has_gate_blocker(review_verdict)
+        ):
+            break  # Step accepted; no blocker evidence was found
+
+        # FAIL or blocker INCONCLUSIVE — retry with feedback only inside
+        # the configured review budget.
         if attempt < max_attempts:
             previous_feedback = review_verdict["feedback"]
             self._summary = (
@@ -218,12 +228,21 @@ for index, node in enumerate(ordered_nodes, start=1):
                 f"(attempt {attempt}), retrying with feedback."
             )
         else:
-            # Final attempt also failed review — record evidence and choose
-            # an adaptive path before applying terminal failure_mode.
+            # Final attempt still has a failed or blocker-inconclusive review.
+            # Record evidence and execute or schedule an allowed adaptation
+            # before applying terminal failure_mode. Same-step review-feedback
+            # retries are exhausted here and must not be reopened by adaptation.
             gate_outcome = classify_gate_outcome(node, execution_result, review_verdict)
             if gate_outcome.adaptive_path is not None:
-                record_gate_adaptation(node, gate_outcome)
-                break
+                adaptation_result = execute_or_schedule_gate_adaptation(
+                    node,
+                    gate_outcome,
+                )
+                if adaptation_result.requires_reexecution:
+                    continue
+                if adaptation_result.allows_progress:
+                    record_gate_adaptation(node, gate_outcome, adaptation_result)
+                    break
             self._handle_step_failure(
                 node, execution_result, review_verdict,
                 f"Step {index} failed review after {max_attempts} attempts"
@@ -266,9 +285,9 @@ This system operates at the **orchestration level** (between plan steps). It doe
 
 After bounded review retries are exhausted, the gate classifies the remaining failure before applying `failure_mode`.
 
-Hard safety blockers fail closed. They include unsafe or ambiguous side effects, authority-sensitive operations, credential or provider-profile problems, billing-relevant runtime changes, source-authority uncertainty, and any path that would substitute a less-constrained execution mode. These outcomes must not be silently rerouted, downgraded, or published as ready.
+Hard safety blockers fail closed. They include unsafe or ambiguous side effects, authority-sensitive operations, credential or provider-profile problems, provider authorization or scope failures, billing-relevant runtime changes, source-authority uncertainty, and any path that would substitute a less-constrained execution mode. These outcomes must not be silently rerouted, downgraded, or published as ready.
 
-Adaptive/readiness blockers may keep the workflow moving when operator intent and safety boundaries are preserved. Examples include missing local dependencies, unavailable external verification, incomplete provider access for non-mutating checks, or a verifier payload that needs bounded corrective feedback. Supported adaptations include retrying with review feedback, inserting remediation or verification steps where the plan model allows them, choosing degraded mode with explicit evidence, or publishing a draft handoff when the downstream side effect is safe and reviewable.
+Adaptive/readiness blockers may keep the workflow moving when operator intent and safety boundaries are preserved. Examples include missing local dependencies, temporary non-credential environmental unavailability during non-mutating checks, or a verifier payload that needs bounded corrective feedback. Supported adaptations include inserting remediation or verification steps where the plan model allows them, choosing degraded mode with explicit evidence, or publishing a draft handoff when the downstream side effect is safe, reviewable, and explicitly allowed by publish policy. Same-step retries with review feedback occur only inside the configured review attempt budget and are not available after that budget is exhausted.
 
 Every failed gate outcome records actionable evidence:
 
