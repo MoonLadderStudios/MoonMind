@@ -291,8 +291,11 @@ The gate distinguishes a verifier judgment from a malformed verdict envelope:
 
 - The runtime injects the canonical output contract (allowed `verdict` and
   `recommendedNextAction` values) into moonspec-verify instructions, and the
-  artifact-publication boundary records `contractViolations` on the structured
-  gate payload when the verifier JSON drifts from that contract.
+  artifact-publication boundary derives the canonical `recommendedNextAction`
+  from the verifier `verdict`. When the model-authored action drifts from the
+  canonical vocabulary or encodes a step-specific destination, MoonMind
+  preserves the raw action as diagnostic evidence but validates the derived
+  action.
 - A gate payload that fails contract validation is downgraded fail-closed to
   `NO_DETERMINATION`, and the gate records a `downgradeReason` naming the
   declared verdict and the violating field in publish context, the blocking

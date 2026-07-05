@@ -256,7 +256,7 @@ steps:
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
-      Continue toward pull request creation only when the latest post-remediation verdict is FULLY_IMPLEMENTED.
+      When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
       id: moonspec-verify
       args:
@@ -299,7 +299,7 @@ steps:
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
-      Continue toward pull request creation only when the latest post-remediation verdict is FULLY_IMPLEMENTED.
+      When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
       id: moonspec-verify
       args:
@@ -342,7 +342,7 @@ steps:
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
-      Continue toward pull request creation only when the latest post-remediation verdict is FULLY_IMPLEMENTED.
+      When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
       id: moonspec-verify
       args:
@@ -385,7 +385,7 @@ steps:
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
-      Continue toward pull request creation only when the latest post-remediation verdict is FULLY_IMPLEMENTED.
+      When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
       id: moonspec-verify
       args:
@@ -428,7 +428,7 @@ steps:
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
-      Continue toward pull request creation only when the latest post-remediation verdict is FULLY_IMPLEMENTED.
+      When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
       id: moonspec-verify
       args:
@@ -470,7 +470,7 @@ steps:
 
       This is the controlling verification gate for Jira Orchestrate publication. If the verdict is ADDITIONAL_WORK_NEEDED or NO_DETERMINATION, the remediation budget is exhausted: stop the orchestration, report the gaps or missing evidence, and do not continue to pull request creation. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify runtime or infrastructure causes as environment failure, stop immediately, and do not create a pull request.
 
-      Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.
+      If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
       id: moonspec-verify
       args:
