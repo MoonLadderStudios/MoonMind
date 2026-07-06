@@ -117,7 +117,7 @@ def test_mm1114_keyboard_changes_options_and_restores_route_focus(server) -> Non
 
 def test_mm1121_create_route_supports_sidebar_hidden_and_table_modes(server) -> None:
     with sync_playwright() as p:
-        with _playwright_page(p) as page:
+        with _playwright_page(p, width=1280) as page:
             page.goto("http://127.0.0.1:8013/workflows/new", wait_until="domcontentloaded")
             expect(page.get_by_role("group", name="Workflow list display")).to_be_visible(timeout=15_000)
             expect(page.get_by_role("button", name="Start Workflow")).to_be_visible()

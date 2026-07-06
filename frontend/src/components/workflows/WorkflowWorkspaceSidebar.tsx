@@ -340,6 +340,7 @@ function WorkflowSidebar({
   search,
   filterText,
   setFilterText,
+  listEnabled = true,
 }: {
   workflowId: string | null | undefined;
   workflowsQuery: UseQueryResult<z.infer<typeof WorkflowWorkspaceListResponseSchema>, Error>;
@@ -348,10 +349,14 @@ function WorkflowSidebar({
   search: URLSearchParams;
   filterText: string;
   setFilterText: (value: string) => void;
+  listEnabled?: boolean;
 }) {
   return (
     <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
       <WorkflowSidebarHeader filterText={filterText} setFilterText={setFilterText} />
+      {!listEnabled ? (
+        <p className="workflow-workspace-sidebar-state">Workflow navigation is disabled.</p>
+      ) : null}
       {workflowsQuery.isLoading ? (
         <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
       ) : null}
@@ -396,7 +401,11 @@ export function WorkflowWorkspaceSidebarPanel({
   const cfg = readDashboardConfig(payload);
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
-  const listQuery = useMemo(() => workflowWorkspaceListQuery(search, defaultSource), [defaultSource, search]);
+  const searchKey = search.toString();
+  const listQuery = useMemo(
+    () => workflowWorkspaceListQuery(new URLSearchParams(searchKey), defaultSource),
+    [defaultSource, searchKey],
+  );
   const [sidebarFilterText, setSidebarFilterText] = useState('');
   const workflowsQuery = useQuery({
     queryKey: ['workflow-workspace-sidebar', listQuery],
@@ -410,6 +419,9 @@ export function WorkflowWorkspaceSidebarPanel({
     enabled: listEnabled,
     refetchInterval: listEnabled ? listPoll : false,
   });
+  if (!listEnabled) {
+    return null;
+  }
   const rows = workflowsQuery.data?.items || [];
   const activeInList = rows.some((row) => workflowWorkspaceRowId(row) === activeWorkflowId);
   const pinnedRow = pinnedCurrentRow && !activeInList ? pinnedCurrentRow : null;
@@ -429,6 +441,7 @@ export function WorkflowWorkspaceSidebarPanel({
       search={search}
       filterText={sidebarFilterText}
       setFilterText={setSidebarFilterText}
+      listEnabled={listEnabled}
     />
   );
 }

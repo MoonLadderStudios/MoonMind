@@ -7500,6 +7500,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   grid-column: 1 / -1;
 }
 
+.workflow-workspace-shell[data-sidebar-collapsed="true"] .workflow-start-primary {
+  grid-column: 1 / -1;
+}
+
 @media (min-width: 768px) {
   .workflow-workspace-shell[data-sidebar-collapsed="true"] {
     grid-template-columns: minmax(0, 1fr);
