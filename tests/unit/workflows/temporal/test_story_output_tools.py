@@ -19,6 +19,7 @@ from moonmind.workflows.temporal.story_output_tools import (
     load_github_issue_preset_brief,
     load_jira_preset_brief,
     update_github_issue_status,
+    update_jira_issue_status,
 )
 
 class _FakeJiraService:
@@ -29,6 +30,10 @@ class _FakeJiraService:
         self.search_requests: list[Any] = []
         self.search_response: Any = {"issues": []}
         self.issue_responses: dict[str, Any] = {}
+        self.transition_responses: dict[str, Any] = {}
+        self.transition_requests: list[Any] = []
+        self.transitions_requests: list[Any] = []
+        self.transitions_response: Any = {"transitions": []}
         self.get_issue_requests: list[Any] = []
         self.existing_links: set[tuple[str, str]] = set()
         self.fail_link_after: int | None = None
@@ -58,6 +63,22 @@ class _FakeJiraService:
     async def get_issue(self, request):
         self.get_issue_requests.append(request)
         return self.issue_responses.get(request.issue_key, {"key": request.issue_key})
+
+    async def get_transitions(self, request):
+        self.transitions_requests.append(request)
+        return self.transitions_response
+
+    async def transition_issue(self, request):
+        self.transition_requests.append(request)
+        if request.issue_key in self.transition_responses:
+            self.issue_responses[request.issue_key] = self.transition_responses[
+                request.issue_key
+            ]
+        return {
+            "transitioned": True,
+            "issueKey": request.issue_key,
+            "transitionId": request.transition_id,
+        }
 
     async def list_create_issue_types(self, request):
         return {
@@ -437,6 +458,198 @@ async def test_update_github_issue_status_blocks_code_review_until_fully_impleme
     assert result.outputs["decision"] == "blocked"
     assert result.outputs["verificationVerdict"] == "ADDITIONAL_WORK_NEEDED"
     assert service.token_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_jira_issue_status_transitions_by_target_status() -> None:
+    service = _FakeJiraService()
+    service.issue_responses["MM-1125"] = {
+        "key": "MM-1125",
+        "fields": {"status": {"id": "1", "name": "Backlog"}},
+    }
+    service.transition_responses["MM-1125"] = {
+        "key": "MM-1125",
+        "fields": {
+            "status": {
+                "id": "3",
+                "name": "In Progress",
+                "statusCategory": {"key": "indeterminate"},
+            }
+        },
+    }
+    service.transitions_response = {
+        "transitions": [
+            {
+                "id": "31",
+                "name": "Start Progress",
+                "to": {
+                    "id": "3",
+                    "name": "In Progress",
+                    "statusCategory": {"key": "indeterminate"},
+                },
+            }
+        ]
+    }
+
+    result = await update_jira_issue_status(
+        {"issueKey": "MM-1125", "targetStatus": "In Progress"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "transitioned"
+    assert result.outputs["transitionId"] == "31"
+    assert result.outputs["confirmedStatus"]["name"] == "In Progress"
+    assert [request.issue_key for request in service.get_issue_requests] == [
+        "MM-1125",
+        "MM-1125",
+    ]
+    assert service.transitions_requests[0].expand_fields is True
+    assert service.transition_requests[0].transition_id == "31"
+
+
+@pytest.mark.asyncio
+async def test_update_jira_issue_status_skips_start_for_fully_implemented_assessment(
+    tmp_path,
+) -> None:
+    assessment = tmp_path / "assessment.json"
+    assessment.write_text('{"verdict": "FULLY_IMPLEMENTED"}', encoding="utf-8")
+    service = _FakeJiraService()
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1125",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": str(assessment),
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "skipped"
+    assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+    assert service.get_issue_requests == []
+    assert service.transition_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_jira_issue_status_uses_previous_assessment_text_when_artifact_missing(
+    tmp_path,
+) -> None:
+    service = _FakeJiraService()
+    service.issue_responses["MM-1125"] = {
+        "key": "MM-1125",
+        "fields": {"status": {"id": "1", "name": "Backlog"}},
+    }
+    service.transition_responses["MM-1125"] = {
+        "key": "MM-1125",
+        "fields": {"status": {"id": "3", "name": "In Progress"}},
+    }
+    service.transitions_response = {
+        "transitions": [
+            {"id": "31", "name": "In Progress", "to": {"name": "In Progress"}}
+        ]
+    }
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1125",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": str(tmp_path / "missing-assessment.json"),
+            "previousOutputs": {
+                "lastAssistantText": (
+                    "Assessment complete for MM-1125: `PARTIALLY_IMPLEMENTED`."
+                )
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "transitioned"
+    assert service.transition_requests[0].transition_id == "31"
+
+
+@pytest.mark.asyncio
+async def test_update_jira_issue_status_accepts_single_quoted_previous_verdict(
+    tmp_path,
+) -> None:
+    service = _FakeJiraService()
+    service.issue_responses["MM-1125"] = {
+        "key": "MM-1125",
+        "fields": {"status": {"id": "1", "name": "Backlog"}},
+    }
+    service.transition_responses["MM-1125"] = {
+        "key": "MM-1125",
+        "fields": {"status": {"id": "3", "name": "In Progress"}},
+    }
+    service.transitions_response = {
+        "transitions": [
+            {"id": "31", "name": "In Progress", "to": {"name": "In Progress"}}
+        ]
+    }
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1125",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": str(tmp_path / "missing-assessment.json"),
+            "previousOutputs": {
+                "summary": "{'verdict': 'PARTIALLY_IMPLEMENTED'}",
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "transitioned"
+    assert service.transition_requests[0].transition_id == "31"
+
+
+@pytest.mark.asyncio
+async def test_update_jira_issue_status_blocks_for_malformed_assessment_artifact(
+    tmp_path,
+) -> None:
+    assessment = tmp_path / "assessment.json"
+    assessment.write_text('{"summary": "assessment incomplete"}', encoding="utf-8")
+    service = _FakeJiraService()
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1125",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": str(assessment),
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert "assessment verdict" in result.outputs["summary"]
+    assert service.get_issue_requests == []
+    assert service.transition_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_jira_issue_status_blocks_when_transition_is_unavailable() -> None:
+    service = _FakeJiraService()
+    service.issue_responses["MM-1125"] = {
+        "key": "MM-1125",
+        "fields": {"status": {"id": "1", "name": "Backlog"}},
+    }
+    service.transitions_response = {
+        "transitions": [{"id": "41", "name": "Done", "to": {"name": "Done"}}]
+    }
+
+    result = await update_jira_issue_status(
+        {"issueKey": "MM-1125", "targetStatus": "In Progress"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["availableTransitions"][0]["transitionId"] == "41"
+    assert service.transition_requests == []
 
 
 @pytest.mark.asyncio
@@ -1101,6 +1314,7 @@ def test_register_story_output_tool_handlers_includes_github_story_tools():
 
     story_tools.register_story_output_tool_handlers(dispatcher)
 
+    assert "jira.update_issue_status" in dispatcher.skills
     assert "story.create_github_issues" in dispatcher.skills
     assert "story.create_github_issue_implement_workflows" in dispatcher.skills
     assert "story.create_github_issue_orchestrate_workflows" in dispatcher.skills
@@ -2764,6 +2978,31 @@ async def test_check_jira_blockers_fetches_missing_blocker_status_and_allows_don
         "MM-2",
         "MM-1",
     ]
+
+
+@pytest.mark.asyncio
+async def test_check_jira_blockers_preserves_previous_assessment_verdict():
+    service = _FakeJiraService()
+    service.issue_responses["MM-2"] = {
+        "key": "MM-2",
+        "fields": {"issuelinks": []},
+    }
+
+    result = await check_jira_blockers(
+        {
+            "targetIssueKey": "MM-2",
+            "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
+            "previousOutputs": {
+                "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["assessmentVerdict"] == "PARTIALLY_IMPLEMENTED"
+
 
 @pytest.mark.asyncio
 async def test_check_jira_blockers_respects_configured_link_type_name():

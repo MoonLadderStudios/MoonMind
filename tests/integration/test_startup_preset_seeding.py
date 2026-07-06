@@ -138,7 +138,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             (step.get("skill") or step.get("tool"))["id"]
             for step in jira_orchestrate_template.steps
         ]
-        assert jira_orchestrate_steps[0] == "jira-issue-updater"
+        assert jira_orchestrate_steps[0] == "jira.update_issue_status"
         assert jira_orchestrate_steps[1] == "jira.check_blockers"
         assert jira_orchestrate_steps[2] == "jira.load_preset_brief"
         assert "moonspec-implement" in jira_orchestrate_steps
@@ -339,6 +339,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert jira_implement_steps[0] == "jira.load_preset_brief"
         assert jira_implement_steps[1] == "auto"
         assert jira_implement_steps[2] == "jira.check_blockers"
+        assert jira_implement_steps[3] == "jira.update_issue_status"
         assert jira_implement_steps[-1] == "jira-issue-updater"
         assert len(jira_implement_steps) == 20
         implement_step_titles = [step["title"] for step in expanded_steps]
@@ -364,6 +365,14 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         implement_blocker_step = expanded_steps[2]
         assert implement_blocker_step["type"] == "tool"
         assert implement_blocker_step["tool"]["id"] == "jira.check_blockers"
+        assert implement_blocker_step["tool"]["inputs"] == {
+            "targetIssueKey": "MM-999",
+            "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
+            "blockerPreflight": {
+                "targetIssueKey": "MM-999",
+                "linkType": "Blocks",
+            },
+        }
         assert (
             "deterministic trusted Jira blocker preflight"
             in implement_blocker_step["instructions"]
@@ -391,7 +400,13 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         implement_in_progress_step = expanded_steps[3]
         assert implement_in_progress_step["title"] == "Move Jira issue to In Progress"
-        assert implement_in_progress_step["skill"]["id"] == "jira-issue-updater"
+        assert implement_in_progress_step["type"] == "tool"
+        assert implement_in_progress_step["tool"]["id"] == "jira.update_issue_status"
+        assert implement_in_progress_step["tool"]["inputs"] == {
+            "issueKey": "MM-999",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
+        }
         assert (
             "FULLY_IMPLEMENTED" in implement_in_progress_step["instructions"]
         )
