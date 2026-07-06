@@ -420,21 +420,26 @@ function WorkflowSidebarRow({
   const status = row.rawState || row.state || row.status || 'unknown';
   const title = row.title?.trim() || workflowId || 'Untitled workflow';
   return (
-    <li>
-      <a
-        className={`workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`}
-        href={workflowDetailHref(workflowId, search)}
-        aria-current={active ? 'page' : undefined}
-        data-active={active ? 'true' : 'false'}
-        data-pinned={pinned ? 'true' : 'false'}
-      >
-        <span className="workflow-workspace-sidebar-row-main">
-          {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
-          <span className="workflow-workspace-sidebar-title">{title}</span>
-        </span>
-        <WorkflowSidebarStatusIcon status={status} />
-      </a>
-    </li>
+    <div
+      role="row"
+      className={`workflow-workspace-sidebar-row-frame${pinned ? ' workflow-workspace-sidebar-row-frame-pinned' : ''}`}
+    >
+      <div role="cell" className="workflow-workspace-sidebar-cell">
+        <a
+          className={`workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`}
+          href={workflowDetailHref(workflowId, search)}
+          aria-current={active ? 'page' : undefined}
+          data-active={active ? 'true' : 'false'}
+          data-pinned={pinned ? 'true' : 'false'}
+        >
+          <span className="workflow-workspace-sidebar-row-main">
+            {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
+            <span className="workflow-workspace-sidebar-title">{title}</span>
+          </span>
+          <WorkflowSidebarStatusIcon status={status} />
+        </a>
+      </div>
+    </div>
   );
 }
 
@@ -501,7 +506,7 @@ function WorkflowSidebarList({
   rows,
   activeWorkflowId,
   search,
-  ariaLabel = 'Workflow navigation list',
+  ariaLabel = 'Workflow rows',
   pinned = false,
 }: {
   rows: WorkflowWorkspaceRow[];
@@ -515,7 +520,8 @@ function WorkflowSidebarList({
   }
 
   return (
-    <ul
+    <div
+      role="rowgroup"
       className={`workflow-workspace-sidebar-list${pinned ? ' workflow-workspace-sidebar-pinned-list' : ''}`}
       aria-label={ariaLabel}
     >
@@ -528,7 +534,46 @@ function WorkflowSidebarList({
           pinned={pinned}
         />
       ))}
-    </ul>
+    </div>
+  );
+}
+
+function WorkflowSidebarTableFrame({ children }: { children: ReactNode }) {
+  return (
+    <div
+      role="table"
+      aria-label="Workflow list table slice"
+      className="workflow-workspace-sidebar-table"
+    >
+      <div role="rowgroup" className="workflow-workspace-sidebar-header">
+        <div role="row" className="workflow-workspace-sidebar-header-row">
+          <div role="columnheader" className="workflow-workspace-sidebar-header-cell">
+            Workflow
+          </div>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function WorkflowSidebarState({
+  children,
+  role,
+}: {
+  children: ReactNode;
+  role?: 'status';
+}) {
+  return (
+    <div role="rowgroup" className="workflow-workspace-sidebar-state-group">
+      <div role="row" className="workflow-workspace-sidebar-row-frame">
+        <div role="cell" className="workflow-workspace-sidebar-cell">
+          <div className="workflow-workspace-sidebar-state" role={role}>
+            {children}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -556,30 +601,32 @@ function WorkflowSidebar({
         onClose={onClose}
         search={search}
       />
-      {workflowsQuery.isLoading ? (
-        <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
-      ) : null}
-      {workflowsQuery.isError ? (
-        <div className="workflow-workspace-sidebar-state" role="status">
-          <p>Workflow navigation is unavailable.</p>
-          <button type="button" className="secondary" onClick={() => void workflowsQuery.refetch()}>
-            Retry
-          </button>
-        </div>
-      ) : null}
-      {!workflowsQuery.isLoading && !workflowsQuery.isError && pinnedCurrentRow ? (
-        <WorkflowSidebarList
-          rows={[pinnedCurrentRow]}
-          activeWorkflowId={workflowId}
-          search={search}
-          ariaLabel="Current workflow"
-          pinned
-        />
-      ) : null}
-      {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
-        <p className="workflow-workspace-sidebar-state">No workflows match the current list filters.</p>
-      ) : null}
-      <WorkflowSidebarList rows={filteredRows} activeWorkflowId={workflowId} search={search} />
+      <WorkflowSidebarTableFrame>
+        {workflowsQuery.isLoading ? (
+          <WorkflowSidebarState>Loading workflows...</WorkflowSidebarState>
+        ) : null}
+        {workflowsQuery.isError ? (
+          <WorkflowSidebarState role="status">
+            <p>Workflow navigation is unavailable.</p>
+            <button type="button" className="secondary" onClick={() => void workflowsQuery.refetch()}>
+              Retry
+            </button>
+          </WorkflowSidebarState>
+        ) : null}
+        {!workflowsQuery.isLoading && !workflowsQuery.isError && pinnedCurrentRow ? (
+          <WorkflowSidebarList
+            rows={[pinnedCurrentRow]}
+            activeWorkflowId={workflowId}
+            search={search}
+            ariaLabel="Current workflow"
+            pinned
+          />
+        ) : null}
+        {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
+          <WorkflowSidebarState>No workflows match the current list filters.</WorkflowSidebarState>
+        ) : null}
+        <WorkflowSidebarList rows={filteredRows} activeWorkflowId={workflowId} search={search} />
+      </WorkflowSidebarTableFrame>
     </aside>
   );
 }
