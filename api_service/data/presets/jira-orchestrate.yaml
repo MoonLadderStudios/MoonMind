@@ -211,6 +211,9 @@ steps:
       /clear
 
       Run moonspec-verify as the final read-only gate unless an up-to-date verification report already covers the current code and artifacts.
+
+      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
+
       If the verdict is ADDITIONAL_WORK_NEEDED, preserve the report as the mandatory remediation input for the next step.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify it as an environment or setup failure when the verifier identifies missing runtime infrastructure, stop immediately, skip all remediation attempts, and do not create a pull request.
       Do not create a pull request from this step. Pull request creation is allowed only after the post-remediation verification step reports FULLY_IMPLEMENTED.
@@ -252,6 +255,8 @@ steps:
       /clear
 
       Run moonspec-verify after remediation attempt 1, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+
+      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
 
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
@@ -296,6 +301,8 @@ steps:
 
       Run moonspec-verify after remediation attempt 2, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
 
+      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
+
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
@@ -338,6 +345,8 @@ steps:
       /clear
 
       Run moonspec-verify after remediation attempt 3, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+
+      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
 
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
@@ -382,6 +391,8 @@ steps:
 
       Run moonspec-verify after remediation attempt 4, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
 
+      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
+
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
@@ -425,6 +436,8 @@ steps:
 
       Run moonspec-verify after remediation attempt 5, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
 
+      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
+
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
@@ -467,6 +480,8 @@ steps:
       /clear
 
       Run moonspec-verify after remediation attempt 6, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+
+      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
 
       This is the controlling verification gate for Jira Orchestrate publication. If the verdict is ADDITIONAL_WORK_NEEDED or NO_DETERMINATION, the remediation budget is exhausted: stop the orchestration, report the gaps or missing evidence, and do not continue to pull request creation. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify runtime or infrastructure causes as environment failure, stop immediately, and do not create a pull request.
 

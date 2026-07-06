@@ -2980,9 +2980,25 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert expanded["steps"][11]["skill"]["id"] == "moonspec-implement"
             assert "ADDITIONAL_WORK_NEEDED" in expanded["steps"][11]["instructions"]
             assert "verification report's gaps" in expanded["steps"][11]["instructions"]
+            assert expanded["steps"][10]["skill"]["id"] == "moonspec-verify"
+            assert "Verification robustness rules" in expanded["steps"][10][
+                "instructions"
+            ]
+            assert "embedding_provider_not_configured" in expanded["steps"][10][
+                "instructions"
+            ]
+            assert "disclosed scope exclusions" in expanded["steps"][10][
+                "instructions"
+            ]
+            assert "Verification robustness rules" in expanded["steps"][12][
+                "instructions"
+            ]
             assert expanded["steps"][22]["title"] == "Verify remediation 6 of 6"
             assert expanded["steps"][22]["skill"]["id"] == "moonspec-verify"
             assert "controlling verification gate" in expanded["steps"][22][
+                "instructions"
+            ]
+            assert "Verification robustness rules" in expanded["steps"][22][
                 "instructions"
             ]
             assert expanded["steps"][23]["title"] == "Reconcile declarative docs"
@@ -3240,6 +3256,23 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
         expanded["steps"][18]["instructions"]
     )
+    assert (
+        "recover that field's full content through the trusted MoonMind tool surface"
+        in expanded["steps"][1]["instructions"]
+    )
+    assert "truncated_fields" in expanded["steps"][1]["instructions"]
+    assert "must not become an assessment requirement row" in expanded["steps"][1][
+        "instructions"
+    ]
+    assert "Verification scope rules" in expanded["steps"][5]["instructions"]
+    assert "embedding_provider_not_configured" in expanded["steps"][5]["instructions"]
+    assert "recovering a truncated issue brief" in expanded["steps"][6]["instructions"]
+    assert (
+        "update artifacts/github-issue-implement-brief.json with the recovered content"
+        in expanded["steps"][6]["instructions"]
+    )
+    assert "Verification scope rules" in expanded["steps"][7]["instructions"]
+    assert "Verification scope rules" in expanded["steps"][17]["instructions"]
     assert expanded["steps"][19]["tool"]["inputs"]["verificationArtifactPath"] == (
         "artifacts/github-issue-implement-verify.json"
     )

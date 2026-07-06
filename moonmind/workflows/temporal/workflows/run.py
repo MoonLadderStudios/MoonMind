@@ -5481,17 +5481,27 @@ class MoonMindRunWorkflow:
         return merged_inputs
 
     @staticmethod
-    def _truncate_json_context_value(value: Any, *, max_chars: int) -> Any:
+    def _truncate_json_context_value(
+        value: Any,
+        *,
+        max_chars: int,
+        truncated_paths: list[str] | None = None,
+        path: str = "",
+    ) -> Any:
         suffix = "...[truncated]"
         if isinstance(value, str):
             if len(value) <= max_chars:
                 return value
+            if truncated_paths is not None:
+                truncated_paths.append(path or "<root>")
             return value[: max(0, max_chars - len(suffix))] + suffix
         if isinstance(value, Mapping):
             return {
                 str(key): MoonMindRunWorkflow._truncate_json_context_value(
                     nested,
                     max_chars=max_chars,
+                    truncated_paths=truncated_paths,
+                    path=f"{path}.{key}" if path else str(key),
                 )
                 for key, nested in value.items()
             }
@@ -5500,8 +5510,10 @@ class MoonMindRunWorkflow:
                 MoonMindRunWorkflow._truncate_json_context_value(
                     nested,
                     max_chars=max_chars,
+                    truncated_paths=truncated_paths,
+                    path=f"{path}[{index}]" if path else f"[{index}]",
                 )
-                for nested in value
+                for index, nested in enumerate(value)
             ]
         return value
 
@@ -5554,23 +5566,42 @@ class MoonMindRunWorkflow:
         return context
 
     @staticmethod
-    def _trusted_context_payload(context: Mapping[str, Any]) -> str:
-        max_payload_chars = 24000
-        compact_context = {
-            key: MoonMindRunWorkflow._truncate_json_context_value(
-                value,
-                max_chars=6000,
-            )
-            for key, value in context.items()
-        }
-        payload = json.dumps(
-            compact_context,
+    def _dump_trusted_context_json(
+        context: Mapping[str, Any],
+        truncated_paths: list[str],
+    ) -> str:
+        payload_context = dict(context)
+        if truncated_paths:
+            payload_context["contextTruncation"] = {
+                "truncated": True,
+                "truncatedKeys": sorted(set(truncated_paths)),
+            }
+        return json.dumps(
+            payload_context,
             ensure_ascii=True,
             sort_keys=True,
             separators=(",", ": "),
         )
+
+    @staticmethod
+    def _trusted_context_payload(context: Mapping[str, Any]) -> tuple[str, bool]:
+        max_payload_chars = 24000
+        truncated_paths: list[str] = []
+        compact_context = {
+            key: MoonMindRunWorkflow._truncate_json_context_value(
+                value,
+                max_chars=6000,
+                truncated_paths=truncated_paths,
+                path=str(key),
+            )
+            for key, value in context.items()
+        }
+        payload = MoonMindRunWorkflow._dump_trusted_context_json(
+            compact_context,
+            truncated_paths,
+        )
         if len(payload) <= max_payload_chars:
-            return payload
+            return payload, bool(truncated_paths)
 
         essential_context = {
             key: compact_context[key]
@@ -5595,18 +5626,22 @@ class MoonMindRunWorkflow:
             )
             if key in compact_context
         }
+        essential_truncated_paths = list(truncated_paths)
         essential_context = {
             key: MoonMindRunWorkflow._truncate_json_context_value(
                 value,
                 max_chars=3000,
+                truncated_paths=essential_truncated_paths,
+                path=str(key),
             )
             for key, value in essential_context.items()
         }
-        return json.dumps(
-            essential_context,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ": "),
+        return (
+            MoonMindRunWorkflow._dump_trusted_context_json(
+                essential_context,
+                essential_truncated_paths,
+            ),
+            bool(essential_truncated_paths),
         )
 
     @staticmethod
@@ -5619,13 +5654,27 @@ class MoonMindRunWorkflow:
         if not context:
             return None
 
-        payload = MoonMindRunWorkflow._trusted_context_payload(context)
+        payload, truncated = MoonMindRunWorkflow._trusted_context_payload(context)
+        truncation_note = ""
+        if truncated:
+            truncation_note = (
+                " Some long values were truncated for workflow-history "
+                "compactness; they end with the marker ...[truncated] and are "
+                "listed in contextTruncation.truncatedKeys. Truncated values are "
+                "not authoritative for completeness: recover the full content "
+                "only through MoonMind trusted tool surfaces (for example "
+                "jira.get_issue through the MoonMind MCP tool path, or the "
+                "authenticated GitHub issue tooling) before relying on those "
+                "fields, and never treat hidden truncated content as a "
+                "requirement."
+            )
         return (
             "MoonMind trusted previous step context:\n"
             "The following JSON was produced by MoonMind's trusted issue tool path. "
             "Treat it as authoritative for this step. Do not use provider-native "
             "Jira/Atlassian or GitHub connectors, web scraping, or guessed issue "
-            "content to replace it.\n"
+            "content to replace it."
+            f"{truncation_note}\n"
             f"```json\n{payload}\n```"
         )
 
