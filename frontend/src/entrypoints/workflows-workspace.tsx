@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import {
-  readDashboardPreferences,
+  resolveWorkflowListDisplayMode,
   updateDashboardPreferences,
   type WorkflowListDisplayMode,
 } from '../utils/dashboardPreferences';
@@ -56,17 +56,6 @@ function isCreatePath(pathname: string): boolean {
   return pathname.replace(/\/$/, '') === '/workflows/new';
 }
 
-function resolveWorkspaceDisplayMode(pathname: string): WorkflowListDisplayMode {
-  if (pathname.replace(/\/$/, '') === '/workflows') {
-    return 'table';
-  }
-  const persisted = readDashboardPreferences().workflowListDisplayMode;
-  if (persisted === 'hidden' || persisted === 'sidebar') {
-    return persisted;
-  }
-  return isCreatePath(pathname) ? 'hidden' : 'sidebar';
-}
-
 type WorkflowsWorkspaceDashboardConfig = {
   features?: {
     temporalDashboard?: {
@@ -89,7 +78,7 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const search = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const createRoute = isCreatePath(location.pathname);
   const [displayMode, setDisplayMode] = useState<WorkflowListDisplayMode>(() => (
-    resolveWorkspaceDisplayMode(location.pathname)
+    resolveWorkflowListDisplayMode(location.pathname) ?? 'sidebar'
   ));
   const isDesktop = useIsDesktop();
   const cfg = readWorkflowsWorkspaceDashboardConfig(payload);
@@ -98,7 +87,7 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const listEnabled = temporalDashboard?.listEnabled !== false;
 
   useEffect(() => {
-    setDisplayMode(resolveWorkspaceDisplayMode(location.pathname));
+    setDisplayMode(resolveWorkflowListDisplayMode(location.pathname) ?? 'sidebar');
   }, [location.pathname]);
 
   useEffect(() => {

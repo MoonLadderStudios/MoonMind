@@ -45,7 +45,8 @@ import {
 } from '../lib/dashboardRoutes';
 import { DashboardAlerts } from './dashboard-alerts';
 import {
-  readDashboardPreferences,
+  resolveWorkflowListDisplayMode,
+  workflowListDisplaySurface,
   updateDashboardPreferences,
   type WorkflowListDisplayMode,
 } from '../utils/dashboardPreferences';
@@ -280,34 +281,15 @@ const WORKFLOW_LIST_DISPLAY_OPTIONS = [
   Icon: LucideIcon;
 }>;
 
-function workflowListDisplaySurface(pathname: string): 'table' | 'create' | 'detail' | null {
-  const path = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
-  if (path === '/workflows') return 'table';
-  if (path === '/workflows/new') return 'create';
-  if (path.startsWith('/workflows/')) return 'detail';
-  return null;
-}
-
-function effectiveWorkflowListDisplayMode(pathname: string): WorkflowListDisplayMode | null {
-  const surface = workflowListDisplaySurface(pathname);
-  if (!surface) return null;
-  if (surface === 'table') return 'table';
-  const persisted = readDashboardPreferences().workflowListDisplayMode;
-  if (persisted === 'hidden' || persisted === 'sidebar') {
-    return persisted;
-  }
-  return surface === 'create' ? 'hidden' : 'sidebar';
-}
-
 function WorkflowListDisplayModeControl() {
   const location = useLocation();
   const navigate = useNavigate();
   const [mode, setMode] = useState<WorkflowListDisplayMode | null>(() => (
-    effectiveWorkflowListDisplayMode(window.location.pathname)
+    resolveWorkflowListDisplayMode(window.location.pathname)
   ));
 
   useEffect(() => {
-    setMode(effectiveWorkflowListDisplayMode(location.pathname));
+    setMode(resolveWorkflowListDisplayMode(location.pathname));
   }, [location.pathname]);
 
   const surface = workflowListDisplaySurface(location.pathname);

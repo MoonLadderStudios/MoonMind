@@ -102,7 +102,7 @@ export const WORKFLOW_START_HEADING_QUOTES = [
   "All systems go",
 ];
 
-function workflowStartFormSnapshot(form: HTMLFormElement | null): string {
+export function workflowStartFormSnapshot(form: HTMLFormElement | null): string {
   if (!form) {
     return "";
   }
@@ -124,7 +124,8 @@ function workflowStartFormSnapshot(form: HTMLFormElement | null): string {
           continue;
         }
         if (control.type === "checkbox" || control.type === "radio") {
-          values.push(`${key}=checked:${control.checked}`);
+          const optionKey = control.value || control.id;
+          values.push(`${key}[${optionKey}]=checked:${control.checked}`);
           continue;
         }
       }

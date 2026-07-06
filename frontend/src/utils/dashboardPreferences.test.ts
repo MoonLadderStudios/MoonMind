@@ -6,8 +6,10 @@ import {
   DEFAULT_DASHBOARD_PREFERENCES,
   readDashboardPreferences,
   resetDashboardPreferences,
+  resolveWorkflowListDisplayMode,
   sanitizeDashboardPreferences,
   updateDashboardPreferences,
+  workflowListDisplaySurface,
   writeDashboardPreferences,
 } from './dashboardPreferences';
 
@@ -206,6 +208,31 @@ describe('dashboardPreferences', () => {
       expect(storedRaw()).toBeNull();
       // A subsequent read also yields defaults.
       expect(readDashboardPreferences()).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+    });
+  });
+
+  describe('workflow list display mode resolution', () => {
+    it('classifies participating workflow surfaces from their path', () => {
+      expect(workflowListDisplaySurface('/workflows')).toBe('table');
+      expect(workflowListDisplaySurface('/workflows/')).toBe('table');
+      expect(workflowListDisplaySurface('/workflows/new')).toBe('create');
+      expect(workflowListDisplaySurface('/workflows/abc-123/steps')).toBe('detail');
+      expect(workflowListDisplaySurface('/settings')).toBeNull();
+    });
+
+    it('resolves table, create, and detail modes from one shared preference rule', () => {
+      expect(resolveWorkflowListDisplayMode('/workflows')).toBe('table');
+      expect(resolveWorkflowListDisplayMode('/workflows/new')).toBe('sidebar');
+      expect(resolveWorkflowListDisplayMode('/workflows/abc-123')).toBe('sidebar');
+      expect(resolveWorkflowListDisplayMode('/settings')).toBeNull();
+
+      updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
+      expect(resolveWorkflowListDisplayMode('/workflows/new')).toBe('hidden');
+      expect(resolveWorkflowListDisplayMode('/workflows/abc-123')).toBe('hidden');
+
+      updateDashboardPreferences({ workflowListDisplayMode: 'table' });
+      expect(resolveWorkflowListDisplayMode('/workflows/new')).toBe('hidden');
+      expect(resolveWorkflowListDisplayMode('/workflows/abc-123')).toBe('sidebar');
     });
   });
 });

@@ -267,6 +267,27 @@ export function updateDashboardPreferences(
   return writeDashboardPreferences({ ...current, ...patch });
 }
 
+export function workflowListDisplaySurface(pathname: string): 'table' | 'create' | 'detail' | null {
+  const path = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  if (path === '/workflows') return 'table';
+  if (path === '/workflows/new') return 'create';
+  if (path.startsWith('/workflows/')) return 'detail';
+  return null;
+}
+
+export function resolveWorkflowListDisplayMode(
+  pathname: string,
+): WorkflowListDisplayMode | null {
+  const surface = workflowListDisplaySurface(pathname);
+  if (!surface) return null;
+  if (surface === 'table') return 'table';
+  const persisted = readDashboardPreferences().workflowListDisplayMode;
+  if (persisted === 'hidden' || persisted === 'sidebar') {
+    return persisted;
+  }
+  return surface === 'create' ? 'hidden' : 'sidebar';
+}
+
 /**
  * Reset all dashboard preferences to their defaults by removing the stored
  * blob. Returns the default preferences.
