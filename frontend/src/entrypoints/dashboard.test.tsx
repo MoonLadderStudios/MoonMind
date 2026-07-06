@@ -1399,6 +1399,10 @@ describe('Dashboard shared entry', () => {
     expect(panelReducedMotionBlock).toContain('animation: none !important');
   });
 
+  it('keeps the dashboard panel flush with the masthead', async () => {
+    expect(cssRuleBlock(dashboardCss, '.panel')).toContain('margin-top: 0;');
+  });
+
   it('disables MM-961 fixed background attachment on mobile and touch/low-power devices', async () => {
     const mobileBackgroundBlock = cssRuleBlockMatching(
       dashboardCss,
@@ -1917,6 +1921,19 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).toMatch(
       /\.masthead-title-meta\s*\{[^}]*justify-self:\s*end;[^}]*justify-content:\s*flex-end;/s,
     );
+    const desktopMastheadRule = (selector: string) =>
+      cssRuleBlockMatching(
+        dashboardCss,
+        (rule) =>
+          normalizeCssSelector(rule.selector) === selector &&
+          rule.parent?.type === 'atrule' &&
+          rule.parent.name === 'media' &&
+          rule.parent.params.includes('min-width: 1181px'),
+      );
+    expect(desktopMastheadRule('.masthead-brand')).toContain('grid-column: 1;');
+    expect(desktopMastheadRule('.workflow-list-display-control')).toContain('grid-column: 2;');
+    expect(desktopMastheadRule('.masthead-nav')).toContain('grid-column: 1 / -1;');
+    expect(desktopMastheadRule('.masthead-title-meta')).toContain('grid-column: 4;');
     expect(cssRuleBlock(dashboardCss, '.masthead-title-meta .version-badge')).toContain('white-space: nowrap;');
   });
 

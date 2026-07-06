@@ -722,7 +722,11 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i })).toBeTruthy();
     expect(await within(sidebar).findByRole('link', { name: /Another workflow/i })).toBeTruthy();
 
-    fireEvent.click(within(sidebar).getByRole('button', { name: 'Workflow sidebar filter. No filter applied.' }));
+    const workflowFilter = within(sidebar).getByRole('button', { name: 'Workflow sidebar filter. No filter applied.' });
+    const workflowHeader = workflowFilter.closest('.workflow-list-column-header');
+    expect(workflowHeader?.querySelector('.workflow-workspace-sidebar-header-title')?.textContent).toContain('Workflow');
+
+    fireEvent.click(workflowFilter);
     fireEvent.change(screen.getByLabelText('Workflow sidebar filter value'), {
       target: { value: 'Another' },
     });

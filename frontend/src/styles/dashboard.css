@@ -468,6 +468,28 @@ h1 {
   min-width: 0;
 }
 
+@media (min-width: 1181px) {
+  .masthead-brand {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .workflow-list-display-control {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .masthead-nav {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .masthead-title-meta {
+    grid-column: 4;
+    grid-row: 1;
+  }
+}
+
 .nav-hamburger {
   display: none;
   align-items: center;
@@ -575,7 +597,7 @@ h1 {
 }
 
 .panel {
-  margin-top: 1rem;
+  margin-top: 0;
   margin-left: auto;
   margin-right: auto;
   max-width: min(72rem, calc(100vw - 2rem));
@@ -903,6 +925,14 @@ h1 {
   min-width: 0;
 }
 
+.workflow-list-column-header-label {
+  min-width: 0;
+  color: rgb(var(--mm-ink));
+  font-size: 0.82rem;
+  font-weight: 720;
+  line-height: 1.2;
+}
+
 .workflow-list-column-filter {
   position: relative;
   flex: 0 0 auto;
@@ -912,8 +942,8 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.65rem;
-  height: 1.65rem;
+  width: 2rem;
+  height: 2rem;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 0.45rem;
@@ -937,9 +967,9 @@ h1 {
 
 .workflow-list-column-filter-icon {
   display: block;
-  width: 0.82rem;
-  height: 0.82rem;
-  fill: currentColor;
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke-width: 2;
 }
 
 .workflow-list-column-filter-popover {
@@ -7307,14 +7337,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-sidebar-header-title {
-  color: rgb(var(--mm-ink));
-  font-size: 0.82rem;
-  font-weight: 720;
-}
-
-.workflow-workspace-sidebar-filter {
-  position: relative;
-  display: inline-flex;
+  color: inherit;
+  font: inherit;
 }
 
 .workflow-workspace-sidebar-filter-popover {
