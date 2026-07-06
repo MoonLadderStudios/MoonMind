@@ -29,6 +29,7 @@ import {
   type WorkflowListDisplayMode,
 } from '../utils/dashboardPreferences';
 import {
+  WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT,
   WORKFLOW_LIST_DISPLAY_MODES,
   contractForWorkflowPath,
   effectiveWorkflowListDisplayMode,
@@ -432,6 +433,19 @@ function WorkflowListDisplayControl({
     async (mode: WorkflowListDisplayMode) => {
       if (!contract || !isWorkflowListDisplayModeSupported(contract, mode)) return;
       setStatusMessage('');
+
+      if (mode === 'table' && contract.surface === 'workflow-start') {
+        const guardEvent = new CustomEvent(WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT, {
+          bubbles: true,
+          cancelable: true,
+        });
+        window.dispatchEvent(guardEvent);
+        if (guardEvent.defaultPrevented) {
+          setStatusMessage('Review the unsaved Create draft before opening the Workflows table.');
+          return;
+        }
+      }
+
       updateDashboardPreferences({
         workflowListDisplayMode: mode,
         workflowWorkspaceSidebarCollapsed: mode === 'hidden',

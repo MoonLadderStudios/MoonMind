@@ -234,6 +234,15 @@ vi.mock('./workflow-detail', () => {
 
 vi.mock('./workflow-start', () => ({
   default: ({ payload }: { payload: BootPayload }) => {
+    const guardWindow = window as Window & { __mm1118DraftGuardRegistered?: boolean };
+    if (!guardWindow.__mm1118DraftGuardRegistered) {
+      guardWindow.__mm1118DraftGuardRegistered = true;
+      window.addEventListener('moonmind:workflow-start:before-table-mode-navigation', (event) => {
+        if (window.location.search.includes('draftGuard=block')) {
+          event.preventDefault();
+        }
+      });
+    }
     const initialData = payload.initialData as { dashboardConfig?: Record<string, unknown> } | undefined;
     const repository = initialData?.dashboardConfig?.defaultRepository;
     return (
@@ -545,6 +554,24 @@ describe('Dashboard shared entry', () => {
     });
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     expect(screen.queryByText('Workflow start route loaded')).toBeNull();
+  });
+
+  it('MM-1118 blocks Create table-mode navigation when the Create draft guard reports unsaved input', async () => {
+    writeDashboardPreferences({ workflowListDisplayMode: 'hidden' });
+    window.history.replaceState({}, '', '/workflows/new?draftGuard=block');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    fireEvent.click(workflowDisplayRadio('table'));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/new');
+    });
+    expect(screen.getByText('Workflow start route loaded')).toBeTruthy();
+    expect((await screen.findByRole('status')).textContent).toBe(
+      'Review the unsaved Create draft before opening the Workflows table.',
+    );
+    expect(screen.queryByText('Workflow list route loaded')).toBeNull();
   });
 
   it('does not register a dashboard proposal review page for MM-859', async () => {

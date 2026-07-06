@@ -18,6 +18,7 @@ import {
   buildTemporalSubmissionDraftFromExecution,
   resolveTaskSubmitPageMode,
 } from "../lib/temporalTaskEditing";
+import { WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT } from "../lib/workflowListDisplay";
 import { renderWithClient } from "../utils/test-utils";
 import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
@@ -696,6 +697,37 @@ describe("WorkflowStart schedule mode entry", () => {
       "Schedule Mode",
     )) as HTMLSelectElement;
     expect(scheduleMode.value).toBe("immediate");
+  });
+
+  it("MM-1118 warns accessibly before table-mode navigation leaves an unsaved Create draft", async () => {
+    window.history.pushState({}, "Task Create", "/workflows/new");
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    fireEvent.change(instructions, {
+      target: { value: "Preserve this unsaved Create draft." },
+    });
+    await waitFor(() => {
+      expect(instructions.value).toBe("Preserve this unsaved Create draft.");
+    });
+
+    const guardEvent = new CustomEvent(WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT, {
+      bubbles: true,
+      cancelable: true,
+    });
+    let navigationAllowed = true;
+    await act(async () => {
+      navigationAllowed = window.dispatchEvent(guardEvent);
+    });
+
+    expect(navigationAllowed).toBe(false);
+    expect(guardEvent.defaultPrevented).toBe(true);
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Review or submit your unsaved Create draft before opening the Workflows table.",
+    );
   });
 });
 

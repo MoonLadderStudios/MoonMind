@@ -74,6 +74,9 @@ export const WORKFLOW_LIST_DISPLAY_MODES = [
   },
 ] as const satisfies readonly ListDisplayModeDefinition[];
 
+export const WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT =
+  'moonmind:workflow-start:before-table-mode-navigation';
+
 export const WORKFLOW_LIST_DISPLAY_SURFACE_CONTRACTS = {
   'workflows-table': {
     surface: 'workflows-table',

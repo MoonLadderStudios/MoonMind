@@ -9,6 +9,7 @@ import { SkillCombobox } from "../components/SkillCombobox";
 import { DashboardErrorDetails } from "../components/dashboard/DashboardErrorDetails";
 import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
+import { WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT } from "../lib/workflowListDisplay";
 import {
   readDashboardPreferences,
   updateDashboardPreferences,
@@ -91,6 +92,8 @@ const PENTEST_VALIDATE_ACTIONS = [
 ];
 const PRESET_REAPPLY_REQUIRED_MESSAGE =
   "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.";
+const CREATE_TABLE_MODE_UNSAVED_DRAFT_MESSAGE =
+  "Review or submit your unsaved Create draft before opening the Workflows table.";
 export const WORKFLOW_START_HEADING_QUOTES = [
   "What's the mission?",
   "Make it so",
@@ -5780,10 +5783,69 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const temporalDraftAppliedRef = useRef<string | null>(null);
   const jiraProjectSelectionInitializedRef = useRef(false);
   const jiraBoardSelectionInitializedRef = useRef(false);
+  const hasCreateDraftContent = useMemo(() => {
+    if (pageMode.mode !== "create") {
+      return false;
+    }
+    return (
+      steps.some(
+        (step) =>
+          step.instructions.trim() ||
+          step.skillId.trim() ||
+          step.toolId.trim() ||
+          step.presetKey.trim() ||
+          step.inputAttachments.length > 0 ||
+          step.explicitRequiredCapabilities.length > 0,
+      ) ||
+      selectedObjectiveAttachmentFiles.length > 0 ||
+      Object.values(selectedStepAttachmentFiles).some((files) => files.length > 0) ||
+      selectedDependencies.length > 0 ||
+      branch.trim() ||
+      branchTouched ||
+      scheduleMode !== "immediate" ||
+      scheduledFor.trim() ||
+      scheduleDeferredMinutes.trim() ||
+      scheduleCron.trim() ||
+      scheduleName.trim()
+    );
+  }, [
+    branch,
+    branchTouched,
+    pageMode.mode,
+    scheduleCron,
+    scheduleDeferredMinutes,
+    scheduleMode,
+    scheduleName,
+    scheduledFor,
+    selectedDependencies,
+    selectedObjectiveAttachmentFiles,
+    selectedStepAttachmentFiles,
+    steps,
+  ]);
 
   useEffect(() => {
     stepsRef.current = steps;
   }, [steps]);
+
+  useEffect(() => {
+    const handleTableModeNavigation = (event: Event) => {
+      if (!hasCreateDraftContent) {
+        return;
+      }
+      event.preventDefault();
+      setSubmitMessage(CREATE_TABLE_MODE_UNSAVED_DRAFT_MESSAGE);
+    };
+    window.addEventListener(
+      WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT,
+      handleTableModeNavigation,
+    );
+    return () => {
+      window.removeEventListener(
+        WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT,
+        handleTableModeNavigation,
+      );
+    };
+  }, [hasCreateDraftContent, setSubmitMessage]);
 
   useEffect(
     () => () => {
