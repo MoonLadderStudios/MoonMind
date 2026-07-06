@@ -50,5 +50,11 @@ describe('dashboard masthead brand styles', () => {
     expect(cssRuleBlock('.workflow-list-display-option[aria-pressed="true"]')).toContain(
       'border-color: rgb(var(--mm-accent) / 0.6);',
     );
+    expect(cssRuleBlock('.workflow-list-display-option[aria-pressed="true"]:hover')).toContain(
+      'border-color: rgb(var(--mm-accent-2) / 0.72);',
+    );
+    expect(cssRuleBlock('.workflow-list-display-option[aria-pressed="true"]:hover')).not.toContain(
+      'color: rgb(var(--mm-ink));',
+    );
   });
 });
