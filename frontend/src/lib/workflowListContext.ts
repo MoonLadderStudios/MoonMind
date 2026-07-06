@@ -79,10 +79,15 @@ export function workflowListContextParams(source: URLSearchParams): URLSearchPar
 
 export function workflowListApiQueryFromContext(source: URLSearchParams): string {
   const pageSize = source.get('limit') || source.get('pageSize') || '25';
-  const params = workflowListContextParams(source);
-  params.delete('limit');
-  params.set('source', params.get('source') || 'temporal');
+  const safe = workflowListContextParams(source);
+  const params = new URLSearchParams();
+  params.set('source', safe.get('source') || 'temporal');
   params.set('pageSize', pageSize);
+  safe.forEach((value, key) => {
+    if (key !== 'source' && key !== 'limit' && key !== 'pageSize') {
+      params.append(key, value);
+    }
+  });
   return params.toString();
 }
 

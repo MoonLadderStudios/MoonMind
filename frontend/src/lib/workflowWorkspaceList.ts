@@ -64,11 +64,21 @@ export function workflowWorkspaceRowFromDetail(
 
 export function workflowWorkspaceListQuery(search: URLSearchParams, defaultSource?: string): string {
   const pageSize = search.get('limit') || search.get('pageSize') || '25';
-  const params = workflowListContextParams(search);
-  params.delete('limit');
-  if (defaultSource && !params.has('source')) {
-    params.set('source', defaultSource);
+  const safe = workflowListContextParams(search);
+  const params = new URLSearchParams();
+  const source = safe.get('source') || defaultSource;
+  if (source) {
+    params.set('source', source);
   }
+  const nextPageToken = safe.get('nextPageToken');
+  if (nextPageToken) {
+    params.set('nextPageToken', nextPageToken);
+  }
+  safe.forEach((value, key) => {
+    if (key !== 'source' && key !== 'limit' && key !== 'pageSize' && key !== 'nextPageToken') {
+      params.append(key, value);
+    }
+  });
   params.set('pageSize', pageSize);
   return params.toString();
 }

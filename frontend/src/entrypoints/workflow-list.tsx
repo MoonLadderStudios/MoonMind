@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
@@ -1108,6 +1108,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   // or API-style `pageSize` from workflow context, still wins over the stored
   // page-size preference so shared links keep their page size.
   const initialPrefs = useMemo(() => readDashboardPreferences(), []);
+  const queryClient = useQueryClient();
   const [density, setDensity] = useState<WorkflowListDensity>(initialPrefs.workflowListDensity);
   const [columnVisibility, setColumnVisibility] = useState(
     initialPrefs.workflowListColumnVisibility,
@@ -1180,7 +1181,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const listQueryKey = useMemo(() => buildWorkflowListQueryKey(listQueryParams), [listQueryParams]);
   const listQuery = useMemo(() => workflowListQueryString(listQueryParams), [listQueryParams]);
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: listQueryKey,
     enabled: listEnabled && filterValidationErrors.length === 0,
     queryFn: async () => {
@@ -1200,6 +1201,24 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     refetchOnWindowFocus: liveUpdatesPref,
     staleTime: listPollMs,
   });
+
+  useEffect(() => {
+    if (!listEnabled || !liveUpdatesPref || drawerOpen || desktopFilterField !== null) {
+      return undefined;
+    }
+    const refetchVisibleList = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+      void refetch();
+    };
+    window.addEventListener('visibilitychange', refetchVisibleList);
+    window.addEventListener('focus', refetchVisibleList);
+    return () => {
+      window.removeEventListener('visibilitychange', refetchVisibleList);
+      window.removeEventListener('focus', refetchVisibleList);
+    };
+  }, [desktopFilterField, drawerOpen, listEnabled, liveUpdatesPref, refetch]);
 
   // Facets enrich the include/exclude dropdowns. The mobile drawer can show
   // every value field at once; desktop column popovers request the active field.
@@ -1371,11 +1390,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const resetDraftFilters = useCallback(() => {
     const cleared = emptyFilters();
     setHasEditedFilters(true);
+    queryClient.removeQueries({ queryKey: ['workflow-list'] });
     setDraftFilters(cleared);
     setFilters(cleared);
     resetToFirstPage();
     setDesktopFilterField(null);
-  }, [resetToFirstPage]);
+  }, [queryClient, resetToFirstPage]);
 
   const removeActiveFilter = useCallback(
     (field: FilterField) => {

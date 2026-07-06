@@ -35,7 +35,7 @@ describe("workflowListContextParams", () => {
     );
 
     expect(query).toBe(
-      "stateIn=executing&progressSignalIn=awaiting_external&source=temporal&pageSize=50",
+      "source=temporal&pageSize=50&stateIn=executing&progressSignalIn=awaiting_external",
     );
   });
 

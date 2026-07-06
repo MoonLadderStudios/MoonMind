@@ -16,7 +16,7 @@ describe('workflowListQuery', () => {
     );
 
     expect(workflowListQueryString(tableParams)).toBe(
-      'source=temporal&repoContains=moon%2Frepo&stateIn=completed&pageSize=25',
+      'source=temporal&pageSize=25&stateIn=completed&repoContains=moon%2Frepo',
     );
     expect(workflowListQueryString(sidebarParams)).toBe(workflowListQueryString(tableParams));
     expect(buildWorkflowListQueryKey(sidebarParams)).toEqual(
@@ -44,6 +44,6 @@ describe('workflowListQuery', () => {
       ),
     );
 
-    expect(workflowListQueryString(params)).toBe('source=temporal&stateIn=executing&pageSize=25');
+    expect(workflowListQueryString(params)).toBe('source=temporal&pageSize=25&stateIn=executing');
   });
 });
