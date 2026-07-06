@@ -867,7 +867,9 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
-    expect((await screen.findByRole('status')).textContent).toContain('No workflow to open.');
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toContain('No workflow to open.');
+    });
     expect(window.location.pathname).toBe('/workflows');
   });
 
@@ -888,7 +890,9 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
-    expect((await screen.findByRole('status')).textContent).toContain('No workflow to open.');
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toContain('No workflow to open.');
+    });
     expect(window.location.pathname).toBe('/workflows');
   });
 
