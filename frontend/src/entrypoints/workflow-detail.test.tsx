@@ -940,9 +940,12 @@ describe('Workflow Detail Entrypoint', () => {
     }
   });
 
-  it('MM-1108 lets the planning RouteIcon finish before replaying', () => {
+  it('MM-1108 lets the planning and finalizing RouteIcon animations finish before replaying', () => {
     expect(WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS.planning).toBeGreaterThan(
       WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
+    );
+    expect(WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS.finalizing).toBe(
+      WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS.planning,
     );
   });
 

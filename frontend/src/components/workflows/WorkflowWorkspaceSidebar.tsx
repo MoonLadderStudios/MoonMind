@@ -12,8 +12,6 @@ import { Link, useInRouterContext } from 'react-router-dom';
 import {
   BotIcon,
   type BotIconHandle,
-  FlaskIcon,
-  type FlaskIconHandle,
   LoaderCircleIcon,
   type LoaderCircleIconHandle,
   RouteIcon,
@@ -53,7 +51,7 @@ const WORKFLOW_SIDEBAR_ANIMATED_STATUS = {
   initializing: LoaderCircleIcon,
   executing: BotIcon,
   planning: RouteIcon,
-  finalizing: FlaskIcon,
+  finalizing: RouteIcon,
 } as const;
 type SidebarAnimatedWorkflowStatus = keyof typeof WORKFLOW_SIDEBAR_ANIMATED_STATUS;
 export const WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS = 1200;
@@ -61,9 +59,9 @@ export const WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS = {
   initializing: undefined,
   executing: 650,
   planning: 1400,
-  finalizing: 650,
+  finalizing: 1400,
 } as const satisfies Readonly<Record<SidebarAnimatedWorkflowStatus, number | undefined>>;
-type WorkflowSidebarStatusIconHandle = LoaderCircleIconHandle | BotIconHandle | RouteIconHandle | FlaskIconHandle;
+type WorkflowSidebarStatusIconHandle = LoaderCircleIconHandle | BotIconHandle | RouteIconHandle;
 
 function readDashboardConfig(payload: BootPayload): DashboardConfig | undefined {
   const raw = payload.initialData as { dashboardConfig?: DashboardConfig } | undefined;
