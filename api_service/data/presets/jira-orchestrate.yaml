@@ -86,16 +86,6 @@ inputs:
     required: false
     default: true
 steps:
-  - title: Move Jira issue to In Progress
-    instructions: |-
-      Change Jira issue {{ inputs.jira_issue_key }} to status In Progress before implementation starts.
-
-      Use the trusted Jira issue updater workflow and Jira transition tools. Match In Progress against the issue's available transitions or target statuses; do not guess transition IDs. Re-fetch the issue when possible and report the confirmed status.
-    skill:
-      id: jira-issue-updater
-      requiredCapabilities:
-        - jira
-      args: {}
   - title: Check Jira blockers before implementation
     type: tool
     instructions: |-
@@ -158,11 +148,21 @@ steps:
     skill:
       id: auto
       args: {}
+  - title: Move Jira issue to In Progress
+    instructions: |-
+      Change Jira issue {{ inputs.jira_issue_key }} to status In Progress only after blocker preflight passes and the classify step confirms this Jira issue is eligible for Jira Orchestrate or is resuming from an eligible source design path.
+
+      Use the trusted Jira issue updater workflow and Jira transition tools. Match In Progress against the issue's available transitions or target statuses; do not guess transition IDs. Re-fetch the issue when possible and report the confirmed status.
+    skill:
+      id: jira-issue-updater
+      requiredCapabilities:
+        - jira
+      args: {}
   - title: Create or select MoonSpec
     instructions: |-
       Before running moonspec-specify, validate that the Jira preset brief is exactly one independently testable story or that the active feature directory has an existing one-story spec.md.
 
-      If the issue brief is not already one independently testable story, stop and report that it must be routed through moonspec-breakdown or another upstream selector before this orchestration can continue. Do not run moonspec-breakdown from this preset and do not select a story inline.
+      If the issue brief is not already one independently testable story and the active feature directory does not have an existing one-story spec.md, stop and report that it must be routed through moonspec-breakdown or another upstream selector before this orchestration can continue. Do not run moonspec-breakdown from this preset and do not select a story inline.
 
       For an eligible single-story Jira preset brief, run moonspec-specify unless an active spec.md already passes the specify gate.
       Preserve Jira issue {{ inputs.jira_issue_key }} and the original preset brief in spec.md so final verification can compare against them.

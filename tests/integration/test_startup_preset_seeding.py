@@ -138,9 +138,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             (step.get("skill") or step.get("tool"))["id"]
             for step in jira_orchestrate_template.steps
         ]
-        assert jira_orchestrate_steps[0] == "jira-issue-updater"
-        assert jira_orchestrate_steps[1] == "jira.check_blockers"
-        assert jira_orchestrate_steps[2] == "jira.load_preset_brief"
+        assert jira_orchestrate_steps[0] == "jira.check_blockers"
+        assert jira_orchestrate_steps[1] == "jira.load_preset_brief"
+        assert jira_orchestrate_steps[2] == "auto"
+        assert jira_orchestrate_steps[3] == "jira-issue-updater"
         assert "moonspec-implement" in jira_orchestrate_steps
         assert "moonspec-verify" in jira_orchestrate_steps
         assert jira_orchestrate_steps[-1] == "jira-issue-updater"
@@ -168,7 +169,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "Do not run moonspec-breakdown from this preset" in specify_step[
             "instructions"
         ]
-        blocker_step = jira_orchestrate_template.steps[1]
+        blocker_step = jira_orchestrate_template.steps[0]
         assert blocker_step["title"] == "Check Jira blockers before implementation"
         assert blocker_step["type"] == "tool"
         assert blocker_step["tool"]["id"] == "jira.check_blockers"

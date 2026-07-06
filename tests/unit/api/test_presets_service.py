@@ -2902,10 +2902,10 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 (step.get("skill") or step.get("tool"))["id"]
                 for step in template.steps
             ] == [
-                "jira-issue-updater",
                 "jira.check_blockers",
                 "jira.load_preset_brief",
                 "auto",
+                "jira-issue-updater",
                 "moonspec-specify",
                 "moonspec-plan",
                 "moonspec-tasks",
@@ -2933,50 +2933,50 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             )
 
             assert len(expanded["steps"]) == 25
-            assert expanded["steps"][0]["skill"]["id"] == "jira-issue-updater"
-            assert "MM-328" in expanded["steps"][0]["instructions"]
-            assert "In Progress" in expanded["steps"][0]["instructions"]
-            assert expanded["steps"][1]["title"] == "Check Jira blockers before implementation"
-            assert expanded["steps"][1]["type"] == "tool"
-            assert expanded["steps"][1]["tool"]["id"] == "jira.check_blockers"
-            assert expanded["steps"][1]["tool"]["inputs"] == {
+            assert expanded["steps"][0]["title"] == "Check Jira blockers before implementation"
+            assert expanded["steps"][0]["type"] == "tool"
+            assert expanded["steps"][0]["tool"]["id"] == "jira.check_blockers"
+            assert expanded["steps"][0]["tool"]["inputs"] == {
                 "targetIssueKey": "MM-328",
                 "blockerPreflight": {
                     "targetIssueKey": "MM-328",
                     "linkType": "Blocks",
                 },
             }
-            assert expanded["steps"][1]["targetIssueKey"] == "MM-328"
-            assert expanded["steps"][1]["blockerPreflight"] == {
+            assert expanded["steps"][0]["targetIssueKey"] == "MM-328"
+            assert expanded["steps"][0]["blockerPreflight"] == {
                 "targetIssueKey": "MM-328",
                 "linkType": "Blocks",
             }
-            assert "Jira issue MM-328" in expanded["steps"][1]["instructions"]
-            assert "deterministic trusted Jira blocker preflight" in expanded["steps"][1]["instructions"]
-            assert "other issue as outwardIssue" in expanded["steps"][1]["instructions"]
-            assert "other issue as inwardIssue" in expanded["steps"][1]["instructions"]
-            assert "MUST NOT block this orchestration" in expanded["steps"][1]["instructions"]
-            assert "blocker" in expanded["steps"][1]["instructions"]
-            assert "Done" in expanded["steps"][1]["instructions"]
-            assert "non-blocker" in expanded["steps"][1]["instructions"]
-            assert "status cannot be determined" in expanded["steps"][1][
+            assert "Jira issue MM-328" in expanded["steps"][0]["instructions"]
+            assert "deterministic trusted Jira blocker preflight" in expanded["steps"][0]["instructions"]
+            assert "other issue as outwardIssue" in expanded["steps"][0]["instructions"]
+            assert "other issue as inwardIssue" in expanded["steps"][0]["instructions"]
+            assert "MUST NOT block this orchestration" in expanded["steps"][0]["instructions"]
+            assert "blocker" in expanded["steps"][0]["instructions"]
+            assert "Done" in expanded["steps"][0]["instructions"]
+            assert "non-blocker" in expanded["steps"][0]["instructions"]
+            assert "status cannot be determined" in expanded["steps"][0][
                 "instructions"
             ]
-            assert "raw Jira credentials" in expanded["steps"][1]["instructions"]
-            assert "web scraping" in expanded["steps"][1]["instructions"]
-            assert "stop the orchestration immediately" in expanded["steps"][1][
+            assert "raw Jira credentials" in expanded["steps"][0]["instructions"]
+            assert "web scraping" in expanded["steps"][0]["instructions"]
+            assert "stop the orchestration immediately" in expanded["steps"][0][
                 "instructions"
             ]
-            assert expanded["steps"][2]["type"] == "tool"
-            assert expanded["steps"][2]["tool"]["id"] == "jira.load_preset_brief"
-            assert expanded["steps"][2]["tool"]["inputs"] == {
+            assert expanded["steps"][1]["type"] == "tool"
+            assert expanded["steps"][1]["tool"]["id"] == "jira.load_preset_brief"
+            assert expanded["steps"][1]["tool"]["inputs"] == {
                 "issueKey": "MM-328",
                 "artifactPath": "artifacts/jira-orchestrate-brief.json",
             }
-            assert "Jira preset brief" in expanded["steps"][2]["instructions"]
-            assert "Keep the scope narrow." in expanded["steps"][3]["instructions"]
-            assert "one independently testable story" in expanded["steps"][3]["instructions"]
-            assert "upstream breakdown/selector workflow" in expanded["steps"][3]["instructions"]
+            assert "Jira preset brief" in expanded["steps"][1]["instructions"]
+            assert "Keep the scope narrow." in expanded["steps"][2]["instructions"]
+            assert "one independently testable story" in expanded["steps"][2]["instructions"]
+            assert "upstream breakdown/selector workflow" in expanded["steps"][2]["instructions"]
+            assert expanded["steps"][3]["skill"]["id"] == "jira-issue-updater"
+            assert "MM-328" in expanded["steps"][3]["instructions"]
+            assert "In Progress" in expanded["steps"][3]["instructions"]
             assert "one independently testable story" in expanded["steps"][4]["instructions"]
             assert "Do not run moonspec-breakdown from this preset" in expanded["steps"][4]["instructions"]
             assert "Split broad designs when needed" not in [
@@ -3380,8 +3380,8 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "Load GitHub issue brief",
         "Assess existing implementation state",
         "Check GitHub issue blockers before orchestration",
-        "Mark GitHub issue In Progress",
         "Classify request and resume point",
+        "Mark GitHub issue In Progress",
         "Create or select MoonSpec",
         "Plan selected spec",
         "Generate TDD task breakdown",
@@ -3404,8 +3404,8 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "Create pull request",
         "Finalize GitHub issue status",
     ]
-    assert "one independently testable story" in expanded["steps"][4]["instructions"]
-    assert "upstream breakdown/selector workflow" in expanded["steps"][4]["instructions"]
+    assert "one independently testable story" in expanded["steps"][3]["instructions"]
+    assert "upstream breakdown/selector workflow" in expanded["steps"][3]["instructions"]
     assert "one independently testable story" in expanded["steps"][5]["instructions"]
     assert "Do not run moonspec-breakdown from this preset" in expanded["steps"][5]["instructions"]
     assert expanded["steps"][0]["tool"]["id"] == "github.load_issue_preset_brief"
@@ -3415,8 +3415,8 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "artifactPath": "artifacts/github-issue-orchestrate-brief.json",
     }
     assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
-    assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
-    assert expanded["steps"][3]["tool"]["inputs"] == {
+    assert expanded["steps"][4]["tool"]["id"] == "github.update_issue_status"
+    assert expanded["steps"][4]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
         "issueNumber": "1067",
         "targetStatus": "In Progress",

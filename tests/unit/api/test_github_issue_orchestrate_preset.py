@@ -155,7 +155,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
         "Load GitHub issue brief",
         "Assess existing implementation state",
         "Check GitHub issue blockers before orchestration",
-        "Mark GitHub issue In Progress",
+        "Classify request and resume point",
     ]
     assert steps[0]["tool"]["id"] == "github.load_issue_preset_brief"
     assert steps[0]["tool"]["inputs"] == {
@@ -176,7 +176,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
     assert "deterministic trusted GitHub blocker preflight" in steps[2][
         "instructions"
     ]
-    assert steps[3]["tool"] == {
+    assert steps[4]["tool"] == {
         "id": "github.update_issue_status",
         "requiredCapabilities": ["gh"],
         "inputs": {
@@ -188,7 +188,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
         },
     }
 
-    assert [steps[index]["skill"]["id"] for index in range(4, 10)] == [
+    assert [steps[index]["skill"]["id"] for index in [3, 5, 6, 7, 8, 9]] == [
         "auto",
         "moonspec-specify",
         "moonspec-plan",
@@ -197,10 +197,10 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
         "moonspec-implement",
     ]
     assert "Split broad designs when needed" not in [step["title"] for step in steps]
-    assert "Preserve MM-1063 traceability." in steps[4]["instructions"]
-    assert "FULLY_IMPLEMENTED" in steps[4]["instructions"]
-    assert "one independently testable story" in steps[4]["instructions"]
-    assert "upstream breakdown/selector workflow" in steps[4]["instructions"]
+    assert "Preserve MM-1063 traceability." in steps[3]["instructions"]
+    assert "FULLY_IMPLEMENTED" in steps[3]["instructions"]
+    assert "one independently testable story" in steps[3]["instructions"]
+    assert "upstream breakdown/selector workflow" in steps[3]["instructions"]
     assert "one independently testable story" in steps[5]["instructions"]
     assert "Do not run moonspec-breakdown from this preset" in steps[5]["instructions"]
     assert "make no code changes" in steps[9]["instructions"]
