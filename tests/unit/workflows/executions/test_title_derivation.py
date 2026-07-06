@@ -20,6 +20,8 @@ from moonmind.workflows.executions.title_derivation import (
         "run",
         " Run ",
         "Run!",
+        "New-run",
+        "New_run",
         "New run",
         "Untitled",
         "Untitled run",
@@ -120,6 +122,68 @@ def test_extracts_pull_request_targets(
     )
 
 
+def test_restricts_bare_numeric_pr_targets_to_explicit_pr_fields() -> None:
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={"inputs": {"port": 8080, "issue_number": 123}},
+            normalized_tool={"name": "future-skill"},
+            normalized_steps=[],
+        )
+        is None
+    )
+
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={"inputs": {"pr": 456}},
+            normalized_tool={"name": "future-skill"},
+            normalized_steps=[],
+        )
+        == "Future Skill: PR #456"
+    )
+
+
+def test_rejects_extremely_long_pr_numbers_without_integer_conversion() -> None:
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={"inputs": {"pr": "1" * 5000}},
+            normalized_tool={"name": "pr-resolver"},
+            normalized_steps=[],
+        )
+        is None
+    )
+
+
+def test_pr_url_extraction_requires_number_boundary() -> None:
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={
+                "inputs": {"pullRequestUrl": "https://github.com/org/repo/pull/456abc"}
+            },
+            normalized_tool={"name": "pr-resolver"},
+            normalized_steps=[],
+        )
+        is None
+    )
+
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={
+                "inputs": {
+                    "pullRequestUrl": "https://github.com/org/repo/pull/456?diff=split"
+                }
+            },
+            normalized_tool={"name": "pr-resolver"},
+            normalized_steps=[],
+        )
+        == "PR Resolver: PR #456"
+    )
+
+
 def test_combines_issue_and_pull_request_in_priority_order() -> None:
     assert (
         synthesize_workflow_title(
@@ -213,6 +277,68 @@ def test_regex_fallback_runs_after_structured_targets(
             normalized_steps=[],
         )
         == "Future Skill: KANDY-123"
+    )
+
+
+def test_regex_fallback_can_extract_issue_and_pr_from_same_text() -> None:
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={"instructions": "Fix MM-123 and review PR #456"},
+            normalized_tool={"name": "jira-pr-verify"},
+            normalized_steps=[],
+        )
+        == "Jira PR Verify: MM-123 — PR #456"
+    )
+
+
+def test_structured_github_shorthand_is_only_pr_target_for_pr_fields() -> None:
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={"inputs": {"comment": "#456"}},
+            normalized_tool={"name": "future-skill"},
+            normalized_steps=[],
+        )
+        is None
+    )
+
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={"inputs": {"pr": "#456"}},
+            normalized_tool={"name": "future-skill"},
+            normalized_steps=[],
+        )
+        == "Future Skill: PR #456"
+    )
+
+
+def test_single_step_title_fallback_requires_exactly_one_step() -> None:
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={"inputs": {"issueKey": "KANDY-123"}},
+            normalized_tool={},
+            normalized_steps=[{"title": "First Step"}, {"title": "Second Step"}],
+        )
+        == "Workflow: KANDY-123"
+    )
+
+
+def test_generic_tool_title_falls_back_to_skill_name() -> None:
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={"inputs": {"issueKey": "KANDY-123"}},
+            normalized_tool={
+                "type": "skill",
+                "name": "jira-pr-verify",
+                "title": "Run",
+            },
+            normalized_steps=[],
+        )
+        == "Jira PR Verify: KANDY-123"
     )
 
 

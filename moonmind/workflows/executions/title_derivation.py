@@ -28,8 +28,27 @@ _ACRONYMS = {
     "pr": "PR",
 }
 
-_REPOSITORY_KEYS = {"repository", "repo", "reporef", "repo_ref"}
-_ISSUE_KEYS = {"jiraissuekey", "jira_issue_key", "issuekey", "issue", "issueurl"}
+_REPOSITORY_KEYS = {
+    "repository",
+    "repository_url",
+    "reporef",
+    "repo",
+    "repo_ref",
+    "repo_url",
+}
+_ISSUE_KEYS = {
+    "issue",
+    "issue_key",
+    "issue_url",
+    "issuekey",
+    "issueurl",
+    "jira_issue",
+    "jira_issue_key",
+    "jira_issue_url",
+    "jiraissue",
+    "jiraissuekey",
+    "jiraissueurl",
+}
 _PR_KEYS = {
     "pr",
     "prnumber",
@@ -38,6 +57,8 @@ _PR_KEYS = {
     "pr_url",
     "pullrequest",
     "pull_request",
+    "pullrequestnumber",
+    "pull_request_number",
     "pullrequesturl",
     "pull_request_url",
 }
@@ -63,9 +84,10 @@ _IGNORED_VALUE_KEYS = {
 }
 
 _ISSUE_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
-_PR_URL_RE = re.compile(r"/pull/(\d+)(?:\b|/)?", re.IGNORECASE)
+_PR_URL_RE = re.compile(r"/pull/(\d+)(?=$|[/?#]|\b)", re.IGNORECASE)
 _PR_TEXT_RE = re.compile(r"\b(?:PR|pull request)\s*#?(\d+)\b", re.IGNORECASE)
 _GITHUB_SHORTHAND_RE = re.compile(r"(?<![\w/])#(\d+)\b")
+_MAX_PR_NUMBER_DIGITS = 10
 
 
 @dataclass(frozen=True)
@@ -77,7 +99,7 @@ class _TitleTarget:
 
 
 def is_generic_title(title: str | None) -> bool:
-    normalized = re.sub(r"[^\w\s]+", " ", str(title or "").strip().casefold())
+    normalized = re.sub(r"[\W_]+", " ", str(title or "").strip().casefold())
     normalized = " ".join(normalized.split())
     return normalized in _GENERIC_TITLES
 
@@ -92,8 +114,6 @@ def synthesize_workflow_title(
     explicit = str(current_title or "").strip()
     if explicit and not is_generic_title(explicit):
         return explicit
-    if explicit == "" and current_title is not None and not is_generic_title(current_title):
-        return current_title
 
     label = _capability_label(task_payload, normalized_tool, normalized_steps)
     targets = _collect_structured_targets(task_payload)
@@ -121,17 +141,23 @@ def _capability_label(
         )
 
     if tool_payload is not None:
-        for key in ("label", "displayName", "display_name", "title"):
+        for key in ("label", "displayName", "display_name"):
             value = _clean_text(tool_payload.get(key))
             if value:
                 return value
-        for key in ("name", "id", "slug", "type"):
+        value = _clean_text(tool_payload.get("title"))
+        if value and not is_generic_title(value):
+            return value
+        for key in ("name", "id", "slug"):
             value = _clean_text(tool_payload.get(key))
             if value:
                 return _identifier_to_label(value)
+        value = _clean_text(tool_payload.get("type"))
+        if value and not is_generic_title(value) and value.casefold() != "skill":
+            return _identifier_to_label(value)
 
-    for step in normalized_steps:
-        value = _clean_text(step.get("title"))
+    if len(normalized_steps) == 1:
+        value = _clean_text(normalized_steps[0].get("title"))
         if value:
             return value
 
@@ -207,11 +233,21 @@ def _append_targets_for_value(
         if issue:
             targets.append(_TitleTarget("issue", issue, 0, path))
             return
-    if key in _PR_KEYS:
         pr = _extract_pr(text)
         if pr:
             targets.append(_TitleTarget("pull_request", pr, 1, path))
             return
+        return
+    if key in _PR_KEYS:
+        pr = _extract_pr(text, allow_bare_number=True, allow_shorthand=True)
+        if pr:
+            targets.append(_TitleTarget("pull_request", pr, 1, path))
+            return
+        issue = _extract_issue(text)
+        if issue:
+            targets.append(_TitleTarget("issue", issue, 0, path))
+            return
+        return
     if key in _BRANCH_KEYS and _looks_like_branch(text):
         targets.append(_TitleTarget("branch", text, 2, path))
         return
@@ -243,8 +279,7 @@ def _collect_text_fallback_targets(
         issue = _extract_issue(text)
         if issue:
             targets.append(_TitleTarget("issue", issue, 0, f"text[{index}]"))
-            continue
-        pr = _extract_pr(text)
+        pr = _extract_pr(text, allow_shorthand=True)
         if pr:
             targets.append(_TitleTarget("pull_request", pr, 1, f"text[{index}]"))
     return _rank_targets(targets)
@@ -269,14 +304,29 @@ def _extract_issue(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _extract_pr(text: str) -> str | None:
-    for pattern in (_PR_URL_RE, _PR_TEXT_RE, _GITHUB_SHORTHAND_RE):
+def _extract_pr(
+    text: str,
+    *,
+    allow_bare_number: bool = False,
+    allow_shorthand: bool = False,
+) -> str | None:
+    patterns = [_PR_URL_RE, _PR_TEXT_RE]
+    if allow_shorthand:
+        patterns.append(_GITHUB_SHORTHAND_RE)
+    for pattern in patterns:
         match = pattern.search(text)
         if match:
-            return f"PR #{int(match.group(1))}"
-    if text.isdigit():
-        return f"PR #{int(text)}"
+            return _render_pr_number(match.group(1))
+    if allow_bare_number and text.isdigit():
+        return _render_pr_number(text)
     return None
+
+
+def _render_pr_number(digits: str) -> str | None:
+    pr_num = digits.lstrip("0") or "0"
+    if len(pr_num) > _MAX_PR_NUMBER_DIGITS:
+        return None
+    return f"PR #{pr_num}"
 
 
 def _looks_like_branch(text: str) -> bool:

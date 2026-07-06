@@ -9665,7 +9665,7 @@ async def _create_execution_from_workflow_request(
     )
     if derived_task_title and (
         "title" not in normalized_task_for_planner
-        or is_generic_title(str(normalized_task_for_planner.get("title") or ""))
+        or is_generic_title(normalized_task_for_planner.get("title"))
     ):
         normalized_task_for_planner["title"] = derived_task_title
 

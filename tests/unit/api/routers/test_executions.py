@@ -6462,6 +6462,45 @@ def test_create_task_shaped_execution_synthesizes_generic_title(
     assert initial_parameters["workflow"]["title"] == "Jira Verify: KANDY-123"
 
 
+def test_create_task_shaped_execution_synthesizes_issue_pr_title_without_repo(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "title": "Run",
+                    "runtime": {"mode": "claude_code"},
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "tool": {
+                        "type": "skill",
+                        "name": "jira-pr-verify",
+                        "inputs": {
+                            "issueKey": "KANDY-123",
+                            "pullRequestUrl": "https://github.com/org/repo/pull/456",
+                            "repository": "org/repo",
+                        },
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    assert called_kwargs["title"] == "Jira PR Verify: KANDY-123 — PR #456"
+    initial_parameters = called_kwargs["initial_parameters"]
+    assert (
+        initial_parameters["workflow"]["title"]
+        == "Jira PR Verify: KANDY-123 — PR #456"
+    )
+
+
 def test_create_task_shaped_execution_keeps_meaningful_title_after_synthesis(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
