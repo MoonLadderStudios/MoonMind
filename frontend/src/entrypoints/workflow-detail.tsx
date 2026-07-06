@@ -643,7 +643,9 @@ export function WorkflowWorkspaceShell({
     : null;
 
   useEffect(() => {
-    updateDashboardPreferences({ lastSelectedWorkflowId: workflowId });
+    if (workflowId) {
+      updateDashboardPreferences({ lastSelectedWorkflowId: workflowId });
+    }
   }, [workflowId]);
 
   return (

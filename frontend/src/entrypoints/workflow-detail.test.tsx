@@ -12,6 +12,7 @@ import {
   WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
   WorkflowDetailEntrypoint,
   WorkflowDetailPage,
+  WorkflowWorkspaceShell,
 } from './workflow-detail';
 import {
   taskCompareHref,
@@ -971,6 +972,26 @@ describe('Workflow Detail Entrypoint', () => {
     expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
     expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('test-123');
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+  });
+
+  it('MM-1117 does not clear the last selected workflow when the shell has no workflow id', async () => {
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'workflow-previous' });
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response);
+
+    renderWithClient(
+      <WorkflowWorkspaceShell
+        payload={stepsPayload}
+        workflowId=""
+        search={new URLSearchParams('source=temporal')}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('workflow-previous');
+    });
   });
 
   it('MM-1117 opens desktop detail routes by default unless hidden display mode is persisted', async () => {

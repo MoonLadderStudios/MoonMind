@@ -775,6 +775,40 @@ describe("WorkflowStart schedule mode entry", () => {
     );
   });
 
+  it("MM-1117 treats null Create sidebar list responses as empty lists", async () => {
+    updateDashboardPreferences({ workflowListDisplayMode: "sidebar" });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/executions?")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => null,
+        } as Response);
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    expect(await screen.findByRole("complementary", { name: "Workflow navigation" })).toBeTruthy();
+    expect(await screen.findByText("No workflows match the current list filters.")).toBeTruthy();
+  });
+
   it("MM-1117 persists Create list-mode changes without writing mode into the URL", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     await screen.findByLabelText("Instructions");

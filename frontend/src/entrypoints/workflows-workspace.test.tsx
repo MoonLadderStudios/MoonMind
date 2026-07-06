@@ -130,4 +130,22 @@ describe('WorkflowsWorkspacePage', () => {
     expect(window.location.pathname).toBe('/workflows');
     expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
   });
+
+  it('MM-1117 reports unavailable navigation when table mode resolution fails', async () => {
+    window.history.pushState({}, 'Workflow Table', '/workflows?source=temporal&stateIn=failed');
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => {
+        throw new Error('invalid json');
+      },
+    } as unknown as Response);
+
+    renderWorkspace({ page: 'dashboard', apiBase: '/api' });
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    expect(await screen.findByText('Workflow navigation is unavailable.')).toBeTruthy();
+    expect(window.location.pathname).toBe('/workflows');
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('sidebar');
+  });
 });

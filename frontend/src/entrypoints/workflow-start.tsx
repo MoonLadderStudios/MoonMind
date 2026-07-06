@@ -156,8 +156,8 @@ function WorkflowStartWorkspace({
       if (!response.ok) {
         throw new Error(`Failed to fetch workflows: ${response.statusText}`);
       }
-      const data = (await response.json()) as { items?: WorkflowStartSidebarRow[] };
-      return { items: Array.isArray(data.items) ? data.items : [] };
+      const data = (await response.json()) as { items?: WorkflowStartSidebarRow[] } | null;
+      return { items: data && Array.isArray(data.items) ? data.items : [] };
     },
     enabled: displayMode === "sidebar",
     staleTime: 5000,

@@ -139,8 +139,8 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
         setTableModeStatus('Workflow navigation is unavailable.');
         return;
       }
-      const data = (await response.json()) as { items?: unknown[] };
-      const rows = Array.isArray(data.items) ? data.items : [];
+      const data = (await response.json()) as { items?: unknown[] } | null;
+      const rows = data && Array.isArray(data.items) ? data.items : [];
       const ids = rows.map(workflowWorkspaceRowId).filter(Boolean);
       const lastSelectedWorkflowId = readDashboardPreferences().lastSelectedWorkflowId;
       const selectedId =
@@ -154,6 +154,8 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
       }
 
       navigate(workflowDetailHref(selectedId, listQueryParams));
+    } catch {
+      setTableModeStatus('Workflow navigation is unavailable.');
     } finally {
       setResolvingTableMode(false);
     }
