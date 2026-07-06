@@ -6,12 +6,12 @@ describe("workflowListContextParams", () => {
   it("preserves supported workflow list filters for detail sidebar queries", () => {
     const params = workflowListContextParams(
       new URLSearchParams(
-        "source=temporal&integration=jira&repo=MoonMind&state=executing&limit=10",
+        "source=temporal&integration=jira&repo=MoonMind&state=executing&limit=10&pageSize=10",
       ),
     );
 
     expect(params.toString()).toBe(
-      "source=temporal&integration=jira&repo=MoonMind&state=executing&limit=10",
+      "source=temporal&integration=jira&repo=MoonMind&state=executing&limit=10&pageSize=10",
     );
   });
 

@@ -589,6 +589,7 @@ describe("WorkflowStart schedule mode entry", () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
+    window.localStorage.clear();
     fetchSpy = vi
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL) => {
@@ -724,6 +725,12 @@ describe("WorkflowStart schedule mode entry", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith("/api/executions?")) {
+        if (url.includes("workflowType=") || url.includes("entry=")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
         return new Promise<Response>((resolve) => {
           resolveList = resolve;
         });
@@ -753,12 +760,14 @@ describe("WorkflowStart schedule mode entry", () => {
     expect(await screen.findByText("Loading workflows...")).toBeTruthy();
     expect(instructions.value).toBe("Draft while list loads.");
 
-    resolveList({
-      ok: true,
-      json: async () => ({
-        items: [{ workflowId: "workflow-1", title: "Existing workflow" }],
-      }),
-    } as Response);
+    await act(async () => {
+      resolveList({
+        ok: true,
+        json: async () => ({
+          items: [{ workflowId: "workflow-1", title: "Existing workflow" }],
+        }),
+      } as Response);
+    });
 
     expect(await screen.findByRole("link", { name: "Existing workflow" })).toBeTruthy();
     expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(

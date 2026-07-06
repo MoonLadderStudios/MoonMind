@@ -25,6 +25,7 @@ export function consumeWorkflowListReturnFocusIntent(source: URLSearchParams): b
 const WORKFLOW_LIST_CONTEXT_ALLOWLIST = new Set([
   'source',
   'limit',
+  'pageSize',
   'nextPageToken',
   'workflowIdContains',
   'workflowId',

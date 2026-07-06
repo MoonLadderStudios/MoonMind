@@ -921,7 +921,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
-      '/api/executions?source=temporal&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira&pageSize=10',
+      '/api/executions?source=temporal&nextPageToken=page-2&integration=jira&repoContains=moon%2Frepo&pageSize=10',
     );
     const anotherWorkflow = await within(sidebar).findByRole('link', { name: /Another workflow/i });
     expect(anotherWorkflow.getAttribute('href')).toBe(

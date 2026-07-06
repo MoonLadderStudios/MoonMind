@@ -4,7 +4,9 @@ export const DEFAULT_WORKFLOW_LIST_PAGE_SIZE = '25';
 
 export type WorkflowListQueryKey = readonly ['workflow-list', string];
 
-const PRIMARY_PARAM_ORDER = ['source', 'nextPageToken', 'pageSize'];
+const PRIMARY_PARAM_ORDER = ['source', 'nextPageToken'];
+
+const TRAILING_PARAM_ORDER = ['pageSize'];
 
 function orderedEntries(params: URLSearchParams): Array<[string, string]> {
   const entries = Array.from(params.entries());
@@ -15,6 +17,13 @@ function orderedEntries(params: URLSearchParams): Array<[string, string]> {
       if (leftPrimary === -1) return 1;
       if (rightPrimary === -1) return -1;
       if (leftPrimary !== rightPrimary) return leftPrimary - rightPrimary;
+    }
+    const leftTrailing = TRAILING_PARAM_ORDER.indexOf(leftKey);
+    const rightTrailing = TRAILING_PARAM_ORDER.indexOf(rightKey);
+    if (leftTrailing !== -1 || rightTrailing !== -1) {
+      if (leftTrailing === -1) return -1;
+      if (rightTrailing === -1) return 1;
+      if (leftTrailing !== rightTrailing) return leftTrailing - rightTrailing;
     }
     if (leftKey !== rightKey) return leftKey.localeCompare(rightKey);
     return leftValue.localeCompare(rightValue);
