@@ -334,6 +334,13 @@ samp {
   color: rgb(var(--mm-accent));
 }
 
+.workflow-list-display-option--selected:hover,
+.workflow-list-display-option[aria-pressed="true"]:hover {
+  border-color: rgb(var(--mm-accent-2) / 0.72);
+  background: rgb(var(--mm-accent-2) / 0.1);
+  color: rgb(var(--mm-ink));
+}
+
 .workflow-list-display-option svg {
   width: 0.95rem;
   height: 0.95rem;
