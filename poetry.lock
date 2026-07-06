@@ -2631,14 +2631,14 @@ llama-parse = ">=0.5.0"
 
 [[package]]
 name = "llama-index-vector-stores-qdrant"
-version = "0.10.1"
+version = "0.10.2"
 description = "llama-index vector_stores qdrant integration"
 optional = false
 python-versions = "<3.14,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_vector_stores_qdrant-0.10.1-py3-none-any.whl", hash = "sha256:90e8c0c0cd96309a9dd84a29cfe77aa6b3ef2f2596f0a0360eaaa8e3a004f1ff"},
-    {file = "llama_index_vector_stores_qdrant-0.10.1.tar.gz", hash = "sha256:fef4ca8411c3e33636aabcf883941fde7a9d6deaa45254ee80627f2d0ffbf551"},
+    {file = "llama_index_vector_stores_qdrant-0.10.2-py3-none-any.whl", hash = "sha256:51070d47d3374860e8072bfa7f5b079222a58a6f1e1d78443e2babc8cab6d0c9"},
+    {file = "llama_index_vector_stores_qdrant-0.10.2.tar.gz", hash = "sha256:3122b644901c7b58e616fd9e7ed4fd1ec2604c63f1b85c5d6ad44820af329be2"},
 ]
 
 [package.dependencies]
