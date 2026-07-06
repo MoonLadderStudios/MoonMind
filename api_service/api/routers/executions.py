@@ -9998,7 +9998,166 @@ def _first_mapping_value(
             return source[key]
     return None
 
-def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
+def _recurring_task_payload(
+    parameters: Mapping[str, Any],
+) -> tuple[str | None, dict[str, Any]]:
+    for key in ("workflow", "task"):
+        task_payload = parameters.get(key)
+        if isinstance(task_payload, Mapping):
+            return key, dict(task_payload)
+    return None, {}
+
+
+async def _resolve_recurring_runtime_metadata(
+    request_payload: Mapping[str, Any],
+    *,
+    session: Any | None,
+) -> dict[str, Any]:
+    workflow_type = str(
+        request_payload.get("workflowType")
+        or request_payload.get("workflow_type")
+        or "MoonMind.UserWorkflow"
+    ).strip()
+    if workflow_type != "MoonMind.UserWorkflow":
+        return {}
+
+    parameter_payload = request_payload
+    raw_initial_parameters = request_payload.get("initialParameters")
+    if raw_initial_parameters is None:
+        raw_initial_parameters = request_payload.get("initial_parameters")
+    if isinstance(raw_initial_parameters, Mapping):
+        parameter_payload = raw_initial_parameters
+
+    _task_key, task_payload = _recurring_task_payload(parameter_payload)
+    if not task_payload and parameter_payload is not request_payload:
+        _task_key, task_payload = _recurring_task_payload(request_payload)
+
+    runtime_payload = (
+        task_payload.get("runtime")
+        if isinstance(task_payload.get("runtime"), Mapping)
+        else parameter_payload.get("runtime")
+        if isinstance(parameter_payload.get("runtime"), Mapping)
+        else {}
+    )
+    raw_target_runtime = (
+        request_payload.get("targetRuntime")
+        or parameter_payload.get("targetRuntime")
+        or runtime_payload.get("mode")
+        or settings.workflow.default_runtime
+        or ""
+    )
+    canonical_target_runtime: str | None = None
+    if raw_target_runtime:
+        normalized_rt = normalize_runtime_id(raw_target_runtime)
+        if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
+            raise _invalid_workflow_request(
+                f"Unsupported targetRuntime: {raw_target_runtime!r}. "
+                "Must be one of: codex_cli, claude_code, codex_cloud, jules."
+            )
+        canonical_target_runtime = normalized_rt
+
+    raw_profile_id = str(
+        runtime_payload.get("profileId")
+        or runtime_payload.get("providerProfile")
+        or runtime_payload.get("executionProfileRef")
+        or task_payload.get("profileId")
+        or task_payload.get("providerProfile")
+        or parameter_payload.get("profileId")
+        or parameter_payload.get("providerProfile")
+        or request_payload.get("profileId")
+        or request_payload.get("providerProfile")
+        or ""
+    ).strip() or None
+    raw_requested_model: str | None = runtime_payload.get("model") or None
+    if raw_requested_model is None:
+        raw_requested_model = parameter_payload.get(
+            "requestedModel"
+        ) or parameter_payload.get("model")
+    if raw_requested_model is not None:
+        raw_requested_model = str(raw_requested_model)
+
+    provider_profile = None
+    session_get = getattr(session, "get", None)
+    if raw_profile_id and callable(session_get):
+        provider_profile = await session_get(
+            ManagedAgentProviderProfile,
+            raw_profile_id,
+        )
+        if provider_profile is None:
+            raise _invalid_workflow_request(
+                f"Provider profile not found: {raw_profile_id!r}."
+            )
+
+    resolved_model, model_source = resolve_effective_model(
+        runtime_id=canonical_target_runtime,
+        profile=provider_profile,
+        requested_model=raw_requested_model,
+        workflow_settings=settings.workflow,
+    )
+    metadata: dict[str, Any] = {
+        "targetRuntime": canonical_target_runtime,
+        "model": resolved_model,
+        "requestedModel": raw_requested_model,
+        "modelSource": model_source,
+    }
+    if raw_profile_id:
+        metadata["profileId"] = raw_profile_id
+    if "effort" in runtime_payload:
+        metadata["effort"] = runtime_payload.get("effort")
+    elif "effort" in parameter_payload:
+        metadata["effort"] = parameter_payload.get("effort")
+    return metadata
+
+
+def _stamp_recurring_runtime_metadata(
+    initial_parameters: dict[str, Any],
+    runtime_metadata: Mapping[str, Any] | None,
+) -> None:
+    if not runtime_metadata:
+        return
+
+    if runtime_metadata.get("targetRuntime"):
+        initial_parameters["targetRuntime"] = runtime_metadata["targetRuntime"]
+    if runtime_metadata.get("model"):
+        initial_parameters["model"] = runtime_metadata["model"]
+    if runtime_metadata.get("requestedModel") is not None:
+        initial_parameters["requestedModel"] = runtime_metadata["requestedModel"]
+    if runtime_metadata.get("modelSource"):
+        initial_parameters["modelSource"] = runtime_metadata["modelSource"]
+    if runtime_metadata.get("profileId"):
+        initial_parameters["profileId"] = runtime_metadata["profileId"]
+    if "effort" in runtime_metadata:
+        initial_parameters["effort"] = runtime_metadata.get("effort")
+
+    task_key, task_payload = _recurring_task_payload(initial_parameters)
+    if task_key is None:
+        return
+
+    runtime_payload = (
+        dict(task_payload.get("runtime"))
+        if isinstance(task_payload.get("runtime"), Mapping)
+        else {}
+    )
+    if runtime_metadata.get("targetRuntime"):
+        runtime_payload["mode"] = runtime_metadata["targetRuntime"]
+    if runtime_metadata.get("model"):
+        runtime_payload["model"] = runtime_metadata["model"]
+    if "effort" in runtime_metadata:
+        runtime_payload["effort"] = runtime_metadata.get("effort")
+    if runtime_metadata.get("profileId"):
+        profile_id = runtime_metadata["profileId"]
+        runtime_payload["profileId"] = profile_id
+        runtime_payload["providerProfile"] = profile_id
+    if runtime_payload:
+        task_payload["runtime"] = runtime_payload
+        initial_parameters[task_key] = task_payload
+
+
+def _build_recurring_target(
+    request_payload: dict[str, Any],
+    *,
+    runtime_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Transform a workflow request payload into a RecurringWorkflowsService target.
 
     Constructs the Temporal workflow-start target expected by
@@ -10011,7 +10170,10 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
         or target_payload.get("workflow_type")
         or "MoonMind.UserWorkflow"
     ).strip()
-    if "initialParameters" in target_payload or "initial_parameters" in target_payload:
+    has_initial_parameters = (
+        "initialParameters" in target_payload or "initial_parameters" in target_payload
+    )
+    if has_initial_parameters:
         initial_parameters = (
             target_payload.get("initialParameters")
             if "initialParameters" in target_payload
@@ -10025,6 +10187,11 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
                 else initial_parameters
             ),
         }
+        if isinstance(target["initialParameters"], dict):
+            _stamp_recurring_runtime_metadata(
+                target["initialParameters"],
+                runtime_metadata,
+            )
         for source_keys, target_key in (
             (("title",), "title"),
             (("inputArtifactRef", "input_artifact_ref"), "inputArtifactRef"),
@@ -10042,9 +10209,8 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
 
     root_propose_tasks = target_payload.pop("proposeTasks", None)
     root_proposal_policy = target_payload.pop("proposalPolicy", None)
-    task_node = target_payload.get("workflow")
-    if isinstance(task_node, Mapping):
-        task_payload = dict(task_node)
+    task_key, task_payload = _recurring_task_payload(target_payload)
+    if task_key is not None:
         propose_tasks_value = (
             task_payload["proposeTasks"]
             if "proposeTasks" in task_payload
@@ -10066,7 +10232,8 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
             task_payload["proposalPolicy"] = normalized_proposal_policy
         else:
             task_payload.pop("proposalPolicy", None)
-        target_payload["workflow"] = task_payload
+        target_payload[task_key] = task_payload
+    _stamp_recurring_runtime_metadata(target_payload, runtime_metadata)
     return {
         "workflowType": workflow_type,
         "title": str(target_payload.get("title") or "").strip() or None,
@@ -10089,6 +10256,7 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
         ),
     }
 
+
 async def _handle_recurring_schedule(
     *,
     schedule: ScheduleParameters,
@@ -10102,8 +10270,6 @@ async def _handle_recurring_schedule(
         RecurringWorkflowsService,
     )
 
-    svc = RecurringWorkflowsService(session)
-    target = _build_recurring_target(request_payload)
     scope_type = schedule.scope_type or "personal"
     if scope_type == "global" and not _is_execution_admin(user):
         raise HTTPException(
@@ -10113,6 +10279,15 @@ async def _handle_recurring_schedule(
                 "message": "Operator privileges are required for global schedules.",
             },
         )
+    svc = RecurringWorkflowsService(session)
+    runtime_metadata = await _resolve_recurring_runtime_metadata(
+        request_payload,
+        session=session,
+    )
+    target = _build_recurring_target(
+        request_payload,
+        runtime_metadata=runtime_metadata,
+    )
     try:
         definition = await svc.create_definition(
             name=schedule.name or "Inline schedule",
