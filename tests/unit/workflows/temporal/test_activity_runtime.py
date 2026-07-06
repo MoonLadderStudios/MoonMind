@@ -120,7 +120,8 @@ async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -
     assert '"BLOCKED"' in prepared
     assert '"advance"' in prepared
     assert '"reattempt_current_step"' in prepared
-    assert "create_pull_request" in prepared
+    assert '`FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"' in prepared
+    assert "raw diagnostic" in prepared
 
 
 async def test_prepare_managed_codex_turn_appends_vocab_when_path_already_present() -> None:
@@ -137,7 +138,7 @@ async def test_prepare_managed_codex_turn_appends_vocab_when_path_already_presen
     assert prepared.count("complete structured verifier JSON") == 0
     assert '"FULLY_IMPLEMENTED"' in prepared
     assert '"advance"' in prepared
-    assert "create_pull_request" in prepared
+    assert "workflow-specific destination" in prepared
 
 
 async def test_codex_skill_payload_rejects_auto_publish_mode() -> None:
@@ -5050,7 +5051,7 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
             )
 
 
-async def test_agent_runtime_publish_artifacts_flags_moonspec_contract_violations(
+async def test_agent_runtime_publish_artifacts_canonicalizes_moonspec_next_action(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5123,8 +5124,13 @@ async def test_agent_runtime_publish_artifacts_flags_moonspec_contract_violation
                 )
             )
 
-            violations = result.metadata["moonSpecVerify"]["contractViolations"]
-            assert any("create_pull_request" in item for item in violations)
+            verify_payload = result.metadata["moonSpecVerify"]
+            assert verify_payload["recommendedNextAction"] == "advance"
+            assert (
+                verify_payload["rawRecommendedNextAction"]
+                == "create_pull_request"
+            )
+            assert "contractViolations" not in verify_payload
             AgentRunResult(**result.model_dump(mode="json", by_alias=True))
 
 

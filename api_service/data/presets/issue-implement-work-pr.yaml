@@ -223,7 +223,9 @@ steps:
 
 
     Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
-    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
+    If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
+    to "advance". The workflow runtime owns pull request creation; do not encode
+    pull request creation or any step-specific destination in recommendedNextAction.'
   skill:
     id: moonspec-verify
     args:
@@ -297,7 +299,9 @@ steps:
 
 
     Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
-    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
+    If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
+    to "advance". The workflow runtime owns pull request creation; do not encode
+    pull request creation or any step-specific destination in recommendedNextAction.'
   skill:
     id: moonspec-verify
     args:
@@ -371,7 +375,9 @@ steps:
 
 
     Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
-    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
+    If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
+    to "advance". The workflow runtime owns pull request creation; do not encode
+    pull request creation or any step-specific destination in recommendedNextAction.'
   skill:
     id: moonspec-verify
     args:
@@ -445,7 +451,9 @@ steps:
 
 
     Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
-    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
+    If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
+    to "advance". The workflow runtime owns pull request creation; do not encode
+    pull request creation or any step-specific destination in recommendedNextAction.'
   skill:
     id: moonspec-verify
     args:
@@ -519,7 +527,9 @@ steps:
 
 
     Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
-    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
+    If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
+    to "advance". The workflow runtime owns pull request creation; do not encode
+    pull request creation or any step-specific destination in recommendedNextAction.'
   skill:
     id: moonspec-verify
     args:
@@ -593,7 +603,9 @@ steps:
 
 
     Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
-    Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.'
+    If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
+    to "advance". The workflow runtime owns pull request creation; do not encode
+    pull request creation or any step-specific destination in recommendedNextAction.'
   skill:
     id: moonspec-verify
     args:

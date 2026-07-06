@@ -185,6 +185,7 @@ from moonmind.workflows.skills.skill_registry import (
     parse_skill_registry,
 )
 from moonmind.workflows.skills.approval_policy import (
+    recommended_next_action_for_verdict,
     recommended_next_actions,
     step_gate_contract_violations,
 )
@@ -7192,6 +7193,8 @@ class TemporalAgentRuntimeActivities:
                 "verification_report_ref",
                 "reportRef",
                 "report_ref",
+                "rawRecommendedNextAction",
+                "raw_recommended_next_action",
             )
             for key in scalar_keys:
                 value = _scalar(gate_payload.get(key))
@@ -7230,6 +7233,42 @@ class TemporalAgentRuntimeActivities:
                 compact["contractViolations"] = compact_violations
 
             return compact
+
+        def _canonicalize_moonspec_verify_gate_payload(
+            gate_payload: Mapping[str, Any],
+        ) -> dict[str, Any]:
+            """Derive MoonSpec gate action from verdict, preserving model output."""
+
+            canonical_payload = dict(gate_payload)
+            recoverable_raw = (
+                canonical_payload.get("recoverableInCurrentRuntime")
+                if "recoverableInCurrentRuntime" in canonical_payload
+                else canonical_payload.get("recoverable_in_current_runtime")
+            )
+            try:
+                recoverable = _coerce_bool(recoverable_raw, default=False)
+            except ValueError:
+                recoverable = False
+            canonical_action = recommended_next_action_for_verdict(
+                canonical_payload.get("verdict"),
+                recoverable_in_current_runtime=recoverable,
+            )
+            if not canonical_action:
+                return canonical_payload
+            raw_action = canonical_payload.get("recommendedNextAction")
+            if raw_action is None:
+                raw_action = canonical_payload.get("recommended_next_action")
+            raw_action_text = (
+                raw_action.strip() if isinstance(raw_action, str) else None
+            )
+            if raw_action is not None and raw_action_text != canonical_action:
+                canonical_payload.setdefault(
+                    "rawRecommendedNextAction",
+                    raw_action if isinstance(raw_action, str) else str(raw_action),
+                )
+            canonical_payload["recommendedNextAction"] = canonical_action
+            canonical_payload.pop("recommended_next_action", None)
+            return canonical_payload
 
         async def _publish_moonspec_verify_artifact() -> dict[str, Any]:
             verify_path = _metadata_text(
@@ -7273,7 +7312,7 @@ class TemporalAgentRuntimeActivities:
                     verify_path,
                 )
                 return {}
-            gate_payload = dict(payload)
+            gate_payload = _canonicalize_moonspec_verify_gate_payload(payload)
             contract_violations = step_gate_contract_violations(gate_payload)
             if contract_violations:
                 # Surface violations at the boundary where the verifier JSON
@@ -8479,9 +8518,12 @@ class TemporalAgentRuntimeActivities:
             "`recoverableInCurrentRuntime`, and `remainingWork` fields.\n"
             f"- `verdict` must be exactly one of: {verdict_values}.\n"
             f"- `recommendedNextAction` must be exactly one of: {next_action_values}. "
-            "Any other value (for example \"create_pull_request\") is a contract "
-            "violation that forces the publication gate to fail closed, discarding "
-            "an otherwise passing verdict.\n"
+            "Any other model-authored value is contract drift; MoonMind preserves "
+            "it as a raw diagnostic and derives the canonical action from the "
+            "verdict.\n"
+            '- For `FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"; '
+            "do not encode pull request creation or any other workflow-specific "
+            "destination in this field.\n"
             "- Still return the Markdown MoonSpec Verification Report in the assistant response."
         )
         return instructions.rstrip() + "\n\n" + block
