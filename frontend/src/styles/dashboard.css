@@ -1998,6 +1998,8 @@ tbody tr:hover {
 }
 
 .workflow-list-data-slab {
+  --workflow-list-slab-bleed-inline: 1rem;
+
   gap: 0;
   overflow: visible;
   padding: 0;
@@ -2019,6 +2021,8 @@ tbody tr:hover {
 }
 
 .workflow-list-data-slab .queue-results-toolbar {
+  width: calc(100% + (var(--workflow-list-slab-bleed-inline) * 2));
+  margin-inline: calc(var(--workflow-list-slab-bleed-inline) * -1);
   padding: 0.85rem 1rem;
   border-bottom: 1px solid rgb(var(--mm-border) / 0.28);
 }
@@ -2031,6 +2035,11 @@ tbody tr:hover {
   padding: 0.7rem 1rem;
   border-bottom: 1px solid rgb(var(--mm-border) / 0.28);
   background: rgb(var(--mm-panel) / 0.85);
+}
+
+.workflow-list-data-slab .workflow-list-results-header {
+  width: calc(100% + (var(--workflow-list-slab-bleed-inline) * 2));
+  margin-inline: calc(var(--workflow-list-slab-bleed-inline) * -1);
 }
 
 .workflow-list-results-header .page-title {
@@ -2047,6 +2056,8 @@ tbody tr:hover {
 .workflow-list-data-slab .workflow-list-results-footer {
   position: relative;
   z-index: 1;
+  width: calc(100% + (var(--workflow-list-slab-bleed-inline) * 2));
+  margin-inline: calc(var(--workflow-list-slab-bleed-inline) * -1);
   border-top: 1px solid rgb(var(--mm-border) / 0.28);
   border-bottom: 0;
 }
@@ -2105,8 +2116,9 @@ tbody tr:hover {
 .workflow-list-data-slab .queue-table-wrapper {
   position: relative;
   z-index: 5;
-  width: 100%;
-  max-width: 100%;
+  width: calc(100% + (var(--workflow-list-slab-bleed-inline) * 2));
+  max-width: none;
+  margin-inline: calc(var(--workflow-list-slab-bleed-inline) * -1);
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -2165,16 +2177,10 @@ tbody tr:hover {
   position: sticky;
   top: 0;
   z-index: 7;
-  background: rgb(var(--mm-panel) / 0.98);
-  border-bottom: 0;
-  box-shadow: 0 1px 0 rgb(var(--mm-border) / 0.72);
-}
-
-.queue-table-wrapper th,
-.workflow-workspace-sidebar-header-cell {
   height: var(--workflow-list-header-row-height);
   padding: 0.5rem 0.75rem;
   background: rgb(var(--mm-panel) / 0.98);
+  border-bottom: 0;
   box-shadow: 0 1px 0 var(--workflow-list-divider-color);
   color: rgb(var(--mm-ink) / 0.85);
   font-weight: 600;
@@ -2245,7 +2251,6 @@ tbody tr:hover {
 
 .queue-table-cell-workflow {
   height: var(--workflow-list-body-row-height);
-  border-right: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color);
   font-weight: 500;
 }
 
@@ -2832,6 +2837,8 @@ tr[data-proposal-id].proposal-consuming td {
   }
 
   .workflow-list-data-slab {
+    --workflow-list-slab-bleed-inline: 0rem;
+
     border: 0;
     border-radius: 0;
     background: transparent;
@@ -7379,22 +7386,45 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   max-height: 100vh;
   overflow: visible;
   /* Not a card: the sidebar is a plain left column separated from the detail by
-   * the grid gap and a single hairline divider, like ChatGPT. */
-  padding: 0 0.125rem 0 0;
-  border-right: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color);
+   * the grid gap rather than a vertical divider. */
+  padding: 0;
 }
 
 .workflow-workspace-sidebar-header {
   position: sticky;
   top: 0;
   z-index: 8;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 3.1rem;
-  padding: 0.5rem 0.55rem;
+  display: grid;
+  min-height: var(--workflow-list-header-row-height);
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
   background: rgb(var(--mm-panel) / 0.98);
-  box-shadow: 0 1px 0 rgb(var(--mm-border) / 0.72);
+  box-shadow: 0 1px 0 var(--workflow-list-divider-color);
+  color: rgb(var(--mm-ink) / 0.85);
+  font-weight: 600;
+}
+
+.workflow-workspace-sidebar-header-row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+}
+
+.workflow-workspace-sidebar-header-cell {
+  display: grid;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+}
+
+.workflow-workspace-sidebar-header-cell .workflow-list-column-header {
+  width: 100%;
+  min-width: 0;
 }
 
 .workflow-workspace-sidebar-header-title {
@@ -7435,7 +7465,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   background: transparent;
 }
 
-.workflow-workspace-sidebar-header,
 .workflow-workspace-sidebar-list,
 .workflow-workspace-sidebar-state-group {
   display: grid;
@@ -7577,6 +7606,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 100%;
   max-width: 66rem;
   margin-inline: auto;
+  padding-top: 0.85rem;
 }
 
 .workflow-workspace-opening-state {

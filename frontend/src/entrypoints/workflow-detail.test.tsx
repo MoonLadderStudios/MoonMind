@@ -1299,6 +1299,9 @@ describe('Workflow Detail Entrypoint', () => {
       /\.workflow-workspace-detail\s*\{[^}]*max-width:\s*66rem;/,
     );
     expect(dashboardCss).toMatch(
+      /\.workflow-workspace-detail\s*\{[^}]*padding-top:\s*0\.85rem;/,
+    );
+    expect(dashboardCss).toMatch(
       /\.workflow-workspace-shell\[data-sidebar-collapsed="true"\] \.workflow-workspace-detail\s*\{[^}]*grid-column:\s*1 \/ -1;/,
     );
   });
