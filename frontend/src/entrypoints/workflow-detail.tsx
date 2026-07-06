@@ -3347,6 +3347,11 @@ function ChatSessionView({
     : 'empty';
 
   const updateStickToBottom = () => {
+    const currentElement = blockListRef.current;
+    if (currentElement) {
+      const distanceFromBottom = currentElement.scrollHeight - currentElement.scrollTop - currentElement.clientHeight;
+      shouldStickToBottomRef.current = distanceFromBottom <= 48;
+    }
     if (scrollFrameRef.current !== null) return;
     scrollFrameRef.current = window.requestAnimationFrame(() => {
       scrollFrameRef.current = null;
