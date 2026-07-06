@@ -110,9 +110,11 @@ describe('dashboardPreferences', () => {
             preferredDetailTab: 'nope', // invalid enum
             liveUpdatesEnabled: 'yes', // wrong type
             workflowWorkspaceSidebarCollapsed: 'yes', // wrong type
+            workflowListDisplayMode: 'drawer', // invalid enum
             createExpertMode: true, // valid
             workflowListColumnVisibility: { repository: false, bogus: true },
             workflowListDefaultStatuses: ['executing', 42, '  failed  ', ''],
+            lastSelectedWorkflowId: '  mm:workflow-123  ',
             defaultRuntime: '  codex_cli  ',
           },
         }),
@@ -123,10 +125,12 @@ describe('dashboardPreferences', () => {
       expect(prefs.preferredDetailTab).toBe('overview'); // reset
       expect(prefs.liveUpdatesEnabled).toBe(true); // reset to default
       expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(false); // reset to default
+      expect(prefs.workflowListDisplayMode).toBe(DEFAULT_DASHBOARD_PREFERENCES.workflowListDisplayMode);
       expect(prefs.createExpertMode).toBe(true); // kept
       expect(prefs.workflowListColumnVisibility.repository).toBe(false); // kept
       expect(prefs.workflowListColumnVisibility).not.toHaveProperty('bogus'); // dropped
       expect(prefs.workflowListDefaultStatuses).toEqual(['executing', 'failed']); // sanitized
+      expect(prefs.lastSelectedWorkflowId).toBe('mm:workflow-123'); // trimmed
       expect(prefs.defaultRuntime).toBe('codex_cli'); // trimmed
     });
 
@@ -186,9 +190,11 @@ describe('dashboardPreferences', () => {
     it('MM-1000 keeps a valid persisted workflow workspace sidebar collapse preference', () => {
       const prefs = sanitizeDashboardPreferences({
         workflowWorkspaceSidebarCollapsed: true,
+        workflowListDisplayMode: 'hidden',
       });
 
       expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(true);
+      expect(prefs.workflowListDisplayMode).toBe('hidden');
     });
   });
 

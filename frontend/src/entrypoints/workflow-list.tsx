@@ -2556,6 +2556,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             <a
                               href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                               className="workflow-list-row-title"
+                              onClick={() => updateDashboardPreferences({ lastSelectedWorkflowId: rowWorkflowId(row) })}
                             >
                               {row.title}
                             </a>
@@ -2616,6 +2617,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <a
                           href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                           className="queue-card-title"
+                          onClick={() => updateDashboardPreferences({ lastSelectedWorkflowId: rowWorkflowId(row) })}
                         >
                           {row.title}
                         </a>

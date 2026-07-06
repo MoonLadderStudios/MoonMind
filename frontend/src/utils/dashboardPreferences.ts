@@ -18,6 +18,7 @@
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '../components/PageSizeSelector';
 
 export const DASHBOARD_PREFERENCES_STORAGE_KEY = 'moonmind.dashboard.preferences';
+export const DASHBOARD_PREFERENCES_CHANGED_EVENT = 'moonmind.dashboard.preferences.changed';
 
 // Bump only when the stored shape changes in a way the validator cannot
 // reconcile from defaults. A mismatched or missing version is treated as an
@@ -27,6 +28,7 @@ export const DASHBOARD_PREFERENCES_VERSION = 1;
 export type WorkflowListDensity = 'comfortable' | 'compact';
 
 export type WorkflowDetailTab = 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
+export type WorkflowListDisplayMode = 'hidden' | 'sidebar' | 'table';
 
 // Columns the operator may hide on the workflow list. The workflow title column
 // is the primary anchor and is intentionally not toggleable, so it is excluded
@@ -70,6 +72,10 @@ export type DashboardPreferences = {
   debugFieldsVisible: boolean;
   /** Whether the desktop workflow detail sidebar is collapsed on reload. */
   workflowWorkspaceSidebarCollapsed: boolean;
+  /** Preferred workflow list display mode for declared dashboard surfaces. */
+  workflowListDisplayMode: WorkflowListDisplayMode;
+  /** Last workflow explicitly selected from a workflow list surface. */
+  lastSelectedWorkflowId: string;
   /** Preferred default workflow detail tab. */
   preferredDetailTab: WorkflowDetailTab;
   /** Preferred runtime default for the create page, where safe. */
@@ -95,6 +101,8 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   createExpertMode: false,
   debugFieldsVisible: true,
   workflowWorkspaceSidebarCollapsed: false,
+  workflowListDisplayMode: 'sidebar',
+  lastSelectedWorkflowId: '',
   preferredDetailTab: 'overview',
   defaultRuntime: '',
   defaultProviderProfile: '',
@@ -154,6 +162,12 @@ function sanitizeDetailTab(value: unknown): WorkflowDetailTab {
     : DEFAULT_DASHBOARD_PREFERENCES.preferredDetailTab;
 }
 
+function sanitizeWorkflowListDisplayMode(value: unknown): WorkflowListDisplayMode {
+  return value === 'hidden' || value === 'sidebar' || value === 'table'
+    ? value
+    : DEFAULT_DASHBOARD_PREFERENCES.workflowListDisplayMode;
+}
+
 function sanitizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -188,6 +202,8 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
       value.workflowWorkspaceSidebarCollapsed,
       DEFAULT_DASHBOARD_PREFERENCES.workflowWorkspaceSidebarCollapsed,
     ),
+    workflowListDisplayMode: sanitizeWorkflowListDisplayMode(value.workflowListDisplayMode),
+    lastSelectedWorkflowId: sanitizeString(value.lastSelectedWorkflowId),
     preferredDetailTab: sanitizeDetailTab(value.preferredDetailTab),
     defaultRuntime: sanitizeString(value.defaultRuntime),
     defaultProviderProfile: sanitizeString(value.defaultProviderProfile),
@@ -239,6 +255,7 @@ export function writeDashboardPreferences(
       DASHBOARD_PREFERENCES_STORAGE_KEY,
       JSON.stringify(envelope),
     );
+    window.dispatchEvent(new Event(DASHBOARD_PREFERENCES_CHANGED_EVENT));
   } catch {
     // Keep dashboard preferences best-effort when storage is unavailable.
   }

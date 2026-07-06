@@ -388,6 +388,30 @@ describe('Dashboard shared entry', () => {
     });
   });
 
+  it('MM-1118 renders the workflow list display radio group after the brand on declared workflow surfaces', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
+    const masthead = document.querySelector('.masthead');
+    expect(masthead).toBeTruthy();
+    expect(masthead!.children.item(0)?.classList.contains('masthead-brand')).toBe(true);
+    expect(masthead!.children.item(1)?.classList.contains('workflow-list-display-control-shell')).toBe(true);
+    const modeGroup = screen.getByRole('radiogroup', { name: 'Workflow list display' });
+    expect(modeGroup.querySelector('input[value="hidden"]')).toBeTruthy();
+    expect(modeGroup.querySelector('input[value="sidebar"]')).toBeTruthy();
+    expect(modeGroup.querySelector('input[value="table"]')).toBeTruthy();
+    expect((modeGroup.querySelector('input[value="table"]') as HTMLInputElement | null)?.checked).toBe(true);
+  });
+
+  it('MM-1118 hides the workflow list display radio group on undeclared dashboard surfaces', async () => {
+    window.history.replaceState({}, '', '/settings');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Settings permissions:')).toBeTruthy();
+    expect(screen.queryByRole('radiogroup', { name: 'Workflow list display' })).toBeNull();
+  });
+
   it('does not register a dashboard proposal review page for MM-859', async () => {
     window.history.replaceState({}, '', '/proposals');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
@@ -628,7 +652,9 @@ describe('Dashboard shared entry', () => {
     // corners because the row carries `border-radius`. The divider lives on the
     // `li` container instead, keeping a straight hairline and rounded hover.
     const listItemBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-list li');
-    expect(listItemBlock).toContain('border-bottom: 1px solid rgb(var(--mm-border) / 0.4)');
+    expect(listItemBlock).toContain(
+      'border-bottom: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color)',
+    );
 
     const lastItemBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-list li:last-child');
     expect(lastItemBlock).toContain('border-bottom: 0');
@@ -645,7 +671,7 @@ describe('Dashboard shared entry', () => {
     expect(tableTitleBlock).toContain('-webkit-line-clamp: 2');
 
     const sidebarRowBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-row');
-    expect(sidebarRowBlock).toContain('min-height: 3.75rem');
+    expect(sidebarRowBlock).toContain('min-height: var(--workflow-list-body-row-height)');
 
     const sidebarTitleBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-title');
     expect(sidebarTitleBlock).toContain('display: -webkit-box');
@@ -656,11 +682,28 @@ describe('Dashboard shared entry', () => {
 
   it('keeps the workflow sidebar scrollbar close to its divider', async () => {
     const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
-    expect(sidebarBlock).toContain('padding: 0 0.125rem 0 0');
+    expect(sidebarBlock).toContain('padding: 0');
 
     const sidebarListBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-list');
-    expect(sidebarListBlock).toContain('padding: 0 0.125rem 0 0');
+    expect(sidebarListBlock).toContain('padding: 0');
     expect(sidebarListBlock).toContain('scrollbar-width: thin');
+  });
+
+  it('MM-1118 defines shared workflow table and sidebar row metrics', async () => {
+    expect(dashboardCss).toMatch(/--workflow-list-header-row-height:\s*2\.75rem;/);
+    expect(dashboardCss).toMatch(/--workflow-list-body-row-height:\s*4rem;/);
+    expect(cssRuleBlock(dashboardCss, '.queue-table-wrapper th')).toContain(
+      'height: var(--workflow-list-header-row-height)',
+    );
+    expect(cssRuleBlock(dashboardCss, '.queue-table-wrapper td')).toContain(
+      'height: var(--workflow-list-body-row-height)',
+    );
+    expect(cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-header')).toContain(
+      'min-height: var(--workflow-list-header-row-height)',
+    );
+    expect(cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar')).toContain(
+      'border-right: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color)',
+    );
   });
 
   it('MM-1064 keeps workflow sidebar status icons compact inside status-colored containers', async () => {

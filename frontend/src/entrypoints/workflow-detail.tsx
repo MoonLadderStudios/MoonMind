@@ -38,8 +38,10 @@ import { LogPanel } from '../components/dashboard/LogPanel';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { formatDurationMs, formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
+  DASHBOARD_PREFERENCES_CHANGED_EVENT,
   readDashboardPreferences,
   updateDashboardPreferences,
+  type WorkflowListDisplayMode,
 } from '../utils/dashboardPreferences';
 import {
   recordTemporalTaskEditingClientEvent,
@@ -427,6 +429,7 @@ function WorkflowSidebarRow({
         aria-current={active ? 'page' : undefined}
         data-active={active ? 'true' : 'false'}
         data-pinned={pinned ? 'true' : 'false'}
+        onClick={() => updateDashboardPreferences({ lastSelectedWorkflowId: workflowId })}
       >
         <span className="workflow-workspace-sidebar-row-main">
           {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
@@ -556,6 +559,9 @@ function WorkflowSidebar({
         onClose={onClose}
         search={search}
       />
+      <div className="workflow-workspace-sidebar-header" aria-hidden="true">
+        Workflow
+      </div>
       {workflowsQuery.isLoading ? (
         <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
       ) : null}
@@ -596,9 +602,11 @@ export function WorkflowWorkspaceShell({
   const cfg = readDashboardConfig(payload);
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
-  const [sidebarOpen, setSidebarOpen] = useState(
-    () => !readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
-  );
+  const [displayMode, setDisplayMode] = useState<WorkflowListDisplayMode>(() => {
+    const prefs = readDashboardPreferences();
+    return prefs.workflowListDisplayMode === 'hidden' ? 'hidden' : 'sidebar';
+  });
+  const [sidebarOpen, setSidebarOpen] = useState(() => displayMode !== 'hidden');
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
@@ -640,6 +648,24 @@ export function WorkflowWorkspaceShell({
     ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
     : null;
 
+  useEffect(() => {
+    updateDashboardPreferences({ lastSelectedWorkflowId: workflowId });
+  }, [workflowId]);
+
+  useEffect(() => {
+    const syncDisplayMode = () => {
+      const next = readDashboardPreferences().workflowListDisplayMode === 'hidden' ? 'hidden' : 'sidebar';
+      setDisplayMode(next);
+      setSidebarOpen(next !== 'hidden');
+    };
+    window.addEventListener(DASHBOARD_PREFERENCES_CHANGED_EVENT, syncDisplayMode);
+    window.addEventListener('storage', syncDisplayMode);
+    return () => {
+      window.removeEventListener(DASHBOARD_PREFERENCES_CHANGED_EVENT, syncDisplayMode);
+      window.removeEventListener('storage', syncDisplayMode);
+    };
+  }, []);
+
   return (
     <div
       className="workflow-workspace-shell"
@@ -656,18 +682,24 @@ export function WorkflowWorkspaceShell({
           search={search}
           closeButtonRef={closeButtonRef}
           onClose={() => {
-            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+            updateDashboardPreferences({
+              workflowWorkspaceSidebarCollapsed: true,
+              workflowListDisplayMode: 'hidden',
+            });
             setSidebarOpen(false);
             window.setTimeout(() => openButtonRef.current?.focus(), 0);
           }}
         />
-      ) : (
+      ) : displayMode === 'sidebar' ? (
         <button
           ref={openButtonRef}
           type="button"
           className="secondary workflow-workspace-open-sidebar workflow-workspace-sidebar-control"
           onClick={() => {
-            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
+            updateDashboardPreferences({
+              workflowWorkspaceSidebarCollapsed: false,
+              workflowListDisplayMode: 'sidebar',
+            });
             setSidebarOpen(true);
             window.setTimeout(() => closeButtonRef.current?.focus(), 0);
           }}
@@ -676,7 +708,7 @@ export function WorkflowWorkspaceShell({
         >
           {SIDEBAR_TOGGLE_ICON}
         </button>
-      )}
+      ) : null}
       <main className="workflow-workspace-detail" aria-label="Workflow detail">
         <WorkflowDetailPage payload={payload} />
       </main>
