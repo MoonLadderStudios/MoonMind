@@ -3194,6 +3194,9 @@ async def test_launch_adds_trusted_jira_tool_hint_for_claude_jira_skill(
         async def wait(self) -> int:
             return 0
 
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
     async def _fake_create_subprocess_exec(*args, **_kwargs):
         nonlocal captured_args
         captured_args = args
@@ -3261,6 +3264,9 @@ async def test_launch_preserves_missing_instruction_ref_without_jira_skill(
 
         async def wait(self) -> int:
             return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
 
     async def _fake_create_subprocess_exec(*_args, **_kwargs):
         return _FakeProcess()
