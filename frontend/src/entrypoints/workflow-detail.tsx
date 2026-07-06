@@ -7,25 +7,10 @@ import {
   type Dispatch,
   type KeyboardEvent,
   type ReactNode,
-  type Ref,
-  type RefObject,
   type SetStateAction,
 } from 'react';
-import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Anser from 'anser';
-import {
-  ArrowRight,
-} from 'lucide-react';
-import {
-  BotIcon,
-  type BotIconHandle,
-  FlaskIcon,
-  type FlaskIconHandle,
-  LoaderCircleIcon,
-  type LoaderCircleIconHandle,
-  RouteIcon,
-  type RouteIconHandle,
-} from 'lucide-animated';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
@@ -38,10 +23,8 @@ import { LogPanel } from '../components/dashboard/LogPanel';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { formatDurationMs, formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
-  DASHBOARD_PREFERENCES_CHANGED_EVENT,
   readDashboardPreferences,
   updateDashboardPreferences,
-  type WorkflowListDisplayMode,
 } from '../utils/dashboardPreferences';
 import {
   recordTemporalTaskEditingClientEvent,
@@ -50,11 +33,15 @@ import {
   taskEditHref,
 } from '../lib/temporalTaskEditing';
 import {
-  markWorkflowListReturnFocusIntent,
-  workflowDetailHref,
-  workflowListContextParams,
-  workflowListHrefFromContext,
-} from '../lib/workflowListContext';
+  readWorkflowListDisplayMode,
+  type WorkflowListDisplayMode,
+} from '../lib/workflowListDisplayMode';
+import {
+  WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
+  WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
+  WorkflowWorkspaceSidebarPanel,
+} from '../components/workflows/WorkflowWorkspaceSidebar';
+import { workflowWorkspaceRowFromDetail } from '../lib/workflowWorkspaceList';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -72,6 +59,11 @@ import {
   type OptimisticUserMessage,
   type RunObservabilityEventRow,
 } from '../lib/chatSession';
+
+export {
+  WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
+  WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
+};
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number; detail?: number; events?: number };
@@ -101,141 +93,6 @@ const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/p
 const SESSION_PROJECTION_POLL_MS = 5000;
 const SESSION_CAPABILITY_POLL_MS = 5000;
 const WORKFLOW_WORKSPACE_DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
-const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
-const WORKFLOW_SIDEBAR_ANIMATED_STATUS = {
-  initializing: LoaderCircleIcon,
-  executing: BotIcon,
-  planning: RouteIcon,
-  finalizing: FlaskIcon,
-} as const;
-type SidebarAnimatedWorkflowStatus = keyof typeof WORKFLOW_SIDEBAR_ANIMATED_STATUS;
-export const WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS = 1200;
-export const WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS = {
-  initializing: undefined,
-  executing: 650,
-  planning: 1400,
-  finalizing: 650,
-} as const satisfies Readonly<Record<SidebarAnimatedWorkflowStatus, number | undefined>>;
-type WorkflowSidebarStatusIconHandle = LoaderCircleIconHandle | BotIconHandle | RouteIconHandle | FlaskIconHandle;
-
-function AnimatedWorkflowSidebarStatusIcon({
-  status,
-  className,
-  title,
-}: {
-  status: SidebarAnimatedWorkflowStatus;
-  className?: string;
-  title: string;
-}) {
-  const iconRef = useRef<WorkflowSidebarStatusIconHandle | null>(null);
-  const Icon = WORKFLOW_SIDEBAR_ANIMATED_STATUS[status];
-  const pillProps = executionStatusPillProps(status, { enableMotion: false });
-
-  useEffect(() => {
-    let active = true;
-    let timerId: number | null = null;
-    const replayMs = WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS[status];
-    const reducedMotion = typeof window !== 'undefined'
-      && typeof window.matchMedia === 'function'
-      && window.matchMedia(REDUCED_MOTION_QUERY).matches;
-
-    const loop = () => {
-      if (reducedMotion) {
-        return;
-      }
-      if (!iconRef.current || !active) {
-        return;
-      }
-      iconRef.current.startAnimation();
-      if (!active || replayMs == null) {
-        return;
-      }
-      timerId = window.setTimeout(() => {
-        if (!active) {
-          return;
-        }
-        void loop();
-      }, replayMs);
-    };
-
-    void loop();
-
-    return () => {
-      active = false;
-      if (timerId !== null) {
-        window.clearTimeout(timerId);
-      }
-      iconRef.current?.stopAnimation();
-    };
-  }, [status]);
-
-  const ref = iconRef as Ref<WorkflowSidebarStatusIconHandle> | null;
-
-  return (
-    <span
-      {...pillProps}
-      className={`${pillProps.className}${className ? ` ${className}` : ''}`}
-      aria-label={`Status: ${title}`}
-      title={title}
-      data-testid="workflow-workspace-sidebar-status-icon"
-    >
-      <Icon
-        ref={ref}
-        size={16}
-        animateOnHover={false}
-        aria-hidden="true"
-      />
-    </span>
-  );
-}
-
-function isSidebarAnimatedWorkflowStatus(status: string): status is SidebarAnimatedWorkflowStatus {
-  return Object.prototype.hasOwnProperty.call(WORKFLOW_SIDEBAR_ANIMATED_STATUS, status);
-}
-
-const WorkflowWorkspaceRowSchema = z
-  .object({
-    taskId: z.string().optional(),
-    workflowId: z.string().optional(),
-    title: z.string().optional(),
-    status: z.string().optional(),
-    state: z.string().optional(),
-    rawState: z.string().optional(),
-    createdAt: z.string().nullable().optional(),
-    updatedAt: z.string().nullable().optional(),
-    scheduledFor: z.string().nullable().optional(),
-    closedAt: z.string().nullable().optional(),
-    repository: z.string().nullable().optional(),
-    targetRuntime: z.string().nullable().optional(),
-  })
-  .strip();
-
-const WorkflowWorkspaceListResponseSchema = z.object({
-  items: z.array(WorkflowWorkspaceRowSchema),
-});
-
-type WorkflowWorkspaceRow = z.infer<typeof WorkflowWorkspaceRowSchema>;
-
-function workflowWorkspaceRowId(row: WorkflowWorkspaceRow): string {
-  return row.workflowId || row.taskId || '';
-}
-
-function workflowWorkspaceRowFromDetail(detail: ExecutionDetail): WorkflowWorkspaceRow {
-  return {
-    taskId: detail.taskId,
-    workflowId: detail.workflowId,
-    title: detail.title,
-    status: detail.status,
-    state: detail.state,
-    rawState: detail.rawState,
-    createdAt: detail.createdAt,
-    updatedAt: detail.updatedAt,
-    scheduledFor: detail.scheduledFor,
-    closedAt: detail.closedAt,
-    repository: detail.repository,
-    targetRuntime: detail.targetRuntime,
-  };
-}
 
 function useWorkflowWorkspaceDesktop(): boolean {
   const [isDesktop, setIsDesktop] = useState(() => {
@@ -364,265 +221,23 @@ function useWorkflowDetailSubroute(
   return [subroute, navigate];
 }
 
-function workflowWorkspaceListQuery(search: URLSearchParams): string {
-  const pageSize = search.get('limit') || search.get('pageSize') || '25';
-  const params = workflowListContextParams(search);
-  params.delete('limit');
-  params.set('pageSize', pageSize);
-  return params.toString();
-}
-
-function sidebarStatusLabel(status: string | null | undefined): string {
-  const label = formatStatusLabel(status);
-  return label.length > 0 ? `${label.charAt(0).toUpperCase()}${label.slice(1)}` : label;
-}
-
-function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefined }) {
-  let normalizedStatus = String(status || '')
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '_');
-  if (normalizedStatus === 'running') {
-    normalizedStatus = 'executing';
-  }
-  if (isSidebarAnimatedWorkflowStatus(normalizedStatus)) {
-    const label = sidebarStatusLabel(status);
-    return (
-      <AnimatedWorkflowSidebarStatusIcon
-        status={normalizedStatus}
-        title={label}
-        className="workflow-workspace-sidebar-status-icon"
-      />
-    );
-  }
-
-  return (
-    <StatusIcon
-      status={status}
-      domain="workflow"
-      className="workflow-workspace-sidebar-status-icon"
-      data-testid="workflow-workspace-sidebar-status-icon"
-    />
-  );
-}
-
-function WorkflowSidebarRow({
-  row,
-  activeWorkflowId,
-  search,
-  pinned = false,
-}: {
-  row: WorkflowWorkspaceRow;
-  activeWorkflowId: string;
-  search: URLSearchParams;
-  pinned?: boolean;
-}) {
-  const workflowId = workflowWorkspaceRowId(row);
-  const active = workflowId === activeWorkflowId;
-  const status = row.rawState || row.state || row.status || 'unknown';
-  const title = row.title?.trim() || workflowId || 'Untitled workflow';
-  return (
-    <li>
-      <a
-        className={`workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`}
-        href={workflowDetailHref(workflowId, search)}
-        aria-current={active ? 'page' : undefined}
-        data-active={active ? 'true' : 'false'}
-        data-pinned={pinned ? 'true' : 'false'}
-        onClick={() => updateDashboardPreferences({ lastSelectedWorkflowId: workflowId })}
-      >
-        <span className="workflow-workspace-sidebar-row-main">
-          {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
-          <span className="workflow-workspace-sidebar-title">{title}</span>
-        </span>
-        <WorkflowSidebarStatusIcon status={status} />
-      </a>
-    </li>
-  );
-}
-
-function WorkspaceControlIcon({ children }: { children: ReactNode }) {
-  return (
-    <svg
-      className="workflow-workspace-control-icon"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {children}
-    </svg>
-  );
-}
-
-const SIDEBAR_TOGGLE_ICON = (
-  <WorkspaceControlIcon>
-    <rect x="3" y="4" width="18" height="16" rx="2" />
-    <path d="M9 4v16" />
-  </WorkspaceControlIcon>
-);
-
-function WorkflowSidebarControls({
-  closeButtonRef,
-  onClose,
-  search,
-}: {
-  closeButtonRef: RefObject<HTMLButtonElement | null>;
-  onClose: () => void;
-  search: URLSearchParams;
-}) {
-  return (
-    <div className="workflow-workspace-sidebar-controls">
-      <button
-        ref={closeButtonRef}
-        type="button"
-        className="secondary workflow-workspace-close-sidebar workflow-workspace-sidebar-control"
-        onClick={onClose}
-        aria-label="Close sidebar"
-        title="Close sidebar"
-      >
-        {SIDEBAR_TOGGLE_ICON}
-      </button>
-      <a
-        href={workflowListHrefFromContext(search, { markDetailReturn: true })}
-        className="secondary workflow-workspace-expand-list workflow-workspace-sidebar-control"
-        onClick={markWorkflowListReturnFocusIntent}
-        aria-label="Expand to full list"
-        title="Expand to full list"
-      >
-        <ArrowRight aria-hidden="true" focusable="false" />
-      </a>
-    </div>
-  );
-}
-
-function WorkflowSidebarList({
-  rows,
-  activeWorkflowId,
-  search,
-  ariaLabel = 'Workflow navigation list',
-  pinned = false,
-}: {
-  rows: WorkflowWorkspaceRow[];
-  activeWorkflowId: string;
-  search: URLSearchParams;
-  ariaLabel?: string;
-  pinned?: boolean;
-}) {
-  if (rows.length === 0) {
-    return null;
-  }
-
-  return (
-    <ul
-      className={`workflow-workspace-sidebar-list${pinned ? ' workflow-workspace-sidebar-pinned-list' : ''}`}
-      aria-label={ariaLabel}
-    >
-      {rows.map((row) => (
-        <WorkflowSidebarRow
-          key={workflowWorkspaceRowId(row)}
-          row={row}
-          activeWorkflowId={activeWorkflowId}
-          search={search}
-          pinned={pinned}
-        />
-      ))}
-    </ul>
-  );
-}
-
-function WorkflowSidebar({
-  workflowId,
-  workflowsQuery,
-  filteredRows,
-  pinnedCurrentRow,
-  search,
-  closeButtonRef,
-  onClose,
-}: {
-  workflowId: string;
-  workflowsQuery: UseQueryResult<z.infer<typeof WorkflowWorkspaceListResponseSchema>, Error>;
-  filteredRows: WorkflowWorkspaceRow[];
-  pinnedCurrentRow: WorkflowWorkspaceRow | null;
-  search: URLSearchParams;
-  closeButtonRef: RefObject<HTMLButtonElement | null>;
-  onClose: () => void;
-}) {
-  return (
-    <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
-      <WorkflowSidebarControls
-        closeButtonRef={closeButtonRef}
-        onClose={onClose}
-        search={search}
-      />
-      <div className="workflow-workspace-sidebar-header" aria-hidden="true">
-        Workflow
-      </div>
-      {workflowsQuery.isLoading ? (
-        <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
-      ) : null}
-      {workflowsQuery.isError ? (
-        <div className="workflow-workspace-sidebar-state" role="status">
-          <p>Workflow navigation is unavailable.</p>
-          <button type="button" className="secondary" onClick={() => void workflowsQuery.refetch()}>
-            Retry
-          </button>
-        </div>
-      ) : null}
-      {!workflowsQuery.isLoading && !workflowsQuery.isError && pinnedCurrentRow ? (
-        <WorkflowSidebarList
-          rows={[pinnedCurrentRow]}
-          activeWorkflowId={workflowId}
-          search={search}
-          ariaLabel="Current workflow"
-          pinned
-        />
-      ) : null}
-      {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
-        <p className="workflow-workspace-sidebar-state">No workflows match the current list filters.</p>
-      ) : null}
-      <WorkflowSidebarList rows={filteredRows} activeWorkflowId={workflowId} search={search} />
-    </aside>
-  );
-}
-
 export function WorkflowWorkspaceShell({
   payload,
   workflowId,
   search,
+  displayMode,
 }: {
   payload: BootPayload;
   workflowId: string;
   search: URLSearchParams;
+  displayMode?: WorkflowListDisplayMode | undefined;
 }) {
   const cfg = readDashboardConfig(payload);
-  const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
-  const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
-  const [displayMode, setDisplayMode] = useState<WorkflowListDisplayMode>(() => {
-    const prefs = readDashboardPreferences();
-    return prefs.workflowListDisplayMode === 'hidden' ? 'hidden' : 'sidebar';
-  });
-  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
-  const openButtonRef = useRef<HTMLButtonElement | null>(null);
-  const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
+  const effectiveDisplayMode = displayMode ?? (
+    readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
+  );
   const sourceTemporal = search.get('source') === 'temporal';
   const encodedWorkflowId = encodeURIComponent(workflowId);
-  const workflowsQuery = useQuery({
-    queryKey: ['workflow-workspace-sidebar', listQuery],
-    queryFn: async () => {
-      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch workflows: ${response.statusText}`);
-      }
-      return WorkflowWorkspaceListResponseSchema.parse(await response.json());
-    },
-    enabled: listEnabled,
-    refetchInterval: listEnabled ? listPoll : false,
-  });
   const selectedWorkflowQuery = useQuery({
     queryKey: ['workflow-detail', encodedWorkflowId, sourceTemporal],
     queryFn: async () => {
@@ -640,52 +255,24 @@ export function WorkflowWorkspaceShell({
         : false
     ),
   });
-  const rows = workflowsQuery.data?.items || [];
-  const activeInList = rows.some((row) => workflowWorkspaceRowId(row) === workflowId);
-  const filteredRows = rows.filter((row) => workflowWorkspaceRowId(row));
-  const pinnedCurrentRow = selectedWorkflowQuery.data && !activeInList
+  const pinnedCurrentRow = selectedWorkflowQuery.data
     ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
     : null;
-
-  useEffect(() => {
-    updateDashboardPreferences({ lastSelectedWorkflowId: workflowId });
-  }, [workflowId]);
-
-  useEffect(() => {
-    const syncDisplayMode = () => {
-      const next = readDashboardPreferences().workflowListDisplayMode === 'hidden' ? 'hidden' : 'sidebar';
-      setDisplayMode(next);
-    };
-    window.addEventListener(DASHBOARD_PREFERENCES_CHANGED_EVENT, syncDisplayMode);
-    window.addEventListener('storage', syncDisplayMode);
-    return () => {
-      window.removeEventListener(DASHBOARD_PREFERENCES_CHANGED_EVENT, syncDisplayMode);
-      window.removeEventListener('storage', syncDisplayMode);
-    };
-  }, []);
 
   return (
     <div
       className="workflow-workspace-shell"
-      data-sidebar-collapsed={displayMode === 'sidebar' ? 'false' : 'true'}
+      data-sidebar-collapsed={effectiveDisplayMode === 'sidebar' ? 'false' : 'true'}
+      data-workflow-list-display-mode={effectiveDisplayMode}
       data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008"
       data-source-issue="MM-975"
     >
-      {displayMode === 'sidebar' ? (
-        <WorkflowSidebar
-          workflowId={workflowId}
-          workflowsQuery={workflowsQuery}
-          filteredRows={filteredRows}
+      {effectiveDisplayMode === 'sidebar' ? (
+        <WorkflowWorkspaceSidebarPanel
+          payload={payload}
+          activeWorkflowId={workflowId}
           pinnedCurrentRow={pinnedCurrentRow}
           search={search}
-          closeButtonRef={closeButtonRef}
-          onClose={() => {
-            updateDashboardPreferences({
-              workflowWorkspaceSidebarCollapsed: true,
-              workflowListDisplayMode: 'hidden',
-            });
-            window.setTimeout(() => openButtonRef.current?.focus(), 0);
-          }}
         />
       ) : null}
       <main className="workflow-workspace-detail" aria-label="Workflow detail">
@@ -3760,6 +3347,11 @@ function ChatSessionView({
     : 'empty';
 
   const updateStickToBottom = () => {
+    const currentElement = blockListRef.current;
+    if (currentElement) {
+      const distanceFromBottom = currentElement.scrollHeight - currentElement.scrollTop - currentElement.clientHeight;
+      shouldStickToBottomRef.current = distanceFromBottom <= 48;
+    }
     if (scrollFrameRef.current !== null) return;
     scrollFrameRef.current = window.requestAnimationFrame(() => {
       scrollFrameRef.current = null;
@@ -9054,9 +8646,17 @@ export function WorkflowDetailEntrypoint({ payload }: { payload: BootPayload }) 
   const search = useMemo(() => new URLSearchParams(typeof window !== 'undefined' ? window.location.search : ''), []);
   const workspaceShellEnabled = cfg?.features?.temporalDashboard?.workspaceShellEnabled !== false;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
+  const displayMode = readWorkflowListDisplayMode(payload);
 
   if (workspaceShellEnabled && listEnabled && isDesktop && workflowId) {
-    return <WorkflowWorkspaceShell payload={payload} workflowId={workflowId} search={search} />;
+    return (
+      <WorkflowWorkspaceShell
+        payload={payload}
+        workflowId={workflowId}
+        search={search}
+        displayMode={displayMode}
+      />
+    );
   }
 
   return <WorkflowDetailPage payload={payload} />;

@@ -1,0 +1,106 @@
+{
+  "handoffType": "jira-orchestrate-intake",
+  "createdAt": "2026-07-06T00:00:00Z",
+  "jiraIssueKey": "MM-1117",
+  "classification": {
+    "inputType": "single-story feature request",
+    "reason": "The trusted Jira preset brief identifies one Jira Story for extending dashboard preference and workflow-list context behavior for display-mode intent, selected workflow persistence, and safe list-data reuse."
+  },
+  "intent": "runtime implementation workflow",
+  "traceability": {
+    "sourceIssueKey": "MM-1111",
+    "sourceJiraIssuePreserved": true,
+    "reason": "The managed task explicitly requires preserving source issue MM-1111 traceability for the downstream Jira Orchestrate runtime workflow."
+  },
+  "sourceStory": {
+    "summary": "Persist display-mode intent and selected workflow while preserving safe list data reuse",
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "sourceSections": [
+      "10. State persistence",
+      "11. Data fetching and cache reuse"
+    ],
+    "claimIds": [
+      "CLAIM-docs-ui-workflowlistdisplaymodes-010",
+      "CLAIM-docs-ui-workflowlistdisplaymodes-011"
+    ],
+    "coverageIds": [
+      "DESIGN-REQ-010",
+      "DESIGN-REQ-011"
+    ]
+  },
+  "canonicalInput": {
+    "trustedSource": "moonmind.jira.get_issue",
+    "jiraPresetBrief": "MM-1117: Persist display-mode intent and selected workflow while preserving safe list data reuse",
+    "sourceDesignClassification": "canonical declarative document",
+    "sourceDesignStatus": "Proposed declarative UI contract",
+    "acceptanceCriteria": [
+      "Dashboard preferences persist the last explicit workflowListDisplayMode and lastSelectedWorkflowId.",
+      "Direct desktop visits to detail default to persisted hidden/sidebar mode, otherwise sidebar; direct Create visits default to persisted hidden/sidebar mode, otherwise hidden.",
+      "Direct visits to /workflows resolve to table regardless of persisted preference until the user selects another mode.",
+      "Workflow detail URLs do not include hidden/sidebar mode, and query parameters never include raw prompts, full drafts, secrets, presigned URLs, logs, artifacts, or large detail payloads.",
+      "Sidebar and table share the authorized workflow list API/cache model, while list refetches and live updates preserve active selection, row height, and focus."
+    ],
+    "requirements": [
+      "Represent full table mode naturally through /workflows.",
+      "Reuse cached Workflows list data only when query parameters match.",
+      "Keep selected detail and Create data independent from list data."
+    ]
+  },
+  "artifactResumeInspection": {
+    "status": "no_existing_feature_artifacts_found",
+    "checkedLocations": [
+      "specs/",
+      "docs/tmp/",
+      "artifacts/",
+      "var/artifacts/",
+      "/work/agent_jobs/mm:9940a126-4bd4-480d-976b-35a2292ac651/artifacts"
+    ],
+    "checkedPatterns": [
+      "MM-1117",
+      "1117",
+      "MM-1111",
+      "1111",
+      "Workflow List Display Modes",
+      "workflowListDisplayMode",
+      "lastSelectedWorkflowId",
+      "MoonSpec",
+      "moonspec"
+    ],
+    "validArtifactsToPreserve": [],
+    "evidence": [
+      "No specs/ directory exists in this checkout.",
+      "No local spec.md, plan.md, tasks.md, research.md, quickstart.md, or data-model.md files exist outside .specify templates.",
+      "No MM-1117 or MM-1111 MoonSpec stage artifacts were found under docs/tmp/, artifacts/, var/artifacts/, or the job artifact directory.",
+      "The only job artifact found outside the repository was stdout.log, which is not a MoonSpec stage artifact.",
+      "Existing docs/tmp Jira Orchestrate handoffs are for other issues and do not contain reusable MM-1117 stage artifacts."
+    ],
+    "resumeFrom": "Specify",
+    "nextStageReason": "The Specify gate is the first incomplete gate because no active feature directory or valid MM-1117 MoonSpec stage artifact exists to preserve."
+  },
+  "stageGateStatus": {
+    "Specify": "INCOMPLETE",
+    "Plan": "NOT_STARTED",
+    "Tasks": "NOT_STARTED",
+    "Align": "NOT_STARTED",
+    "Implement": "NOT_STARTED",
+    "Verify": "NOT_STARTED",
+    "DocReconcile": "NOT_STARTED"
+  },
+  "stageExecution": {
+    "performedInThisStep": false,
+    "reason": "This managed step is limited to Jira Orchestrate intake classification and artifact resume inspection. It must not run specification, planning, task generation, implementation, verification, publishing, pull request creation, or Jira transitions."
+  },
+  "downstreamInstructions": {
+    "useBriefAsCanonicalInput": true,
+    "treatImplementationDocumentAsRuntimeSourceRequirements": true,
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "preserveSourceIssueTraceability": [
+      "MM-1111"
+    ],
+    "resumeFromFirstIncompleteStage": "Specify",
+    "runAsRuntimeImplementationWorkflow": true,
+    "doNotRegenerateValidLaterStageArtifacts": true,
+    "keepCanonicalDocsDeclarative": true,
+    "doNotRunImplementationInlineInsideIntake": true
+  }
+}

@@ -11,7 +11,19 @@ vi.mock('./workflow-list', () => ({
 
 vi.mock('./workflow-detail', () => ({
   default: () => <div data-testid="workflow-detail-entrypoint">Workflow detail entrypoint</div>,
-  WorkflowWorkspaceShell: () => <div data-testid="workflow-workspace-shell">Workflow workspace shell</div>,
+  WorkflowWorkspaceShell: ({
+    displayMode,
+  }: {
+    displayMode?: 'hidden' | 'sidebar' | 'table';
+  }) => (
+    <div data-testid="workflow-workspace-shell" data-display-mode={displayMode ?? 'unset'}>
+      Workflow workspace shell
+    </div>
+  ),
+}));
+
+vi.mock('./workflow-start', () => ({
+  default: () => <div data-testid="workflow-start-page">Create workflow</div>,
 }));
 
 function mockDesktopViewport(matches: boolean) {
@@ -69,5 +81,54 @@ describe('WorkflowsWorkspacePage', () => {
 
     expect(screen.getByTestId('workflow-workspace-shell')).toBeTruthy();
     expect(screen.queryByTestId('workflow-detail-entrypoint')).toBeNull();
+  });
+
+  it('keeps /workflows as the table primary surface', () => {
+    window.history.pushState({}, 'Workspace Table Test', '/workflows');
+
+    renderWorkspace({ page: 'dashboard', apiBase: '/api' });
+
+    expect(screen.getByTestId('workflow-list-page')).toBeTruthy();
+    expect(screen.queryByTestId('workflow-workspace-shell')).toBeNull();
+  });
+
+  it('renders the create workflow route as the create surface', () => {
+    window.history.pushState({}, 'Workspace Create Test', '/workflows/new');
+
+    renderWorkspace({ page: 'dashboard', apiBase: '/api' });
+
+    expect(screen.getByTestId('workflow-start-page')).toBeTruthy();
+    expect(screen.queryByTestId('workflow-list-page')).toBeNull();
+    expect(screen.queryByTestId('workflow-workspace-shell')).toBeNull();
+  });
+
+  it('renders first-workflow resolution status in the workflow detail loading area', () => {
+    window.history.pushState({}, 'Workspace Opening Test', '/workflows');
+
+    renderWorkspace({
+      page: 'dashboard',
+      apiBase: '/api',
+      initialData: {
+        workflowListDisplayMode: 'sidebar',
+        workflowListDisplayStatus: 'Opening first workflow...',
+      },
+    });
+
+    expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+    expect(screen.getByText('Opening first workflow...')).toBeTruthy();
+    expect(screen.getByTestId('loading-placeholder-detail')).toBeTruthy();
+    expect(screen.queryByTestId('workflow-list-page')).toBeNull();
+  });
+
+  it('passes the resolved hidden/sidebar mode into detail workspace composition', () => {
+    renderWorkspace({
+      page: 'dashboard',
+      apiBase: '/api',
+      initialData: {
+        workflowListDisplayMode: 'hidden',
+      },
+    });
+
+    expect(screen.getByTestId('workflow-workspace-shell').getAttribute('data-display-mode')).toBe('hidden');
   });
 });

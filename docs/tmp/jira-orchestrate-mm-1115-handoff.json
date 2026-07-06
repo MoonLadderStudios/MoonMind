@@ -1,0 +1,103 @@
+{
+  "handoffType": "jira-orchestrate-intake",
+  "createdAt": "2026-07-05T00:00:00Z",
+  "jiraIssueKey": "MM-1115",
+  "traceability": {
+    "preserveSourceIssueKeys": [
+      "MM-1111"
+    ],
+    "reason": "The managed task explicitly requires preserving source issue MM-1111 traceability for downstream MoonSpec and runtime implementation stages."
+  },
+  "classification": {
+    "inputType": "single-story feature request",
+    "reason": "The trusted Jira preset brief identifies one Jira Story for composing the shared workflow-list display modes across Workflow Detail and Create surfaces, with scoped acceptance criteria and a single optional source design document."
+  },
+  "intent": "runtime implementation workflow",
+  "sourceStory": {
+    "summary": "Compose display modes across Workflow Detail and Create surfaces",
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "sourceSections": [
+      "7. Surface composition",
+      "13. Empty, loading, and error states"
+    ],
+    "claimIds": [
+      "CLAIM-docs-ui-workflowlistdisplaymodes-007",
+      "CLAIM-docs-ui-workflowlistdisplaymodes-013"
+    ],
+    "coverageIds": [
+      "DESIGN-REQ-007",
+      "DESIGN-REQ-013"
+    ]
+  },
+  "canonicalInput": {
+    "trustedSource": "moonmind.jira.get_issue",
+    "jiraPresetBrief": "MM-1115: Compose display modes across Workflow Detail and Create surfaces",
+    "sourceDesignClassification": "canonical declarative document",
+    "treatSourceDesignAsRuntimeSourceRequirements": true,
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "acceptanceCriteria": [
+      "Hidden detail renders Workflow Details alone with the selected workflow ID still sourced from the route.",
+      "Sidebar detail renders the list on the left and existing detail surface on the right; sidebar failures do not erase authorized detail content.",
+      "Hidden Create renders Create alone and keeps form behavior owned by the Create page contract.",
+      "Sidebar Create renders workflow navigation beside Create, keeps Create usable, and sidebar row clicks navigate to workflow detail after draft preservation rules are respected.",
+      "Table mode renders /workflows only, with no hidden detail pane or Create form left mounted."
+    ],
+    "requirements": [
+      "Own sidebar composition in the workspace/layout layer rather than in detail or Create page bodies.",
+      "Keep detail, Create, and list error recovery scoped to their own data regions.",
+      "Respect Create draft preservation or unsaved-change confirmation before route-changing mode selections complete.",
+      "Use the existing workspace-layer detail/sidebar composition as a base.",
+      "Add the missing hidden/sidebar/table behavior for both Detail and Create under the shared display-mode resolver."
+    ]
+  },
+  "artifactResumeInspection": {
+    "status": "no_existing_feature_artifacts_found",
+    "checkedLocations": [
+      "artifacts/",
+      "var/artifacts/",
+      "docs/tmp/",
+      "repository root MoonSpec artifacts"
+    ],
+    "checkedPatterns": [
+      "MM-1115",
+      "MM_1115",
+      "1115",
+      "WorkflowListDisplayModes",
+      "Workflow List Display Modes",
+      "workflow-list-display",
+      "workflow list display"
+    ],
+    "evidence": [
+      "docs/UI/WorkflowListDisplayModes.md exists and contains sections 7 and 13 covering surface composition and scoped empty/loading/error behavior.",
+      "No spec.md, plan.md, tasks.md, research.md, quickstart.md, or data-model.md files were found in the active repository tree outside template directories.",
+      "No MM-1115-specific MoonSpec artifact, feature directory, or handoff file was found under artifacts/, var/artifacts/, or docs/tmp/ before this intake handoff was written.",
+      "The only matching repository file found by the narrowed MM-1115/display-mode scan was docs/UI/WorkflowListDisplayModes.md."
+    ],
+    "resumeFrom": "Specify",
+    "nextStageReason": "Specify is the first incomplete stage because no valid active feature directory or MoonSpec stage artifact exists to preserve or resume."
+  },
+  "stageGateStatus": {
+    "Specify": "INCOMPLETE",
+    "Plan": "NOT_STARTED",
+    "Tasks": "NOT_STARTED",
+    "Align": "NOT_STARTED",
+    "Implement": "NOT_STARTED",
+    "Verify": "NOT_STARTED",
+    "DocReconcile": "NOT_STARTED"
+  },
+  "stageExecution": {
+    "performedInThisStep": false,
+    "reason": "This managed step is limited to Jira Orchestrate intake classification and artifact resume inspection. It does not run specification, planning, task generation, implementation, verification, publishing, pull request creation, or Jira transitions."
+  },
+  "downstreamInstructions": {
+    "useBriefAsCanonicalInput": true,
+    "runAsRuntimeImplementationWorkflow": true,
+    "treatImplementationDocumentAsRuntimeSourceRequirements": true,
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "resumeFromFirstIncompleteStage": "Specify",
+    "doNotRegenerateValidLaterStageArtifacts": true,
+    "preserveSourceIssueTraceability": [
+      "MM-1111"
+    ]
+  }
+}

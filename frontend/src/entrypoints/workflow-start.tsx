@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useInRouterContext, useLocation } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { LoadingPlaceholder } from "../components/dashboard/LoadingPlaceholder";
@@ -9,7 +10,6 @@ import { SkillCombobox } from "../components/SkillCombobox";
 import { DashboardErrorDetails } from "../components/dashboard/DashboardErrorDetails";
 import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
-import { WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT } from "../lib/workflowListDisplay";
 import {
   readDashboardPreferences,
   updateDashboardPreferences,
@@ -23,6 +23,24 @@ import {
   type TemporalTaskEditingExecutionContract,
   type TemporalTaskInputAttachmentRef,
 } from "../lib/temporalTaskEditing";
+import {
+  readWorkflowListDisplayMode,
+} from "../lib/workflowListDisplayMode";
+import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowWorkspaceSidebar";
+import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
+
+type WorkflowStartDashboardConfig = {
+  features?: {
+    temporalDashboard?: {
+      listEnabled?: boolean;
+    };
+  };
+};
+
+function readWorkflowStartDashboardConfig(payload: BootPayload): WorkflowStartDashboardConfig | undefined {
+  const raw = payload.initialData as { dashboardConfig?: WorkflowStartDashboardConfig } | undefined;
+  return raw?.dashboardConfig;
+}
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
@@ -92,8 +110,6 @@ const PENTEST_VALIDATE_ACTIONS = [
 ];
 const PRESET_REAPPLY_REQUIRED_MESSAGE =
   "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.";
-const CREATE_TABLE_MODE_UNSAVED_DRAFT_MESSAGE =
-  "Review or submit your unsaved Create draft before opening the Workflows table.";
 export const WORKFLOW_START_HEADING_QUOTES = [
   "What's the mission?",
   "Make it so",
@@ -103,6 +119,46 @@ export const WORKFLOW_START_HEADING_QUOTES = [
   "Light this candle",
   "All systems go",
 ];
+
+export function workflowStartFormSnapshot(form: HTMLFormElement | null): string {
+  if (!form) {
+    return "";
+  }
+  const values: string[] = [];
+  const controls = Array.from(form.elements);
+  for (const control of controls) {
+    if (
+      control instanceof HTMLInputElement ||
+      control instanceof HTMLTextAreaElement ||
+      control instanceof HTMLSelectElement
+    ) {
+      if (!control.name && !control.id) {
+        continue;
+      }
+      const key = control.name || control.id;
+      if (control instanceof HTMLInputElement) {
+        if (control.type === "file") {
+          values.push(`${key}=files:${control.files?.length ?? 0}`);
+          continue;
+        }
+        if (control.type === "checkbox" || control.type === "radio") {
+          const optionKey = control.value || control.id;
+          values.push(`${key}[${optionKey}]=checked:${control.checked}`);
+          continue;
+        }
+      }
+      values.push(`${key}=${control.value}`);
+    }
+  }
+  return values.sort().join("\n");
+}
+
+function workflowStartFormChanged(initialSnapshot: string): boolean {
+  const form = document.getElementById("queue-submit-form");
+  return form instanceof HTMLFormElement
+    ? workflowStartFormSnapshot(form) !== initialSnapshot
+    : false;
+}
 
 function randomWorkflowStartHeading(except?: string): string {
   if (WORKFLOW_START_HEADING_QUOTES.length === 0) {
@@ -5488,7 +5544,7 @@ function StepContextBar({
   );
 }
 
-export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
+function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
   const pageMode = useMemo(
@@ -5783,66 +5839,43 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const temporalDraftAppliedRef = useRef<string | null>(null);
   const jiraProjectSelectionInitializedRef = useRef(false);
   const jiraBoardSelectionInitializedRef = useRef(false);
-  const hasCreateDraftContent = useMemo(() => {
-    return (
-      (steps ?? []).some(
-        (step) =>
-          step?.instructions?.trim() ||
-          step?.skillId?.trim() ||
-          step?.toolId?.trim() ||
-          step?.presetKey?.trim() ||
-          (step?.inputAttachments?.length ?? 0) > 0 ||
-          (step?.explicitRequiredCapabilities?.length ?? 0) > 0,
-      ) ||
-      (selectedObjectiveAttachmentFiles?.length ?? 0) > 0 ||
-      Object.values(selectedStepAttachmentFiles ?? {}).some((files) => (files?.length ?? 0) > 0) ||
-      (selectedDependencies?.length ?? 0) > 0 ||
-      Boolean(branch?.trim()) ||
-      branchTouched ||
-      scheduleMode !== "immediate" ||
-      Boolean(scheduledFor?.trim()) ||
-      Boolean(scheduleDeferredMinutes?.trim()) ||
-      Boolean(scheduleCron?.trim()) ||
-      Boolean(scheduleName?.trim())
+  const initialRouteGuardSnapshotRef = useRef<string>("");
+
+  useEffect(() => {
+    const captureSnapshot = () => {
+      const form = document.getElementById("queue-submit-form");
+      initialRouteGuardSnapshotRef.current = form instanceof HTMLFormElement
+        ? workflowStartFormSnapshot(form)
+        : "";
+    };
+    const timerId = window.setTimeout(captureSnapshot, 0);
+    const handleRouteChangeRequest = (event: Event) => {
+      if (!workflowStartFormChanged(initialRouteGuardSnapshotRef.current)) {
+        return;
+      }
+      const confirmed = window.confirm(
+        "Leave Create? Unsaved workflow draft changes may be lost.",
+      );
+      if (!confirmed) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener(
+      WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
+      handleRouteChangeRequest,
     );
-  }, [
-    branch,
-    branchTouched,
-    pageMode.mode,
-    scheduleCron,
-    scheduleDeferredMinutes,
-    scheduleMode,
-    scheduleName,
-    scheduledFor,
-    selectedDependencies,
-    selectedObjectiveAttachmentFiles,
-    selectedStepAttachmentFiles,
-    steps,
-  ]);
+    return () => {
+      window.clearTimeout(timerId);
+      window.removeEventListener(
+        WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
+        handleRouteChangeRequest,
+      );
+    };
+  }, []);
 
   useEffect(() => {
     stepsRef.current = steps;
   }, [steps]);
-
-  useEffect(() => {
-    const handleTableModeNavigation = (event: Event) => {
-      if (!hasCreateDraftContent) {
-        return;
-      }
-      event.preventDefault();
-      setSubmitMessage(CREATE_TABLE_MODE_UNSAVED_DRAFT_MESSAGE);
-    };
-    window.addEventListener(
-      WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT,
-      handleTableModeNavigation,
-    );
-    return () => {
-      window.removeEventListener(
-        WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT,
-        handleTableModeNavigation,
-      );
-    };
-  }, [hasCreateDraftContent, setSubmitMessage]);
 
   useEffect(
     () => () => {
@@ -12798,8 +12831,12 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 value={publishMode}
                 onChange={(event) => setPublishMode(event.target.value)}
               >
-                <option value="auto" disabled={!autoPublishAvailable}>
-                  Auto — selected skill decides
+                <option
+                  value="auto"
+                  disabled={!autoPublishAvailable}
+                  title="Auto — selected skill decides"
+                >
+                  Auto
                 </option>
                 <option value="none">None</option>
                 <option value="branch" disabled={!mergeAutomationAvailable}>
@@ -12988,4 +13025,60 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
+
+export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
+  const inRouterContext = useInRouterContext();
+  if (inRouterContext) {
+    return <WorkflowStartPageWithRouterLocation payload={payload} />;
+  }
+  return (
+    <WorkflowStartPageWithSearch
+      payload={payload}
+      searchString={typeof window !== "undefined" ? window.location.search : ""}
+    />
+  );
+}
+
+function WorkflowStartPageWithRouterLocation({ payload }: { payload: BootPayload }) {
+  const { search: searchString } = useLocation();
+  return <WorkflowStartPageWithSearch payload={payload} searchString={searchString} />;
+}
+
+function WorkflowStartPageWithSearch({
+  payload,
+  searchString,
+}: {
+  payload: BootPayload;
+  searchString: string;
+}) {
+  const displayMode = readWorkflowListDisplayMode(payload);
+  const search = useMemo(
+    () => new URLSearchParams(searchString),
+    [searchString],
+  );
+  if (displayMode === "table") {
+    return <WorkflowStartPageContent payload={payload} />;
+  }
+  const cfg = readWorkflowStartDashboardConfig(payload);
+  const sidebarVisible = displayMode === "sidebar"
+    && cfg?.features?.temporalDashboard?.listEnabled !== false;
+
+  return (
+    <div
+      className="workflow-start-workspace workflow-workspace-shell"
+      data-sidebar-collapsed={sidebarVisible ? "false" : "true"}
+      data-workflow-list-display-mode={displayMode}
+    >
+      {sidebarVisible ? (
+        <WorkflowWorkspaceSidebarPanel payload={payload} search={search} defaultSource="temporal" />
+      ) : (
+        <div className="workflow-workspace-sidebar-slot" hidden aria-hidden="true" />
+      )}
+      <main className="workflow-start-primary" aria-label="Create workflow">
+        <WorkflowStartPageContent payload={payload} />
+      </main>
+    </div>
+  );
+}
+
 export default WorkflowStartPage;

@@ -25,6 +25,7 @@ export function consumeWorkflowListReturnFocusIntent(source: URLSearchParams): b
 const WORKFLOW_LIST_CONTEXT_ALLOWLIST = new Set([
   'source',
   'limit',
+  'pageSize',
   'nextPageToken',
   'workflowIdContains',
   'workflowId',
@@ -46,6 +47,14 @@ const WORKFLOW_LIST_CONTEXT_ALLOWLIST = new Set([
   'targetSkillNotIn',
   'targetSkillBlank',
   'titleContains',
+  'progressPctFrom',
+  'progressPctTo',
+  'progressBucketIn',
+  'progressBucketNotIn',
+  'progressSignalIn',
+  'progressSignalNotIn',
+  'progressStepTitleContains',
+  'progressBlank',
   'scheduledFrom',
   'scheduledTo',
   'scheduledBlank',
@@ -68,6 +77,20 @@ export function workflowListContextParams(source: URLSearchParams): URLSearchPar
   return params;
 }
 
+export function workflowListApiQueryFromContext(source: URLSearchParams): string {
+  const pageSize = source.get('limit') || source.get('pageSize') || '25';
+  const safe = workflowListContextParams(source);
+  const params = new URLSearchParams();
+  params.set('source', safe.get('source') || 'temporal');
+  params.set('pageSize', pageSize);
+  safe.forEach((value, key) => {
+    if (key !== 'source' && key !== 'limit' && key !== 'pageSize') {
+      params.append(key, value);
+    }
+  });
+  return params.toString();
+}
+
 export function workflowDetailHref(workflowId: string, source: URLSearchParams): string {
   const params = workflowListContextParams(source);
   if (!params.has('source')) {
@@ -83,6 +106,11 @@ export function workflowListHrefFromContext(
 ): string {
   const params = workflowListContextParams(source);
   params.delete('source');
+  const pageSize = params.get('pageSize');
+  if (!params.has('limit') && pageSize) {
+    params.set('limit', pageSize);
+  }
+  params.delete('pageSize');
   if (options.markDetailReturn) {
     params.delete('nextPageToken');
   }

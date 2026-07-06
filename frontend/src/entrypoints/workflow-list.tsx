@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
@@ -7,12 +7,21 @@ import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
+import {
+  WorkflowColumnFilterButton,
+  WorkflowColumnHeader,
+} from '../components/WorkflowColumnHeader';
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
 import {
   WORKFLOW_LIST_CONTEXT_RETURN_PARAM,
   consumeWorkflowListReturnFocusIntent,
   workflowDetailHref,
 } from '../lib/workflowListContext';
+import {
+  buildWorkflowListQueryKey,
+  buildWorkflowListQueryParams,
+  workflowListQueryString,
+} from '../lib/workflowListQuery';
 import {
   TOGGLEABLE_WORKFLOW_LIST_COLUMNS,
   readDashboardPreferences,
@@ -1095,10 +1104,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   // Field whose first control should receive focus when the drawer opens.
   const pendingDrawerFocusRef = useRef<FilterField | null>(null);
   // MM-964: local-first dashboard preferences. Read once on mount; mutations are
-  // mirrored back to localStorage so they survive reload. An explicit `limit` in
-  // the URL still wins over the stored page-size preference so shared links keep
-  // their page size.
+  // mirrored back to localStorage so they survive reload. An explicit `limit`,
+  // or API-style `pageSize` from workflow context, still wins over the stored
+  // page-size preference so shared links keep their page size.
   const initialPrefs = useMemo(() => readDashboardPreferences(), []);
+  const queryClient = useQueryClient();
   const [density, setDensity] = useState<WorkflowListDensity>(initialPrefs.workflowListDensity);
   const [columnVisibility, setColumnVisibility] = useState(
     initialPrefs.workflowListColumnVisibility,
@@ -1118,7 +1128,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       : false,
   );
   const [pageSize, setPageSize] = useState(() => {
-    const limitParam = initial.get('limit');
+    const limitParam = initial.get('limit') ?? initial.get('pageSize');
     return limitParam !== null ? parsePageSize(limitParam) : initialPrefs.workflowListPageSize;
   });
   const [listCursor, setListCursor] = useState<string | null>(() =>
@@ -1160,24 +1170,22 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     syncUrl();
   }, [syncUrl]);
 
-  const queryKey = [
-    'workflow-list',
-    'temporal',
-    pageSize,
-    filters,
-    listCursor,
-  ] as const;
+  const listQueryParams = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set('source', 'temporal');
+    params.set('pageSize', String(pageSize));
+    if (listCursor) params.set('nextPageToken', listCursor);
+    appendFilterParams(params, filters);
+    return buildWorkflowListQueryParams(params);
+  }, [filters, listCursor, pageSize]);
+  const listQueryKey = useMemo(() => buildWorkflowListQueryKey(listQueryParams), [listQueryParams]);
+  const listQuery = useMemo(() => workflowListQueryString(listQueryParams), [listQueryParams]);
 
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey,
+  const { data, isLoading, isError, error, refetch } = useQuery({
+    queryKey: listQueryKey,
     enabled: listEnabled && filterValidationErrors.length === 0,
     queryFn: async () => {
-      const params = new URLSearchParams();
-      params.set('source', 'temporal');
-      params.set('pageSize', String(pageSize));
-      if (listCursor) params.set('nextPageToken', listCursor);
-      appendFilterParams(params, filters);
-      const response = await fetch(`${payload.apiBase}/executions?${params}`);
+      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
       if (!response.ok) {
         throw new Error(await taskListErrorMessage(response));
       }
@@ -1191,7 +1199,26 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     // dashboard query client falls back to React Query's stale-on-focus default
     // and would refetch /executions when returning to the tab even while paused.
     refetchOnWindowFocus: liveUpdatesPref,
+    staleTime: listPollMs,
   });
+
+  useEffect(() => {
+    if (!listEnabled || !liveUpdatesPref || drawerOpen || desktopFilterField !== null) {
+      return undefined;
+    }
+    const refetchVisibleList = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+      void refetch();
+    };
+    window.addEventListener('visibilitychange', refetchVisibleList);
+    window.addEventListener('focus', refetchVisibleList);
+    return () => {
+      window.removeEventListener('visibilitychange', refetchVisibleList);
+      window.removeEventListener('focus', refetchVisibleList);
+    };
+  }, [desktopFilterField, drawerOpen, listEnabled, liveUpdatesPref, refetch]);
 
   // Facets enrich the include/exclude dropdowns. The mobile drawer can show
   // every value field at once; desktop column popovers request the active field.
@@ -1290,6 +1317,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     updateDashboardPreferences({ liveUpdatesEnabled: enabled });
   }, []);
 
+  const rememberExplicitWorkflowSelection = useCallback((workflowId: string) => {
+    if (workflowId) {
+      updateDashboardPreferences({ lastSelectedWorkflowId: workflowId });
+    }
+  }, []);
+
   const handlePageSizeChange = useCallback(
     (size: number) => {
       setPageSize(size);
@@ -1357,11 +1390,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const resetDraftFilters = useCallback(() => {
     const cleared = emptyFilters();
     setHasEditedFilters(true);
+    queryClient.removeQueries({ queryKey: ['workflow-list'] });
     setDraftFilters(cleared);
     setFilters(cleared);
     resetToFirstPage();
     setDesktopFilterField(null);
-  }, [resetToFirstPage]);
+  }, [queryClient, resetToFirstPage]);
 
   const removeActiveFilter = useCallback(
     (field: FilterField) => {
@@ -2432,51 +2466,42 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             aria-sort={sortable ? ariaSort : undefined}
                             className="workflow-list-header-cell"
                           >
-                            <div className="workflow-list-column-header">
-                              {sortable ? (
-                                <button
-                                  type="button"
-                                  className="table-sort-button"
-                                  onClick={() => onHeaderClick(field)}
-                                  aria-label={ariaLabel}
-                                  title={CURRENT_PAGE_SORT_NOTICE}
-                                >
-                                  {label}
-                                  {sortIndicator(field)}
-                                  <span className="sr-only">{sortHint}</span>
-                                </button>
-                              ) : (
-                                <span className="workflow-list-static-header">{label}</span>
-                              )}
-                              {filterField ? (
-                                <div
-                                  className="workflow-list-column-filter"
-                                  ref={isFilterOpen ? desktopFilterRef : null}
-                                >
-                                  <button
-                                    type="button"
-                                    className={`workflow-list-column-filter-button${filterValue ? ' is-active' : ''}`}
-                                    aria-label={
+                            {filterField ? (
+                              <WorkflowColumnHeader
+                                label={
+                                  sortable ? (
+                                    <button
+                                      type="button"
+                                      className="table-sort-button"
+                                      onClick={() => onHeaderClick(field)}
+                                      aria-label={ariaLabel}
+                                      title={CURRENT_PAGE_SORT_NOTICE}
+                                    >
+                                      {label}
+                                      {sortIndicator(field)}
+                                      <span className="sr-only">{sortHint}</span>
+                                    </button>
+                                  ) : (
+                                    <span className="workflow-list-static-header">{label}</span>
+                                  )
+                                }
+                                filterButton={
+                                  <WorkflowColumnFilterButton
+                                    active={Boolean(filterValue)}
+                                    expanded={isFilterOpen}
+                                    ariaLabel={
                                       filterValue
                                         ? `${label} column filter: ${filterValue}`
                                         : `${label} filter. No filter applied.`
                                     }
-                                    aria-haspopup="dialog"
-                                    aria-expanded={isFilterOpen}
                                     onClick={() => {
                                       setDraftFilters(filters);
                                       setDesktopFilterField((current) => (current === filterField ? null : filterField));
                                     }}
-                                  >
-                                    <svg
-                                      aria-hidden="true"
-                                      className="workflow-list-column-filter-icon"
-                                      viewBox="0 0 16 16"
-                                      focusable="false"
-                                    >
-                                      <path d="M2 4h12v1.6H2V4ZM4.5 7.2h7v1.6h-7V7.2ZM6.5 10.4h3v1.6h-3v-1.6Z" />
-                                    </svg>
-                                  </button>
+                                  />
+                                }
+                                filterRef={isFilterOpen ? desktopFilterRef : null}
+                              >
                                   {isFilterOpen ? (
                                     <div
                                       className="workflow-list-column-filter-popover"
@@ -2528,9 +2553,22 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                                       </div>
                                     </div>
                                   ) : null}
-                                </div>
-                              ) : null}
-                            </div>
+                              </WorkflowColumnHeader>
+                            ) : sortable ? (
+                              <button
+                                type="button"
+                                className="table-sort-button"
+                                onClick={() => onHeaderClick(field)}
+                                aria-label={ariaLabel}
+                                title={CURRENT_PAGE_SORT_NOTICE}
+                              >
+                                {label}
+                                {sortIndicator(field)}
+                                <span className="sr-only">{sortHint}</span>
+                              </button>
+                            ) : (
+                              <span className="workflow-list-static-header">{label}</span>
+                            )}
                           </th>
                         );
                       })}
@@ -2556,7 +2594,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             <a
                               href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                               className="workflow-list-row-title"
-                              onClick={() => updateDashboardPreferences({ lastSelectedWorkflowId: rowWorkflowId(row) })}
+                              onClick={() => rememberExplicitWorkflowSelection(rowWorkflowId(row))}
                             >
                               {row.title}
                             </a>
@@ -2617,7 +2655,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <a
                           href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                           className="queue-card-title"
-                          onClick={() => updateDashboardPreferences({ lastSelectedWorkflowId: rowWorkflowId(row) })}
+                          onClick={() => rememberExplicitWorkflowSelection(rowWorkflowId(row))}
                         >
                           {row.title}
                         </a>
@@ -2656,6 +2694,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                         className="button secondary queue-card-details-action"
                         role="button"
+                        onClick={() => rememberExplicitWorkflowSelection(rowWorkflowId(row))}
                       >
                         View details
                       </a>
