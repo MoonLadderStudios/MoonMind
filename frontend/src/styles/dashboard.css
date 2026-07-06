@@ -77,6 +77,12 @@
   --mm-executing-letter-sweep-direction: 1;
   --mm-executing-letter-halo: var(--mm-status-shimmer-letter-halo);
   --mm-executing-letter-bright: var(--mm-status-shimmer-letter-bright);
+  --workflow-list-header-row-height: 2.75rem;
+  --workflow-list-body-row-height: 4rem;
+  --workflow-list-compact-body-row-height: 3rem;
+  --workflow-list-column-workflow-width: 20rem;
+  --workflow-list-divider-width: 1px;
+  --workflow-list-divider-color: rgb(var(--mm-border) / 0.72);
   --mm-executing-moving-light-gradient:
     linear-gradient(
       var(--mm-executing-sweep-angle),
@@ -2098,6 +2104,7 @@ tbody tr:hover {
   border: 0;
   border-radius: 0;
   background: transparent;
+  transition: opacity 120ms ease;
 }
 
 /*
@@ -2158,6 +2165,21 @@ tbody tr:hover {
 }
 
 .queue-table-wrapper th,
+.workflow-workspace-sidebar-header-cell {
+  height: var(--workflow-list-header-row-height);
+  padding: 0.5rem 0.75rem;
+  background: rgb(var(--mm-panel) / 0.98);
+  box-shadow: 0 1px 0 var(--workflow-list-divider-color);
+  color: rgb(var(--mm-ink) / 0.85);
+  font-weight: 600;
+  text-align: left;
+}
+
+.workflow-list-data-slab tbody tr {
+  height: var(--workflow-list-body-row-height);
+}
+
+.queue-table-wrapper th,
 .queue-table-wrapper td {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -2181,7 +2203,7 @@ tbody tr:hover {
 }
 
 .queue-table-column-workflow {
-  width: 30%;
+  width: var(--workflow-list-column-workflow-width);
 }
 
 .queue-table-column-progress {
@@ -2216,10 +2238,16 @@ tbody tr:hover {
 }
 
 .queue-table-cell-workflow {
+  height: var(--workflow-list-body-row-height);
+  border-right: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color);
   font-weight: 500;
 }
 
 /* MM-964: compact density preference tightens the workflow list rows. */
+.queue-table-wrapper[data-density='compact'] {
+  --workflow-list-body-row-height: var(--workflow-list-compact-body-row-height);
+}
+
 .queue-table-wrapper[data-density='compact'] th,
 .queue-table-wrapper[data-density='compact'] td {
   padding: 0.3rem 0.45rem;
@@ -7302,9 +7330,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .workflow-workspace-shell {
   display: grid;
-  grid-template-columns: minmax(14rem, 17rem) minmax(0, 1fr);
+  grid-template-columns: var(--workflow-list-column-workflow-width) minmax(0, 1fr);
   align-items: start;
-  column-gap: 2.25rem;
+  column-gap: 1.25rem;
   width: 100%;
   max-width: none;
 }
@@ -7320,7 +7348,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   /* Not a card: the sidebar is a plain left column separated from the detail by
    * the grid gap and a single hairline divider, like ChatGPT. */
   padding: 0 0.125rem 0 0;
-  border-right: 1px solid rgb(var(--mm-border) / 0.55);
+  border-right: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color);
 }
 
 .workflow-workspace-sidebar-header {
@@ -7347,59 +7375,78 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   min-width: min(17rem, calc(100vw - 2rem));
 }
 
-.workflow-workspace-sidebar-list {
-  display: flex;
-  flex-direction: column;
+.workflow-workspace-sidebar-table {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
-  list-style: none;
-  padding: 0 0.125rem 0 0;
+  border-radius: 0;
+  box-shadow: none;
   margin: 0;
-  /* Slimmer, theme-matched scrollbar instead of the default chunky one. */
   scrollbar-width: thin;
   scrollbar-color: rgb(var(--mm-border) / 0.55) transparent;
 }
 
-.workflow-workspace-sidebar-list::-webkit-scrollbar {
+.workflow-workspace-sidebar-table::-webkit-scrollbar {
   width: 6px;
 }
 
-.workflow-workspace-sidebar-list::-webkit-scrollbar-thumb {
+.workflow-workspace-sidebar-table::-webkit-scrollbar-thumb {
   background: rgb(var(--mm-border) / 0.55);
   border-radius: 999px;
 }
 
-.workflow-workspace-sidebar-list::-webkit-scrollbar-track {
+.workflow-workspace-sidebar-table::-webkit-scrollbar-track {
   background: transparent;
 }
 
+.workflow-workspace-sidebar-header,
+.workflow-workspace-sidebar-list,
+.workflow-workspace-sidebar-state-group {
+  display: grid;
+  min-width: 0;
+}
+
+.workflow-workspace-sidebar-list {
+  margin: 0;
+}
+
 .workflow-workspace-sidebar-pinned-list {
+  position: sticky;
+  top: var(--workflow-list-header-row-height);
+  z-index: 6;
   flex: 0 0 auto;
   overflow: visible;
+  background: rgb(var(--mm-panel) / 0.98);
 }
 
-/* Rows are separated by the same hairline dividers used elsewhere, not by
- * individual bordered cards. The divider lives on the `li` container rather
- * than on the row so the row's `border-radius` cannot curve the hairline at
- * its corners. */
-.workflow-workspace-sidebar-list li {
-  border-bottom: 1px solid rgb(var(--mm-border) / 0.4);
+.workflow-workspace-sidebar-row-frame {
+  display: grid;
+  min-width: 0;
+  height: var(--workflow-list-body-row-height);
+  max-height: var(--workflow-list-body-row-height);
+  border-bottom: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color);
 }
 
-.workflow-workspace-sidebar-list li:last-child {
+.workflow-workspace-sidebar-table > :last-child .workflow-workspace-sidebar-row-frame:last-child {
   border-bottom: 0;
+}
+
+.workflow-workspace-sidebar-cell {
+  min-width: 0;
 }
 
 .workflow-workspace-sidebar-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  min-height: 3.75rem;
+  height: var(--workflow-list-body-row-height);
+  max-height: var(--workflow-list-body-row-height);
   padding: 0.58rem 0.55rem;
   gap: 0.55rem;
   border: 0;
-  border-radius: 0.4rem;
   background: transparent;
   color: rgb(var(--mm-ink));
   text-decoration: none;
@@ -7409,7 +7456,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-sidebar-row-pinned {
+  padding-block: 0.38rem;
   background: rgb(var(--mm-accent) / 0.06);
+}
+
+.workflow-workspace-sidebar-row-pinned .workflow-workspace-sidebar-title {
+  height: 1.25em;
+  -webkit-line-clamp: 1;
 }
 
 .workflow-workspace-sidebar-row:hover,
@@ -7448,8 +7501,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .workflow-workspace-sidebar-kicker {
   color: rgb(var(--mm-accent));
-  font-size: 0.7rem;
+  font-size: 0.62rem;
   font-weight: 700;
+  line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
@@ -7469,9 +7523,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-sidebar-state {
-  padding: 0.5rem 0.45rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: var(--workflow-list-body-row-height);
+  padding: 0.5rem 0.75rem;
   color: rgb(var(--mm-muted));
   font-size: 0.85rem;
+}
+
+.workflow-workspace-sidebar-state p {
+  margin: 0;
 }
 
 /* The detail is a centered, width-bounded container in a stable grid column.
@@ -7508,8 +7570,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 @media (prefers-reduced-motion: reduce) {
   .workflow-workspace-sidebar-row,
-  .workflow-workspace-sidebar {
-    transition-duration: 1ms;
+  .workflow-workspace-sidebar,
+  .workflow-workspace-sidebar-table,
+  .workflow-list-data-slab .queue-table-wrapper {
+    transition-duration: 1ms !important;
+    transform: none !important;
   }
 }
 

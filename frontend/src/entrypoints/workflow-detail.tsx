@@ -444,30 +444,35 @@ function WorkflowSidebarRow({
     </>
   );
   return (
-    <li>
-      {inRouterContext ? (
-        <Link
-          className={className}
-          to={href}
-          aria-current={active ? 'page' : undefined}
-          data-active={active ? 'true' : 'false'}
-          data-pinned={pinned ? 'true' : 'false'}
-        >
-          {content}
-        </Link>
-      ) : (
-        <a
-          className={className}
-          href={href}
-          aria-current={active ? 'page' : undefined}
-          data-active={active ? 'true' : 'false'}
-          data-pinned={pinned ? 'true' : 'false'}
-          onClick={handleClick}
-        >
-          {content}
-        </a>
-      )}
-    </li>
+    <div
+      role="row"
+      className={`workflow-workspace-sidebar-row-frame${pinned ? ' workflow-workspace-sidebar-row-frame-pinned' : ''}`}
+    >
+      <div role="cell" className="workflow-workspace-sidebar-cell">
+        {inRouterContext ? (
+          <Link
+            className={className}
+            to={href}
+            aria-current={active ? 'page' : undefined}
+            data-active={active ? 'true' : 'false'}
+            data-pinned={pinned ? 'true' : 'false'}
+          >
+            {content}
+          </Link>
+        ) : (
+          <a
+            className={className}
+            href={href}
+            aria-current={active ? 'page' : undefined}
+            data-active={active ? 'true' : 'false'}
+            data-pinned={pinned ? 'true' : 'false'}
+            onClick={handleClick}
+          >
+            {content}
+          </a>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -489,7 +494,8 @@ function WorkflowSidebarList({
   }
 
   return (
-    <ul
+    <div
+      role="rowgroup"
       className={`workflow-workspace-sidebar-list${pinned ? ' workflow-workspace-sidebar-pinned-list' : ''}`}
       aria-label={ariaLabel}
     >
@@ -502,7 +508,39 @@ function WorkflowSidebarList({
           pinned={pinned}
         />
       ))}
-    </ul>
+    </div>
+  );
+}
+
+function WorkflowSidebarTableFrame({ children }: { children: ReactNode }) {
+  return (
+    <div
+      role="table"
+      aria-label="Workflow list table slice"
+      className="workflow-workspace-sidebar-table"
+    >
+      {children}
+    </div>
+  );
+}
+
+function WorkflowSidebarState({
+  children,
+  role,
+}: {
+  children: ReactNode;
+  role?: 'status';
+}) {
+  return (
+    <div role="rowgroup" className="workflow-workspace-sidebar-state-group">
+      <div role="row" className="workflow-workspace-sidebar-row-frame">
+        <div role="cell" className="workflow-workspace-sidebar-cell">
+          <div className="workflow-workspace-sidebar-state" role={role}>
+            {children}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -550,65 +588,69 @@ function WorkflowSidebarHeader({
   }, [open]);
 
   return (
-    <header className="workflow-workspace-sidebar-header">
-      <WorkflowColumnHeader
-        label={<span className="workflow-workspace-sidebar-header-title">Workflow</span>}
-        filterButton={
-          <WorkflowColumnFilterButton
-            active={active}
-            expanded={open}
-            ariaLabel={active ? `Workflow sidebar filter: ${filterText}` : 'Workflow sidebar filter. No filter applied.'}
-            onClick={() => setOpen((value) => !value)}
-          />
-        }
-        filterRef={filterRef}
-      >
-        {open ? (
-          <div
-            className="workflow-workspace-sidebar-filter-popover workflow-list-column-filter-popover"
-            role="dialog"
-            aria-label="Workflow sidebar filter"
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.stopPropagation();
-                setOpen(false);
-              }
-            }}
-          >
-            <div className="workflow-list-column-filter-title">Workflow filter</div>
-            <label className="workflow-list-filter-control">
-              <span>Workflow</span>
-              <input
-                type="search"
-                value={filterText}
-                onChange={(event) => setFilterText(event.target.value)}
-                placeholder="Filter workflows"
-                aria-label="Workflow sidebar filter value"
-                autoFocus
+    <div role="rowgroup" className="workflow-workspace-sidebar-header">
+      <div role="row" className="workflow-workspace-sidebar-header-row">
+        <div role="columnheader" className="workflow-workspace-sidebar-header-cell">
+          <WorkflowColumnHeader
+            label={<span className="workflow-workspace-sidebar-header-title">Workflow</span>}
+            filterButton={
+              <WorkflowColumnFilterButton
+                active={active}
+                expanded={open}
+                ariaLabel={active ? `Workflow sidebar filter: ${filterText}` : 'Workflow sidebar filter. No filter applied.'}
+                onClick={() => setOpen((value) => !value)}
               />
-            </label>
-            <div className="workflow-list-filter-actions">
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => setFilterText('')}
-                disabled={!active}
-                aria-label="Reset workflow sidebar filter"
+            }
+            filterRef={filterRef}
+          >
+            {open ? (
+              <div
+                className="workflow-workspace-sidebar-filter-popover workflow-list-column-filter-popover"
+                role="dialog"
+                aria-label="Workflow sidebar filter"
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.stopPropagation();
+                    setOpen(false);
+                  }
+                }}
               >
-                Reset
-              </button>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                aria-label="Apply workflow sidebar filter"
-              >
-                Apply
-              </button>
-            </div>
-          </div>
-        ) : null}
-      </WorkflowColumnHeader>
-    </header>
+                <div className="workflow-list-column-filter-title">Workflow filter</div>
+                <label className="workflow-list-filter-control">
+                  <span>Workflow</span>
+                  <input
+                    type="search"
+                    value={filterText}
+                    onChange={(event) => setFilterText(event.target.value)}
+                    placeholder="Filter workflows"
+                    aria-label="Workflow sidebar filter value"
+                    autoFocus
+                  />
+                </label>
+                <div className="workflow-list-filter-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => setFilterText('')}
+                    disabled={!active}
+                    aria-label="Reset workflow sidebar filter"
+                  >
+                    Reset
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOpen(false)}
+                    aria-label="Apply workflow sidebar filter"
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </WorkflowColumnHeader>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -631,31 +673,33 @@ function WorkflowSidebar({
 }) {
   return (
     <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
-      <WorkflowSidebarHeader filterText={filterText} setFilterText={setFilterText} />
-      {workflowsQuery.isLoading ? (
-        <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
-      ) : null}
-      {workflowsQuery.isError ? (
-        <div className="workflow-workspace-sidebar-state" role="status">
-          <p>Workflow navigation is unavailable.</p>
-          <button type="button" className="secondary" onClick={() => void workflowsQuery.refetch()}>
-            Retry
-          </button>
-        </div>
-      ) : null}
-      {!workflowsQuery.isLoading && !workflowsQuery.isError && pinnedCurrentRow ? (
-        <WorkflowSidebarList
-          rows={[pinnedCurrentRow]}
-          activeWorkflowId={workflowId}
-          search={search}
-          ariaLabel="Current workflow"
-          pinned
-        />
-      ) : null}
-      {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
-        <p className="workflow-workspace-sidebar-state">No workflows match the current list filters.</p>
-      ) : null}
-      <WorkflowSidebarList rows={filteredRows} activeWorkflowId={workflowId} search={search} />
+      <WorkflowSidebarTableFrame>
+        <WorkflowSidebarHeader filterText={filterText} setFilterText={setFilterText} />
+        {workflowsQuery.isLoading ? (
+          <WorkflowSidebarState>Loading workflows...</WorkflowSidebarState>
+        ) : null}
+        {workflowsQuery.isError ? (
+          <WorkflowSidebarState role="status">
+            <p>Workflow navigation is unavailable.</p>
+            <button type="button" className="secondary" onClick={() => void workflowsQuery.refetch()}>
+              Retry
+            </button>
+          </WorkflowSidebarState>
+        ) : null}
+        {!workflowsQuery.isLoading && !workflowsQuery.isError && pinnedCurrentRow ? (
+          <WorkflowSidebarList
+            rows={[pinnedCurrentRow]}
+            activeWorkflowId={workflowId}
+            search={search}
+            ariaLabel="Current workflow"
+            pinned
+          />
+        ) : null}
+        {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
+          <WorkflowSidebarState>No workflows match the current list filters.</WorkflowSidebarState>
+        ) : null}
+        <WorkflowSidebarList rows={filteredRows} activeWorkflowId={workflowId} search={search} />
+      </WorkflowSidebarTableFrame>
     </aside>
   );
 }
