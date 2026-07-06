@@ -427,7 +427,12 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     assert omnigent_env["OMNIGENT_AUTH_ENABLED"] == "${OMNIGENT_AUTH_ENABLED:-1}"
     assert omnigent_env["OMNIGENT_AUTH_PROVIDER"] == "${OMNIGENT_AUTH_PROVIDER:-}"
     assert omnigent_env["OMNIGENT_ACCOUNTS_BASE_URL"] == (
-        "${OMNIGENT_ACCOUNTS_BASE_URL:-http://localhost:8000}"
+        "${OMNIGENT_ACCOUNTS_BASE_URL:-http://localhost:${OMNIGENT_PORT:-8000}}"
+    )
+    assert omnigent_env["OMNIGENT_WS_ALLOWED_ORIGINS"] == (
+        "${OMNIGENT_WS_ALLOWED_ORIGINS:-${OMNIGENT_ACCOUNTS_BASE_URL:-http://"
+        "localhost:${OMNIGENT_PORT:-8000}},http://localhost:${OMNIGENT_PORT:-8000},"
+        "http://127.0.0.1:${OMNIGENT_PORT:-8000}}"
     )
     assert omnigent_env["OMNIGENT_ACCOUNTS_AUTO_OPEN"] == (
         "${OMNIGENT_ACCOUNTS_AUTO_OPEN:-0}"
@@ -455,6 +460,7 @@ def test_omnigent_env_template_and_example_config_for_mm_970():
         "OMNIGENT_AUTH_PROVIDER",
         "OMNIGENT_ACCOUNTS_COOKIE_SECRET",
         "OMNIGENT_ACCOUNTS_BASE_URL",
+        "OMNIGENT_WS_ALLOWED_ORIGINS",
         "OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD",
         "OMNIGENT_ACCOUNTS_SESSION_TTL_HOURS",
         "OMNIGENT_ACCOUNTS_INVITE_TTL_HOURS",
