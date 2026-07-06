@@ -498,11 +498,13 @@ function WorkflowSidebarControls({
   closeButtonRef,
   onClose,
   search,
+  onNavigate,
   focusCloseOnMount = false,
 }: {
   closeButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
   search: URLSearchParams;
+  onNavigate?: ((href: string) => boolean) | undefined;
   focusCloseOnMount?: boolean | undefined;
 }) {
   useEffect(() => {
@@ -510,6 +512,8 @@ function WorkflowSidebarControls({
       closeButtonRef.current?.focus();
     }
   }, [closeButtonRef, focusCloseOnMount]);
+
+  const listHref = workflowListHrefFromContext(search, { markDetailReturn: true });
 
   return (
     <div className="workflow-workspace-sidebar-controls">
@@ -524,9 +528,15 @@ function WorkflowSidebarControls({
         {SIDEBAR_TOGGLE_ICON}
       </button>
       <a
-        href={workflowListHrefFromContext(search, { markDetailReturn: true })}
+        href={listHref}
         className="secondary workflow-workspace-expand-list workflow-workspace-sidebar-control"
-        onClick={markWorkflowListReturnFocusIntent}
+        onClick={(event) => {
+          if (onNavigate?.(listHref) === false) {
+            event.preventDefault();
+            return;
+          }
+          markWorkflowListReturnFocusIntent();
+        }}
         aria-label="Expand to full list"
         title="Expand to full list"
       >
@@ -583,6 +593,7 @@ function WorkflowSidebar({
   closeButtonRef,
   onClose,
   onNavigate,
+  hidden = false,
   focusCloseOnMount = false,
 }: {
   workflowId: string;
@@ -593,14 +604,16 @@ function WorkflowSidebar({
   closeButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
   onNavigate?: ((href: string) => boolean) | undefined;
+  hidden?: boolean | undefined;
   focusCloseOnMount?: boolean | undefined;
 }) {
   return (
-    <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
+    <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation" hidden={hidden}>
       <WorkflowSidebarControls
         closeButtonRef={closeButtonRef}
         onClose={onClose}
         search={search}
+        onNavigate={onNavigate}
         focusCloseOnMount={focusCloseOnMount}
       />
       {workflowsQuery.isLoading ? (
@@ -646,6 +659,7 @@ export function WorkflowWorkspaceSidebarLayout({
   primaryAriaLabel,
   onSidebarClose,
   onSidebarNavigate,
+  sidebarHidden,
   focusCloseOnMount,
 }: {
   payload: BootPayload;
@@ -656,6 +670,7 @@ export function WorkflowWorkspaceSidebarLayout({
   primaryAriaLabel: string;
   onSidebarClose: () => void;
   onSidebarNavigate?: ((href: string) => boolean) | undefined;
+  sidebarHidden?: boolean | undefined;
   focusCloseOnMount?: boolean | undefined;
 }) {
   const cfg = readDashboardConfig(payload);
@@ -700,6 +715,7 @@ export function WorkflowWorkspaceSidebarLayout({
         closeButtonRef={closeButtonRef}
         onClose={onSidebarClose}
         onNavigate={onSidebarNavigate}
+        hidden={sidebarHidden}
         focusCloseOnMount={focusCloseOnMount}
       />
       <main className="workflow-workspace-detail" aria-label={primaryAriaLabel}>

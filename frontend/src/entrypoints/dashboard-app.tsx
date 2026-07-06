@@ -298,11 +298,15 @@ function WorkflowListDisplayModeControl() {
   }
 
   const selectMode = (nextMode: WorkflowListDisplayMode) => {
+    const surface = workflowListDisplaySurface(location.pathname);
     if (
       nextMode === 'table' &&
-      workflowListDisplaySurface(location.pathname) === 'create' &&
+      surface === 'create' &&
       !requestWorkflowStartRouteChange('/workflows')
     ) {
+      return;
+    }
+    if (surface === 'table' && nextMode !== 'table') {
       return;
     }
     updateDashboardPreferences({ workflowListDisplayMode: nextMode });
@@ -587,7 +591,10 @@ function RoutedDashboardPage({
     );
   }
 
-  if (route.page === 'workflow-start' && isUiInfoPending) {
+  if (
+    isUiInfoPending &&
+    (route.page === 'workflow-start' || route.currentPath === '/workflows/new')
+  ) {
     return (
       <AppShell dataWidePanel={route.dataWidePanel} uiInfo={uiInfo}>
         <LoadingPage />

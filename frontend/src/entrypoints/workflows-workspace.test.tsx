@@ -24,22 +24,26 @@ vi.mock('./workflow-detail', () => ({
   WorkflowWorkspaceSidebarLayout: ({
     children,
     onSidebarNavigate,
+    sidebarHidden,
   }: {
     children: ReactNode;
     onSidebarNavigate?: ((href: string) => boolean) | undefined;
+    sidebarHidden?: boolean | undefined;
   }) => (
-    <div data-testid="workflow-sidebar-layout">
+    <div data-testid="workflow-sidebar-layout" data-sidebar-hidden={sidebarHidden ? 'true' : 'false'}>
       {sidebarListFailure.enabled ? <p role="alert">Sidebar list failed</p> : null}
-      <a
-        href="/workflows/sidebar-target?source=temporal"
-        onClick={(event) => {
-          if (onSidebarNavigate?.('/workflows/sidebar-target?source=temporal') === false) {
-            event.preventDefault();
-          }
-        }}
-      >
-        Sidebar target workflow
-      </a>
+      {!sidebarHidden ? (
+        <a
+          href="/workflows/sidebar-target?source=temporal"
+          onClick={(event) => {
+            if (onSidebarNavigate?.('/workflows/sidebar-target?source=temporal') === false) {
+              event.preventDefault();
+            }
+          }}
+        >
+          Sidebar target workflow
+        </a>
+      ) : null}
       {children}
     </div>
   ),
@@ -149,7 +153,8 @@ describe('WorkflowsWorkspacePage', () => {
     renderWorkspace({ page: 'dashboard', apiBase: '/api' });
 
     expect(screen.getByTestId('workflow-start-page')).toBeTruthy();
-    expect(screen.queryByTestId('workflow-sidebar-layout')).toBeNull();
+    expect(screen.getByTestId('workflow-sidebar-layout').getAttribute('data-sidebar-hidden')).toBe('true');
+    expect(screen.queryByRole('link', { name: 'Sidebar target workflow' })).toBeNull();
   });
 
   it('renders sidebar create with workspace-owned navigation beside create', () => {

@@ -111,7 +111,7 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   }
 
   if (createRoute) {
-    if (!isDesktop || !workspaceShellEnabled || !listEnabled || displayMode === 'hidden') {
+    if (!isDesktop || !workspaceShellEnabled || !listEnabled) {
       return (
         <section
           className="workflows-workspace-page workflows-workspace-page--create"
@@ -125,7 +125,7 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
 
     return (
       <section
-        className="workflows-workspace-page workflows-workspace-page--create workflows-workspace-page--selected"
+        className={`workflows-workspace-page workflows-workspace-page--create workflows-workspace-page--selected${displayMode === 'hidden' ? ' workflows-workspace-page--hidden-list' : ''}`}
         aria-label="Workflows workspace"
         data-jira-issue="MM-1115"
       >
@@ -134,6 +134,7 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
           search={search}
           activeWorkflowId=""
           primaryAriaLabel="Create workflow"
+          sidebarHidden={displayMode === 'hidden'}
           onSidebarClose={() => {
             updateDashboardPreferences({
               workflowWorkspaceSidebarCollapsed: true,
