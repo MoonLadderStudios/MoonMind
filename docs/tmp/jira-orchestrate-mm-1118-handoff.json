@@ -1,0 +1,105 @@
+{
+  "handoffType": "jira-orchestrate-intake",
+  "createdAt": "2026-07-06T00:00:00Z",
+  "jiraIssueKey": "MM-1118",
+  "classification": {
+    "inputType": "single-story feature request",
+    "reason": "The trusted Jira preset brief identifies one Jira Story for adding declarative workflow-list display surface contracts and regression coverage for the Workflow List Display Modes contract."
+  },
+  "intent": "runtime implementation workflow",
+  "sourceStory": {
+    "summary": "Add declarative opt-in surface contracts and display-mode regression coverage",
+    "sourceIssueKey": "MM-1111",
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "sourceSections": [
+      "12. Accessibility requirements",
+      "14. Future extension model",
+      "15. Testing contract"
+    ],
+    "claimIds": [
+      "CLAIM-docs-ui-workflowlistdisplaymodes-012",
+      "CLAIM-docs-ui-workflowlistdisplaymodes-014",
+      "CLAIM-docs-ui-workflowlistdisplaymodes-015"
+    ],
+    "coverageIds": [
+      "DESIGN-REQ-012",
+      "DESIGN-REQ-014",
+      "DESIGN-REQ-015"
+    ]
+  },
+  "canonicalInput": {
+    "trustedSource": "moonmind.jira.get_issue",
+    "jiraPresetBrief": "MM-1118: Add declarative opt-in surface contracts and display-mode regression coverage",
+    "sourceDesignClassification": "canonical declarative document",
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "traceability": {
+      "sourceIssueKey": "MM-1111",
+      "implementationIssueKey": "MM-1118"
+    },
+    "acceptanceCriteria": [
+      "Add a surface contract declaring whether each future page supports hidden, sidebar, and table modes before the masthead control appears there.",
+      "Ensure unsupported modes are not enabled and pages outside Workflows/Create do not receive accidental workflow sidebars.",
+      "Keep future non-workflow lists from reusing workflow entity, route, or selection semantics implicitly.",
+      "Add tests covering the 22 listed behaviors from masthead rendering through authorization boundaries.",
+      "Keep the Workflows table as the canonical table target for workflow entities."
+    ],
+    "requirements": [
+      "Keep future extension as a declaration, not implicit route sniffing.",
+      "Preserve accessibility test coverage for keyboard operation, focus, active row state, hidden mobile controls, and draft warnings.",
+      "Include authorization boundary tests for table rows, sidebar rows, first-row fallback, remembered selections, and pinned current rows."
+    ]
+  },
+  "artifactResumeInspection": {
+    "status": "no_existing_feature_artifacts_found",
+    "checkedLocations": [
+      "artifacts/",
+      "docs/tmp/",
+      "var/artifacts/",
+      "repository root MoonSpec artifacts",
+      "/work/agent_jobs/mm:d0fc6430-01ff-4d4e-8de1-9b79d55e5487/artifacts"
+    ],
+    "checkedPatterns": [
+      "MM-1118",
+      "MM-1111",
+      "1118",
+      "1111",
+      "WorkflowListDisplayModes",
+      "workflow list display",
+      "display mode",
+      "display-mode",
+      "display_modes",
+      "workflowlist"
+    ],
+    "evidence": [
+      "No spec.md, plan.md, tasks.md, research.md, quickstart.md, or data-model.md files were found in this checkout outside .specify templates.",
+      "No specs/ feature directory exists in this checkout.",
+      "No matching durable artifact files were present under artifacts/, var/artifacts/, or the job artifact directory.",
+      "The only repository content match for the MM-1118 source scope is docs/UI/WorkflowListDisplayModes.md, which contains the referenced sections 12, 14, and 15.",
+      "artifacts/jira-orchestrate-brief.json was referenced by the trusted step context but is not present in the working tree; the inline trusted Jira brief remains the canonical input for this intake."
+    ],
+    "resumeFrom": "Specify",
+    "nextStageReason": "Specify is the first incomplete gate because no active feature directory or valid MoonSpec stage artifacts exist to preserve or resume after."
+  },
+  "stageGateStatus": {
+    "Specify": "INCOMPLETE",
+    "Plan": "NOT_STARTED",
+    "Tasks": "NOT_STARTED",
+    "Align": "NOT_STARTED",
+    "Implement": "NOT_STARTED",
+    "Verify": "NOT_STARTED",
+    "DocReconcile": "NOT_STARTED"
+  },
+  "stageExecution": {
+    "performedInThisStep": false,
+    "reason": "This managed step is limited to Jira Orchestrate intake classification and artifact resume inspection. It must not run specification, planning, task generation, implementation, verification, publishing, pull request creation, or Jira transitions."
+  },
+  "downstreamInstructions": {
+    "useBriefAsCanonicalInput": true,
+    "treatImplementationDocumentAsRuntimeSourceRequirements": true,
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "sourceIssueKey": "MM-1111",
+    "resumeFromFirstIncompleteStage": "Specify",
+    "runAsRuntimeImplementationWorkflow": true,
+    "doNotRegenerateValidLaterStageArtifacts": true
+  }
+}

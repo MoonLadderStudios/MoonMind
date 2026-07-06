@@ -49,6 +49,7 @@ import {
   type WorkflowListDisplayMode,
 } from '../lib/workflowListDisplayMode';
 import {
+  DASHBOARD_PREFERENCES_CHANGED_EVENT,
   readDashboardPreferences,
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
@@ -659,6 +660,20 @@ function RoutedDashboardPage({
       setLastSelectedWorkflowId(routeWorkflowId);
     }
   }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    const syncPreferences = () => {
+      const prefs = readDashboardPreferences();
+      setRequestedMode(prefs.workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar');
+      setLastSelectedWorkflowId(prefs.lastSelectedWorkflowId.trim() || null);
+    };
+    window.addEventListener(DASHBOARD_PREFERENCES_CHANGED_EVENT, syncPreferences);
+    window.addEventListener('storage', syncPreferences);
+    return () => {
+      window.removeEventListener(DASHBOARD_PREFERENCES_CHANGED_EVENT, syncPreferences);
+      window.removeEventListener('storage', syncPreferences);
+    };
+  }, []);
 
   useEffect(() => {
     const normalizedPath = location.pathname.replace(/\/$/, '');

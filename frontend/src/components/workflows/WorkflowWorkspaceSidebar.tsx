@@ -26,6 +26,8 @@ import {
   WorkflowColumnHeader,
 } from '../WorkflowColumnHeader';
 import { workflowDetailHref } from '../../lib/workflowListContext';
+import { requestWorkflowStartRouteChange } from '../../lib/workflowStartRouteGuard';
+import { updateDashboardPreferences } from '../../utils/dashboardPreferences';
 import {
   WorkflowWorkspaceListResponseSchema,
   type WorkflowWorkspaceRow,
@@ -196,9 +198,19 @@ function WorkflowSidebarRow({
   const inRouterContext = useInRouterContext();
   const className = `workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`;
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
-    if (inRouterContext) {
+    if (
+      !event.defaultPrevented
+      && event.button === 0
+      && !event.metaKey
+      && !event.ctrlKey
+      && !event.shiftKey
+      && !event.altKey
+      && !requestWorkflowStartRouteChange(href)
+    ) {
       event.preventDefault();
+      return;
     }
+    updateDashboardPreferences({ lastSelectedWorkflowId: workflowId });
   };
   const content = (
     <>
@@ -222,6 +234,7 @@ function WorkflowSidebarRow({
             aria-current={active ? 'page' : undefined}
             data-active={active ? 'true' : 'false'}
             data-pinned={pinned ? 'true' : 'false'}
+            onClick={handleClick}
           >
             {content}
           </Link>

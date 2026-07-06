@@ -18,6 +18,7 @@
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '../components/PageSizeSelector';
 
 export const DASHBOARD_PREFERENCES_STORAGE_KEY = 'moonmind.dashboard.preferences';
+export const DASHBOARD_PREFERENCES_CHANGED_EVENT = 'moonmind:dashboard-preferences-changed';
 
 // Bump only when the stored shape changes in a way the validator cannot
 // reconcile from defaults. A mismatched or missing version is treated as an
@@ -243,6 +244,7 @@ export function writeDashboardPreferences(
       DASHBOARD_PREFERENCES_STORAGE_KEY,
       JSON.stringify(envelope),
     );
+    window.dispatchEvent(new Event(DASHBOARD_PREFERENCES_CHANGED_EVENT));
   } catch {
     // Keep dashboard preferences best-effort when storage is unavailable.
   }
@@ -270,5 +272,6 @@ export function resetDashboardPreferences(): DashboardPreferences {
   } catch {
     // Best-effort reset; defaults are returned regardless.
   }
+  window.dispatchEvent(new Event(DASHBOARD_PREFERENCES_CHANGED_EVENT));
   return { ...DEFAULT_DASHBOARD_PREFERENCES };
 }
