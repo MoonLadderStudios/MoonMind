@@ -6471,6 +6471,24 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 }
 
+@media (max-width: 924px) and (min-width: 641px) {
+  .workflow-start-workspace .queue-floating-bar-row {
+    grid-template-columns:
+      minmax(0, 1fr)
+      minmax(9.5rem, 0.8fr)
+      auto;
+    justify-content: stretch;
+  }
+
+  .workflow-start-workspace .queue-floating-bar-row .queue-inline-selector--repo {
+    grid-column: 1 / -1;
+  }
+
+  .workflow-start-workspace .queue-floating-bar-row .queue-submit-primary {
+    justify-self: end;
+  }
+}
+
 .queue-step-header {
   display: flex;
   justify-content: space-between;
@@ -7338,6 +7356,20 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   max-width: none;
 }
 
+.workflow-start-workspace {
+  --workflow-start-primary-offset: calc(
+    (var(--workflow-list-column-workflow-width) + 1.25rem) / 2
+  );
+  --workflow-start-primary-available-width: calc(
+    100% - var(--workflow-list-column-workflow-width) - 1.25rem - 2rem
+  );
+}
+
+.workflow-start-workspace .queue-floating-bar {
+  left: calc(50% + var(--workflow-start-primary-offset));
+  width: min(var(--workflow-start-primary-available-width), 70rem);
+}
+
 .workflow-workspace-sidebar {
   position: sticky;
   top: 0;
@@ -7567,6 +7599,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   grid-column: 1 / -1;
 }
 
+.workflow-start-workspace[data-sidebar-collapsed="true"] {
+  --workflow-start-primary-offset: 0rem;
+  --workflow-start-primary-available-width: calc(100% - 2rem);
+}
+
 @media (min-width: 768px) {
   .workflow-workspace-shell[data-sidebar-collapsed="true"] {
     grid-template-columns: minmax(0, 1fr);
@@ -7597,6 +7634,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   .workflow-workspace-shell {
     display: block;
     max-width: none;
+  }
+
+  .workflow-start-workspace {
+    --workflow-start-primary-offset: 0rem;
+    --workflow-start-primary-available-width: calc(100% - 2rem);
   }
 
   .workflow-workspace-detail {
