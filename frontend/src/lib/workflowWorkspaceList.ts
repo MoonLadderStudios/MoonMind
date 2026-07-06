@@ -25,18 +25,18 @@ export const WorkflowWorkspaceListResponseSchema = z.object({
 export type WorkflowWorkspaceRow = z.infer<typeof WorkflowWorkspaceRowSchema>;
 
 type WorkflowWorkspaceDetailSource = {
-  taskId?: string;
-  workflowId?: string;
-  title?: string;
-  status?: string;
-  state?: string;
-  rawState?: string;
-  createdAt?: string | null;
-  updatedAt?: string | null;
-  scheduledFor?: string | null;
-  closedAt?: string | null;
-  repository?: string | null;
-  targetRuntime?: string | null;
+  taskId?: string | undefined;
+  workflowId?: string | undefined;
+  title?: string | undefined;
+  status?: string | undefined;
+  state?: string | undefined;
+  rawState?: string | undefined;
+  createdAt?: string | null | undefined;
+  updatedAt?: string | null | undefined;
+  scheduledFor?: string | null | undefined;
+  closedAt?: string | null | undefined;
+  repository?: string | null | undefined;
+  targetRuntime?: string | null | undefined;
 };
 
 export function workflowWorkspaceRowId(row: WorkflowWorkspaceRow): string {
