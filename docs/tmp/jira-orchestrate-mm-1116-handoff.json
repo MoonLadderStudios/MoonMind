@@ -1,0 +1,109 @@
+{
+  "handoffType": "jira-orchestrate-intake",
+  "updatedAt": "2026-07-06T00:00:00Z",
+  "jiraIssueKey": "MM-1116",
+  "sourceIssueKey": "MM-1111",
+  "classification": {
+    "inputType": "single-story feature request",
+    "reason": "The trusted Jira preset brief identifies one Jira Story for reworking the workflow sidebar visual and semantic structure into the first-column slice of the Workflows table."
+  },
+  "intent": "runtime implementation workflow",
+  "sourceStory": {
+    "summary": "Rework the sidebar into the Workflows table first-column slice",
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "sourceSections": [
+      "8. Sidebar-as-table-slice visual contract",
+      "9. Motion and continuity"
+    ],
+    "claimIds": [
+      "CLAIM-docs-ui-workflowlistdisplaymodes-008",
+      "CLAIM-docs-ui-workflowlistdisplaymodes-009"
+    ],
+    "coverageIds": [
+      "DESIGN-REQ-008",
+      "DESIGN-REQ-009"
+    ]
+  },
+  "canonicalInput": {
+    "trustedSource": "moonmind.jira.get_issue",
+    "jiraPresetBrief": "MM-1116: Rework the sidebar into the Workflows table first-column slice\n\nSource Reference\nSource Document: docs/UI/WorkflowListDisplayModes.md\nSource Title: Workflow List Display Modes\nSource Sections:\n- 8. Sidebar-as-table-slice visual contract\n- 9. Motion and continuity\nCanonical Claim IDs:\n- CLAIM-docs-ui-workflowlistdisplaymodes-008\n- CLAIM-docs-ui-workflowlistdisplaymodes-009\nCoverage IDs:\n- DESIGN-REQ-008\n- DESIGN-REQ-009\nRemaining Work\nKeep the existing authorized sidebar navigation behavior where useful, but replace the visual/semantic structure with a table-slice variant sharing row/frame primitives and metrics with the full Workflows table.\nAlready Implemented Evidence\n- DESIGN-REQ-008 - partially_met - frontend/src/entrypoints/workflow-detail.tsx renders a sidebar list with active-row aria-current and status/title rows, and frontend/src/styles/dashboard.css fixes compact sidebar row sizing and separators.\n- DESIGN-REQ-008 - unmet - frontend/src/entrypoints/workflow-detail.tsx renders the sidebar as ul/li navigation without a Workflow header row or shared table/sidebar row primitive; frontend/src/styles/dashboard.css uses sidebar-specific 3.75rem row sizing rather than the requested shared workflow-list metric tokens.\n- DESIGN-REQ-009 - unmet - No implementation evidence was found for sidebar/table transition geometry, divider alignment, shared scroll/focus continuity, or reduced-motion behavior for the three-mode table-slice contract.\nOriginal Story Scope\nAs a user moving between sidebar and full table, I need the sidebar to look and behave like the first column of the Workflows table so the mode change feels continuous.\n\nAcceptance criteria\n- The sidebar has a header row labeled Workflow before any selectable workflow rows.\n- Sidebar header typography, casing, background, border, padding, and non-hover behavior match the full table first-column header.\n- Sidebar and table share row metric tokens for header height, body row height, workflow column width, divider width, and divider color.\n- Sidebar rows have the same block size as full table rows and clamp titles or compact supplements without increasing row height.\n- Switching between sidebar and table preserves row geometry, aligns the divider, avoids large page-slide animations, and respects reduced-motion settings.\nRequirements\n- Prefer shared row/frame primitives capable of rendering table and sidebar variants.\n- Preserve table-equivalent semantics if div/grid markup is required.\n- Do not present the sidebar as cards, a menu, or an unrelated navigation rail.\nAcceptance Criteria\n- Render a sidebar header row labeled Workflow before selectable workflow rows.\n- Match sidebar header typography, casing, background, border, padding, and non-hover behavior to the full table first-column header.\n- Share row metric tokens for header height, body row height, workflow column width, divider width, and divider color between sidebar and table.\n- Keep sidebar rows the same block size as full table rows and clamp titles or compact supplements without increasing row height.\n- Preserve row geometry, align the divider, avoid large page-slide animations, and respect reduced-motion settings when switching between sidebar and table.\nRequirements\n- Prefer shared row/frame primitives capable of rendering table and sidebar variants.\n- Preserve table-equivalent semantics if div/grid markup is required.\n- Do not present the sidebar as cards, a menu, or an unrelated navigation rail.",
+    "sourceDesignClassification": "canonical declarative document used as runtime source requirements",
+    "sourceIssueTraceability": {
+      "sourceIssueKey": "MM-1111",
+      "preserveTraceability": true
+    },
+    "acceptanceCriteria": [
+      "Render a sidebar header row labeled Workflow before selectable workflow rows.",
+      "Match sidebar header typography, casing, background, border, padding, and non-hover behavior to the full table first-column header.",
+      "Share row metric tokens for header height, body row height, workflow column width, divider width, and divider color between sidebar and table.",
+      "Keep sidebar rows the same block size as full table rows and clamp titles or compact supplements without increasing row height.",
+      "Preserve row geometry, align the divider, avoid large page-slide animations, and respect reduced-motion settings when switching between sidebar and table."
+    ],
+    "requirements": [
+      "Prefer shared row/frame primitives capable of rendering table and sidebar variants.",
+      "Preserve table-equivalent semantics if div/grid markup is required.",
+      "Do not present the sidebar as cards, a menu, or an unrelated navigation rail.",
+      "Keep existing authorized sidebar navigation behavior where useful while replacing the visual and semantic structure with a table-slice variant."
+    ]
+  },
+  "artifactResumeInspection": {
+    "status": "no_existing_moonspec_artifacts_found",
+    "checkedLocations": [
+      "artifacts/",
+      "artifacts-root-owned-context/",
+      "artifacts-root-owned-mm1079-context/",
+      "artifacts-root-owned-original/",
+      "artifacts-root-owned-preserved-mm1089-assessment/",
+      "artifacts-root-owned-readonly/",
+      "docs/tmp/",
+      "repository root MoonSpec artifacts",
+      ".specify/",
+      "contracts/"
+    ],
+    "checkedPatterns": [
+      "MM-1116",
+      "1116",
+      "MM-1111",
+      "1111",
+      "WorkflowListDisplayModes",
+      "Sidebar-as-table-slice",
+      "Motion and continuity",
+      "DESIGN-REQ-008",
+      "DESIGN-REQ-009"
+    ],
+    "validArtifactsToPreserve": [],
+    "evidence": [
+      "No issue-specific files matching MM-1116 or MM-1111 were found in the repository workspace.",
+      "No root-level spec.md, plan.md, tasks.md, research.md, data-model.md, or quickstart.md artifacts were found.",
+      "The run-local artifacts directory contains only retrieved context artifacts.",
+      "Existing docs/tmp Jira Orchestrate handoffs cover other issues, not MM-1116.",
+      "docs/UI/WorkflowListDisplayModes.md contains the referenced source sections 8 and 9."
+    ],
+    "resumeFrom": "Specify",
+    "nextStageReason": "Specify is the first incomplete MoonSpec stage because no valid MM-1116 MoonSpec artifacts were found to preserve or resume after."
+  },
+  "stageGateStatus": {
+    "Intake": "COMPLETE",
+    "Specify": "INCOMPLETE",
+    "Plan": "NOT_STARTED",
+    "Tasks": "NOT_STARTED",
+    "Align": "NOT_STARTED",
+    "Implement": "NOT_STARTED",
+    "Verify": "NOT_STARTED",
+    "DocReconcile": "NOT_STARTED"
+  },
+  "stageExecution": {
+    "performedInThisStep": false,
+    "reason": "This managed step is limited to Jira Orchestrate intake classification and artifact resume inspection. It must not run specification, planning, task generation, implementation, verification, publishing, pull request creation, or Jira transitions."
+  },
+  "downstreamInstructions": {
+    "useBriefAsCanonicalInput": true,
+    "treatImplementationDocumentAsRuntimeSourceRequirements": true,
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "resumeFromFirstIncompleteStage": "Specify",
+    "runAsRuntimeImplementationWorkflow": true,
+    "doNotRegenerateValidLaterStageArtifacts": true,
+    "preserveSourceIssueTraceability": "MM-1111",
+    "preserveExistingArtifacts": []
+  }
+}
