@@ -1040,20 +1040,32 @@ describe('Dashboard shared entry', () => {
     expect(sidebarBlock).toContain('border-right: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color)');
   });
 
-  it('MM-1116 matches sidebar and full-table Workflow header styling through shared selectors', async () => {
-    const sharedHeaderBlock = cssRuleBlock(
-      dashboardCss,
-      '.queue-table-wrapper th,\n.workflow-workspace-sidebar-header-cell',
-    );
-    expect(sharedHeaderBlock).toContain('height: var(--workflow-list-header-row-height)');
-    expect(sharedHeaderBlock).toContain('background: rgb(var(--mm-panel) / 0.98)');
-    expect(sharedHeaderBlock).toContain('box-shadow: 0 1px 0 var(--workflow-list-divider-color)');
-    expect(sharedHeaderBlock).toContain('font-weight: 600');
-    expect(sharedHeaderBlock).toContain('color: rgb(var(--mm-ink) / 0.85)');
+  it('MM-1123 gives sidebar header chrome a single owner while keeping the inner cell layout-only', async () => {
+    const tableHeaderBlock = cssRuleBlocks(dashboardCss, '.queue-table-wrapper th').join('\n');
+    expect(tableHeaderBlock).toContain('height: var(--workflow-list-header-row-height)');
+    expect(tableHeaderBlock).toContain('padding: 0.5rem 0.75rem');
+    expect(tableHeaderBlock).toContain('background: rgb(var(--mm-panel) / 0.98)');
+    expect(tableHeaderBlock).toContain('box-shadow: 0 1px 0 var(--workflow-list-divider-color)');
+    expect(tableHeaderBlock).toContain('font-weight: 600');
+    expect(tableHeaderBlock).toContain('color: rgb(var(--mm-ink) / 0.85)');
 
-    const sidebarHeaderBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-header-cell');
-    expect(sidebarHeaderBlock).toContain('padding: 0.5rem 0.75rem');
-    expect(sidebarHeaderBlock).toContain('text-align: left');
+    const sidebarHeaderChromeBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-header');
+    expect(sidebarHeaderChromeBlock).toContain('background: rgb(var(--mm-panel) / 0.98)');
+    expect(sidebarHeaderChromeBlock).toContain('box-shadow: 0 1px 0 var(--workflow-list-divider-color)');
+    expect(sidebarHeaderChromeBlock).toContain('padding: 0.5rem 0.55rem');
+
+    const sidebarHeaderChainBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-workspace-sidebar-header-row,\n.workflow-workspace-sidebar-header-cell,\n.workflow-workspace-sidebar-header-cell .workflow-list-column-header',
+    );
+    expect(sidebarHeaderChainBlock).toContain('width: 100%');
+    expect(sidebarHeaderChainBlock).toContain('min-width: 0');
+
+    const sidebarHeaderBlock = cssRuleBlocks(dashboardCss, '.workflow-workspace-sidebar-header-cell').join('\n');
+    expect(sidebarHeaderBlock).toContain('height: auto');
+    expect(sidebarHeaderBlock).toContain('padding: 0');
+    expect(sidebarHeaderBlock).toContain('background: transparent');
+    expect(sidebarHeaderBlock).toContain('box-shadow: none');
   });
 
   it('keeps workflow titles clamped to two consistent lines in the list and sidebar', async () => {
@@ -1112,7 +1124,7 @@ describe('Dashboard shared entry', () => {
 
   it('MM-1116 keeps sidebar/table mode changes aligned and reduced-motion safe', async () => {
     const tableWorkflowCellBlock = cssRuleBlock(dashboardCss, '.queue-table-cell-workflow');
-    expect(tableWorkflowCellBlock).toContain('border-right: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color)');
+    expect(tableWorkflowCellBlock).not.toContain('border-right');
 
     const workflowWrapperBlock = cssRuleBlock(dashboardCss, '.workflow-list-data-slab .queue-table-wrapper');
     expect(workflowWrapperBlock).toContain('transition: opacity 120ms ease');
