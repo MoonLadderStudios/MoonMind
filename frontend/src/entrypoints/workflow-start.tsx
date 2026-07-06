@@ -12744,7 +12744,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 value={publishMode}
                 onChange={(event) => setPublishMode(event.target.value)}
               >
-                <option value="auto" disabled={!autoPublishAvailable}>
+                <option
+                  value="auto"
+                  disabled={!autoPublishAvailable}
+                  title="Auto — selected skill decides"
+                >
                   Auto
                 </option>
                 <option value="none">None</option>

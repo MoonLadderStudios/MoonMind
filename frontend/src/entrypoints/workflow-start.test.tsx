@@ -7873,6 +7873,7 @@ describe.skip("Task Create Entrypoint", () => {
         (option) =>
           option.value === "auto" &&
           option.text === "Auto" &&
+          option.getAttribute("title") === "Auto — selected skill decides" &&
           option.disabled,
       ),
     ).toBe(true);
