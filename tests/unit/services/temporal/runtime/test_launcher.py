@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -37,6 +38,72 @@ def _make_request(**overrides) -> AgentExecutionRequest:
     )
     defaults.update(overrides)
     return AgentExecutionRequest(**defaults)
+
+@pytest.mark.asyncio
+async def test_claude_workspace_trust_config_merges_existing_projects(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    config_dir = tmp_path / "home" / ".claude"
+    config_file = tmp_path / "home" / ".claude.json"
+    workspace = tmp_path / "workspaces" / "mm:trust-run" / "repo"
+    workspace.mkdir(parents=True)
+    existing_workspace = tmp_path / "workspaces" / "existing" / "repo"
+    existing_workspace.mkdir(parents=True)
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "theme": "dark",
+                "projects": {
+                    str(existing_workspace.resolve()): {"custom": "kept"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    await launcher._ensure_claude_workspace_trust_config(
+        config_dir=config_dir,
+        config_file=config_file,
+        workspace_path=str(workspace),
+        run_as_user=None,
+    )
+
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    assert config["theme"] == "dark"
+    assert config["projects"][str(existing_workspace.resolve())]["custom"] == "kept"
+    assert (
+        config["projects"][str(workspace.resolve())]["hasTrustDialogAccepted"]
+        is True
+    )
+
+@pytest.mark.asyncio
+async def test_run_checked_command_redacts_auth_paths(tmp_path, monkeypatch):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+
+    class _FakeProcess:
+        returncode = 1
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b"/home/app/.claude.json token=raw-secret failed"
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await launcher._run_checked_command("python3", "/home/app/.claude.json")
+
+    message = str(exc_info.value)
+    assert "/home/app/.claude.json" not in message
+    assert "[REDACTED_AUTH_PATH]" in message
+    assert "token=[REDACTED]" in message
 
 def test_build_command_default():
     store = ManagedRunStore("/tmp/test-store")
@@ -2335,13 +2402,14 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     assert "app:app" in chown_call
     assert str(run_root) in chown_call
 
-    # Verify config creation was attempted via runuser
+    # Verify config trust materialization was attempted via runuser
     assert len(config_creation_calls) == 1, (
         f"Expected 1 config creation call, got {len(config_creation_calls)}"
     )
     config_call_str = " ".join(str(arg) for arg in config_creation_calls[0])
     assert "python3" in config_call_str
-    assert "pathlib" in config_call_str
+    assert "hasTrustDialogAccepted" in config_call_str
+    assert str(workspace_root.resolve()) in config_creation_calls[0]
 
     # Verify runuser was used instead of direct subprocess exec
     # Filter to find the final launch runuser (not the config creation one)
