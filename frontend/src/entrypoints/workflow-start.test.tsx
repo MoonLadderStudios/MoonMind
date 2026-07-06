@@ -9543,6 +9543,18 @@ describe.skip("Task Create Entrypoint", () => {
     );
   });
 
+  it("centers the floating submit rail on the create primary column", async () => {
+    expect(dashboardCss).toMatch(
+      /\.workflow-start-workspace\s*\{[^}]*--workflow-start-primary-offset:\s*calc\(\s*\(var\(--workflow-list-column-workflow-width\)\s*\+\s*1\.25rem\)\s*\/\s*2\s*\);[^}]*--workflow-start-primary-available-width:\s*calc\(\s*100vw\s*-\s*var\(--workflow-list-column-workflow-width\)\s*-\s*1\.25rem\s*-\s*2rem\s*\);/s,
+    );
+    expect(dashboardCss).toMatch(
+      /\.workflow-start-workspace\s*\.queue-floating-bar\s*\{[^}]*left:\s*calc\(50%\s*\+\s*var\(--workflow-start-primary-offset\)\);[^}]*width:\s*min\(var\(--workflow-start-primary-available-width\),\s*70rem\);/s,
+    );
+    expect(dashboardCss).toMatch(
+      /\.workflow-start-workspace\[data-sidebar-collapsed="true"\]\s*\{[^}]*--workflow-start-primary-offset:\s*0rem;[^}]*--workflow-start-primary-available-width:\s*calc\(100vw\s*-\s*2rem\);/s,
+    );
+  });
+
   it("loads branches through MoonMind and submits one authored branch", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
