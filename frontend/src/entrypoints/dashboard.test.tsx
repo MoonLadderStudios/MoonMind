@@ -188,14 +188,20 @@ vi.mock('./workflow-list', () => ({
 
 vi.mock('./workflows-workspace', () => ({
   default: () => {
+    const isCreateRoute = window.location.pathname === '/workflows/new';
     const isDetailRoute =
-      window.location.pathname.startsWith('/workflows/') && window.location.pathname !== '/workflows/new';
+      window.location.pathname.startsWith('/workflows/') && !isCreateRoute;
     return (
       <div data-testid="workflows-workspace-route">
         <a href="/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95?source=temporal">
           Mock workflow title
         </a>
-        {isDetailRoute ? (
+        {isCreateRoute ? (
+          <>
+            <div>Workflow start route loaded</div>
+            <div>Workflow start default repository: MoonLadderStudios/MoonMind</div>
+          </>
+        ) : isDetailRoute ? (
           <div>Workflow detail route loaded: {window.location.pathname}</div>
         ) : (
           <div>Workflow list route loaded</div>
@@ -580,6 +586,30 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow detail route loaded: /workflows/second')).toBeTruthy();
     expect(screen.queryByText('Workflow detail route loaded: /workflows/first/debug')).toBeNull();
+  });
+
+  it('asks the Create route-change guard before Full screen table mode leaves Create', async () => {
+    window.history.replaceState({}, '', '/workflows/new');
+    const guardedTargets: string[] = [];
+    const blockNavigation = (event: Event) => {
+      const detail = event instanceof CustomEvent ? event.detail : undefined;
+      guardedTargets.push(String(detail?.href || ''));
+      event.preventDefault();
+    };
+    window.addEventListener('moonmind:workflow-start-route-change-request', blockNavigation);
+
+    try {
+      renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+      expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+      fireEvent.click(screen.getByRole('radio', { name: 'Full screen table' }));
+
+      expect(guardedTargets).toEqual(['/workflows']);
+      expect(window.location.pathname).toBe('/workflows/new');
+      expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('false');
+    } finally {
+      window.removeEventListener('moonmind:workflow-start-route-change-request', blockNavigation);
+    }
   });
 
   it('does not render operational metrics on the workflows home dashboard', async () => {
@@ -1540,11 +1570,12 @@ describe('Dashboard shared entry', () => {
     );
 
     expect(dashboardCss).toMatch(
-      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\);/s,
+      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*auto\s+auto\s+minmax\(0,\s*1fr\)\s+auto;/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
     );
+    expect(dashboardCss).toContain('.workflow-list-display-mode');
     expect(dashboardCss).toMatch(
       /\.masthead-nav\s*\{[^}]*align-self:\s*stretch;[^}]*justify-content:\s*center;[^}]*justify-self:\s*center;/s,
     );

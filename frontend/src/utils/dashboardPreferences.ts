@@ -27,6 +27,7 @@ export const DASHBOARD_PREFERENCES_VERSION = 1;
 export type WorkflowListDensity = 'comfortable' | 'compact';
 
 export type WorkflowDetailTab = 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
+export type WorkflowListDisplayMode = 'hidden' | 'sidebar' | 'table';
 
 // Columns the operator may hide on the workflow list. The workflow title column
 // is the primary anchor and is intentionally not toggleable, so it is excluded
@@ -70,6 +71,8 @@ export type DashboardPreferences = {
   debugFieldsVisible: boolean;
   /** Whether the desktop workflow detail sidebar is collapsed on reload. */
   workflowWorkspaceSidebarCollapsed: boolean;
+  /** Preferred workflow list display mode for participating workflow surfaces. */
+  workflowListDisplayMode: WorkflowListDisplayMode;
   /** Preferred default workflow detail tab. */
   preferredDetailTab: WorkflowDetailTab;
   /** Preferred runtime default for the create page, where safe. */
@@ -95,6 +98,7 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   createExpertMode: false,
   debugFieldsVisible: true,
   workflowWorkspaceSidebarCollapsed: false,
+  workflowListDisplayMode: 'sidebar',
   preferredDetailTab: 'overview',
   defaultRuntime: '',
   defaultProviderProfile: '',
@@ -154,6 +158,12 @@ function sanitizeDetailTab(value: unknown): WorkflowDetailTab {
     : DEFAULT_DASHBOARD_PREFERENCES.preferredDetailTab;
 }
 
+function sanitizeWorkflowListDisplayMode(value: unknown): WorkflowListDisplayMode {
+  return value === 'hidden' || value === 'sidebar' || value === 'table'
+    ? value
+    : DEFAULT_DASHBOARD_PREFERENCES.workflowListDisplayMode;
+}
+
 function sanitizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -188,6 +198,7 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
       value.workflowWorkspaceSidebarCollapsed,
       DEFAULT_DASHBOARD_PREFERENCES.workflowWorkspaceSidebarCollapsed,
     ),
+    workflowListDisplayMode: sanitizeWorkflowListDisplayMode(value.workflowListDisplayMode),
     preferredDetailTab: sanitizeDetailTab(value.preferredDetailTab),
     defaultRuntime: sanitizeString(value.defaultRuntime),
     defaultProviderProfile: sanitizeString(value.defaultProviderProfile),

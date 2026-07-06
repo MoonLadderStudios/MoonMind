@@ -20,7 +20,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ScrollText } from 'lucide-react';
+import { PanelLeft, Rows3, ScrollText, Square, type LucideIcon } from 'lucide-react';
 import {
   MoonIcon,
   type MoonIconHandle,
@@ -44,6 +44,12 @@ import {
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
 import { DashboardAlerts } from './dashboard-alerts';
+import {
+  readDashboardPreferences,
+  updateDashboardPreferences,
+  type WorkflowListDisplayMode,
+} from '../utils/dashboardPreferences';
+import { requestWorkflowStartRouteChange } from '../lib/workflowStartRouteGuard';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
 type PageImport = () => Promise<{ default: PageComponent }>;
@@ -264,6 +270,112 @@ function useDashboardUiInfo() {
   });
 }
 
+const WORKFLOW_LIST_DISPLAY_OPTIONS = [
+  { value: 'hidden', label: 'No list', Icon: Square },
+  { value: 'sidebar', label: 'Sidebar list', Icon: PanelLeft },
+  { value: 'table', label: 'Full screen table', Icon: Rows3 },
+] as const satisfies ReadonlyArray<{
+  value: WorkflowListDisplayMode;
+  label: string;
+  Icon: LucideIcon;
+}>;
+
+function workflowListDisplaySurface(pathname: string): 'table' | 'create' | 'detail' | null {
+  const path = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  if (path === '/workflows') return 'table';
+  if (path === '/workflows/new') return 'create';
+  if (path.startsWith('/workflows/')) return 'detail';
+  return null;
+}
+
+function effectiveWorkflowListDisplayMode(pathname: string): WorkflowListDisplayMode | null {
+  const surface = workflowListDisplaySurface(pathname);
+  if (!surface) return null;
+  if (surface === 'table') return 'table';
+  const persisted = readDashboardPreferences().workflowListDisplayMode;
+  if (persisted === 'hidden' || persisted === 'sidebar') {
+    return persisted;
+  }
+  return surface === 'create' ? 'hidden' : 'sidebar';
+}
+
+function WorkflowListDisplayModeControl() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [mode, setMode] = useState<WorkflowListDisplayMode | null>(() => (
+    effectiveWorkflowListDisplayMode(window.location.pathname)
+  ));
+
+  useEffect(() => {
+    setMode(effectiveWorkflowListDisplayMode(location.pathname));
+  }, [location.pathname]);
+
+  const surface = workflowListDisplaySurface(location.pathname);
+  if (!surface || mode === null) {
+    return null;
+  }
+
+  const selectMode = (nextMode: WorkflowListDisplayMode) => {
+    if (
+      nextMode === 'table' &&
+      workflowListDisplaySurface(location.pathname) === 'create' &&
+      !requestWorkflowStartRouteChange('/workflows')
+    ) {
+      return;
+    }
+    updateDashboardPreferences({ workflowListDisplayMode: nextMode });
+    setMode(nextMode);
+    window.dispatchEvent(new CustomEvent('moonmind:workflow-list-display-mode', { detail: nextMode }));
+    if (nextMode === 'table' && location.pathname !== '/workflows') {
+      navigate('/workflows');
+    }
+  };
+
+  const moveMode = (direction: 1 | -1) => {
+    const currentIndex = WORKFLOW_LIST_DISPLAY_OPTIONS.findIndex((option) => option.value === mode);
+    const nextIndex = (currentIndex + direction + WORKFLOW_LIST_DISPLAY_OPTIONS.length)
+      % WORKFLOW_LIST_DISPLAY_OPTIONS.length;
+    const nextOption = WORKFLOW_LIST_DISPLAY_OPTIONS[nextIndex];
+    if (nextOption) {
+      selectMode(nextOption.value);
+    }
+  };
+
+  return (
+    <div
+      className="workflow-list-display-mode"
+      role="radiogroup"
+      aria-label="Workflow list display"
+      onKeyDown={(event) => {
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+          event.preventDefault();
+          moveMode(1);
+        }
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          moveMode(-1);
+        }
+      }}
+    >
+      {WORKFLOW_LIST_DISPLAY_OPTIONS.map(({ value, label, Icon }) => (
+        <button
+          key={value}
+          type="button"
+          className="workflow-list-display-mode-option"
+          role="radio"
+          aria-checked={mode === value}
+          aria-label={label}
+          title={label}
+          data-selected={mode === value ? 'true' : 'false'}
+          onClick={() => selectMode(value)}
+        >
+          <Icon aria-hidden="true" focusable="false" />
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function DashboardLiveUpdateProvider({
   uiInfo,
   children,
@@ -362,6 +474,8 @@ function DashboardNavigation({ uiInfo }: { uiInfo: DashboardUiInfo | null }) {
           <span className="masthead-brand-mind">Mind</span>
         </h1>
       </Link>
+
+      <WorkflowListDisplayModeControl />
 
       <button
         className="nav-hamburger"

@@ -409,24 +409,32 @@ function WorkflowSidebarRow({
   activeWorkflowId,
   search,
   pinned = false,
+  onNavigate,
 }: {
   row: WorkflowWorkspaceRow;
   activeWorkflowId: string;
   search: URLSearchParams;
   pinned?: boolean;
+  onNavigate?: ((href: string) => boolean) | undefined;
 }) {
   const workflowId = workflowWorkspaceRowId(row);
   const active = workflowId === activeWorkflowId;
   const status = row.rawState || row.state || row.status || 'unknown';
   const title = row.title?.trim() || workflowId || 'Untitled workflow';
+  const href = workflowDetailHref(workflowId, search);
   return (
     <li>
       <a
         className={`workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`}
-        href={workflowDetailHref(workflowId, search)}
+        href={href}
         aria-current={active ? 'page' : undefined}
         data-active={active ? 'true' : 'false'}
         data-pinned={pinned ? 'true' : 'false'}
+        onClick={(event) => {
+          if (onNavigate?.(href) === false) {
+            event.preventDefault();
+          }
+        }}
       >
         <span className="workflow-workspace-sidebar-row-main">
           {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
@@ -467,11 +475,19 @@ function WorkflowSidebarControls({
   closeButtonRef,
   onClose,
   search,
+  focusCloseOnMount = false,
 }: {
   closeButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
   search: URLSearchParams;
+  focusCloseOnMount?: boolean | undefined;
 }) {
+  useEffect(() => {
+    if (focusCloseOnMount) {
+      closeButtonRef.current?.focus();
+    }
+  }, [closeButtonRef, focusCloseOnMount]);
+
   return (
     <div className="workflow-workspace-sidebar-controls">
       <button
@@ -503,12 +519,14 @@ function WorkflowSidebarList({
   search,
   ariaLabel = 'Workflow navigation list',
   pinned = false,
+  onNavigate,
 }: {
   rows: WorkflowWorkspaceRow[];
   activeWorkflowId: string;
   search: URLSearchParams;
   ariaLabel?: string;
   pinned?: boolean;
+  onNavigate?: ((href: string) => boolean) | undefined;
 }) {
   if (rows.length === 0) {
     return null;
@@ -526,6 +544,7 @@ function WorkflowSidebarList({
           activeWorkflowId={activeWorkflowId}
           search={search}
           pinned={pinned}
+          onNavigate={onNavigate}
         />
       ))}
     </ul>
@@ -540,6 +559,8 @@ function WorkflowSidebar({
   search,
   closeButtonRef,
   onClose,
+  onNavigate,
+  focusCloseOnMount = false,
 }: {
   workflowId: string;
   workflowsQuery: UseQueryResult<z.infer<typeof WorkflowWorkspaceListResponseSchema>, Error>;
@@ -548,6 +569,8 @@ function WorkflowSidebar({
   search: URLSearchParams;
   closeButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
+  onNavigate?: ((href: string) => boolean) | undefined;
+  focusCloseOnMount?: boolean | undefined;
 }) {
   return (
     <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
@@ -555,6 +578,7 @@ function WorkflowSidebar({
         closeButtonRef={closeButtonRef}
         onClose={onClose}
         search={search}
+        focusCloseOnMount={focusCloseOnMount}
       />
       {workflowsQuery.isLoading ? (
         <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
@@ -574,36 +598,48 @@ function WorkflowSidebar({
           search={search}
           ariaLabel="Current workflow"
           pinned
+          onNavigate={onNavigate}
         />
       ) : null}
       {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
         <p className="workflow-workspace-sidebar-state">No workflows match the current list filters.</p>
       ) : null}
-      <WorkflowSidebarList rows={filteredRows} activeWorkflowId={workflowId} search={search} />
+      <WorkflowSidebarList
+        rows={filteredRows}
+        activeWorkflowId={workflowId}
+        search={search}
+        onNavigate={onNavigate}
+      />
     </aside>
   );
 }
 
-export function WorkflowWorkspaceShell({
+export function WorkflowWorkspaceSidebarLayout({
   payload,
-  workflowId,
   search,
+  activeWorkflowId,
+  children,
+  detailQuery,
+  primaryAriaLabel,
+  onSidebarClose,
+  onSidebarNavigate,
+  focusCloseOnMount,
 }: {
   payload: BootPayload;
-  workflowId: string;
   search: URLSearchParams;
+  activeWorkflowId: string;
+  children: ReactNode;
+  detailQuery?: UseQueryResult<ExecutionDetail, Error>;
+  primaryAriaLabel: string;
+  onSidebarClose: () => void;
+  onSidebarNavigate?: ((href: string) => boolean) | undefined;
+  focusCloseOnMount?: boolean | undefined;
 }) {
   const cfg = readDashboardConfig(payload);
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
-  const [sidebarOpen, setSidebarOpen] = useState(
-    () => !readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
-  );
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
-  const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
-  const sourceTemporal = search.get('source') === 'temporal';
-  const encodedWorkflowId = encodeURIComponent(workflowId);
   const workflowsQuery = useQuery({
     queryKey: ['workflow-workspace-sidebar', listQuery],
     queryFn: async () => {
@@ -616,6 +652,59 @@ export function WorkflowWorkspaceShell({
     enabled: listEnabled,
     refetchInterval: listEnabled ? listPoll : false,
   });
+  const rows = workflowsQuery.data?.items || [];
+  const activeInList = activeWorkflowId
+    ? rows.some((row) => workflowWorkspaceRowId(row) === activeWorkflowId)
+    : false;
+  const filteredRows = rows.filter((row) => workflowWorkspaceRowId(row));
+  const pinnedCurrentRow = detailQuery?.data && !activeInList
+    ? workflowWorkspaceRowFromDetail(detailQuery.data)
+    : null;
+
+  return (
+    <div
+      className="workflow-workspace-shell"
+      data-sidebar-collapsed="false"
+      data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008 MM-1115"
+      data-source-issue="MM-975"
+    >
+      <WorkflowSidebar
+        workflowId={activeWorkflowId}
+        workflowsQuery={workflowsQuery}
+        filteredRows={filteredRows}
+        pinnedCurrentRow={pinnedCurrentRow}
+        search={search}
+        closeButtonRef={closeButtonRef}
+        onClose={onSidebarClose}
+        onNavigate={onSidebarNavigate}
+        focusCloseOnMount={focusCloseOnMount}
+      />
+      <main className="workflow-workspace-detail" aria-label={primaryAriaLabel}>
+        {children}
+      </main>
+    </div>
+  );
+}
+
+export function WorkflowWorkspaceShell({
+  payload,
+  workflowId,
+  search,
+  displayMode,
+}: {
+  payload: BootPayload;
+  workflowId: string;
+  search: URLSearchParams;
+  displayMode?: 'hidden' | 'sidebar';
+}) {
+  const cfg = readDashboardConfig(payload);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => !readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
+  );
+  const [focusCloseOnMount, setFocusCloseOnMount] = useState(false);
+  const openButtonRef = useRef<HTMLButtonElement | null>(null);
+  const sourceTemporal = search.get('source') === 'temporal';
+  const encodedWorkflowId = encodeURIComponent(workflowId);
   const selectedWorkflowQuery = useQuery({
     queryKey: ['workflow-detail', encodedWorkflowId, sourceTemporal],
     queryFn: async () => {
@@ -627,60 +716,80 @@ export function WorkflowWorkspaceShell({
       return ExecutionDetailSchema.parse(await response.json());
     },
     enabled: Boolean(workflowId),
+    staleTime: cfg?.pollIntervalsMs?.detail ?? 2000,
     refetchInterval: (query) => (
       !isExecutionTerminal(query.state.data)
         ? (cfg?.pollIntervalsMs?.detail ?? 2000)
         : false
     ),
   });
-  const rows = workflowsQuery.data?.items || [];
-  const activeInList = rows.some((row) => workflowWorkspaceRowId(row) === workflowId);
-  const filteredRows = rows.filter((row) => workflowWorkspaceRowId(row));
-  const pinnedCurrentRow = selectedWorkflowQuery.data && !activeInList
-    ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
-    : null;
 
-  return (
-    <div
-      className="workflow-workspace-shell"
-      data-sidebar-collapsed={sidebarOpen ? 'false' : 'true'}
-      data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008"
-      data-source-issue="MM-975"
-    >
-      {sidebarOpen ? (
-        <WorkflowSidebar
-          workflowId={workflowId}
-          workflowsQuery={workflowsQuery}
-          filteredRows={filteredRows}
-          pinnedCurrentRow={pinnedCurrentRow}
-          search={search}
-          closeButtonRef={closeButtonRef}
-          onClose={() => {
-            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
-            setSidebarOpen(false);
-            window.setTimeout(() => openButtonRef.current?.focus(), 0);
-          }}
-        />
-      ) : (
+  if (displayMode === 'hidden') {
+    return (
+      <main
+        className="workflow-workspace-detail workflow-workspace-detail--hidden-list"
+        aria-label="Workflow detail"
+        data-jira-issue="MM-1115"
+      >
+        <WorkflowDetailPage payload={payload} />
+      </main>
+    );
+  }
+
+  if (displayMode === undefined && !sidebarOpen) {
+    return (
+      <div
+        className="workflow-workspace-shell"
+        data-sidebar-collapsed="true"
+        data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008"
+        data-source-issue="MM-975"
+      >
         <button
           ref={openButtonRef}
           type="button"
           className="secondary workflow-workspace-open-sidebar workflow-workspace-sidebar-control"
           onClick={() => {
             updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
+            setFocusCloseOnMount(true);
             setSidebarOpen(true);
-            window.setTimeout(() => closeButtonRef.current?.focus(), 0);
           }}
           aria-label="Open workflow sidebar"
           title="Open workflow sidebar"
         >
           {SIDEBAR_TOGGLE_ICON}
         </button>
-      )}
-      <main className="workflow-workspace-detail" aria-label="Workflow detail">
-        <WorkflowDetailPage payload={payload} />
-      </main>
-    </div>
+        <main className="workflow-workspace-detail" aria-label="Workflow detail">
+          <WorkflowDetailPage payload={payload} />
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <WorkflowWorkspaceSidebarLayout
+      payload={payload}
+      search={search}
+      activeWorkflowId={workflowId}
+      detailQuery={selectedWorkflowQuery}
+      primaryAriaLabel="Workflow detail"
+      onSidebarClose={() => {
+        if (displayMode === undefined) {
+          updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+          setFocusCloseOnMount(false);
+          setSidebarOpen(false);
+          window.setTimeout(() => openButtonRef.current?.focus(), 0);
+          return;
+        }
+        updateDashboardPreferences({
+          workflowWorkspaceSidebarCollapsed: true,
+          workflowListDisplayMode: 'hidden',
+        });
+        window.dispatchEvent(new CustomEvent('moonmind:workflow-list-display-mode', { detail: 'hidden' }));
+      }}
+      focusCloseOnMount={focusCloseOnMount}
+    >
+      <WorkflowDetailPage payload={payload} />
+    </WorkflowWorkspaceSidebarLayout>
   );
 }
 
@@ -7236,6 +7345,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       return ExecutionDetailSchema.parse(await response.json());
     },
     enabled: Boolean(encodedTaskId),
+    staleTime: detailPoll,
     refetchInterval: (query) => (
       !isExecutionTerminal(query.state.data)
         ? detailPoll
