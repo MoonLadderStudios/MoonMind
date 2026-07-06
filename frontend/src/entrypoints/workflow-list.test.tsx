@@ -5,6 +5,7 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
 import { markWorkflowListReturnFocusIntent } from '../lib/workflowListContext';
+import { updateDashboardPreferences } from '../utils/dashboardPreferences';
 import { WorkflowListPage } from './workflow-list';
 import '../styles/dashboard.css';
 
@@ -65,6 +66,17 @@ describe('Workflows Entrypoint', () => {
 
     expect(document.querySelector('.workflow-workspace-shell')).toBeNull();
     expect(document.querySelector('.queue-table-wrapper')).toBeTruthy();
+  });
+
+  it('MM-1117 resolves direct /workflows visits to the full table despite persisted hidden mode', async () => {
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(document.querySelector('.workflow-workspace-shell')).toBeNull();
+    expect(document.querySelector('.queue-table-wrapper')).toBeTruthy();
+    expect(window.location.pathname).toBe('/workflows');
   });
 
   it('shows structured API validation detail when the workflow list request fails', async () => {

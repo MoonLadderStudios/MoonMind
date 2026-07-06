@@ -20,6 +20,10 @@ import {
 } from "../lib/temporalTaskEditing";
 import { renderWithClient } from "../utils/test-utils";
 import {
+  readDashboardPreferences,
+  updateDashboardPreferences,
+} from "../utils/dashboardPreferences";
+import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
   buildCapabilityChips,
   CAPABILITY_CATALOG,
@@ -696,6 +700,85 @@ describe("WorkflowStart schedule mode entry", () => {
       "Schedule Mode",
     )) as HTMLSelectElement;
     expect(scheduleMode.value).toBe("immediate");
+  });
+
+  it("MM-1117 defaults direct Create visits to hidden mode unless sidebar is persisted", async () => {
+    updateDashboardPreferences({ workflowListDisplayMode: "table" });
+
+    const first = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await screen.findByLabelText("Instructions");
+    expect(screen.getByRole("button", { name: "Open workflow sidebar" })).toBeTruthy();
+    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
+
+    first.unmount();
+    updateDashboardPreferences({ workflowListDisplayMode: "sidebar" });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    expect(await screen.findByRole("complementary", { name: "Workflow navigation" })).toBeTruthy();
+    expect(window.location.pathname).toBe("/workflows/new");
+  });
+
+  it("MM-1117 keeps Create draft fields independent from sidebar list loading", async () => {
+    updateDashboardPreferences({ workflowListDisplayMode: "sidebar" });
+    let resolveList: (response: Response) => void = () => undefined;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/executions?")) {
+        return new Promise<Response>((resolve) => {
+          resolveList = resolve;
+        });
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
+    fireEvent.change(instructions, { target: { value: "Draft while list loads." } });
+    expect(await screen.findByText("Loading workflows...")).toBeTruthy();
+    expect(instructions.value).toBe("Draft while list loads.");
+
+    resolveList({
+      ok: true,
+      json: async () => ({
+        items: [{ workflowId: "workflow-1", title: "Existing workflow" }],
+      }),
+    } as Response);
+
+    expect(await screen.findByRole("link", { name: "Existing workflow" })).toBeTruthy();
+    expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(
+      "Draft while list loads.",
+    );
+  });
+
+  it("MM-1117 persists Create list-mode changes without writing mode into the URL", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await screen.findByLabelText("Instructions");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open workflow sidebar" }));
+    expect(await screen.findByRole("complementary", { name: "Workflow navigation" })).toBeTruthy();
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe("sidebar");
+    expect(window.location.href).not.toContain("workflowListDisplayMode");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close sidebar" }));
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe("hidden");
+    expect(screen.getByRole("button", { name: "Open workflow sidebar" })).toBeTruthy();
+    expect(window.location.href).not.toContain("workflowListDisplayMode");
   });
 });
 

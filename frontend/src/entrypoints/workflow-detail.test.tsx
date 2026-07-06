@@ -1151,6 +1151,19 @@ describe('Workflow Detail Entrypoint', () => {
     expect(window.sessionStorage.getItem(WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY)).toBe('1');
   });
 
+  it('MM-1117 persists explicit full-table selection from the detail sidebar', async () => {
+    window.history.pushState({}, 'Workspace Table Mode Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    fireEvent.click(within(sidebar).getByRole('link', { name: 'Expand to full list' }));
+
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('table');
+  });
+
   it('keeps desktop detail positioning stable when the workspace sidebar is collapsed', async () => {
     window.history.pushState({}, 'Workspace Motion Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);

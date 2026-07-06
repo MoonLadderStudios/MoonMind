@@ -196,6 +196,18 @@ describe('dashboardPreferences', () => {
       expect(prefs.workflowListDisplayMode).toBe('hidden');
       expect(prefs.lastSelectedWorkflowId).toBe('workflow-789');
     });
+
+    it('MM-1117 round-trips explicit table display mode and trims selected workflow ids', () => {
+      writeDashboardPreferences({
+        ...DEFAULT_DASHBOARD_PREFERENCES,
+        workflowListDisplayMode: 'table',
+        lastSelectedWorkflowId: '  workflow-table-1  ',
+      });
+
+      const prefs = readDashboardPreferences();
+      expect(prefs.workflowListDisplayMode).toBe('table');
+      expect(prefs.lastSelectedWorkflowId).toBe('workflow-table-1');
+    });
   });
 
   describe('reset behavior (MM-964 reset behavior)', () => {

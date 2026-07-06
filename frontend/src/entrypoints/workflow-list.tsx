@@ -14,6 +14,11 @@ import {
   workflowDetailHref,
 } from '../lib/workflowListContext';
 import {
+  buildWorkflowListQueryKey,
+  buildWorkflowListQueryParams,
+  workflowListQueryString,
+} from '../lib/workflowListQuery';
+import {
   TOGGLEABLE_WORKFLOW_LIST_COLUMNS,
   readDashboardPreferences,
   resetDashboardPreferences,
@@ -1160,24 +1165,22 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     syncUrl();
   }, [syncUrl]);
 
-  const queryKey = [
-    'workflow-list',
-    'temporal',
-    pageSize,
-    filters,
-    listCursor,
-  ] as const;
+  const listQueryParams = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set('source', 'temporal');
+    params.set('pageSize', String(pageSize));
+    if (listCursor) params.set('nextPageToken', listCursor);
+    appendFilterParams(params, filters);
+    return buildWorkflowListQueryParams(params);
+  }, [filters, listCursor, pageSize]);
+  const listQueryKey = useMemo(() => buildWorkflowListQueryKey(listQueryParams), [listQueryParams]);
+  const listQuery = useMemo(() => workflowListQueryString(listQueryParams), [listQueryParams]);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey,
+    queryKey: listQueryKey,
     enabled: listEnabled && filterValidationErrors.length === 0,
     queryFn: async () => {
-      const params = new URLSearchParams();
-      params.set('source', 'temporal');
-      params.set('pageSize', String(pageSize));
-      if (listCursor) params.set('nextPageToken', listCursor);
-      appendFilterParams(params, filters);
-      const response = await fetch(`${payload.apiBase}/executions?${params}`);
+      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
       if (!response.ok) {
         throw new Error(await taskListErrorMessage(response));
       }
@@ -1191,6 +1194,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     // dashboard query client falls back to React Query's stale-on-focus default
     // and would refetch /executions when returning to the tab even while paused.
     refetchOnWindowFocus: liveUpdatesPref,
+    staleTime: listPollMs,
   });
 
   // Facets enrich the include/exclude dropdowns. The mobile drawer can show

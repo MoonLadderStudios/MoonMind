@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { PanelLeft, Rows3, Square } from "lucide-react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { LoadingPlaceholder } from "../components/dashboard/LoadingPlaceholder";
@@ -12,7 +13,14 @@ import { navigateTo } from "../lib/navigation";
 import {
   readDashboardPreferences,
   updateDashboardPreferences,
+  type WorkflowListDisplayMode,
 } from "../utils/dashboardPreferences";
+import { workflowDetailHref } from "../lib/workflowListContext";
+import {
+  buildWorkflowListQueryKey,
+  buildWorkflowListQueryParams,
+  workflowListQueryString,
+} from "../lib/workflowListQuery";
 import {
   buildTemporalArtifactEditUpdatePayload,
   buildRuntimeCommandVersionWarnings,
@@ -112,6 +120,135 @@ function randomWorkflowStartHeading(except?: string): string {
     candidates.length > 0 ? candidates : WORKFLOW_START_HEADING_QUOTES;
   const index = Math.floor(Math.random() * choices.length);
   return choices[index] ?? "Start Workflow";
+}
+
+type WorkflowStartSidebarRow = {
+  workflowId?: string | null;
+  taskId?: string | null;
+  title?: string | null;
+};
+
+function workflowStartRowId(row: WorkflowStartSidebarRow): string {
+  return String(row.workflowId || row.taskId || "").trim();
+}
+
+function workflowStartInitialListMode(): Extract<WorkflowListDisplayMode, "hidden" | "sidebar"> {
+  return readDashboardPreferences().workflowListDisplayMode === "sidebar" ? "sidebar" : "hidden";
+}
+
+function WorkflowStartWorkspace({
+  children,
+  temporalListEndpoint,
+}: {
+  children: ReactElement;
+  temporalListEndpoint: string;
+}) {
+  const [displayMode, setDisplayMode] = useState(workflowStartInitialListMode);
+  const listQueryParams = useMemo(
+    () => buildWorkflowListQueryParams(new URLSearchParams("source=temporal&pageSize=25")),
+    [],
+  );
+  const listQuery = useMemo(() => workflowListQueryString(listQueryParams), [listQueryParams]);
+  const workflowsQuery = useQuery({
+    queryKey: buildWorkflowListQueryKey(listQueryParams),
+    queryFn: async (): Promise<{ items: WorkflowStartSidebarRow[] }> => {
+      const response = await fetch(`${temporalListEndpoint}?${listQuery}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch workflows: ${response.statusText}`);
+      }
+      const data = (await response.json()) as { items?: WorkflowStartSidebarRow[] };
+      return { items: Array.isArray(data.items) ? data.items : [] };
+    },
+    enabled: displayMode === "sidebar",
+    staleTime: 5000,
+  });
+  const rows = workflowsQuery.data?.items.filter((row) => workflowStartRowId(row)) ?? [];
+
+  const setMode = (mode: WorkflowListDisplayMode) => {
+    updateDashboardPreferences({ workflowListDisplayMode: mode });
+    if (mode === "table") {
+      navigateTo("/workflows");
+      return;
+    }
+    setDisplayMode(mode);
+  };
+
+  return (
+    <div
+      className="workflow-workspace-shell workflow-start-workspace-shell"
+      data-sidebar-collapsed={displayMode === "sidebar" ? "false" : "true"}
+      data-testid="workflow-start-workspace"
+    >
+      {displayMode === "sidebar" ? (
+        <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
+          <div className="workflow-workspace-sidebar-controls">
+            <button
+              type="button"
+              className="secondary workflow-workspace-close-sidebar workflow-workspace-sidebar-control"
+              aria-label="Close sidebar"
+              title="Close sidebar"
+              onClick={() => setMode("hidden")}
+            >
+              <Square aria-hidden="true" focusable="false" />
+            </button>
+            <button
+              type="button"
+              className="secondary workflow-workspace-expand-list workflow-workspace-sidebar-control"
+              aria-label="Expand to full list"
+              title="Expand to full list"
+              onClick={() => setMode("table")}
+            >
+              <Rows3 aria-hidden="true" focusable="false" />
+            </button>
+          </div>
+          {workflowsQuery.isLoading ? (
+            <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
+          ) : null}
+          {workflowsQuery.isError ? (
+            <div className="workflow-workspace-sidebar-state" role="status">
+              <p>Workflow navigation is unavailable.</p>
+              <button type="button" className="secondary" onClick={() => void workflowsQuery.refetch()}>
+                Retry
+              </button>
+            </div>
+          ) : null}
+          {!workflowsQuery.isLoading && !workflowsQuery.isError && rows.length === 0 ? (
+            <p className="workflow-workspace-sidebar-state">No workflows match the current list filters.</p>
+          ) : null}
+          {rows.length > 0 ? (
+            <ul className="workflow-workspace-sidebar-list" aria-label="Workflow navigation list">
+              {rows.map((row) => {
+                const workflowId = workflowStartRowId(row);
+                const title = String(row.title || workflowId || "Untitled workflow");
+                return (
+                  <li key={workflowId}>
+                    <a className="workflow-workspace-sidebar-row" href={workflowDetailHref(workflowId, listQueryParams)}>
+                      <span className="workflow-workspace-sidebar-row-main">
+                        <span className="workflow-workspace-sidebar-title">{title}</span>
+                      </span>
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </aside>
+      ) : (
+        <button
+          type="button"
+          className="secondary workflow-workspace-open-sidebar workflow-workspace-sidebar-control"
+          aria-label="Open workflow sidebar"
+          title="Open workflow sidebar"
+          onClick={() => setMode("sidebar")}
+        >
+          <PanelLeft aria-hidden="true" focusable="false" />
+        </button>
+      )}
+      <main className="workflow-workspace-detail" aria-label="Create workflow">
+        {children}
+      </main>
+    </div>
+  );
 }
 
 function readProposeTasksPreference(defaultValue: boolean): boolean {
@@ -10660,7 +10797,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     clearSubmitArrowExit();
   }
 
-  return (
+  const createSurface = (
     <div className="stack workflow-start-page dashboard-surface dashboard-surface--page">
       <section
         className="workflow-start-heading"
@@ -12927,6 +13064,12 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         </div>
       ) : null}
     </div>
+  );
+
+  return (
+    <WorkflowStartWorkspace temporalListEndpoint={temporalListEndpoint}>
+      {createSurface}
+    </WorkflowStartWorkspace>
   );
 }
 export default WorkflowStartPage;

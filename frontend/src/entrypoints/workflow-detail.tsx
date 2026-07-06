@@ -50,9 +50,13 @@ import {
 import {
   markWorkflowListReturnFocusIntent,
   workflowDetailHref,
-  workflowListContextParams,
   workflowListHrefFromContext,
 } from '../lib/workflowListContext';
+import {
+  buildWorkflowListQueryKey,
+  buildWorkflowListQueryParams,
+  workflowListQueryString,
+} from '../lib/workflowListQuery';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -362,14 +366,6 @@ function useWorkflowDetailSubroute(
   return [subroute, navigate];
 }
 
-function workflowWorkspaceListQuery(search: URLSearchParams): string {
-  const pageSize = search.get('limit') || search.get('pageSize') || '25';
-  const params = workflowListContextParams(search);
-  params.delete('limit');
-  params.set('pageSize', pageSize);
-  return params.toString();
-}
-
 function sidebarStatusLabel(status: string | null | undefined): string {
   const label = formatStatusLabel(status);
   return label.length > 0 ? `${label.charAt(0).toUpperCase()}${label.slice(1)}` : label;
@@ -487,7 +483,10 @@ function WorkflowSidebarControls({
       <a
         href={workflowListHrefFromContext(search, { markDetailReturn: true })}
         className="secondary workflow-workspace-expand-list workflow-workspace-sidebar-control"
-        onClick={markWorkflowListReturnFocusIntent}
+        onClick={() => {
+          updateDashboardPreferences({ workflowListDisplayMode: 'table' });
+          markWorkflowListReturnFocusIntent();
+        }}
         aria-label="Expand to full list"
         title="Expand to full list"
       >
@@ -602,11 +601,12 @@ export function WorkflowWorkspaceShell({
   });
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
-  const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
+  const listQueryParams = useMemo(() => buildWorkflowListQueryParams(search), [search]);
+  const listQuery = useMemo(() => workflowListQueryString(listQueryParams), [listQueryParams]);
   const sourceTemporal = search.get('source') === 'temporal';
   const encodedWorkflowId = encodeURIComponent(workflowId);
   const workflowsQuery = useQuery({
-    queryKey: ['workflow-workspace-sidebar', listQuery],
+    queryKey: buildWorkflowListQueryKey(listQueryParams),
     queryFn: async () => {
       const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
       if (!response.ok) {
@@ -616,6 +616,7 @@ export function WorkflowWorkspaceShell({
     },
     enabled: listEnabled,
     refetchInterval: listEnabled ? listPoll : false,
+    staleTime: listPoll,
   });
   const selectedWorkflowQuery = useQuery({
     queryKey: ['workflow-detail', encodedWorkflowId, sourceTemporal],
