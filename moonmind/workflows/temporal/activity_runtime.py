@@ -221,6 +221,7 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
 from moonmind.workflows.temporal.story_output_tools import (
     JIRA_CHECK_BLOCKERS_TOOL_NAME,
     JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
+    JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME,
 )
 from moonmind.workflows.temporal.step_checkpoints import (
     build_step_checkpoint_create_result,
@@ -1838,6 +1839,67 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
                         "resolvedSourceDesignPath": {"type": "string"},
                         "sourceResolution": {"type": "object"},
                         "jiraIssue": {"type": "object"},
+                        "summary": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                }
+            },
+            "executor": {
+                "activity_type": "mm.tool.execute",
+                "selector": {"mode": "by_capability"},
+            },
+            "requirements": {"capabilities": ["integration:jira"]},
+            "policies": {
+                "timeouts": {
+                    "start_to_close_seconds": 60,
+                    "schedule_to_close_seconds": 120,
+                },
+                "retries": {"max_attempts": 1},
+            },
+        }
+
+    if name == JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME:
+        return {
+            "name": name,
+            "description": (
+                "Move a Jira issue to a named status through MoonMind's "
+                "trusted Jira transition path."
+            ),
+            "inputs": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "issueKey": {"type": "string"},
+                        "issue_key": {"type": "string"},
+                        "jiraIssueKey": {"type": "string"},
+                        "jira_issue_key": {"type": "string"},
+                        "targetStatus": {"type": "string"},
+                        "target_status": {"type": "string"},
+                        "statusName": {"type": "string"},
+                        "status_name": {"type": "string"},
+                        "mode": {"type": "string"},
+                        "assessmentArtifactPath": {"type": "string"},
+                        "assessment_artifact_path": {"type": "string"},
+                        "fields": {"type": "object"},
+                        "update": {"type": "object"},
+                        "jira": {"type": "object"},
+                        "issue": {"type": "object"},
+                    },
+                    "additionalProperties": True,
+                }
+            },
+            "outputs": {
+                "schema": {
+                    "type": "object",
+                    "required": ["issueKey", "targetStatus", "decision", "summary"],
+                    "properties": {
+                        "issueKey": {"type": "string"},
+                        "targetStatus": {"type": "string"},
+                        "decision": {"type": "string"},
+                        "transitioned": {"type": "boolean"},
+                        "transitionId": {"type": "string"},
+                        "currentStatus": {"type": "object"},
+                        "confirmedStatus": {"type": "object"},
                         "summary": {"type": "string"},
                     },
                     "additionalProperties": True,

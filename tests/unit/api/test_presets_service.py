@@ -2902,7 +2902,7 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 (step.get("skill") or step.get("tool"))["id"]
                 for step in template.steps
             ] == [
-                "jira-issue-updater",
+                "jira.update_issue_status",
                 "jira.check_blockers",
                 "jira.load_preset_brief",
                 "auto",
@@ -2934,7 +2934,12 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             )
 
             assert len(expanded["steps"]) == 26
-            assert expanded["steps"][0]["skill"]["id"] == "jira-issue-updater"
+            assert expanded["steps"][0]["type"] == "tool"
+            assert expanded["steps"][0]["tool"]["id"] == "jira.update_issue_status"
+            assert expanded["steps"][0]["tool"]["inputs"] == {
+                "issueKey": "MM-328",
+                "targetStatus": "In Progress",
+            }
             assert "MM-328" in expanded["steps"][0]["instructions"]
             assert "In Progress" in expanded["steps"][0]["instructions"]
             assert expanded["steps"][1]["title"] == "Check Jira blockers before implementation"
@@ -3107,6 +3112,13 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
                     "targetIssueKey": "MM-742",
                     "linkType": "Blocks",
                 },
+            }
+            assert expanded["steps"][3]["type"] == "tool"
+            assert expanded["steps"][3]["tool"]["id"] == "jira.update_issue_status"
+            assert expanded["steps"][3]["tool"]["inputs"] == {
+                "issueKey": "MM-742",
+                "targetStatus": "In Progress",
+                "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_issue_key"] == "MM-742"
             assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [

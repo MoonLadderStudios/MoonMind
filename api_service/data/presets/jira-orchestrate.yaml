@@ -87,15 +87,18 @@ inputs:
     default: true
 steps:
   - title: Move Jira issue to In Progress
+    type: tool
     instructions: |-
       Change Jira issue {{ inputs.jira_issue_key }} to status In Progress before implementation starts.
 
-      Use the trusted Jira issue updater workflow and Jira transition tools. Match In Progress against the issue's available transitions or target statuses; do not guess transition IDs. Re-fetch the issue when possible and report the confirmed status.
-    skill:
-      id: jira-issue-updater
+      Use the deterministic trusted Jira status tool. It must look up Jira's available transitions, match In Progress against transition target statuses or transition names, apply the returned transition ID, and re-fetch the issue when possible to report the confirmed status.
+    tool:
+      id: jira.update_issue_status
       requiredCapabilities:
         - jira
-      args: {}
+      args:
+        issueKey: "{{ inputs.jira_issue_key }}"
+        targetStatus: In Progress
   - title: Check Jira blockers before implementation
     type: tool
     instructions: |-

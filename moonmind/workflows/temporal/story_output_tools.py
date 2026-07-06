@@ -19,8 +19,10 @@ from moonmind.integrations.jira.models import (
     CreateIssueLinkRequest,
     CreateSubtaskRequest,
     GetIssueRequest,
+    GetTransitionsRequest,
     ListCreateIssueTypesRequest,
     SearchIssuesRequest,
+    TransitionIssueRequest,
 )
 from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
@@ -38,6 +40,7 @@ GITHUB_IMPLEMENT_WORKFLOWS_TOOL_NAME = (
 )
 JIRA_CHECK_BLOCKERS_TOOL_NAME = "jira.check_blockers"
 JIRA_LOAD_PRESET_BRIEF_TOOL_NAME = "jira.load_preset_brief"
+JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME = "jira.update_issue_status"
 GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
 GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
 GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
@@ -328,8 +331,24 @@ def _repo_root_candidates(
     workspace_spec = _mapping(
         context_mapping.get("workspaceSpec") or context_mapping.get("workspace_spec")
     )
+    previous_outputs = _mapping(
+        inputs.get("previousOutputs")
+        or inputs.get("previous_outputs")
+        or context_mapping.get("previousOutputs")
+        or context_mapping.get("previous_outputs")
+    )
+    previous_workspace_spec = _mapping(
+        previous_outputs.get("workspaceSpec")
+        or previous_outputs.get("workspace_spec")
+    )
     candidates: list[Path] = []
-    for source in (inputs, context_mapping, workspace_spec):
+    for source in (
+        inputs,
+        context_mapping,
+        workspace_spec,
+        previous_outputs,
+        previous_workspace_spec,
+    ):
         for key in (
             "repoRoot",
             "repo_root",
@@ -3857,6 +3876,304 @@ async def load_jira_preset_brief(
     return ToolResult(status="COMPLETED", outputs=outputs)
 
 
+def _jira_update_issue_key(inputs: Mapping[str, Any]) -> str:
+    return _load_preset_brief_issue_key(inputs)
+
+
+def _jira_status_mode(inputs: Mapping[str, Any]) -> str:
+    mode = _string(inputs.get("mode")).lower().replace("-", "_").replace(" ", "_")
+    if mode:
+        return mode
+    target = _string(
+        inputs.get("targetStatus")
+        or inputs.get("target_status")
+        or inputs.get("statusName")
+        or inputs.get("status_name")
+    )
+    return target.lower().replace("-", "_").replace(" ", "_") if target else "start"
+
+
+def _jira_target_status(inputs: Mapping[str, Any]) -> str:
+    explicit = _first_string(
+        inputs.get("targetStatus"),
+        inputs.get("target_status"),
+        inputs.get("statusName"),
+        inputs.get("status_name"),
+    )
+    if explicit:
+        return explicit
+    mode = _jira_status_mode(inputs)
+    mapped = {
+        "start": "In Progress",
+        "in_progress": "In Progress",
+        "review": "Review",
+        "code_review": "Review",
+        "done": "Done",
+    }.get(mode)
+    if mapped:
+        return mapped
+    return mode.replace("_", " ").title() if mode else ""
+
+
+def _jira_status_match_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _string(value).lower())
+
+
+def _jira_transition_candidate(transition: Mapping[str, Any]) -> dict[str, Any]:
+    to_status = _mapping(transition.get("to"))
+    category = _mapping(to_status.get("statusCategory") or to_status.get("category"))
+    return {
+        "transitionId": _string(transition.get("id") or transition.get("transitionId")),
+        "transitionName": _string(transition.get("name")),
+        "toStatusName": _string(to_status.get("name")),
+        "toStatusId": _string(to_status.get("id")),
+        "toStatusCategory": _string(category.get("key") or category.get("name")),
+    }
+
+
+def _find_jira_status_transition(
+    transitions: Sequence[Any],
+    *,
+    target_status: str,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    target_token = _jira_status_match_token(target_status)
+    candidates: list[dict[str, Any]] = []
+    for item in transitions:
+        if not isinstance(item, Mapping):
+            continue
+        candidate = _jira_transition_candidate(item)
+        if not candidate["transitionId"]:
+            continue
+        candidates.append(candidate)
+        tokens = {
+            _jira_status_match_token(candidate["toStatusName"]),
+            _jira_status_match_token(candidate["transitionName"]),
+        }
+        if target_token and target_token in tokens:
+            return candidate, candidates
+    return None, candidates
+
+
+def _jira_current_status_output(issue: Mapping[str, Any]) -> dict[str, Any]:
+    status = _status_payload(issue)
+    category = _mapping(status.get("statusCategory") or status.get("category"))
+    return {
+        "name": _string(status.get("name")),
+        "id": _string(status.get("id")),
+        "category": _string(category.get("key") or category.get("name")),
+    }
+
+
+async def update_jira_issue_status(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    jira_service_factory: JiraServiceFactory = JiraToolService,
+) -> ToolResult:
+    issue_key = _jira_update_issue_key(inputs)
+    target_status = _jira_target_status(inputs)
+    mode = _jira_status_mode(inputs)
+    if not issue_key:
+        raise ValueError("issueKey is required for Jira issue status updates.")
+    if not target_status:
+        raise ValueError("targetStatus is required for Jira issue status updates.")
+
+    if mode in {"start", "in_progress"} or (
+        _jira_status_match_token(target_status) == "inprogress"
+    ):
+        if inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path"):
+            assessment_verdict, assessment_available = _jira_assessment_verdict(
+                inputs,
+                _context,
+            )
+            if not assessment_available:
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueKey": issue_key,
+                        "targetStatus": target_status,
+                        "decision": "blocked",
+                        "summary": "Jira In Progress update requires an assessment verdict, but it was unavailable.",
+                    },
+                )
+            if assessment_verdict == "FULLY_IMPLEMENTED":
+                return ToolResult(
+                    status="COMPLETED",
+                    outputs={
+                        "issueKey": issue_key,
+                        "targetStatus": target_status,
+                        "decision": "skipped",
+                        "assessmentVerdict": assessment_verdict,
+                        "summary": f"Skipped Jira In Progress update for {issue_key} because assessment verdict is FULLY_IMPLEMENTED.",
+                    },
+                )
+            if assessment_verdict == "BLOCKED":
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueKey": issue_key,
+                        "targetStatus": target_status,
+                        "decision": "blocked",
+                        "assessmentVerdict": assessment_verdict,
+                        "summary": f"Skipped Jira In Progress update for {issue_key} because assessment verdict is BLOCKED.",
+                    },
+                )
+
+    service = jira_service_factory()
+    try:
+        issue = await service.get_issue(
+            GetIssueRequest(
+                issueKey=issue_key,
+                fields=["status", "summary", "issuetype"],
+            )
+        )
+    except Exception as exc:
+        code = _string(getattr(exc, "code", "")) or exc.__class__.__name__
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueKey": issue_key,
+                "targetStatus": target_status,
+                "decision": "blocked",
+                "summary": f"Could not fetch Jira issue {issue_key} before status update ({code}).",
+            },
+        )
+
+    issue_mapping = _mapping(issue)
+    current_status = _jira_current_status_output(issue_mapping)
+    if _jira_status_match_token(current_status.get("name")) == _jira_status_match_token(
+        target_status
+    ):
+        return ToolResult(
+            status="COMPLETED",
+            outputs={
+                "issueKey": issue_key,
+                "targetStatus": target_status,
+                "currentStatus": current_status,
+                "confirmedStatus": current_status,
+                "decision": "already_satisfied",
+                "transitioned": False,
+                "summary": f"Jira issue {issue_key} is already in status {current_status['name']}.",
+            },
+        )
+
+    try:
+        transition_payload = await service.get_transitions(
+            GetTransitionsRequest(issueKey=issue_key, expandFields=True)
+        )
+    except Exception as exc:
+        code = _string(getattr(exc, "code", "")) or exc.__class__.__name__
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueKey": issue_key,
+                "targetStatus": target_status,
+                "currentStatus": current_status,
+                "decision": "blocked",
+                "summary": f"Could not list Jira transitions for {issue_key} ({code}).",
+            },
+        )
+
+    transitions = _list(_mapping(transition_payload).get("transitions"))
+    selected_transition, candidates = _find_jira_status_transition(
+        transitions,
+        target_status=target_status,
+    )
+    if selected_transition is None:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueKey": issue_key,
+                "targetStatus": target_status,
+                "currentStatus": current_status,
+                "decision": "blocked",
+                "availableTransitions": candidates,
+                "summary": f"No Jira transition for {issue_key} matched target status {target_status}.",
+            },
+        )
+
+    try:
+        await service.transition_issue(
+            TransitionIssueRequest(
+                issueKey=issue_key,
+                transitionId=selected_transition["transitionId"],
+                fields=_mapping(inputs.get("fields")),
+                update=_mapping(inputs.get("update")),
+            )
+        )
+    except Exception as exc:
+        code = _string(getattr(exc, "code", "")) or exc.__class__.__name__
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueKey": issue_key,
+                "targetStatus": target_status,
+                "currentStatus": current_status,
+                "selectedTransition": selected_transition,
+                "decision": "blocked",
+                "summary": f"Jira transition for {issue_key} failed ({code}).",
+            },
+        )
+
+    try:
+        confirmed_issue = await service.get_issue(
+            GetIssueRequest(
+                issueKey=issue_key,
+                fields=["status", "summary", "issuetype"],
+            )
+        )
+        confirmed_status = _jira_current_status_output(_mapping(confirmed_issue))
+    except Exception as exc:
+        code = _string(getattr(exc, "code", "")) or exc.__class__.__name__
+        return ToolResult(
+            status="COMPLETED",
+            outputs={
+                "issueKey": issue_key,
+                "targetStatus": target_status,
+                "currentStatus": current_status,
+                "selectedTransition": selected_transition,
+                "decision": "transitioned_unverified",
+                "transitioned": True,
+                "transitionId": selected_transition["transitionId"],
+                "summary": f"Transitioned Jira issue {issue_key} toward {target_status}, but confirmation fetch failed ({code}).",
+            },
+        )
+
+    if _jira_status_match_token(confirmed_status.get("name")) != _jira_status_match_token(
+        target_status
+    ):
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueKey": issue_key,
+                "targetStatus": target_status,
+                "currentStatus": current_status,
+                "confirmedStatus": confirmed_status,
+                "selectedTransition": selected_transition,
+                "decision": "blocked",
+                "transitioned": True,
+                "transitionId": selected_transition["transitionId"],
+                "summary": f"Jira issue {issue_key} transition completed, but confirmed status is {confirmed_status.get('name') or 'unknown'} instead of {target_status}.",
+            },
+        )
+
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "issueKey": issue_key,
+            "targetStatus": target_status,
+            "currentStatus": current_status,
+            "confirmedStatus": confirmed_status,
+            "selectedTransition": selected_transition,
+            "decision": "transitioned",
+            "transitioned": True,
+            "transitionId": selected_transition["transitionId"],
+            "transitionName": selected_transition["transitionName"],
+            "summary": f"Transitioned Jira issue {issue_key} to {confirmed_status['name']}.",
+        },
+    )
+
+
 def _github_issue_inputs(inputs: Mapping[str, Any]) -> tuple[str, int]:
     nested = _mapping(inputs.get("github") or inputs.get("issue"))
     repository = _string(
@@ -4148,6 +4465,97 @@ def _assessment_verdict_from_artifact(
         return "", False
     verdict = _string(payload.get("verdict")).upper()
     return verdict, True
+
+
+_ASSESSMENT_VERDICTS = frozenset(
+    {"FULLY_IMPLEMENTED", "PARTIALLY_IMPLEMENTED", "NOT_IMPLEMENTED", "BLOCKED"}
+)
+
+
+def _normalize_assessment_verdict(value: Any) -> str:
+    verdict = _string(value).upper()
+    return verdict if verdict in _ASSESSMENT_VERDICTS else ""
+
+
+def _assessment_verdict_from_mapping(payload: Mapping[str, Any]) -> str:
+    for key in (
+        "assessmentVerdict",
+        "assessment_verdict",
+        "jiraAssessmentVerdict",
+        "jira_assessment_verdict",
+        "initialAssessmentVerdict",
+        "initial_assessment_verdict",
+        "verdict",
+    ):
+        verdict = _normalize_assessment_verdict(payload.get(key))
+        if verdict:
+            return verdict
+    for key in (
+        "assessment",
+        "jiraAssessment",
+        "jira_assessment",
+        "jiraImplementAssessment",
+        "jira_implement_assessment",
+    ):
+        nested = _mapping(payload.get(key))
+        verdict = _assessment_verdict_from_mapping(nested) if nested else ""
+        if verdict:
+            return verdict
+    return ""
+
+
+def _assessment_verdict_from_text(value: Any) -> str:
+    text = _string(value)
+    if not text:
+        return ""
+    patterns = (
+        r"(?is)\bassessment\s+complete\b[^.\n:]*[:\s`]+"
+        r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)\b",
+        r"(?is)\brecorded\s+verdict\b[^.\n:]*[:\s`]+"
+        r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)\b",
+        r"(?is)\"verdict\"\s*:\s*\""
+        r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)\"",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return _normalize_assessment_verdict(match.group(1))
+    return ""
+
+
+def _jira_assessment_verdict(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[str, bool]:
+    artifact_path = _string(
+        inputs.get("assessmentArtifactPath")
+        or inputs.get("assessment_artifact_path")
+    )
+    if artifact_path:
+        artifact_verdict, artifact_available = _assessment_verdict_from_artifact(
+            inputs,
+            context,
+        )
+        if artifact_available:
+            return artifact_verdict, True
+
+    previous_outputs = _mapping(
+        inputs.get("previousOutputs")
+        or inputs.get("previous_outputs")
+        or (context or {}).get("previousOutputs")
+        or (context or {}).get("previous_outputs")
+    )
+    verdict = _assessment_verdict_from_mapping(previous_outputs)
+    if verdict:
+        return verdict, True
+    for key in ("lastAssistantText", "assistantText", "summary", "operator_summary"):
+        verdict = _assessment_verdict_from_text(previous_outputs.get(key))
+        if verdict:
+            return verdict, True
+
+    if artifact_path:
+        return "", False
+    return "", True
 
 
 def _verification_verdict_from_payload(payload: Mapping[str, Any]) -> str:
@@ -4905,6 +5313,17 @@ def register_story_output_tool_handlers(
         handler=_load_jira_preset_brief,
     )
 
+    async def _update_jira_issue_status(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await update_jira_issue_status(inputs, context)
+
+    dispatcher.register_skill(
+        skill_name=JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME,
+        handler=_update_jira_issue_status,
+    )
+
     async def _load_github_issue_preset_brief(
         inputs: Mapping[str, Any],
         context: Mapping[str, Any] | None = None,
@@ -4972,6 +5391,7 @@ __all__ = [
     "JIRA_CREATE_ISSUES_TOOL_NAME",
     "JIRA_IMPLEMENT_TASKS_TOOL_NAME",
     "JIRA_LOAD_PRESET_BRIEF_TOOL_NAME",
+    "JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME",
     "GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME",
     "GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME",
     "GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME",
@@ -4988,6 +5408,7 @@ __all__ = [
     "discover_documents",
     "create_document_update_tasks_from_paths",
     "load_jira_preset_brief",
+    "update_jira_issue_status",
     "DOCUMENT_DISCOVER_TOOL_NAME",
     "DOCUMENT_UPDATE_TASKS_TOOL_NAME",
     "register_story_output_tool_handlers",
