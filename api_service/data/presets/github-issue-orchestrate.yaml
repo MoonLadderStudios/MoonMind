@@ -189,37 +189,39 @@ steps:
     Source design path (optional): {{ inputs.source_design_path }}.
 
 
-    Classify the input as a single-story feature request, broad technical or declarative design,
-    or existing feature directory.
+    Classify the input only to decide whether GitHub Issue Orchestrate is eligible for one-story
+    MoonSpec orchestration.
 
-    Inspect existing MoonSpec artifacts and resume from the first incomplete stage instead
-    of regenerating valid later-stage artifacts.'
+    Continue only when the GitHub issue preset brief is exactly one independently testable
+    story, or when Source design path points at an active feature directory with an existing
+    one-story spec.md. If the issue brief is broad, multi-story, requires implementing all
+    stories, or needs story selection before implementation, stop before MoonSpec lifecycle
+    work begins and report that the issue must be routed through moonspec-breakdown or another
+    upstream breakdown/selector workflow before GitHub Issue Orchestrate can continue.
+
+    For eligible one-story inputs, inspect existing MoonSpec artifacts and resume from the
+    first incomplete stage instead of regenerating valid later-stage artifacts.'
   skill:
     id: auto
     args: {}
 - title: Create or select MoonSpec
-  instructions: 'For a single-story GitHub issue preset brief, run moonspec-specify unless
-    an active spec.md already passes the specify gate.
+  instructions: 'Before running moonspec-specify, validate that the GitHub issue preset
+    brief is exactly one independently testable story or that the active feature directory
+    has an existing one-story spec.md.
 
-    For a broad technical or declarative design, run moonspec-breakdown first, then select
-    the recommended first generated spec unless the issue brief explicitly requires processing
-    all specs.
+    If the issue brief is not already one independently testable story, stop and report that
+    it must be routed through moonspec-breakdown or another upstream selector before this
+    orchestration can continue. Do not run moonspec-breakdown from this preset and do not
+    select a story inline.
+
+    For an eligible single-story GitHub issue preset brief, run moonspec-specify unless an
+    active spec.md already passes the specify gate.
 
     Preserve GitHub issue {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
     }} and the original preset brief in spec.md so final verification can compare against
     them.'
   skill:
     id: moonspec-specify
-    args: {}
-- title: Split broad designs when needed
-  instructions: 'Run moonspec-breakdown only when the GitHub issue preset brief is a broad
-    technical or declarative design with multiple independently testable stories.
-
-    Keep each generated spec isolated and process specs in dependency order when multiple
-    specs are required by {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
-    }}.'
-  skill:
-    id: auto
     args: {}
 - title: Plan selected spec
   instructions: 'Run moonspec-plan when plan.md or required design artifacts are missing or

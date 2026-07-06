@@ -144,10 +144,30 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "moonspec-implement" in jira_orchestrate_steps
         assert "moonspec-verify" in jira_orchestrate_steps
         assert jira_orchestrate_steps[-1] == "jira-issue-updater"
-        assert len(jira_orchestrate_steps) == 26
+        assert len(jira_orchestrate_steps) == 25
         assert jira_orchestrate_steps.count("moonspec-implement") == 7
         assert jira_orchestrate_steps.count("moonspec-verify") == 7
         assert jira_orchestrate_steps.count("moonspec-doc-reconcile") == 1
+        jira_orchestrate_titles = [
+            step["title"] for step in jira_orchestrate_template.steps
+        ]
+        assert "Split broad designs when needed" not in jira_orchestrate_titles
+        classify_step = next(
+            step
+            for step in jira_orchestrate_template.steps
+            if step["title"] == "Classify request and resume point"
+        )
+        assert "upstream breakdown/selector workflow" in classify_step[
+            "instructions"
+        ]
+        specify_step = next(
+            step
+            for step in jira_orchestrate_template.steps
+            if step["title"] == "Create or select MoonSpec"
+        )
+        assert "Do not run moonspec-breakdown from this preset" in specify_step[
+            "instructions"
+        ]
         blocker_step = jira_orchestrate_template.steps[1]
         assert blocker_step["title"] == "Check Jira blockers before implementation"
         assert blocker_step["type"] == "tool"
