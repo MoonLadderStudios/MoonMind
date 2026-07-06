@@ -120,7 +120,12 @@ class _FakeAsyncClient:
 
 
 def _run_main(
-    module: dict[str, Any], argv: list[str], monkeypatch: Any, tmp_path: Path
+    module: dict[str, Any],
+    argv: list[str],
+    monkeypatch: Any,
+    tmp_path: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     _FakeAsyncClient.submissions = []
     monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
@@ -133,8 +138,15 @@ def _run_main(
         "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
         "MOONMIND_DEFAULT_RUNTIME",
         "MOONMIND_EXECUTION_PROFILE_REF",
+        "MOONMIND_TASK_CONTEXT_PATH",
+        "TASK_CONTEXT_PATH",
+        "MOONMIND_AGENT_RUN_ID",
+        "MOONMIND_RUN_ID",
+        "AGENT_RUN_ID",
     ):
         monkeypatch.delenv(env_key, raising=False)
+    for key, value in (extra_env or {}).items():
+        monkeypatch.setenv(key, value)
 
     completed = subprocess.CompletedProcess(
         args=["gh"], returncode=0, stdout=json.dumps(_mixed_pr_set()), stderr=""
@@ -188,6 +200,58 @@ def test_end_to_end_mixed_pr_set(monkeypatch: Any, tmp_path: Path) -> None:
         assert body["payload"]["idempotencyKey"].startswith(
             "batch-dependabot-resolver:MoonLadderStudios/MoonMind:pr:"
         )
+
+
+def test_end_to_end_inherits_runtime_selection_from_parent_context(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    task_context_path = tmp_path / "artifacts" / "task_context.json"
+    task_context_path.parent.mkdir(parents=True)
+    task_context_path.write_text(
+        json.dumps(
+            {
+                "runtimeConfig": {
+                    "mode": "codex_cli",
+                    "model": "gpt-5.3-codex-spark",
+                    "effort": "xhigh",
+                    "providerProfile": "codex-profile",
+                }
+            }
+        )
+    )
+
+    summary = _run_main(
+        module,
+        ["--repo", "MoonLadderStudios/MoonMind", "--max-prs", "1"],
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "MOONMIND_TASK_CONTEXT_PATH": str(task_context_path),
+            "MOONMIND_TASK_WORKFLOW_ID": "mm:parent-workflow",
+            "MOONMIND_AGENT_RUN_ID": "agent-run-1",
+        },
+    )
+
+    assert summary["runtime"] == {
+        "mode": "codex_cli",
+        "model": "gpt-5.3-codex-spark",
+        "effort": "xhigh",
+        "executionProfileRef": "codex-profile",
+    }
+    assert summary["created"] == 1
+    assert len(_FakeAsyncClient.submissions) == 1
+
+    payload = _FakeAsyncClient.submissions[0]["payload"]
+    assert payload["runtimeInheritance"] == "caller"
+    assert payload["targetRuntime"] == "codex_cli"
+    assert payload["task"]["runtime"] == {
+        "mode": "codex_cli",
+        "model": "gpt-5.3-codex-spark",
+        "effort": "xhigh",
+        "executionProfileRef": "codex-profile",
+    }
 
 
 def test_end_to_end_dry_run_submits_nothing(monkeypatch: Any, tmp_path: Path) -> None:

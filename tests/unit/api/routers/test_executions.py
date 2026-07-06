@@ -7699,6 +7699,70 @@ def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
     assert stored_payload["workflow"]["proposalPolicy"] == {"targets": ["moonmind"]}
 
 
+def test_create_task_shaped_recurring_schedule_preserves_runtime_selection(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    next_run_at = datetime.now(UTC) + timedelta(hours=1)
+
+    with patch(
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.create_definition = AsyncMock(
+            return_value=SimpleNamespace(
+                id=uuid4(),
+                name="Dependabot schedule",
+                cron="0 * * * *",
+                timezone="UTC",
+                next_run_at=next_run_at,
+            )
+        )
+
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "codex",
+                    "providerProfile": "codex-profile",
+                    "schedule": {
+                        "mode": "recurring",
+                        "cron": "0 * * * *",
+                    },
+                    "workflow": {
+                        "instructions": "Resolve Dependabot PRs.",
+                        "skill": {"name": "batch-dependabot-resolver"},
+                        "runtime": {
+                            "mode": "codex",
+                            "model": "gpt-5.3-codex-spark",
+                            "effort": "xhigh",
+                            "profileId": "   ",
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    target = service.create_definition.await_args.kwargs["target"]
+    stored_payload = target["initialParameters"]
+    stored_runtime = stored_payload["workflow"]["runtime"]
+
+    assert stored_payload["targetRuntime"] == "codex_cli"
+    assert stored_payload["model"] == "gpt-5.3-codex-spark"
+    assert stored_payload["requestedModel"] == "gpt-5.3-codex-spark"
+    assert stored_payload["modelSource"] == "task_override"
+    assert stored_payload["effort"] == "xhigh"
+    assert stored_payload["profileId"] == "codex-profile"
+    assert stored_runtime["mode"] == "codex_cli"
+    assert stored_runtime["model"] == "gpt-5.3-codex-spark"
+    assert stored_runtime["effort"] == "xhigh"
+    assert stored_runtime["profileId"] == "codex-profile"
+    assert stored_runtime["providerProfile"] == "codex-profile"
+
+
 def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
