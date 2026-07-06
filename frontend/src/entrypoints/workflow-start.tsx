@@ -27,6 +27,7 @@ import {
   readWorkflowListDisplayMode,
 } from "../lib/workflowListDisplayMode";
 import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowWorkspaceSidebar";
+import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
 
 type WorkflowStartDashboardConfig = {
   features?: {
@@ -118,6 +119,46 @@ export const WORKFLOW_START_HEADING_QUOTES = [
   "Light this candle",
   "All systems go",
 ];
+
+export function workflowStartFormSnapshot(form: HTMLFormElement | null): string {
+  if (!form) {
+    return "";
+  }
+  const values: string[] = [];
+  const controls = Array.from(form.elements);
+  for (const control of controls) {
+    if (
+      control instanceof HTMLInputElement ||
+      control instanceof HTMLTextAreaElement ||
+      control instanceof HTMLSelectElement
+    ) {
+      if (!control.name && !control.id) {
+        continue;
+      }
+      const key = control.name || control.id;
+      if (control instanceof HTMLInputElement) {
+        if (control.type === "file") {
+          values.push(`${key}=files:${control.files?.length ?? 0}`);
+          continue;
+        }
+        if (control.type === "checkbox" || control.type === "radio") {
+          const optionKey = control.value || control.id;
+          values.push(`${key}[${optionKey}]=checked:${control.checked}`);
+          continue;
+        }
+      }
+      values.push(`${key}=${control.value}`);
+    }
+  }
+  return values.sort().join("\n");
+}
+
+function workflowStartFormChanged(initialSnapshot: string): boolean {
+  const form = document.getElementById("queue-submit-form");
+  return form instanceof HTMLFormElement
+    ? workflowStartFormSnapshot(form) !== initialSnapshot
+    : false;
+}
 
 function randomWorkflowStartHeading(except?: string): string {
   if (WORKFLOW_START_HEADING_QUOTES.length === 0) {
@@ -5798,6 +5839,39 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const temporalDraftAppliedRef = useRef<string | null>(null);
   const jiraProjectSelectionInitializedRef = useRef(false);
   const jiraBoardSelectionInitializedRef = useRef(false);
+  const initialRouteGuardSnapshotRef = useRef<string>("");
+
+  useEffect(() => {
+    const captureSnapshot = () => {
+      const form = document.getElementById("queue-submit-form");
+      initialRouteGuardSnapshotRef.current = form instanceof HTMLFormElement
+        ? workflowStartFormSnapshot(form)
+        : "";
+    };
+    const timerId = window.setTimeout(captureSnapshot, 0);
+    const handleRouteChangeRequest = (event: Event) => {
+      if (!workflowStartFormChanged(initialRouteGuardSnapshotRef.current)) {
+        return;
+      }
+      const confirmed = window.confirm(
+        "Leave Create? Unsaved workflow draft changes may be lost.",
+      );
+      if (!confirmed) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener(
+      WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
+      handleRouteChangeRequest,
+    );
+    return () => {
+      window.clearTimeout(timerId);
+      window.removeEventListener(
+        WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
+        handleRouteChangeRequest,
+      );
+    };
+  }, []);
 
   useEffect(() => {
     stepsRef.current = steps;

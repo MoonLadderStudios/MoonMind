@@ -710,19 +710,27 @@ describe('Workflow Detail Entrypoint', () => {
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
   });
 
-  it('filters the reusable workflow workspace sidebar from its header control', async () => {
-    window.history.pushState({}, 'Workspace Sidebar Filter Test', '/workflows/test-123?source=temporal');
+
+  it('MM-1116 renders the sidebar workflow list as a table slice with a filterable header', async () => {
+    window.history.pushState({}, 'Workspace Table Slice Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    expect(within(sidebar).getByText('Workflow')).toBeTruthy();
-    expect(await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i })).toBeTruthy();
-    expect(await within(sidebar).findByRole('link', { name: /Another workflow/i })).toBeTruthy();
+    const table = await within(sidebar).findByRole('table', { name: 'Workflow list table slice' });
+    const header = within(table).getByRole('columnheader', { name: 'Workflow' });
+    expect(header.closest('.workflow-workspace-sidebar-header-row')).toBeTruthy();
+    expect(within(header).queryByRole('link')).toBeNull();
 
-    const workflowFilter = within(sidebar).getByRole('button', { name: 'Workflow sidebar filter. No filter applied.' });
+    const selected = within(table).getByRole('link', { name: /MM-997 selected workflow/i });
+    const another = within(table).getByRole('link', { name: /Another workflow/i });
+    expect(header.compareDocumentPosition(selected) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(selected.getAttribute('aria-current')).toBe('page');
+    expect(another.getAttribute('href')).toBe('/workflows/test-456?source=temporal');
+
+    const workflowFilter = within(header).getByRole('button', { name: 'Workflow sidebar filter. No filter applied.' });
     const workflowHeader = workflowFilter.closest('.workflow-list-column-header');
     expect(workflowHeader?.querySelector('.workflow-workspace-sidebar-header-title')?.textContent).toContain('Workflow');
 
@@ -731,8 +739,78 @@ describe('Workflow Detail Entrypoint', () => {
       target: { value: 'Another' },
     });
 
-    expect(within(sidebar).queryByRole('link', { name: /MM-997 selected workflow/i })).toBeNull();
-    expect(within(sidebar).getByRole('link', { name: /Another workflow/i })).toBeTruthy();
+    expect(within(table).queryByRole('link', { name: /MM-997 selected workflow/i })).toBeNull();
+    expect(within(table).getByRole('link', { name: /Another workflow/i })).toBeTruthy();
+  });
+
+  it('MM-1116 preserves the sidebar table-slice header for loading, error, and empty states', async () => {
+    mockDesktopViewport(true);
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        return new Promise(() => {});
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          namespace: 'default',
+          temporalRunId: '02-run',
+          runId: '02-run',
+          stepsHref: '/api/executions/test-123/steps',
+          source: 'temporal',
+          workflowType: 'MoonMind.UserWorkflow',
+          title: 'Loading state detail',
+          status: 'running',
+          state: 'executing',
+          rawState: 'executing',
+          temporalStatus: 'running',
+          createdAt: '2026-04-09T00:00:00Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          actions: {},
+          relatedRuns: [],
+        }),
+      } as Response);
+    });
+
+    window.history.pushState({}, 'Workspace Loading Slice Test', '/workflows/test-123?source=temporal');
+    const loadingRender = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+    const loadingSidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const loadingTable = await within(loadingSidebar).findByRole('table', { name: 'Workflow list table slice' });
+    expect(within(loadingTable).getByRole('columnheader', { name: 'Workflow' })).toBeTruthy();
+    expect(within(loadingTable).getByText('Loading workflows...')).toBeTruthy();
+    loadingRender.unmount();
+
+    mockWorkflowWorkspaceSidebarFailure();
+    window.history.pushState({}, 'Workspace Error Slice Test', '/workflows/test-123?source=temporal');
+    const errorRender = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+    const errorSidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const errorTable = await within(errorSidebar).findByRole('table', { name: 'Workflow list table slice' });
+    expect(within(errorTable).getByRole('columnheader', { name: 'Workflow' })).toBeTruthy();
+    expect(await within(errorTable).findByText('Workflow navigation is unavailable.')).toBeTruthy();
+    errorRender.unmount();
+
+    mockWorkflowWorkspaceFetches({ rows: [] });
+    window.history.pushState({}, 'Workspace Empty Slice Test', '/workflows/test-123?source=temporal&stateIn=failed');
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+    const emptySidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const emptyTable = await within(emptySidebar).findByRole('table', { name: 'Workflow list table slice' });
+    expect(within(emptyTable).getByRole('columnheader', { name: 'Workflow' })).toBeTruthy();
+    expect(await within(emptyTable).findByText('No workflows match the current list filters.')).toBeTruthy();
   });
 
   it('MM-999 pins the selected workflow above sidebar rows when it is outside the filtered result', async () => {
@@ -743,7 +821,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    const pinnedGroup = await within(sidebar).findByRole('list', { name: 'Current workflow' });
+    const pinnedGroup = await within(sidebar).findByRole('rowgroup', { name: 'Current workflow' });
     const pinned = within(pinnedGroup).getByRole('link', { name: /MM-999 selected workflow outside filters/i });
     expect(pinned.getAttribute('aria-current')).toBe('page');
     expect(pinned.getAttribute('data-pinned')).toBe('true');
@@ -761,8 +839,8 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    const pinnedGroup = await within(sidebar).findByRole('list', { name: 'Current workflow' });
-    const filterMatchingList = within(sidebar).getByRole('list', { name: 'Workflow navigation list' });
+    const pinnedGroup = await within(sidebar).findByRole('rowgroup', { name: 'Current workflow' });
+    const filterMatchingList = within(sidebar).getByRole('rowgroup', { name: 'Workflow navigation list' });
     expect(within(pinnedGroup).getByRole('link', { name: /MM-999 selected workflow outside filters/i })).toBeTruthy();
     expect(within(filterMatchingList).queryByRole('link', { name: /MM-999 selected workflow outside filters/i })).toBeNull();
     expect(within(filterMatchingList).getByRole('link', { name: /Filtered workflow/i })).toBeTruthy();
@@ -876,7 +954,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    expect(within(sidebar).queryByRole('list', { name: 'Current workflow' })).toBeNull();
+    expect(within(sidebar).queryByRole('rowgroup', { name: 'Current workflow' })).toBeNull();
     expect((await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i })).getAttribute('aria-current')).toBe(
       'page',
     );
@@ -891,7 +969,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(await within(sidebar).findByText('No workflows match the current list filters.')).toBeTruthy();
-    const pinnedGroup = within(sidebar).getByRole('list', { name: 'Current workflow' });
+    const pinnedGroup = within(sidebar).getByRole('rowgroup', { name: 'Current workflow' });
     const pinned = within(pinnedGroup).getByRole('link', { name: /MM-997 selected workflow/i });
     expect(pinned.getAttribute('aria-current')).toBe('page');
     expect(pinned.getAttribute('data-pinned')).toBe('true');
@@ -1206,7 +1284,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const dashboardCss = await readDashboardCss();
     expect(dashboardCss).toMatch(
-      /\.workflow-workspace-shell\s*\{[^}]*grid-template-columns:\s*minmax\(14rem,\s*17rem\) minmax\(0,\s*1fr\);/,
+      /\.workflow-workspace-shell\s*\{[^}]*grid-template-columns:\s*var\(--workflow-list-column-workflow-width\) minmax\(0,\s*1fr\);/,
     );
     expect(dashboardCss).toMatch(
       /@media \(min-width:\s*768px\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,

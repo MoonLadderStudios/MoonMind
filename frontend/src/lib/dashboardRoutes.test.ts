@@ -30,9 +30,9 @@ describe('dashboard route resolution', () => {
     }
   });
 
-  it('keeps the new workflow route on the start page', () => {
+  it('keeps the new workflow route inside the workspace compositor', () => {
     expect(resolveDashboardRoute('/workflows/new')).toEqual({
-      page: 'workflow-start',
+      page: 'workflows-workspace',
       dataWidePanel: true,
       currentPath: '/workflows/new',
     });
