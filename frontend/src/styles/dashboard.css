@@ -7371,7 +7371,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-bottom: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color);
 }
 
-.workflow-workspace-sidebar-list:last-child .workflow-workspace-sidebar-row-frame:last-child {
+.workflow-workspace-sidebar-table > :last-child .workflow-workspace-sidebar-row-frame:last-child {
   border-bottom: 0;
 }
 

@@ -690,6 +690,12 @@ describe('Dashboard shared entry', () => {
 
     const sidebarRowBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-row');
     expect(sidebarRowBlock).not.toContain('border-radius');
+
+    const sidebarLastRowFrameBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-workspace-sidebar-table > :last-child .workflow-workspace-sidebar-row-frame:last-child',
+    );
+    expect(sidebarLastRowFrameBlock).toContain('border-bottom: 0');
   });
 
   it('MM-1116 keeps sidebar/table mode changes aligned and reduced-motion safe', async () => {
