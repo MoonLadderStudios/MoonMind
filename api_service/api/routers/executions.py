@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -170,6 +170,10 @@ from moonmind.workflows.executions.runtime_inheritance import (
     RuntimeInheritanceError,
     apply_inherited_runtime_to_payload,
     resolve_child_runtime_inheritance,
+)
+from moonmind.workflows.executions.title_derivation import (
+    is_generic_title,
+    synthesize_workflow_title,
 )
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from api_service.api.execution_principal import (
@@ -8497,24 +8501,20 @@ def _validate_workflow_runtime_requirements(
     raise _invalid_workflow_request(_PR_RESOLVER_SELECTOR_ERROR)
 
 
-def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
-    explicit = str(task_payload.get("title") or "").strip()
-    if explicit:
-        return explicit
-    tool_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
-        task_payload.get("skill")
+def _derive_task_title(
+    task_payload: dict[str, Any],
+    *,
+    normalized_tool: Mapping[str, Any] | None = None,
+    normalized_steps: Sequence[Mapping[str, Any]] = (),
+) -> str | None:
+    synthesized = synthesize_workflow_title(
+        current_title=str(task_payload.get("title") or "").strip() or None,
+        task_payload=task_payload,
+        normalized_tool=normalized_tool,
+        normalized_steps=normalized_steps,
     )
-    tool_name = ""
-    if tool_payload:
-        tool_name = str(
-            tool_payload.get("name") or tool_payload.get("id") or ""
-        ).strip()
-    if tool_name.lower() == "pr-resolver":
-        starting_branch = _pr_resolver_structured_selector(
-            task_payload=task_payload,
-        )
-        if starting_branch:
-            return starting_branch[:_MAX_TASK_TITLE_LENGTH]
+    if synthesized:
+        return synthesized[:_MAX_TASK_TITLE_LENGTH]
     raw_steps = task_payload.get("steps")
     if isinstance(raw_steps, list):
         for item in raw_steps:
@@ -9658,8 +9658,15 @@ async def _create_execution_from_workflow_request(
         normalized_tool=normalized_tool,
         normalized_task_for_planner=normalized_task_for_planner,
     )
-    derived_task_title = _derive_task_title(task_payload)
-    if derived_task_title and "title" not in normalized_task_for_planner:
+    derived_task_title = _derive_task_title(
+        task_payload,
+        normalized_tool=normalized_tool,
+        normalized_steps=normalized_steps,
+    )
+    if derived_task_title and (
+        "title" not in normalized_task_for_planner
+        or is_generic_title(str(normalized_task_for_planner.get("title") or ""))
+    ):
         normalized_task_for_planner["title"] = derived_task_title
 
     # --- Model resolution ---

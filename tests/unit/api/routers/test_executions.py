@@ -6356,11 +6356,11 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
 
     assert response.status_code == 201
     called_kwargs = service.create_execution.await_args.kwargs
-    assert called_kwargs["title"] == "feature/resolve-pr"
+    assert called_kwargs["title"] == "PR Resolver: feature/resolve-pr"
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    assert initial_parameters["workflow"]["title"] == "feature/resolve-pr"
+    assert initial_parameters["workflow"]["title"] == "PR Resolver: feature/resolve-pr"
     assert initial_parameters["workflow"]["git"] == {
         "startingBranch": "feature/resolve-pr",
     }
@@ -6392,9 +6392,9 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_non_default_git_br
 
     assert response.status_code == 201
     called_kwargs = service.create_execution.await_args.kwargs
-    assert called_kwargs["title"] == "feature/resolve-pr"
+    assert called_kwargs["title"] == "PR Resolver: feature/resolve-pr"
     initial_parameters = called_kwargs["initial_parameters"]
-    assert initial_parameters["workflow"]["title"] == "feature/resolve-pr"
+    assert initial_parameters["workflow"]["title"] == "PR Resolver: feature/resolve-pr"
     assert initial_parameters["workflow"]["git"] == {
         "branch": "feature/resolve-pr",
     }
@@ -7555,9 +7555,50 @@ def test_create_task_shaped_execution_derives_pr_resolver_title_from_tool_inputs
 
     assert response.status_code == 201
     called_kwargs = service.create_execution.await_args.kwargs
-    assert called_kwargs["title"] == "feature/from-tool-inputs"
+    assert called_kwargs["title"] == "PR Resolver: feature/from-tool-inputs"
     initial_parameters = called_kwargs["initial_parameters"]
-    assert initial_parameters["workflow"]["title"] == "feature/from-tool-inputs"
+    assert initial_parameters["workflow"]["title"] == (
+        "PR Resolver: feature/from-tool-inputs"
+    )
+
+
+def test_create_task_shaped_execution_synthesizes_generic_skill_title(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "title": "Run",
+                    "runtime": {"mode": "claude_code"},
+                    "tool": {
+                        "type": "skill",
+                        "name": "jira-pr-verify",
+                        "inputs": {
+                            "issueKey": "KANDY-123",
+                            "pullRequestUrl": (
+                                "https://github.com/MoonLadderStudios/MoonMind/pull/456"
+                            ),
+                            "repository": "MoonLadderStudios/MoonMind",
+                        },
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    assert called_kwargs["title"] == "Jira PR Verify: KANDY-123 \u2014 PR #456"
+    initial_parameters = called_kwargs["initial_parameters"]
+    assert initial_parameters["workflow"]["title"] == (
+        "Jira PR Verify: KANDY-123 \u2014 PR #456"
+    )
 
 def test_create_task_shaped_execution_once_schedule_sets_start_delay(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
