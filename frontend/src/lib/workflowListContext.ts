@@ -84,6 +84,11 @@ export function workflowListHrefFromContext(
 ): string {
   const params = workflowListContextParams(source);
   params.delete('source');
+  const pageSize = params.get('pageSize');
+  if (!params.has('limit') && pageSize) {
+    params.set('limit', pageSize);
+  }
+  params.delete('pageSize');
   if (options.markDetailReturn) {
     params.delete('nextPageToken');
   }

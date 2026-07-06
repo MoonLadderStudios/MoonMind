@@ -132,7 +132,7 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
 
     setResolvingTableMode(true);
     try {
-      const listQueryParams = buildWorkflowListQueryParams(search);
+      const listQueryParams = buildWorkflowListQueryParams(new URLSearchParams(window.location.search));
       const listQuery = workflowListQueryString(listQueryParams);
       const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
       if (!response.ok) {

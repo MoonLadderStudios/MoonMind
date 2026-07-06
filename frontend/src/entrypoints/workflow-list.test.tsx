@@ -79,6 +79,16 @@ describe('Workflows Entrypoint', () => {
     expect(window.location.pathname).toBe('/workflows');
   });
 
+  it('MM-1117 honors API-style pageSize when opening the full list', async () => {
+    window.history.pushState({}, 'Page size context', '/workflows?pageSize=100&stateIn=completed');
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&stateIn=completed&pageSize=100');
+    expect(window.location.search).toBe('?stateIn=completed&limit=100');
+  });
+
   it('shows structured API validation detail when the workflow list request fails', async () => {
     fetchSpy.mockResolvedValue({
       ok: false,

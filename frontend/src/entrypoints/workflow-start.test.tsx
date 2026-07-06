@@ -23,6 +23,7 @@ import {
   readDashboardPreferences,
   updateDashboardPreferences,
 } from "../utils/dashboardPreferences";
+import { WorkflowListPage } from "./workflow-list";
 import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
   buildCapabilityChips,
@@ -590,6 +591,7 @@ describe("WorkflowStart schedule mode entry", () => {
 
   beforeEach(() => {
     window.localStorage.clear();
+    window.history.pushState({}, "Task Create", "/workflows/new");
     fetchSpy = vi
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL) => {
@@ -807,6 +809,80 @@ describe("WorkflowStart schedule mode entry", () => {
 
     expect(await screen.findByRole("complementary", { name: "Workflow navigation" })).toBeTruthy();
     expect(await screen.findByText("No workflows match the current list filters.")).toBeTruthy();
+  });
+
+  it("MM-1117 keeps the Create sidebar list cache separate from the full workflow list", async () => {
+    updateDashboardPreferences({ workflowListDisplayMode: "sidebar" });
+    const executionResponses = [
+      {
+        ok: true,
+        json: async () => ({
+          items: [{ workflowId: "workflow-1", title: "Existing workflow" }],
+        }),
+      } as Response,
+      {
+        ok: true,
+        json: async () => ({
+          items: [{ taskId: "task-123", title: "Full list workflow", state: "completed" }],
+          count: 1,
+          nextPageToken: "next-page",
+        }),
+      } as Response,
+    ];
+    const emptyExecutionResponse = {
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/executions?")) {
+        return Promise.resolve(executionResponses.shift() ?? emptyExecutionResponse);
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+    });
+
+    const view = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    expect(await screen.findByRole("link", { name: "Existing workflow" })).toBeTruthy();
+    const callsBeforeFullList = fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("/api/executions?")).length;
+    window.history.pushState({}, "Workflow List", "/workflows");
+    view.rerender(<WorkflowListPage payload={{ page: "workflow-list", apiBase: "/api" }} />);
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("/api/executions?")).length).toBeGreaterThan(
+        callsBeforeFullList,
+      );
+    });
+  });
+
+  it("MM-1117 prompts before opening the full workflow list with a dirty Create draft", async () => {
+    updateDashboardPreferences({ workflowListDisplayMode: "sidebar" });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
+    fireEvent.change(instructions, { target: { value: "Do not discard this draft." } });
+    fireEvent.click(await screen.findByRole("button", { name: "Expand to full list" }));
+
+    expect(confirmSpy).toHaveBeenCalledWith("Leave this workflow draft and open the full workflow list?");
+    expect(navigateTo).not.toHaveBeenCalledWith("/workflows");
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe("sidebar");
   });
 
   it("MM-1117 persists Create list-mode changes without writing mode into the URL", async () => {

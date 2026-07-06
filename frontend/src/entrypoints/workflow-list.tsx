@@ -1100,9 +1100,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   // Field whose first control should receive focus when the drawer opens.
   const pendingDrawerFocusRef = useRef<FilterField | null>(null);
   // MM-964: local-first dashboard preferences. Read once on mount; mutations are
-  // mirrored back to localStorage so they survive reload. An explicit `limit` in
-  // the URL still wins over the stored page-size preference so shared links keep
-  // their page size.
+  // mirrored back to localStorage so they survive reload. An explicit `limit`,
+  // or API-style `pageSize` from workflow context, still wins over the stored
+  // page-size preference so shared links keep their page size.
   const initialPrefs = useMemo(() => readDashboardPreferences(), []);
   const [density, setDensity] = useState<WorkflowListDensity>(initialPrefs.workflowListDensity);
   const [columnVisibility, setColumnVisibility] = useState(
@@ -1123,7 +1123,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       : false,
   );
   const [pageSize, setPageSize] = useState(() => {
-    const limitParam = initial.get('limit');
+    const limitParam = initial.get('limit') ?? initial.get('pageSize');
     return limitParam !== null ? parsePageSize(limitParam) : initialPrefs.workflowListPageSize;
   });
   const [listCursor, setListCursor] = useState<string | null>(() =>

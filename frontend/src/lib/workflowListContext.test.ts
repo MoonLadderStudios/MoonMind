@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { workflowListContextParams } from "./workflowListContext";
+import {
+  workflowListContextParams,
+  workflowListHrefFromContext,
+} from "./workflowListContext";
 
 describe("workflowListContextParams", () => {
   it("preserves supported workflow list filters for detail sidebar queries", () => {
@@ -31,5 +34,14 @@ describe("workflowListContextParams", () => {
     );
 
     expect(params.toString()).toBe("stateIn=completed");
+  });
+
+  it("converts API-style pageSize to table limit when linking back to the workflow list", () => {
+    const href = workflowListHrefFromContext(
+      new URLSearchParams("source=temporal&pageSize=100&stateIn=completed&nextPageToken=page-2"),
+      { markDetailReturn: true },
+    );
+
+    expect(href).toBe("/workflows?stateIn=completed&limit=100&returnFromWorkflowDetail=1");
   });
 });

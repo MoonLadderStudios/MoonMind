@@ -115,6 +115,20 @@ describe('WorkflowsWorkspacePage', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions?source=temporal&repoContains=moon%2Frepo&pageSize=25');
   });
 
+  it('MM-1117 resolves table mode from the live browser search after list filters change', async () => {
+    window.history.pushState({}, 'Workflow Table', '/workflows?source=temporal&stateIn=failed');
+
+    renderWorkspace({ page: 'dashboard', apiBase: '/api' });
+    window.history.replaceState({}, 'Workflow Table', '/workflows?source=temporal&repoContains=moon%2Frepo');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/workflow-1');
+    });
+    expect(fetchSpy).toHaveBeenCalledWith('/api/executions?source=temporal&repoContains=moon%2Frepo&pageSize=25');
+  });
+
   it('MM-1117 stays on table mode when hidden mode has no selectable workflow to open', async () => {
     window.history.pushState({}, 'Workflow Table', '/workflows?source=temporal&stateIn=failed');
     fetchSpy.mockResolvedValueOnce({

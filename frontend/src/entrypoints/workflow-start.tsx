@@ -17,7 +17,6 @@ import {
 } from "../utils/dashboardPreferences";
 import { workflowDetailHref } from "../lib/workflowListContext";
 import {
-  buildWorkflowListQueryKey,
   buildWorkflowListQueryParams,
   workflowListQueryString,
 } from "../lib/workflowListQuery";
@@ -136,11 +135,26 @@ function workflowStartInitialListMode(): Extract<WorkflowListDisplayMode, "hidde
   return readDashboardPreferences().workflowListDisplayMode === "sidebar" ? "sidebar" : "hidden";
 }
 
+function workflowStartHasDraftContent(steps: StepState[]): boolean {
+  return steps.some((step) => (
+    Boolean(step.instructions.trim()) ||
+    hasExplicitSkillSelection(step.skillId) ||
+    Boolean(step.toolId.trim()) ||
+    Boolean(step.presetKey.trim()) ||
+    step.inputAttachments.length > 0 ||
+    Object.keys(step.toolInputValues).length > 0 ||
+    Object.keys(step.presetInputValues).length > 0 ||
+    Boolean(step.generatedTool || step.generatedSkill || step.runtimeCommand)
+  ));
+}
+
 function WorkflowStartWorkspace({
   children,
+  hasDraftContent,
   temporalListEndpoint,
 }: {
   children: ReactElement;
+  hasDraftContent: boolean;
   temporalListEndpoint: string;
 }) {
   const [displayMode, setDisplayMode] = useState(workflowStartInitialListMode);
@@ -150,7 +164,7 @@ function WorkflowStartWorkspace({
   );
   const listQuery = useMemo(() => workflowListQueryString(listQueryParams), [listQueryParams]);
   const workflowsQuery = useQuery({
-    queryKey: buildWorkflowListQueryKey(listQueryParams),
+    queryKey: ["workflow-start-sidebar-list", listQuery] as const,
     queryFn: async (): Promise<{ items: WorkflowStartSidebarRow[] }> => {
       const response = await fetch(`${temporalListEndpoint}?${listQuery}`);
       if (!response.ok) {
@@ -165,11 +179,18 @@ function WorkflowStartWorkspace({
   const rows = workflowsQuery.data?.items.filter((row) => workflowStartRowId(row)) ?? [];
 
   const setMode = (mode: WorkflowListDisplayMode) => {
-    updateDashboardPreferences({ workflowListDisplayMode: mode });
     if (mode === "table") {
+      if (
+        hasDraftContent &&
+        !window.confirm("Leave this workflow draft and open the full workflow list?")
+      ) {
+        return;
+      }
+      updateDashboardPreferences({ workflowListDisplayMode: mode });
       navigateTo("/workflows");
       return;
     }
+    updateDashboardPreferences({ workflowListDisplayMode: mode });
     setDisplayMode(mode);
   };
 
@@ -13067,7 +13088,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   );
 
   return (
-    <WorkflowStartWorkspace temporalListEndpoint={temporalListEndpoint}>
+    <WorkflowStartWorkspace
+      hasDraftContent={workflowStartHasDraftContent(steps)}
+      temporalListEndpoint={temporalListEndpoint}
+    >
       {createSurface}
     </WorkflowStartWorkspace>
   );
