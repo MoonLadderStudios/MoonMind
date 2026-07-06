@@ -243,7 +243,6 @@ samp {
 .masthead-brand {
   display: inline-flex;
   align-items: center;
-  grid-column: 1;
   justify-self: start;
   gap: 0.55rem;
   min-width: 0;
@@ -282,7 +281,6 @@ samp {
 .workflow-list-display-control {
   display: inline-flex;
   align-items: center;
-  grid-column: 2;
   justify-self: start;
   gap: 0.25rem;
   min-width: 0;
@@ -350,7 +348,6 @@ samp {
 .masthead-title-meta {
   display: flex;
   align-items: center;
-  grid-column: 4;
   justify-self: end;
   justify-content: flex-end;
   flex-wrap: nowrap;
@@ -465,11 +462,32 @@ h1 {
 .masthead-nav {
   position: relative;
   display: flex;
-  grid-column: 3;
   align-self: stretch;
   justify-content: center;
   justify-self: center;
   min-width: 0;
+}
+
+@media (min-width: 1181px) {
+  .masthead-brand {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .workflow-list-display-control {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .masthead-nav {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .masthead-title-meta {
+    grid-column: 4;
+    grid-row: 1;
+  }
 }
 
 .nav-hamburger {
@@ -7321,12 +7339,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .workflow-workspace-sidebar-header-title {
   color: inherit;
   font: inherit;
-}
-
-.workflow-workspace-sidebar-filter {
-  position: relative;
-  display: block;
-  width: 100%;
 }
 
 .workflow-workspace-sidebar-filter-popover {

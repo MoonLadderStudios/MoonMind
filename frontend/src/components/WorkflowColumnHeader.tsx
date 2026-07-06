@@ -21,7 +21,7 @@ export function WorkflowColumnFilterButton({
       aria-expanded={expanded}
       onClick={onClick}
     >
-      <ListFilter className="workflow-list-column-filter-icon" size={15} aria-hidden="true" />
+      <ListFilter className="workflow-list-column-filter-icon" aria-hidden="true" />
     </button>
   );
 }
@@ -39,7 +39,7 @@ export function WorkflowColumnHeader({
 }) {
   return (
     <div className="workflow-list-column-header">
-      <span className="workflow-list-column-header-label">{label}</span>
+      {label}
       <div className="workflow-list-column-filter" ref={filterRef}>
         {filterButton}
         {children}

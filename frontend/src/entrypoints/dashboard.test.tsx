@@ -1388,8 +1388,6 @@ describe('Dashboard shared entry', () => {
   });
 
   it('enforces MM-961 reduced-motion suppression for the panel entry animation', async () => {
-    expect(cssRuleBlock(dashboardCss, '.panel')).toContain('margin-top: 0;');
-
     const panelReducedMotionBlock = cssRuleBlockMatching(
       dashboardCss,
       (rule) =>
@@ -1399,6 +1397,10 @@ describe('Dashboard shared entry', () => {
         rule.parent.params.includes('prefers-reduced-motion: reduce'),
     );
     expect(panelReducedMotionBlock).toContain('animation: none !important');
+  });
+
+  it('keeps the dashboard panel flush with the masthead', async () => {
+    expect(cssRuleBlock(dashboardCss, '.panel')).toContain('margin-top: 0;');
   });
 
   it('disables MM-961 fixed background attachment on mobile and touch/low-power devices', async () => {

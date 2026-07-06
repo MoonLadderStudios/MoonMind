@@ -523,18 +523,18 @@ function WorkflowSidebarHeader({
 
   return (
     <header className="workflow-workspace-sidebar-header">
-      <div className="workflow-workspace-sidebar-filter" ref={filterRef}>
-        <WorkflowColumnHeader
-          label={<span className="workflow-workspace-sidebar-header-title">Workflow</span>}
-          filterButton={
-            <WorkflowColumnFilterButton
-              active={active}
-              expanded={open}
-              ariaLabel={active ? `Workflow sidebar filter: ${filterText}` : 'Workflow sidebar filter. No filter applied.'}
-              onClick={() => setOpen((value) => !value)}
-            />
-          }
-        />
+      <WorkflowColumnHeader
+        label={<span className="workflow-workspace-sidebar-header-title">Workflow</span>}
+        filterButton={
+          <WorkflowColumnFilterButton
+            active={active}
+            expanded={open}
+            ariaLabel={active ? `Workflow sidebar filter: ${filterText}` : 'Workflow sidebar filter. No filter applied.'}
+            onClick={() => setOpen((value) => !value)}
+          />
+        }
+        filterRef={filterRef}
+      >
         {open ? (
           <div
             className="workflow-workspace-sidebar-filter-popover workflow-list-column-filter-popover"
@@ -579,7 +579,7 @@ function WorkflowSidebarHeader({
             </div>
           </div>
         ) : null}
-      </div>
+      </WorkflowColumnHeader>
     </header>
   );
 }
