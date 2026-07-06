@@ -302,6 +302,13 @@ class TemporalDashboardSettings(BaseSettings):
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIVE_QUERY_TIMEOUT_SECONDS"),
         gt=0,
     )
+    terminal_step_ledger_query_timeout_seconds: float = Field(
+        30.0,
+        validation_alias=AliasChoices(
+            "TEMPORAL_DASHBOARD_TERMINAL_STEP_LEDGER_QUERY_TIMEOUT_SECONDS"
+        ),
+        gt=0,
+    )
     list_count_timeout_seconds: float = Field(
         1.0,
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIST_COUNT_TIMEOUT_SECONDS"),

@@ -10817,6 +10817,108 @@ def test_get_execution_steps_fallback_preserves_independent_steps(
     assert payload["steps"][1]["status"] == "ready"
     assert payload["steps"][2]["status"] == "ready"
 
+
+def test_get_execution_steps_uses_terminal_step_ledger_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.close_status = TemporalExecutionCloseStatus.FAILED
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={"workflowId": "mm:wf-1", "runId": "run-99", "steps": []},
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "live_query_timeout_seconds",
+        0.01,
+    )
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "terminal_step_ledger_query_timeout_seconds",
+        12.0,
+    )
+    observed_timeouts: list[float] = []
+
+    async def passthrough_timeout(awaitable, *, timeout: float):
+        observed_timeouts.append(timeout)
+        return await awaitable
+
+    with (
+        patch(
+            "api_service.api.routers.executions.asyncio.wait_for",
+            side_effect=passthrough_timeout,
+        ),
+        TestClient(app) as test_client,
+    ):
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 200
+    assert observed_timeouts == [12.0]
+
+
+def test_get_execution_steps_does_not_use_projection_fallback_for_terminal_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.close_status = TemporalExecutionCloseStatus.FAILED
+    record.memo = {
+        **record.memo,
+        "summary": "Executing plan step 2/3: verify",
+        "mm_current_step_order": 2,
+    }
+    record.parameters = {
+        "workflow": {
+            "steps": [
+                {
+                    "id": "plan",
+                    "title": "Plan",
+                    "type": "skill",
+                    "skill": {"id": "plan"},
+                },
+                {
+                    "id": "verify",
+                    "title": "Verify",
+                    "type": "skill",
+                    "skill": {"id": "verify"},
+                },
+                {
+                    "id": "publish",
+                    "title": "Publish",
+                    "type": "skill",
+                    "skill": {"id": "publish"},
+                },
+            ],
+        },
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        error=RPCError("Connection failed", RPCStatusCode.UNAVAILABLE, None),
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "terminal_step_ledger_query_timeout_seconds",
+        12.0,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "temporal_unavailable"
+
+
 def test_get_execution_steps_returns_500_for_invalid_ledger_payload() -> None:
     app = FastAPI()
     app.include_router(router)
