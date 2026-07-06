@@ -37,6 +37,30 @@ def recommended_next_actions() -> tuple[str, ...]:
     return tuple(sorted(_RECOMMENDED_NEXT_ACTIONS))
 
 
+def recommended_next_action_for_verdict(
+    verdict: Any,
+    *,
+    recoverable_in_current_runtime: bool = False,
+) -> str | None:
+    """Return the runtime-owned next action for a canonical gate verdict."""
+
+    normalized = str(verdict or "").strip().upper()
+    normalized = _VERDICT_SYNONYMS.get(normalized, normalized)
+    if normalized == "FULLY_IMPLEMENTED":
+        return "advance"
+    if normalized == "ADDITIONAL_WORK_NEEDED":
+        return "reattempt_current_step"
+    if normalized == "NO_DETERMINATION":
+        return (
+            "reattempt_current_step"
+            if recoverable_in_current_runtime
+            else "needs_human"
+        )
+    if normalized in {"BLOCKED", "FAILED_UNRECOVERABLE"}:
+        return "blocked"
+    return None
+
+
 def step_gate_contract_violations(payload: Mapping[str, Any]) -> list[str]:
     """Return the contract violations that force a fail-closed downgrade.
 

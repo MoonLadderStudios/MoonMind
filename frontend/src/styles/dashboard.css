@@ -218,9 +218,9 @@ samp {
   z-index: 50;
   isolation: isolate;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
-  column-gap: 1rem;
+  column-gap: 0.7rem;
   padding: 0.65rem 1rem var(--masthead-padding-block-end);
 }
 
@@ -283,6 +283,73 @@ samp {
   color: inherit;
 }
 
+.workflow-list-display-control {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.18rem;
+  border: 1px solid rgb(var(--mm-border) / 0.7);
+  border-radius: 0.55rem;
+  background: rgb(var(--mm-panel) / 0.68);
+}
+
+.workflow-list-display-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 0.42rem;
+  background: transparent;
+  color: rgb(var(--mm-muted));
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+
+.workflow-list-display-option:hover,
+.workflow-list-display-option:focus-visible {
+  border-color: rgb(var(--mm-accent-2) / 0.72);
+  background: rgb(var(--mm-accent-2) / 0.1);
+  color: rgb(var(--mm-ink));
+  transform: none;
+  filter: none;
+}
+
+.workflow-list-display-option:focus-visible {
+  outline: none;
+  box-shadow: var(--mm-control-focus-ring);
+}
+
+.workflow-list-display-option--selected,
+.workflow-list-display-option[aria-pressed="true"] {
+  border-color: rgb(var(--mm-accent) / 0.6);
+  background: rgb(var(--mm-accent) / 0.14);
+  color: rgb(var(--mm-accent));
+}
+
+.workflow-list-display-option svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex: 0 0 auto;
+  stroke-width: 2;
+}
+
+.workflow-list-display-status {
+  display: none;
+  max-width: 18ch;
+  padding: 0 0.38rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.76rem;
+  line-height: 1.15;
+  white-space: normal;
+}
+
 .masthead-title-meta {
   display: flex;
   align-items: center;
@@ -296,6 +363,7 @@ samp {
 
 .masthead-title-meta .version-badge {
   margin-left: 0;
+  white-space: nowrap;
 }
 
 .masthead-title-meta .masthead-meta-item {
@@ -405,6 +473,28 @@ h1 {
   min-width: 0;
 }
 
+@media (min-width: 1181px) {
+  .masthead-brand {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .workflow-list-display-control {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .masthead-nav {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .masthead-title-meta {
+    grid-column: 4;
+    grid-row: 1;
+  }
+}
+
 .nav-hamburger {
   display: none;
   align-items: center;
@@ -512,7 +602,7 @@ h1 {
 }
 
 .panel {
-  margin-top: 1rem;
+  margin-top: 0;
   margin-left: auto;
   margin-right: auto;
   max-width: min(72rem, calc(100vw - 2rem));
@@ -840,6 +930,14 @@ h1 {
   min-width: 0;
 }
 
+.workflow-list-column-header-label {
+  min-width: 0;
+  color: rgb(var(--mm-ink));
+  font-size: 0.82rem;
+  font-weight: 720;
+  line-height: 1.2;
+}
+
 .workflow-list-column-filter {
   position: relative;
   flex: 0 0 auto;
@@ -849,8 +947,8 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.65rem;
-  height: 1.65rem;
+  width: 2rem;
+  height: 2rem;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 0.45rem;
@@ -874,9 +972,9 @@ h1 {
 
 .workflow-list-column-filter-icon {
   display: block;
-  width: 0.82rem;
-  height: 0.82rem;
-  fill: currentColor;
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke-width: 2;
 }
 
 .workflow-list-column-filter-popover {
@@ -2000,6 +2098,8 @@ tbody tr:hover {
 .workflow-list-data-slab .queue-table-wrapper {
   position: relative;
   z-index: 5;
+  width: 100%;
+  max-width: 100%;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -2043,7 +2143,8 @@ tbody tr:hover {
   border-radius: 0;
   background: transparent;
   table-layout: fixed;
-  max-width: 100%;
+  width: 100%;
+  max-width: none;
   margin: 0;
 }
 
@@ -2082,6 +2183,16 @@ tbody tr:hover {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: normal;
+}
+
+.workflow-list-data-slab .queue-table-wrapper th:first-child,
+.workflow-list-data-slab .queue-table-wrapper td:first-child {
+  padding-left: 1rem;
+}
+
+.workflow-list-data-slab .queue-table-wrapper th:last-child,
+.workflow-list-data-slab .queue-table-wrapper td:last-child {
+  padding-right: 1rem;
 }
 
 .queue-table-wrapper code {
@@ -7188,6 +7299,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @media (max-width: 767px) {
+  .workflow-list-display-control {
+    display: none;
+  }
+
   .panel:has(.workflow-detail-page) {
     max-width: none;
     margin-top: 0.5rem;
@@ -7219,106 +7334,41 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .workflow-workspace-sidebar {
   position: sticky;
-  top: 1rem;
+  top: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  max-height: calc(100vh - 2rem);
-  overflow: hidden;
+  gap: 0;
+  max-height: 100vh;
+  overflow: visible;
   /* Not a card: the sidebar is a plain left column separated from the detail by
    * the grid gap and a single hairline divider, like ChatGPT. */
   padding: 0 0.125rem 0 0;
   border-right: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color);
 }
 
-.workflow-workspace-sidebar-controls {
+.workflow-workspace-sidebar-header {
+  position: sticky;
+  top: 0;
+  z-index: 8;
   display: flex;
-  gap: 0.4rem;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 0.4rem;
+  min-height: 3.1rem;
+  padding: 0.5rem 0.55rem;
+  background: rgb(var(--mm-panel) / 0.98);
+  box-shadow: 0 1px 0 rgb(var(--mm-border) / 0.72);
 }
 
-/* Shared icon-button styling for compact workflow sidebar controls. */
-.workflow-workspace-sidebar-control {
-  background: rgb(var(--mm-panel));
-  background-image: linear-gradient(145deg, rgb(var(--mm-panel) / 0.95), rgb(var(--mm-panel) / 0.65));
-  border-color: rgb(var(--mm-border) / 0.7);
-  box-shadow: 0 10px 25px -18px rgb(var(--mm-ink) / 0.8);
-  transform-origin: center;
+.workflow-workspace-sidebar-header-title {
+  color: inherit;
+  font: inherit;
 }
 
-/* The sidebar controls are compact icon buttons rather than full-text buttons. */
-.workflow-workspace-expand-list,
-.workflow-workspace-close-sidebar,
-.workflow-workspace-open-sidebar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  padding: 0;
-  border: 1px solid rgb(var(--mm-border));
-  border-radius: 0.5rem;
-  background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-ink));
-  flex: 0 0 auto;
-  text-decoration: none;
-  transition: var(--mm-control-transition);
+.workflow-workspace-sidebar-filter-popover {
+  left: auto;
+  right: 0;
+  min-width: min(17rem, calc(100vw - 2rem));
 }
-
-.workflow-workspace-sidebar-control:hover,
-.workflow-workspace-sidebar-control:focus-visible {
-  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.35), rgb(var(--mm-accent-2) / 0.25));
-  color: rgb(var(--mm-ink));
-  border-color: rgb(var(--mm-accent));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 12px 24px -14px rgb(var(--mm-accent) / 0.78);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
-}
-
-.workflow-workspace-sidebar-control:active,
-.workflow-workspace-sidebar-control.is-clicked {
-  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.5), rgb(var(--mm-accent-2) / 0.4));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.42),
-    0 0 0 1px rgb(255 255 255 / 0.56),
-    0 0 14px 1px rgb(var(--mm-accent) / 0.76);
-  transform: scale(var(--mm-control-press-scale));
-  filter: brightness(1.2) saturate(1.12);
-}
-
-.workflow-workspace-sidebar-control:disabled,
-.workflow-workspace-sidebar-control:disabled:hover {
-  opacity: var(--mm-control-disabled-opacity);
-  cursor: not-allowed;
-  background: rgb(var(--mm-panel) / 0.4);
-  border-color: rgb(var(--mm-border) / 0.4);
-  box-shadow: none;
-  transform: none;
-  filter: none;
-}
-
-.workflow-workspace-sidebar-control:focus-visible {
-  outline: none;
-  box-shadow:
-    var(--mm-control-focus-ring),
-    inset 0 1px 0 rgb(255 255 255 / 0.28),
-    0 12px 24px -14px rgb(var(--mm-accent) / 0.78);
-}
-
-.workflow-workspace-control-icon,
-.workflow-workspace-expand-list svg {
-  width: 1.05rem;
-  height: 1.05rem;
-  flex: 0 0 auto;
-  fill: none;
-  stroke: currentcolor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 
 .workflow-workspace-sidebar-table {
   display: grid;
@@ -7480,16 +7530,25 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-inline: auto;
 }
 
-.workflow-workspace-open-sidebar {
-  justify-self: start;
-  align-self: start;
-  margin-bottom: 0.75rem;
+.workflow-workspace-opening-state {
+  display: grid;
+  gap: 0.8rem;
+  padding-top: 1rem;
 }
 
-@media (min-width: 768px) and (max-width: 85rem) {
+.workflow-workspace-opening-state p {
+  margin: 0;
+  color: rgb(var(--mm-muted));
+  font-size: 0.9rem;
+}
+
+.workflow-workspace-shell[data-sidebar-collapsed="true"] .workflow-workspace-detail {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 768px) {
   .workflow-workspace-shell[data-sidebar-collapsed="true"] {
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 1rem;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -7505,7 +7564,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 @media (prefers-reduced-motion: reduce) {
   .workflow-workspace-sidebar,
-  .workflow-workspace-open-sidebar,
   .workflow-workspace-detail {
     transition-duration: 1ms !important;
     animation-duration: 1ms !important;
@@ -7564,8 +7622,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     max-width: none;
   }
 
-  .workflow-workspace-sidebar,
-  .workflow-workspace-open-sidebar {
+  .workflow-workspace-sidebar {
     display: none;
   }
 
@@ -7632,7 +7689,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 @media (prefers-reduced-motion: reduce) {
   .workflow-workspace-shell,
   .workflow-workspace-sidebar,
-  .workflow-workspace-open-sidebar,
   .workflow-workspace-detail {
     transition: none !important;
     animation: none !important;

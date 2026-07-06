@@ -9,6 +9,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
@@ -29,6 +30,7 @@ import {
   preferredTemplate,
   resolveDefaultProviderProfileId,
   resolveObjectiveInstructions,
+  workflowStartFormSnapshot,
   WORKFLOW_START_HEADING_QUOTES,
   WorkflowStartPage,
 } from "./workflow-start";
@@ -36,6 +38,50 @@ import {
 vi.mock("../lib/navigation", () => ({
   navigateTo: vi.fn(),
 }));
+
+describe("workflowStartFormSnapshot", () => {
+  it("distinguishes selected radio and checkbox options that share a group name", () => {
+    const form = document.createElement("form");
+    form.innerHTML = `
+      <input type="radio" name="color" value="red" checked />
+      <input type="radio" name="color" value="blue" />
+      <input type="checkbox" name="flags" value="dry-run" checked />
+      <input type="checkbox" name="flags" value="publish" />
+    `;
+
+    const initial = workflowStartFormSnapshot(form);
+    const red = form.querySelector('input[value="red"]');
+    const blue = form.querySelector('input[value="blue"]');
+    const dryRun = form.querySelector('input[value="dry-run"]');
+    const publish = form.querySelector('input[value="publish"]');
+    if (
+      !(red instanceof HTMLInputElement) ||
+      !(blue instanceof HTMLInputElement) ||
+      !(dryRun instanceof HTMLInputElement) ||
+      !(publish instanceof HTMLInputElement)
+    ) {
+      throw new Error("Expected test inputs to exist");
+    }
+
+    red.checked = false;
+    blue.checked = true;
+    expect(workflowStartFormSnapshot(form)).not.toBe(initial);
+
+    red.checked = true;
+    blue.checked = false;
+    dryRun.checked = false;
+    publish.checked = true;
+    expect(workflowStartFormSnapshot(form)).not.toBe(initial);
+  });
+});
+
+function renderWorkflowStartPage(payload: BootPayload) {
+  return renderWithClient(
+    <MemoryRouter initialEntries={[`${window.location.pathname}${window.location.search}`]}>
+      <WorkflowStartPage payload={payload} />
+    </MemoryRouter>,
+  );
+}
 
 describe("buildEditParametersPatch", () => {
   it("uses submitted runtime fields as authoritative when canonical edit metadata is cleared", () => {
@@ -120,6 +166,12 @@ describe("WorkflowStartPage loading placeholders", () => {
           json: async () => ({ items: { worker: [] }, legacyItems: [] }),
         } as Response);
       }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
       return Promise.resolve({
         ok: true,
         json: async () => ({}),
@@ -141,20 +193,90 @@ describe("WorkflowStartPage loading placeholders", () => {
       },
     };
 
-    renderWithClient(
-      <WorkflowStartPage
-        payload={{
+    renderWorkflowStartPage({
           ...mockPayload,
           initialData: {
             dashboardConfig,
           },
-        }}
-      />,
-    );
+        });
 
     expect(screen.getByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     expect(screen.getByText("Workflow start editable draft loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-form-controls")).toBeTruthy();
+  });
+});
+
+describe("WorkflowStartPage workflow list display modes", () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    window.history.pushState({}, "Create Workflow", "/workflows/new");
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith("/api/executions?")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                workflowId: "mm:create-sidebar",
+                title: "Sidebar workflow",
+                status: "completed",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+        } as Response);
+      }
+      if (url.includes("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("renders Create without a workflow list in hidden mode", () => {
+    renderWorkflowStartPage({
+          ...mockPayload,
+          initialData: {
+            ...(mockPayload.initialData as Record<string, unknown>),
+            workflowListDisplayMode: "hidden",
+          },
+        });
+
+    expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
+    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
+  });
+
+  it("renders Create with the workflow list as a sidebar in sidebar mode", async () => {
+    renderWorkflowStartPage({
+          ...mockPayload,
+          initialData: {
+            ...(mockPayload.initialData as Record<string, unknown>),
+            workflowListDisplayMode: "sidebar",
+          },
+        });
+
+    const sidebar = await screen.findByRole("complementary", { name: "Workflow navigation" });
+    expect((await within(sidebar).findByRole("link", { name: /Sidebar workflow/i })).getAttribute("href")).toBe(
+      "/workflows/mm%3Acreate-sidebar?source=temporal",
+    );
+    expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
   });
 });
 
@@ -637,7 +759,7 @@ describe("WorkflowStart schedule mode entry", () => {
             json: async () => ({ items: [] }),
           } as Response);
         }
-        if (url.startsWith("/api/v1/provider-profiles")) {
+      if (url.includes("/api/v1/provider-profiles")) {
           return Promise.resolve({
             ok: true,
             json: async () => [],
@@ -7787,7 +7909,8 @@ describe.skip("Task Create Entrypoint", () => {
       Array.from(publishModeSelect.options).some(
         (option) =>
           option.value === "auto" &&
-          option.text === "Auto — selected skill decides" &&
+          option.text === "Auto" &&
+          option.getAttribute("title") === "Auto — selected skill decides" &&
           option.disabled,
       ),
     ).toBe(true);
