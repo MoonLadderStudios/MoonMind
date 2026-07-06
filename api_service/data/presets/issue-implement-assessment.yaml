@@ -64,17 +64,26 @@ steps:
     First persist the loaded issue preset brief as a local handoff artifact at {{
     inputs.brief_artifact_path }} with keys issue_provider, issue_ref, issue_url,
     title, description, acceptance_criteria, labels, preset_brief, constraints,
-    source_resolution, trusted_source, and truncated. Copy the brief content exactly
-    from the trusted brief-loading tool step context for {{ inputs.issue_provider
-    }} issue {{ inputs.issue_ref }}; do not re-fetch, paraphrase, or invent requirements.
-    Map provider summary/title fields to title and provider body/description fields
-    to description; do not write summary or body aliases. Set truncated to true when
-    any copied field contains the literal marker ...[truncated], and record that
-    truncation as a risk in the assessment summary; otherwise set truncated to false.
-    Later moonspec-verify steps in this preset require this artifact as the authoritative
-    issue brief for verification target issue_brief. If no trusted loaded brief is
-    available to persist, report BLOCKED with that missing evidence instead of writing
-    a fabricated brief.
+    source_resolution, trusted_source, truncated, and truncated_fields. Copy the
+    brief content exactly from the trusted brief-loading tool step context for {{
+    inputs.issue_provider }} issue {{ inputs.issue_ref }}; never paraphrase or invent
+    requirements. Map provider summary/title fields to title and provider body/description
+    fields to description; do not write summary or body aliases. When any copied
+    field contains the literal truncation marker ...[truncated], recover that field''s
+    full content through the trusted MoonMind tool surface for {{ inputs.issue_provider
+    }} (for jira, the MoonMind MCP jira.get_issue tool; for github, the authenticated
+    GitHub issue tooling) and persist the full recovered content in place of the
+    truncated text. Do not use provider-native connectors, web scraping, or guessed
+    content for recovery. Set truncated to false and truncated_fields to an empty
+    list when no marker remains after recovery. Only when trusted recovery is unavailable
+    in this runtime, keep the visible content, set truncated to true, list the still-truncated
+    keys in truncated_fields, and record the residual truncation as a risk in the
+    assessment summary. Never write a requirement or acceptance-criteria entry for
+    content you cannot see: a truncation marker is a delivery artifact, not a requirement,
+    and hidden content must not become an assessment requirement row. Later moonspec-verify
+    steps in this preset require this artifact as the authoritative issue brief for
+    verification target issue_brief. If no trusted loaded brief is available to persist,
+    report BLOCKED with that missing evidence instead of writing a fabricated brief.
 
 
     Record the following workflow constraints verbatim under the constraints key
@@ -100,14 +109,21 @@ steps:
 
     - BLOCKED: the requirements are too ambiguous to assess, or required Jira/repo
     evidence is unavailable. Do not guess; report BLOCKED with the exact missing evidence
-    and stop the preset.
+    and stop the preset. A residual truncation marker alone does not make the assessment
+    BLOCKED when the visible requirements and acceptance criteria are assessable;
+    assess the visible scope and record the truncation risk.
 
 
     Record the verdict and a concise list of met/partially-met/unmet requirements
     in the step result AND in a local handoff artifact at {{ inputs.assessment_artifact_path
     }} with keys issue_provider, issue_ref, issue_url, verdict, branch, base_ref,
     mode, summary, and requirements (list of objects with description and status of
-    met, partially_met, not_met, or unverifiable).
+    met, partially_met, not_met, or unverifiable). Use status unverifiable, with a
+    short reason in the description, only for requirements that can be proven solely
+    by manual testing, external deployment, provider credentials, or tooling that
+    is not available in this runtime. Unverifiable entries are disclosed scope exclusions
+    for later verification, not implementation gaps, and they must describe visible
+    issue content, never hidden truncated content.
 
 
     The verdict written here is the controlling input for every later step in this

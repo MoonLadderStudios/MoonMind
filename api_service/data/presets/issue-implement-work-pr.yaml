@@ -132,9 +132,30 @@ steps:
     or tasks.md for issue_brief verification mode.
 
 
-    Re-read the issue preset brief and confirm every required behavior change is implemented
-    and covered by tests. Run the focused unit and integration checks named by the
-    brief or implied by the changed code paths.
+    Re-read the issue preset brief and confirm every required behavior change that
+    is visible in the brief artifact is implemented and covered by tests. Run the
+    focused unit and integration checks named by the brief or implied by the changed
+    code paths.
+
+
+    Verification scope rules: the visible content of {{ inputs.brief_artifact_path
+    }} plus the assessment backlog in {{ inputs.assessment_artifact_path }} define
+    the verification scope. If the brief artifact is marked truncated, first attempt
+    one bounded recovery of the full issue content through the trusted MoonMind tool
+    surface; verify against the recovered content when recovery succeeds, otherwise
+    verify the visible requirements and report the residual truncation as a disclosed
+    scope limitation instead of NO_DETERMINATION, unless the acceptance criteria
+    themselves are truncated and unrecoverable. Treat assessment requirements with
+    status unverifiable, and requirements provable only by manual testing, external
+    deployment, or provider tooling unavailable in this runtime, as disclosed scope
+    exclusions: list them with reasons in the verifier result, and do not let them
+    block FULLY_IMPLEMENTED or justify NO_DETERMINATION when every repo-verifiable
+    in-scope requirement is VERIFIED. Record optional retrieval or enrichment tooling
+    that is unavailable or misconfigured (for example MoonMind RAG search failing
+    with embedding_provider_not_configured) as a NOT RUN environment note; it never
+    gates the verdict. Reserve NO_DETERMINATION for a missing or unreadable brief
+    artifact, unrecoverably truncated acceptance criteria, or visible in-scope requirements
+    whose repository evidence cannot be inspected in this runtime.
 
 
     If verification returns ADDITIONAL_WORK_NEEDED, produce structured remaining
@@ -184,8 +205,12 @@ steps:
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
-    is recoverable in this runtime, such as by running a skipped command or inspecting
-    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is recoverable in this runtime, such as by running a skipped command, inspecting
+    available files, or recovering a truncated issue brief. A brief artifact marked
+    truncated is recoverable in this runtime: recover the full issue content through
+    the trusted MoonMind tool surface, update {{ inputs.brief_artifact_path }} with
+    the recovered content and truncated set to false, and continue remediation against
+    the recovered scope. Otherwise stop and report the exact blocker. If the latest verdict
     is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
     treat it as terminal for issue implementation remediation and do not create a
     pull request.
@@ -211,6 +236,26 @@ steps:
     Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
+
+
+    Verification scope rules: the visible content of {{ inputs.brief_artifact_path
+    }} plus the assessment backlog in {{ inputs.assessment_artifact_path }} define
+    the verification scope. If the brief artifact is marked truncated, first attempt
+    one bounded recovery of the full issue content through the trusted MoonMind tool
+    surface; verify against the recovered content when recovery succeeds, otherwise
+    verify the visible requirements and report the residual truncation as a disclosed
+    scope limitation instead of NO_DETERMINATION, unless the acceptance criteria
+    themselves are truncated and unrecoverable. Treat assessment requirements with
+    status unverifiable, and requirements provable only by manual testing, external
+    deployment, or provider tooling unavailable in this runtime, as disclosed scope
+    exclusions: list them with reasons in the verifier result, and do not let them
+    block FULLY_IMPLEMENTED or justify NO_DETERMINATION when every repo-verifiable
+    in-scope requirement is VERIFIED. Record optional retrieval or enrichment tooling
+    that is unavailable or misconfigured (for example MoonMind RAG search failing
+    with embedding_provider_not_configured) as a NOT RUN environment note; it never
+    gates the verdict. Reserve NO_DETERMINATION for a missing or unreadable brief
+    artifact, unrecoverably truncated acceptance criteria, or visible in-scope requirements
+    whose repository evidence cannot be inspected in this runtime.
 
 
     This is remediation verification attempt 1 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
@@ -260,8 +305,12 @@ steps:
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
-    is recoverable in this runtime, such as by running a skipped command or inspecting
-    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is recoverable in this runtime, such as by running a skipped command, inspecting
+    available files, or recovering a truncated issue brief. A brief artifact marked
+    truncated is recoverable in this runtime: recover the full issue content through
+    the trusted MoonMind tool surface, update {{ inputs.brief_artifact_path }} with
+    the recovered content and truncated set to false, and continue remediation against
+    the recovered scope. Otherwise stop and report the exact blocker. If the latest verdict
     is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
     treat it as terminal for issue implementation remediation and do not create a
     pull request.
@@ -287,6 +336,26 @@ steps:
     Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
+
+
+    Verification scope rules: the visible content of {{ inputs.brief_artifact_path
+    }} plus the assessment backlog in {{ inputs.assessment_artifact_path }} define
+    the verification scope. If the brief artifact is marked truncated, first attempt
+    one bounded recovery of the full issue content through the trusted MoonMind tool
+    surface; verify against the recovered content when recovery succeeds, otherwise
+    verify the visible requirements and report the residual truncation as a disclosed
+    scope limitation instead of NO_DETERMINATION, unless the acceptance criteria
+    themselves are truncated and unrecoverable. Treat assessment requirements with
+    status unverifiable, and requirements provable only by manual testing, external
+    deployment, or provider tooling unavailable in this runtime, as disclosed scope
+    exclusions: list them with reasons in the verifier result, and do not let them
+    block FULLY_IMPLEMENTED or justify NO_DETERMINATION when every repo-verifiable
+    in-scope requirement is VERIFIED. Record optional retrieval or enrichment tooling
+    that is unavailable or misconfigured (for example MoonMind RAG search failing
+    with embedding_provider_not_configured) as a NOT RUN environment note; it never
+    gates the verdict. Reserve NO_DETERMINATION for a missing or unreadable brief
+    artifact, unrecoverably truncated acceptance criteria, or visible in-scope requirements
+    whose repository evidence cannot be inspected in this runtime.
 
 
     This is remediation verification attempt 2 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
@@ -336,8 +405,12 @@ steps:
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
-    is recoverable in this runtime, such as by running a skipped command or inspecting
-    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is recoverable in this runtime, such as by running a skipped command, inspecting
+    available files, or recovering a truncated issue brief. A brief artifact marked
+    truncated is recoverable in this runtime: recover the full issue content through
+    the trusted MoonMind tool surface, update {{ inputs.brief_artifact_path }} with
+    the recovered content and truncated set to false, and continue remediation against
+    the recovered scope. Otherwise stop and report the exact blocker. If the latest verdict
     is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
     treat it as terminal for issue implementation remediation and do not create a
     pull request.
@@ -363,6 +436,26 @@ steps:
     Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
+
+
+    Verification scope rules: the visible content of {{ inputs.brief_artifact_path
+    }} plus the assessment backlog in {{ inputs.assessment_artifact_path }} define
+    the verification scope. If the brief artifact is marked truncated, first attempt
+    one bounded recovery of the full issue content through the trusted MoonMind tool
+    surface; verify against the recovered content when recovery succeeds, otherwise
+    verify the visible requirements and report the residual truncation as a disclosed
+    scope limitation instead of NO_DETERMINATION, unless the acceptance criteria
+    themselves are truncated and unrecoverable. Treat assessment requirements with
+    status unverifiable, and requirements provable only by manual testing, external
+    deployment, or provider tooling unavailable in this runtime, as disclosed scope
+    exclusions: list them with reasons in the verifier result, and do not let them
+    block FULLY_IMPLEMENTED or justify NO_DETERMINATION when every repo-verifiable
+    in-scope requirement is VERIFIED. Record optional retrieval or enrichment tooling
+    that is unavailable or misconfigured (for example MoonMind RAG search failing
+    with embedding_provider_not_configured) as a NOT RUN environment note; it never
+    gates the verdict. Reserve NO_DETERMINATION for a missing or unreadable brief
+    artifact, unrecoverably truncated acceptance criteria, or visible in-scope requirements
+    whose repository evidence cannot be inspected in this runtime.
 
 
     This is remediation verification attempt 3 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
@@ -412,8 +505,12 @@ steps:
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
-    is recoverable in this runtime, such as by running a skipped command or inspecting
-    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is recoverable in this runtime, such as by running a skipped command, inspecting
+    available files, or recovering a truncated issue brief. A brief artifact marked
+    truncated is recoverable in this runtime: recover the full issue content through
+    the trusted MoonMind tool surface, update {{ inputs.brief_artifact_path }} with
+    the recovered content and truncated set to false, and continue remediation against
+    the recovered scope. Otherwise stop and report the exact blocker. If the latest verdict
     is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
     treat it as terminal for issue implementation remediation and do not create a
     pull request.
@@ -439,6 +536,26 @@ steps:
     Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
+
+
+    Verification scope rules: the visible content of {{ inputs.brief_artifact_path
+    }} plus the assessment backlog in {{ inputs.assessment_artifact_path }} define
+    the verification scope. If the brief artifact is marked truncated, first attempt
+    one bounded recovery of the full issue content through the trusted MoonMind tool
+    surface; verify against the recovered content when recovery succeeds, otherwise
+    verify the visible requirements and report the residual truncation as a disclosed
+    scope limitation instead of NO_DETERMINATION, unless the acceptance criteria
+    themselves are truncated and unrecoverable. Treat assessment requirements with
+    status unverifiable, and requirements provable only by manual testing, external
+    deployment, or provider tooling unavailable in this runtime, as disclosed scope
+    exclusions: list them with reasons in the verifier result, and do not let them
+    block FULLY_IMPLEMENTED or justify NO_DETERMINATION when every repo-verifiable
+    in-scope requirement is VERIFIED. Record optional retrieval or enrichment tooling
+    that is unavailable or misconfigured (for example MoonMind RAG search failing
+    with embedding_provider_not_configured) as a NOT RUN environment note; it never
+    gates the verdict. Reserve NO_DETERMINATION for a missing or unreadable brief
+    artifact, unrecoverably truncated acceptance criteria, or visible in-scope requirements
+    whose repository evidence cannot be inspected in this runtime.
 
 
     This is remediation verification attempt 4 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
@@ -488,8 +605,12 @@ steps:
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
-    is recoverable in this runtime, such as by running a skipped command or inspecting
-    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is recoverable in this runtime, such as by running a skipped command, inspecting
+    available files, or recovering a truncated issue brief. A brief artifact marked
+    truncated is recoverable in this runtime: recover the full issue content through
+    the trusted MoonMind tool surface, update {{ inputs.brief_artifact_path }} with
+    the recovered content and truncated set to false, and continue remediation against
+    the recovered scope. Otherwise stop and report the exact blocker. If the latest verdict
     is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
     treat it as terminal for issue implementation remediation and do not create a
     pull request.
@@ -515,6 +636,26 @@ steps:
     Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
+
+
+    Verification scope rules: the visible content of {{ inputs.brief_artifact_path
+    }} plus the assessment backlog in {{ inputs.assessment_artifact_path }} define
+    the verification scope. If the brief artifact is marked truncated, first attempt
+    one bounded recovery of the full issue content through the trusted MoonMind tool
+    surface; verify against the recovered content when recovery succeeds, otherwise
+    verify the visible requirements and report the residual truncation as a disclosed
+    scope limitation instead of NO_DETERMINATION, unless the acceptance criteria
+    themselves are truncated and unrecoverable. Treat assessment requirements with
+    status unverifiable, and requirements provable only by manual testing, external
+    deployment, or provider tooling unavailable in this runtime, as disclosed scope
+    exclusions: list them with reasons in the verifier result, and do not let them
+    block FULLY_IMPLEMENTED or justify NO_DETERMINATION when every repo-verifiable
+    in-scope requirement is VERIFIED. Record optional retrieval or enrichment tooling
+    that is unavailable or misconfigured (for example MoonMind RAG search failing
+    with embedding_provider_not_configured) as a NOT RUN environment note; it never
+    gates the verdict. Reserve NO_DETERMINATION for a missing or unreadable brief
+    artifact, unrecoverably truncated acceptance criteria, or visible in-scope requirements
+    whose repository evidence cannot be inspected in this runtime.
 
 
     This is remediation verification attempt 5 of {{ inputs.remediation_max_attempts }}. If the verdict is ADDITIONAL_WORK_NEEDED,
@@ -564,8 +705,12 @@ steps:
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
-    is recoverable in this runtime, such as by running a skipped command or inspecting
-    available files. Otherwise stop and report the exact blocker. If the latest verdict
+    is recoverable in this runtime, such as by running a skipped command, inspecting
+    available files, or recovering a truncated issue brief. A brief artifact marked
+    truncated is recoverable in this runtime: recover the full issue content through
+    the trusted MoonMind tool surface, update {{ inputs.brief_artifact_path }} with
+    the recovered content and truncated set to false, and continue remediation against
+    the recovered scope. Otherwise stop and report the exact blocker. If the latest verdict
     is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
     treat it as terminal for issue implementation remediation and do not create a
     pull request.
@@ -592,6 +737,26 @@ steps:
     Run moonspec-verify against verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} after remediation only when this attempt is within {{ inputs.remediation_max_attempts }} and the latest verdict is not FULLY_IMPLEMENTED.
     Use {{ inputs.brief_artifact_path }} as the authoritative issue brief and {{
     inputs.assessment_artifact_path }} as the initial state assessment.
+
+
+    Verification scope rules: the visible content of {{ inputs.brief_artifact_path
+    }} plus the assessment backlog in {{ inputs.assessment_artifact_path }} define
+    the verification scope. If the brief artifact is marked truncated, first attempt
+    one bounded recovery of the full issue content through the trusted MoonMind tool
+    surface; verify against the recovered content when recovery succeeds, otherwise
+    verify the visible requirements and report the residual truncation as a disclosed
+    scope limitation instead of NO_DETERMINATION, unless the acceptance criteria
+    themselves are truncated and unrecoverable. Treat assessment requirements with
+    status unverifiable, and requirements provable only by manual testing, external
+    deployment, or provider tooling unavailable in this runtime, as disclosed scope
+    exclusions: list them with reasons in the verifier result, and do not let them
+    block FULLY_IMPLEMENTED or justify NO_DETERMINATION when every repo-verifiable
+    in-scope requirement is VERIFIED. Record optional retrieval or enrichment tooling
+    that is unavailable or misconfigured (for example MoonMind RAG search failing
+    with embedding_provider_not_configured) as a NOT RUN environment note; it never
+    gates the verdict. Reserve NO_DETERMINATION for a missing or unreadable brief
+    artifact, unrecoverably truncated acceptance criteria, or visible in-scope requirements
+    whose repository evidence cannot be inspected in this runtime.
 
 
     This is the controlling verification gate for pull request creation. If the verdict

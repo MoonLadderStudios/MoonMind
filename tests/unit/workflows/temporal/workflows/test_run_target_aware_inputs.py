@@ -549,6 +549,53 @@ def test_trusted_issue_context_uses_valid_json_after_truncation() -> None:
     parsed = json.loads(payload)
     assert parsed["trustedSource"] == "moonmind.jira.get_issue"
     assert parsed["jiraPresetBrief"].endswith("...[truncated]")
+    assert parsed["contextTruncation"] == {
+        "truncated": True,
+        "truncatedKeys": ["jiraPresetBrief"],
+    }
+    assert "recover the full content" in instruction
+    assert "MoonMind trusted tool surfaces" in instruction
+
+
+def test_trusted_issue_context_omits_truncation_disclosure_when_complete() -> None:
+    instruction = MoonMindRunWorkflow._trusted_previous_outputs_instruction(
+        {
+            "trustedSource": "moonmind.jira.get_issue",
+            "jiraIssueKey": "MM-657",
+            "jiraPresetBrief": "MM-657: Settings HTTP API surface",
+        }
+    )
+
+    assert instruction is not None
+    payload = instruction.split("```json\n", 1)[1].split("\n```", 1)[0]
+    parsed = json.loads(payload)
+    assert "contextTruncation" not in parsed
+    assert "recover the full content" not in instruction
+
+
+def test_trusted_issue_context_discloses_truncation_in_essential_fallback() -> None:
+    instruction = MoonMindRunWorkflow._trusted_previous_outputs_instruction(
+        {
+            "trustedSource": "moonmind.jira.get_issue",
+            "jiraIssueKey": "MM-657",
+            "jiraPresetBrief": "A" * 30000,
+            "presetBrief": "B" * 30000,
+            "jiraStepInstructions": "C" * 30000,
+            "summary": "D" * 30000,
+            "jiraIssue": {"descriptionText": "E" * 30000},
+        }
+    )
+
+    assert instruction is not None
+    payload = instruction.split("```json\n", 1)[1].split("\n```", 1)[0]
+    parsed = json.loads(payload)
+    assert parsed["jiraPresetBrief"].endswith("...[truncated]")
+    assert len(parsed["jiraPresetBrief"]) == 3000
+    truncation = parsed["contextTruncation"]
+    assert truncation["truncated"] is True
+    assert "jiraPresetBrief" in truncation["truncatedKeys"]
+    assert "jiraIssue.descriptionText" not in truncation["truncatedKeys"]
+    assert "recover the full content" in instruction
 
 
 def test_trusted_issue_context_ignores_unconsumed_instruction_aliases() -> None:

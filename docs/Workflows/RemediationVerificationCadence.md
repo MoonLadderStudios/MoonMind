@@ -76,6 +76,9 @@ The attempt number is the retry-cycle number, not the individual gap number. A s
 5. **Full verification is attempt-scoped.** The expensive authoritative verifier runs after a remediation attempt, not after every atomic fix.
 6. **Budgets are explicit.** Maximum attempts, action budgets, and escalation behavior must be visible and enforced.
 7. **Artifacts stay durable.** Each remediation attempt and verification attempt must leave enough evidence to audit what changed and why another attempt did or did not run.
+8. **Verification scope is the visible, trusted input.** The verifier's scope is the visible content of the trusted verification inputs (issue brief artifact, spec, assessment backlog). When a trusted input is marked truncated, the verifier or remediator first attempts one bounded recovery of the full content through the trusted MoonMind tool surface; residual truncation is a disclosed scope limitation in the report, not a `NO_DETERMINATION` trigger, unless the acceptance criteria themselves are truncated and unrecoverable. Hidden truncated content never becomes a requirement.
+9. **Non-repo-verifiable requirements are disclosed exclusions.** Requirements provable only by manual testing, external deployment, or provider tooling unavailable in the runtime are reported as scope exclusions with reasons. They do not block `FULLY_IMPLEMENTED` and do not force `NO_DETERMINATION` when every repo-verifiable in-scope requirement is verified.
+10. **Optional tooling never gates the verdict.** Unavailable or misconfigured optional enrichment tooling (for example MoonMind RAG retrieval failing with `embedding_provider_not_configured`) is recorded as a `NOT RUN` environment note. `NO_DETERMINATION` is reserved for verification targets that cannot be established at all: a missing or unreadable authoritative input, unrecoverably truncated acceptance criteria, or repository evidence for visible in-scope requirements that cannot be inspected.
 
 ---
 
