@@ -79,6 +79,67 @@ async def test_claude_workspace_trust_config_merges_existing_projects(tmp_path):
     )
 
 @pytest.mark.asyncio
+async def test_claude_workspace_trust_config_resets_invalid_json(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    config_dir = tmp_path / "home" / ".claude"
+    config_file = tmp_path / "home" / ".claude.json"
+    workspace = tmp_path / "workspaces" / "trust-run" / "repo"
+    workspace.mkdir(parents=True)
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{not-json", encoding="utf-8")
+
+    await launcher._ensure_claude_workspace_trust_config(
+        config_dir=config_dir,
+        config_file=config_file,
+        workspace_path=str(workspace),
+        run_as_user=None,
+    )
+
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    assert config["version"] == 1
+    assert (
+        config["projects"][str(workspace.resolve())]["hasTrustDialogAccepted"]
+        is True
+    )
+
+@pytest.mark.asyncio
+async def test_claude_workspace_trust_config_resets_non_object_sections(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    config_dir = tmp_path / "home" / ".claude"
+    config_file = tmp_path / "home" / ".claude.json"
+    workspace = tmp_path / "workspaces" / "trust-run" / "repo"
+    workspace.mkdir(parents=True)
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "projects": {
+                    str(workspace.resolve()): ["not", "an", "object"],
+                    "other": {"kept": True},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    await launcher._ensure_claude_workspace_trust_config(
+        config_dir=config_dir,
+        config_file=config_file,
+        workspace_path=str(workspace),
+        run_as_user=None,
+    )
+
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    assert config["projects"]["other"]["kept"] is True
+    assert (
+        config["projects"][str(workspace.resolve())]["hasTrustDialogAccepted"]
+        is True
+    )
+
+@pytest.mark.asyncio
 async def test_run_checked_command_redacts_auth_paths(tmp_path, monkeypatch):
     store = ManagedRunStore(tmp_path / "managed_runs")
     launcher = ManagedRuntimeLauncher(store)
@@ -2298,6 +2359,67 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
     assert (run_root / ".moonmind" / "bin" / "gh").exists()
 
 @pytest.mark.asyncio
+async def test_launch_pretrusts_claude_code_without_privilege_drop(
+    tmp_path, monkeypatch
+):
+    captured_launches: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    trust_calls: list[dict[str, object]] = []
+
+    class _FakeProcess:
+        pid = 4242
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        captured_launches.append((args, kwargs))
+        return _FakeProcess()
+
+    async def _fake_ensure(self, **kwargs):
+        trust_calls.append(kwargs)
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._ensure_claude_workspace_trust_config",
+        _fake_ensure,
+    )
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    workspace_root = tmp_path / "workspaces" / "non-root-run" / "repo"
+    workspace_root.mkdir(parents=True)
+
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        passthrough_env_keys=[],
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="non-root-run",
+        request=_make_request(),
+        profile=profile,
+        workspace_path=str(workspace_root),
+    )
+    await process.wait()
+
+    assert len(trust_calls) == 1
+    trust_call = trust_calls[0]
+    assert trust_call["run_as_user"] is None
+    assert trust_call["workspace_path"] == str(workspace_root)
+    assert trust_call["config_file"] == Path(os.environ["HOME"]) / ".claude.json"
+    assert captured_launches
+    assert captured_launches[-1][0][0] == "claude"
+
 @pytest.mark.asyncio
 async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypatch):
     """When launched as root for claude_code runtime, the process should:

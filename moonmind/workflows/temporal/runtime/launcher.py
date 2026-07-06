@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 _LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
 
 _CLAUDE_WORKSPACE_TRUST_CONFIG_SCRIPT = r"""
+import fcntl
 import json
 import sys
 from pathlib import Path
@@ -59,36 +60,46 @@ from pathlib import Path
 config_dir = Path(sys.argv[1])
 config_file = Path(sys.argv[2])
 workspace_path = sys.argv[3]
+lock_file = config_file.with_suffix(config_file.suffix + ".lock")
 
 config_file.parent.mkdir(parents=True, exist_ok=True)
 config_dir.mkdir(parents=True, exist_ok=True)
+lock_file.parent.mkdir(parents=True, exist_ok=True)
 
-if config_file.exists():
-    raw_config = config_file.read_text(encoding="utf-8").strip()
-    if raw_config:
-        config = json.loads(raw_config)
-        if not isinstance(config, dict):
-            raise ValueError("Claude config root must be a JSON object")
+with lock_file.open("w", encoding="utf-8") as lock_handle:
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+
+    if config_file.exists():
+        raw_config = config_file.read_text(encoding="utf-8").strip()
+        if raw_config:
+            try:
+                config = json.loads(raw_config)
+            except json.JSONDecodeError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+        else:
+            config = {}
     else:
         config = {}
-else:
-    config = {}
 
-config.setdefault("version", 1)
-if workspace_path:
-    projects = config.setdefault("projects", {})
-    if not isinstance(projects, dict):
-        raise ValueError("Claude config projects must be a JSON object")
+    config.setdefault("version", 1)
+    if workspace_path:
+        projects = config.get("projects")
+        if not isinstance(projects, dict):
+            projects = {}
+            config["projects"] = projects
 
-    project_config = projects.setdefault(workspace_path, {})
-    if not isinstance(project_config, dict):
-        raise ValueError("Claude config project entry must be a JSON object")
-    project_config["hasTrustDialogAccepted"] = True
+        project_config = projects.get(workspace_path)
+        if not isinstance(project_config, dict):
+            project_config = {}
+            projects[workspace_path] = project_config
+        project_config["hasTrustDialogAccepted"] = True
 
-config_file.write_text(
-    json.dumps(config, indent=2, sort_keys=True) + "\n",
-    encoding="utf-8",
-)
+    config_file.write_text(
+        json.dumps(config, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 """.strip()
 
 _SECRET_LIKE_PATTERN = re.compile(
@@ -1441,35 +1452,38 @@ class ManagedRuntimeLauncher:
             if _needs_priv_drop:
                 # runuser -u does not rewrite HOME/USER/LOGNAME for us when we pass
                 # an explicit env block, so seed the target-user login context
-                # explicitly before launching Claude Code.
+                # explicitly before any app-user command.
                 env_overrides["HOME"] = "/home/app"
                 env_overrides["USER"] = "app"
                 env_overrides["LOGNAME"] = "app"
 
-                # Ensure Claude Code's config file exists in the app user's HOME
-                # and trusts the MoonMind-managed workspace. Without this, the
-                # CLI ignores permissions.allow entries until an interactive
+            if _is_claude_code:
+                # Ensure Claude Code's config file exists in the runtime user's
+                # HOME and trusts the MoonMind-managed workspace. Without this,
+                # the CLI ignores permissions.allow entries until an interactive
                 # trust dialog is accepted.
                 #
-                # Update the config as the app user (via runuser) to avoid:
-                # - Symlink traversal risks when writing as root
-                # - File ownership mismatches (root-owned files used by app user)
-                app_home_dir = Path(env_overrides["HOME"])
-                claude_config_dir = app_home_dir / ".claude"
-                claude_config_file = app_home_dir / ".claude.json"
+                # When privileges are dropped, update the config as the app user
+                # to avoid symlink traversal risks and root-owned config files.
+                claude_home_dir = Path(
+                    env_overrides.get("HOME") or os.path.expanduser("~")
+                )
+                claude_config_dir = claude_home_dir / ".claude"
+                claude_config_file = claude_home_dir / ".claude.json"
 
                 try:
                     await self._ensure_claude_workspace_trust_config(
                         config_dir=claude_config_dir,
                         config_file=claude_config_file,
                         workspace_path=resolved_workspace_path,
-                        run_as_user="app",
+                        run_as_user="app" if _needs_priv_drop else None,
                     )
                 except RuntimeError as exc:
                     raise RuntimeError(
                         "Unable to ensure Claude workspace trust config"
                     ) from exc
 
+            if _needs_priv_drop:
                 # Use runuser with env= so secrets do not appear in process argv.
                 process = await asyncio.create_subprocess_exec(
                     "runuser", "-u", "app", "--",
