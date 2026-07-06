@@ -19,6 +19,8 @@ MoonMind project principles are no longer kept in a standalone constitution file
 - PostgreSQL in production; SQLite-backed async sessions in focused service tests; artifact storage via artifact refs (001-safe-git-isolation)
 - Python 3.11+ project conventions with FastAPI, Pydantic v2, SQLAlchemy async, Temporal workflow/activity modules, and a TypeScript dashboard outside this story. + FastAPI routers and dependency injection, SQLAlchemy async ORM, Pydantic models, pytest/pytest-asyncio, Temporal workflow boundary models, MoonMind artifact refs. (001-branch-turn-launch)
 - PostgreSQL in production through SQLAlchemy/Alembic; SQLite-backed unit tests for service/API persistence. Existing checkpoint branch tables are in `api_service/db/models.py` and `api_service/migrations/versions/333_checkpoint_branch_graph.py`. (001-branch-turn-launch)
+- TypeScript/React frontend with Python e2e tests; repository Python uses pytest for backend and browser checks. + React, React Router, TanStack Query, Zod, Vitest, Testing Library, Playwright, pytest. (001-fix-create-sidebar)
+- N/A for this UI routing/layout story; workflow rows are fetched from existing `/api/executions` list endpoints. (001-fix-create-sidebar)
 
 ## Recent Changes
 - 001-match-loading-cards: Added TypeScript 5.9.3 with React 19.2.4 for dashboard UI; Python backend remains out of scope unless API fixtures need adjustment. + React, React DOM, TanStack Query, zod, lucide-react/lucide-animated, Vitest, Testing Library, Vite, Tailwind utility classes plus `frontend/src/styles/dashboard.css`.
