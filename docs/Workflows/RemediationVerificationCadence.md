@@ -1,9 +1,9 @@
 # Remediation Verification Cadence
 
-**Status:** Desired-state design refinement
+**Status:** Desired-state design refinement and implementation plan
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Platform + dashboard
-**Last Updated:** 2026-07-03
+**Last Updated:** 2026-07-06
 **Related:** `docs/Workflows/WorkflowRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Steps/StepExecutionsAndCheckpointing.md`, `docs/Artifacts/ArtifactPresentationContract.md`, `docs/UI/WorkflowDetailsPage.md`
 
 ---
@@ -239,27 +239,181 @@ Verify remediation attempt 1 of 6
 
 ---
 
-## 10. Acceptance criteria for implementation
+## 10. Implementation review as of 2026-07-06
 
-This design is implemented when:
+The current repository has a useful partial implementation, but it does not yet satisfy this design as a system contract.
 
-1. The workflow planner creates one full verification step after each remediation attempt, not after each individual gap by default.
-2. Remediation attempt numbering is distinct from gap numbering in backend state, artifacts, and dashboard labels.
-3. The remediator receives the latest verification report and is instructed to address all safe known gaps in one attempt.
-4. Targeted local checks can be recorded inside `remediation.attempt` artifacts.
-5. Full verifier outputs are recorded as `remediation.verification` artifacts and identify the attempt they verify.
-6. Policy can still require targeted action verification or full verification for specific high-risk action kinds.
-7. The dashboard renders attempt-level progress and per-gap details without implying a full verifier per gap.
-8. Tests cover multi-gap remediation, remaining-gap retries, blocked/no-determination escalation, and high-risk action verification exceptions.
+What is already present:
+
+- The orchestrate presets already contain remediation and post-remediation verification pairs for multiple attempts.
+- Those steps already carry attempt-oriented annotations such as `moonSpecRemediationAttempt` and `moonSpecRemediationMaxAttempts`.
+- The remediation instructions already tell the worker to consume the latest verifier report and treat `ADDITIONAL_WORK_NEEDED` as the bounded remediation input.
+- The verifier instructions already preserve `ADDITIONAL_WORK_NEEDED` for the next attempt and stop for hard terminal states.
+
+What remains incomplete:
+
+- The visible preset labels still look like gap ordinals, for example `Remediate verification gaps 1 of 6` and `Verify remediation 1 of 6`.
+- The preset step graph still materializes every remediation pair up front. Later attempts rely on instruction-level skipping rather than a planner/orchestrator decision that creates or activates the next attempt only after `ADDITIONAL_WORK_NEEDED`, budget availability, and safety checks.
+- Attempt artifacts are not first-class. The repository still needs a durable `remediation.attempt` artifact schema, writer, and reader that records known gaps, statuses, changed files, targeted checks, and the input verification artifact.
+- Post-remediation verification artifacts are not attempt-scoped. The verifier should write `remediation.verification` artifacts that identify the remediation attempt they verify instead of only updating a generic verifier output path.
+- The backend state model needs an explicit remediation cadence view so attempt numbering, max-attempt budget, gap IDs, targeted checks, and authoritative verification refs are persisted separately from the plain workflow step title.
+- The dashboard needs a rendering path for attempt progress, nested gap status, targeted checks, action verification, and latest authoritative completion verification.
+- Existing tests still assert the legacy labels and static step expectations, so they protect the incomplete implementation instead of this desired cadence.
+
+A fix that only renames the current preset titles is not enough. Label cleanup is necessary, but the acceptance criteria require durable attempt state, attempt-scoped artifacts, authoritative verification refs, conditional continuation, and dashboard rendering.
 
 ---
 
-## 11. Design rule summary
+## 11. Remaining-work implementation plan
 
-Keep these rules stable as MoonMind evolves:
+### 11.1 Planner and orchestration contract
 
-1. **Batch known safe gaps into a remediation attempt.**
-2. **Run one authoritative full verifier after the attempt.**
-3. **Use targeted checks inside the attempt for cheap or safety-critical confirmation.**
-4. **Create another attempt only from a new verifier report.**
-5. **Make attempt numbering, gap counts, budgets, and verifier authority explicit in the UI and artifacts.**
+Introduce a small remediation cadence model at the workflow planning/orchestration boundary.
+
+Recommended fields:
+
+```json
+{
+  "cadence": "attempt_scoped_remediation_verification",
+  "attempt": 1,
+  "maxAttempts": 6,
+  "sourceVerificationArtifactId": "...",
+  "latestVerificationArtifactId": "...",
+  "knownGapCount": 6,
+  "terminalPolicy": {
+    "fullyImplemented": "advance",
+    "additionalWorkNeeded": "next_attempt_when_budget_and_policy_allow",
+    "blocked": "stop_or_escalate",
+    "noDetermination": "stop_or_escalate",
+    "failedUnrecoverable": "stop_or_escalate"
+  }
+}
+```
+
+The planner should derive the next remediation attempt from the latest verifier artifact, not from an individual gap. It should create or activate the next remediation pair only when the authoritative verifier returns `ADDITIONAL_WORK_NEEDED`, the attempt budget remains, and remediation policy says the remaining work is safe. If the first implementation uses static preset expansion for compatibility, the runtime still needs an explicit skip/activation state so the UI does not present unneeded future attempts as active work.
+
+### 11.2 Attempt-scoped artifacts
+
+Add schemas and writers for two durable artifact types:
+
+1. `remediation.attempt`
+   - path: `reports/remediation_attempt-<n>.json`
+   - written by the remediation step
+   - includes the input verifier artifact ref, all known gaps consumed from that report, per-gap status (`addressed`, `deferred`, `unsafe`, `still_failing`), changed files, targeted checks, and `nextVerificationRequired`
+2. `remediation.verification`
+   - path: `reports/remediation_verification-<n>.json`
+   - written by the full verifier step after an attempt
+   - includes `verifiesAttempt`, the input remediation attempt artifact ref, the whole-target verdict, remaining gaps, and the verifier evidence refs
+
+The existing generic verifier artifact can remain as a latest-pointer or compatibility artifact, but it must not be the only durable record for post-remediation verification.
+
+### 11.3 Preset and skill instruction updates
+
+Update the affected issue orchestration presets so their step titles and instructions use attempt-oriented wording:
+
+```text
+Remediate verification gaps — attempt N of M
+Verify remediation attempt N of M
+```
+
+For attempts after the first, prefer:
+
+```text
+Remediate remaining gaps — attempt N of M
+Verify remediation attempt N of M
+```
+
+Each remediation step should explicitly instruct the worker to:
+
+- read the latest verifier artifact before changing anything;
+- address all safe known gaps from that report in one bounded pass;
+- defer or mark unsafe gaps with evidence instead of silently skipping them;
+- record targeted local checks inside the remediation attempt artifact;
+- avoid creating sibling full-verifier steps for local checks;
+- stop without code changes when the latest verifier verdict is terminal.
+
+Each post-remediation verifier step should explicitly verify the whole target state and write a `remediation.verification` artifact that references the remediation attempt artifact.
+
+### 11.4 Continuation and terminal handling
+
+Normalize verifier outcomes once at the cadence boundary:
+
+- `FULLY_IMPLEMENTED`: mark the latest verification artifact as the completion authority, skip remaining remediation attempts, and allow the downstream handoff.
+- `ADDITIONAL_WORK_NEEDED`: create or activate the next remediation attempt only when budget remains and policy says the work is safe.
+- `BLOCKED`: stop or escalate with the blocking evidence; do not loop.
+- `NO_DETERMINATION`: stop or escalate with the missing-evidence reason unless the policy explicitly marks the evidence recovery as safe targeted remediation.
+- `FAILED_UNRECOVERABLE` and environment-contamination verdicts: stop, classify the failure, and prevent PR or issue handoff.
+
+This logic belongs in the planner/orchestrator layer, not only in natural-language step instructions.
+
+### 11.5 Immediate verification exceptions
+
+Keep support for immediate verification inside a remediation attempt, but model it as targeted action verification unless policy requires a full verifier. The artifact record should distinguish:
+
+- targeted health checks;
+- action verification for side-effecting or high-risk operations;
+- policy-required full completion verification.
+
+Examples include provider-profile slot changes, container/session/liveness operations, destructive actions, migrations, branch promotion, publish actions, and environmental repairs whose result determines the next safe remediation decision.
+
+### 11.6 Dashboard and API projection
+
+Extend the workflow detail API projection so the dashboard can render remediation cadence explicitly instead of parsing meaning from labels alone.
+
+Recommended UI projection:
+
+```json
+{
+  "remediationCadence": {
+    "attempt": 2,
+    "maxAttempts": 6,
+    "status": "verifying",
+    "latestAuthoritativeVerificationArtifactId": "...",
+    "attempts": [
+      {
+        "attempt": 1,
+        "remediationStepId": "...",
+        "verificationStepId": "...",
+        "knownGaps": { "total": 6, "addressed": 5, "deferred": 1, "unsafe": 0, "stillFailing": 1 },
+        "targetedChecks": { "passed": 4, "failed": 0, "notRun": 0 },
+        "verificationVerdict": "ADDITIONAL_WORK_NEEDED"
+      }
+    ]
+  }
+}
+```
+
+The Workflow detail timeline should render the remediation and full verification steps as peers at the attempt level, while targeted checks and per-gap details appear inside the remediation attempt details.
+
+### 11.7 Test plan
+
+Add or update tests at the same layer where each behavior is enforced.
+
+Required coverage:
+
+- one verifier report with multiple gaps produces one remediation attempt and one full verification step;
+- a single remediation attempt can mark multiple gaps addressed, deferred, unsafe, or still failing;
+- targeted local checks are captured in the remediation attempt artifact and do not appear as sibling full-verifier steps;
+- post-remediation verification writes a `remediation.verification` artifact that identifies the attempt it verifies;
+- `ADDITIONAL_WORK_NEEDED` creates or activates a next attempt only when budget remains and policy allows it;
+- attempt exhaustion stops with remaining-work evidence;
+- `BLOCKED`, `NO_DETERMINATION`, and unrecoverable failures stop or escalate rather than looping;
+- high-risk action policies can require targeted action verification or policy-required full verification;
+- preset expansion and dashboard rendering use attempt-oriented labels and keep gap progress separate from attempt progress;
+- the latest authoritative verification artifact is visually and API-distinct from local targeted checks.
+
+Affected tests should include the preset expansion assertions that currently expect legacy labels, backend cadence/continuation unit tests, artifact schema tests, and frontend workflow-detail rendering tests.
+
+---
+
+## 12. Implementation priority
+
+1. **Backend contract first.** Add the cadence state, artifact schemas, and continuation decision tests before UI polish. This prevents the issue from being solved only as a label change.
+2. **Preset compatibility second.** Update Jira, GitHub issue, and provider-neutral issue implementation presets to use attempt labels and attempt artifact paths while preserving existing inputs.
+3. **Verifier/remediator artifact writing third.** Ensure the remediator writes `remediation.attempt` and the full verifier writes `remediation.verification` with an explicit `verifiesAttempt` link.
+4. **Dashboard projection fourth.** Add API/UI rendering for attempt progress, per-gap status, targeted checks, and latest authoritative verification.
+5. **End-to-end acceptance last.** Exercise a multi-gap report through successful batched remediation, remaining-gap retry, blocked/no-determination stops, and a high-risk action verification exception.
+
+This order is deliberate: the durable state and artifact contract are the source of truth; labels and dashboard rendering should consume that contract rather than becoming the contract themselves.
+
+---
