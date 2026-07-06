@@ -5290,13 +5290,17 @@ async def _query_workflow_for_detail(
     temporal_client: Client,
     workflow_id: str,
     query_name: str,
+    *,
+    timeout_seconds: float | None = None,
 ) -> Any:
-    timeout_seconds = float(
-        settings.temporal_dashboard.live_query_timeout_seconds
+    effective_timeout_seconds = float(
+        timeout_seconds
+        if timeout_seconds is not None
+        else settings.temporal_dashboard.live_query_timeout_seconds
     )
     return await asyncio.wait_for(
         query_workflow(temporal_client, workflow_id, query_name),
-        timeout=timeout_seconds,
+        timeout=effective_timeout_seconds,
     )
 
 
@@ -5718,6 +5722,9 @@ def _fallback_current_step_order(record: Any) -> int | None:
 
 
 def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | None:
+    close_status = _enum_value(getattr(record, "close_status", None))
+    if close_status:
+        return None
     parameters = getattr(record, "parameters", None)
     if not isinstance(parameters, Mapping):
         return None
@@ -5816,6 +5823,26 @@ def _fallback_step_ledger_from_record(record: Any) -> StepLedgerSnapshotModel | 
         )
         return None
 
+
+def _step_ledger_query_timeout_seconds(fallback_record: Any | None) -> float:
+    live_timeout_seconds = float(
+        settings.temporal_dashboard.live_query_timeout_seconds
+    )
+    close_status = (
+        _enum_value(getattr(fallback_record, "close_status", None))
+        if fallback_record is not None
+        else None
+    )
+    if close_status:
+        return max(
+            live_timeout_seconds,
+            float(
+                settings.temporal_dashboard.terminal_step_ledger_query_timeout_seconds
+            ),
+        )
+    return live_timeout_seconds
+
+
 async def _load_execution_progress(
     *,
     temporal_client: Client,
@@ -5884,6 +5911,7 @@ async def _load_execution_step_ledger(
             temporal_client,
             workflow_id,
             "get_step_ledger",
+            timeout_seconds=_step_ledger_query_timeout_seconds(fallback_record),
         )
     except (RPCError, TimeoutError) as exc:
         logger.warning(

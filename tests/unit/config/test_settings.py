@@ -139,17 +139,27 @@ class TestTemporalDashboardSettings:
         settings = TemporalDashboardSettings(_env_file=None)
         assert settings.actions_enabled is True
         assert settings.submit_enabled is True
+        assert settings.terminal_step_ledger_query_timeout_seconds == 30.0
 
     def test_env_overrides(self, monkeypatch):
         monkeypatch.setenv("TEMPORAL_DASHBOARD_ACTIONS_ENABLED", "false")
         monkeypatch.setenv("TEMPORAL_DASHBOARD_SUBMIT_ENABLED", "false")
+        monkeypatch.setenv(
+            "TEMPORAL_DASHBOARD_TERMINAL_STEP_LEDGER_QUERY_TIMEOUT_SECONDS",
+            "12.5",
+        )
 
         settings = TemporalDashboardSettings(_env_file=None)
         assert settings.actions_enabled is False
         assert settings.submit_enabled is False
+        assert settings.terminal_step_ledger_query_timeout_seconds == 12.5
 
         monkeypatch.delenv("TEMPORAL_DASHBOARD_ACTIONS_ENABLED", raising=False)
         monkeypatch.delenv("TEMPORAL_DASHBOARD_SUBMIT_ENABLED", raising=False)
+        monkeypatch.delenv(
+            "TEMPORAL_DASHBOARD_TERMINAL_STEP_LEDGER_QUERY_TIMEOUT_SECONDS",
+            raising=False,
+        )
 
 class TestFeatureFlagsSettings:
     def test_preset_catalog_reads_prefixed_env(self, monkeypatch):
