@@ -1,0 +1,84 @@
+{
+  "handoffType": "jira-orchestrate-intake",
+  "updatedAt": "2026-07-06T00:00:00Z",
+  "jiraIssueKey": "MM-1121",
+  "classification": {
+    "inputType": "single-story feature request",
+    "reason": "The trusted Jira preset brief identifies one bounded UI behavior fix: make the Create route support the Sidebar list mode it already has a rendering path for, keep Full screen table navigation to /workflows, and make the Create-with-sidebar layout match the workflow workspace visual contract. The brief does not request splitting a broad design into multiple independently testable stories and does not identify an existing feature directory with a valid spec.md."
+  },
+  "intent": "runtime implementation workflow",
+  "canonicalInput": {
+    "trustedSource": "moonmind.jira.get_issue",
+    "artifactPath": "artifacts/jira-orchestrate-brief.json",
+    "artifactPresentInCheckout": false,
+    "jiraPresetBriefSummary": "MM-1121: Fix sidebar. Desired behavior: /workflows/new supports No list and Sidebar list, while Full screen table from Create navigates to /workflows. Current blockers: dashboard-app rewrites Sidebar list on /workflows/new to hidden, resolveWorkflowListDisplay maps /workflows/new + sidebar to hidden with status 'Sidebar list is unavailable on Create.', and /workflows/new is not dataWidePanel while workflow workspace routes are. The robust implementation should also extract reusable workflow sidebar/list/layout code out of workflow-detail.tsx so Create does not import reusable UI from another page entrypoint.",
+    "sourceDesignPathFromInstruction": "",
+    "relevantRepositoryContracts": [
+      "docs/UI/WorkflowListDisplayModes.md"
+    ],
+    "runtimeSourceRequirements": [
+      "Create page supports No list and Sidebar list.",
+      "Selecting Full screen table from Create navigates to /workflows.",
+      "/workflows/new with sidebar stays on /workflows/new, renders the Create page as the primary surface, and renders the workflow list as a sidebar.",
+      "Create with sidebar should use layout width/visual treatment consistent with workflow detail sidebar mode.",
+      "Reusable sidebar/list/layout code should not be owned by workflow-detail.tsx when it is used by Create."
+    ]
+  },
+  "artifactResumeInspection": {
+    "status": "no_existing_moonspec_artifacts_found",
+    "checkedLocations": [
+      "artifacts/",
+      "var/",
+      "docs/tmp/",
+      "repository root MoonSpec artifact paths"
+    ],
+    "checkedPatterns": [
+      "MM-1121",
+      "1121",
+      "fix sidebar",
+      "workflowListDisplayMode",
+      "spec.md",
+      "plan.md",
+      "tasks.md",
+      "research.md",
+      "quickstart.md",
+      "data-model.md",
+      "moonspec-verify"
+    ],
+    "validArtifactsToPreserve": [],
+    "evidence": [
+      "No active repository spec.md, plan.md, tasks.md, research.md, quickstart.md, or data-model.md was found outside the MoonSpec submodule.",
+      "No artifacts/ or var/ file for MM-1121, 1121, fix-sidebar, or sidebar MoonSpec output was found.",
+      "The referenced artifacts/jira-orchestrate-brief.json file is absent in this checkout, so this intake used the trusted inline MoonMind issue context as the authoritative brief.",
+      "docs/UI/WorkflowListDisplayModes.md declares that /workflows/new + sidebar stays on /workflows/new with the Create page as primary surface and the workflow list as sidebar.",
+      "frontend/src/lib/workflowListDisplayMode.ts currently rewrites /workflows/new + sidebar to hidden and returns status 'Sidebar list is unavailable on Create.'.",
+      "frontend/src/entrypoints/workflow-start.tsx already renders WorkflowWorkspaceSidebarPanel beside Create content when it receives workflowListDisplayMode: 'sidebar'.",
+      "frontend/src/lib/dashboardRoutes.ts currently resolves /workflows/new with dataWidePanel: false while workflow workspace/detail routes use dataWidePanel: true."
+    ],
+    "resumeFrom": "Specify",
+    "nextStageReason": "Specify is the first incomplete MoonSpec stage because no valid existing spec.md passes the specify gate and there are no later-stage MoonSpec artifacts for MM-1121 to preserve."
+  },
+  "stageGateStatus": {
+    "ClassifyRequestAndResumePoint": "COMPLETE",
+    "Specify": "INCOMPLETE",
+    "Plan": "NOT_STARTED",
+    "Tasks": "NOT_STARTED",
+    "Align": "NOT_STARTED",
+    "Implement": "NOT_STARTED",
+    "Verify": "NOT_STARTED",
+    "DocReconcile": "NOT_STARTED"
+  },
+  "stageExecution": {
+    "performedInThisStep": false,
+    "reason": "This managed step is limited to Jira Orchestrate intake classification and artifact resume inspection. It must not run specification, planning, task generation, implementation, verification, publishing, pull request creation, or Jira transitions."
+  },
+  "downstreamInstructions": {
+    "useBriefAsCanonicalInput": true,
+    "treatImplementationDocumentAsRuntimeSourceRequirements": false,
+    "sourceDesignPath": "",
+    "resumeFromFirstIncompleteStage": "Specify",
+    "runAsRuntimeImplementationWorkflow": true,
+    "doNotRegenerateValidLaterStageArtifacts": true,
+    "preserveExistingArtifacts": []
+  }
+}
