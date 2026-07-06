@@ -15,6 +15,7 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { DashboardApp } from './dashboard-app';
 import { navigateTo } from '../lib/navigation';
+import { readDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -187,9 +188,12 @@ vi.mock('./workflow-list', () => ({
 }));
 
 vi.mock('./workflows-workspace', () => ({
-  default: () => {
+  default: ({ payload }: { payload: BootPayload }) => {
     const isDetailRoute =
       window.location.pathname.startsWith('/workflows/') && window.location.pathname !== '/workflows/new';
+    const isCreateRoute = window.location.pathname === '/workflows/new';
+    const initialData = payload.initialData as { dashboardConfig?: Record<string, unknown> } | undefined;
+    const repository = initialData?.dashboardConfig?.defaultRepository;
     return (
       <div data-testid="workflows-workspace-route">
         <a href="/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95?source=temporal">
@@ -197,6 +201,11 @@ vi.mock('./workflows-workspace', () => ({
         </a>
         {isDetailRoute ? (
           <div>Workflow detail route loaded: {window.location.pathname}</div>
+        ) : isCreateRoute ? (
+          <>
+            <div>Workflow start route loaded</div>
+            <div>Workflow start default repository: {typeof repository === 'string' ? repository : 'none'}</div>
+          </>
         ) : (
           <div>Workflow list route loaded</div>
         )}
@@ -229,12 +238,16 @@ vi.mock('./workflow-detail', () => {
 
 vi.mock('./workflow-start', () => ({
   default: ({ payload }: { payload: BootPayload }) => {
-    const initialData = payload.initialData as { dashboardConfig?: Record<string, unknown> } | undefined;
+    const initialData = payload.initialData as {
+      dashboardConfig?: Record<string, unknown>;
+      workflowListDisplayMode?: unknown;
+    } | undefined;
     const repository = initialData?.dashboardConfig?.defaultRepository;
     return (
       <>
         <div>Workflow start route loaded</div>
         <div>Workflow start default repository: {typeof repository === 'string' ? repository : 'none'}</div>
+        <div>Workflow start list display: {String(initialData?.workflowListDisplayMode ?? 'unset')}</div>
       </>
     );
   },
@@ -321,6 +334,7 @@ describe('Dashboard shared entry', () => {
     fetchSpy.mockRestore();
     window.WebSocket = originalWebSocket;
     document.querySelectorAll('[data-nav]').forEach((node) => node.remove());
+    window.localStorage.clear();
     window.history.replaceState({}, '', '/');
   });
 
@@ -386,6 +400,45 @@ describe('Dashboard shared entry', () => {
       expect(document.querySelector('.panel--data-wide')).toBeTruthy();
       expect(document.querySelector('.dashboard-shell-constrained--data-wide')).toBeTruthy();
     });
+  });
+
+  it('renders one workflow list display radio group on covered workflow surfaces', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+
+    const group = screen.getByRole('group', { name: 'Workflow list display' });
+    expect(group).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'No list' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Full screen table' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
+  });
+
+  it('opens a visible workflow when sidebar mode is selected from the workflows table', async () => {
+    window.history.replaceState({}, '', '/workflows?source=temporal');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95');
+    });
+    expect(await screen.findByText(/Workflow detail route loaded:/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('hides the workflow list display control on unsupported routes', async () => {
+    window.history.replaceState({}, '', '/settings');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Settings permissions:');
+
+    expect(screen.queryByRole('radiogroup', { name: 'Workflow list display' })).toBeNull();
   });
 
   it('does not register a dashboard proposal review page for MM-859', async () => {
@@ -503,6 +556,26 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByText('Workflow start default repository: MoonLadderStudios/MoonMind')).toBeTruthy();
   });
 
+  it('MM-1121 keeps sidebar mode on the Create route', async () => {
+    window.history.replaceState({}, '', '/workflows/new?source=temporal');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('true');
+    await waitFor(() => {
+      expect(document.querySelector('.panel--data-wide')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    expect(screen.getByRole('button', { name: 'No list' }).getAttribute('aria-pressed')).toBe('true');
+    expect(window.location.pathname).toBe('/workflows/new');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('true');
+    expect(window.location.pathname).toBe('/workflows/new');
+    expect(window.location.search).toBe('?source=temporal');
+  });
+
   it('MM-1029 navigateTo uses the SPA route event for dashboard-internal URLs', async () => {
     window.history.replaceState({}, '', '/workflows/new');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
@@ -582,6 +655,332 @@ describe('Dashboard shared entry', () => {
     expect(screen.queryByText('Workflow detail route loaded: /workflows/first/debug')).toBeNull();
   });
 
+  it('MM-1113 opens an authorized remembered workflow when leaving the full table', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=completed&limit=50');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'remembered-123' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions/remembered-123?source=temporal') {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: 'remembered-123' }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fetchSpy.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/remembered-123');
+    });
+    expect(window.location.search).toContain('stateIn=completed');
+    expect(window.location.search).toContain('limit=50');
+    expect(window.location.search).toContain('source=temporal');
+    expect(fetchSpy).toHaveBeenCalledWith('/api/executions/remembered-123?source=temporal');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions?'))).toBe(false);
+    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+  });
+
+  it('MM-1113 keeps a route-selected workflow when switching detail-compatible modes', async () => {
+    window.history.replaceState({}, '', '/workflows/route-123?stateIn=failed&limit=10');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'remembered-123' });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow detail route loaded: /workflows/route-123')).toBeTruthy();
+    fetchSpy.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+    });
+    expect(window.location.pathname).toBe('/workflows/route-123');
+    expect(window.location.search).toBe('?stateIn=failed&limit=10');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/remembered-123'))).toBe(false);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions?'))).toBe(false);
+  });
+
+  it('MM-1113 resolves the first row from the exact current list query context', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/workflows?stateIn=completed&source=jules&limit=50&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&sort=updatedAt',
+    );
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (
+        url ===
+        '/api/executions?stateIn=completed&source=jules&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&pageSize=50'
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [{ workflowId: 'first-query-row', title: 'First query row' }] }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/first-query-row');
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/executions?stateIn=completed&source=jules&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&pageSize=50',
+    );
+    expect(window.location.search).toContain('stateIn=completed');
+    expect(window.location.search).toContain('source=jules');
+    expect(window.location.search).toContain('limit=50');
+    expect(window.location.search).toContain('nextPageToken=cursor-1');
+    expect(window.location.search).not.toContain('sort=updatedAt');
+  });
+
+  it('MM-1113 ignores unauthorized remembered selections and opens the first visible row', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=completed&limit=50');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'unauthorized-123' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions/unauthorized-123?source=temporal') {
+        return Promise.resolve({ ok: false, status: 403, statusText: 'Forbidden' } as Response);
+      }
+      if (url === '/api/executions?stateIn=completed&source=temporal&pageSize=50') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{ workflowId: 'visible-456', taskId: 'visible-456', title: 'Visible authorized row' }],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/visible-456');
+    });
+    expect(window.location.pathname).not.toBe('/workflows/unauthorized-123');
+    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(false);
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('unauthorized-123');
+  });
+
+  it('MM-1113 never navigates to or renders an unauthorized remembered workflow during fallback', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=completed');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'secret-remembered' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions/secret-remembered?source=temporal') {
+        return Promise.resolve({ ok: false, status: 403, statusText: 'Forbidden' } as Response);
+      }
+      if (url === '/api/executions?stateIn=completed&source=temporal&pageSize=25') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{ workflowId: 'authorized-row', taskId: 'authorized-row', title: 'Authorized row' }],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/authorized-row');
+    });
+    expect(window.location.pathname).not.toBe('/workflows/secret-remembered');
+    expect(screen.queryByText(/secret-remembered/i)).toBeNull();
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('secret-remembered');
+  });
+
+  it('MM-1113 selects only returned authorized first-row data', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=running');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=running&source=temporal&pageSize=25') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [{ taskId: 'authorized-task-row', title: 'Authorized task row' }] }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/authorized-task-row');
+    });
+    expect(window.location.pathname).not.toContain('unauthorized');
+    expect(screen.queryByText(/unauthorized/i)).toBeNull();
+  });
+
+  it('MM-1113 exposes a resolving state while the matching workflow list is loading', async () => {
+    window.history.replaceState({}, '', '/workflows?limit=25');
+    let resolveList: ((response: Response) => void) | undefined;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?source=temporal&pageSize=25') {
+        return new Promise<Response>((resolve) => {
+          resolveList = resolve;
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
+    const completeList = resolveList;
+    if (!completeList) {
+      throw new Error('Expected workflow list request to be pending.');
+    }
+    completeList({
+      ok: true,
+      json: async () => ({ items: [{ workflowId: 'first-loading-row' }] }),
+    } as Response);
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/first-loading-row');
+    });
+  });
+
+  it('MM-1113 stays on the table when fallback list resolution fails or has no rows', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=failed');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=failed&source=temporal&pageSize=25') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toContain('No workflow to open.');
+    });
+    expect(window.location.pathname).toBe('/workflows');
+  });
+
+  it('MM-1113 treats non-object fallback list responses as empty', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=completed');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=completed&source=temporal&pageSize=25') {
+        return Promise.resolve({ ok: true, json: async () => null } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toContain('No workflow to open.');
+    });
+    expect(window.location.pathname).toBe('/workflows');
+  });
+
+  it('MM-1113 stays on the table and exposes a recoverable state when fallback list loading fails', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=failed');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=failed&source=temporal&pageSize=25') {
+        return Promise.resolve({ ok: false, status: 503, statusText: 'Service Unavailable' } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+
+    expect((await screen.findByRole('status')).textContent).toContain('Workflow list is unavailable.');
+    expect(window.location.pathname).toBe('/workflows');
+    expect(window.location.search).toBe('?stateIn=failed');
+  });
+
+  it('MM-1113 ignores stale fallback navigation after leaving the workflow surface', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=running');
+    let resolveList: ((response: Response) => void) | undefined;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=running&source=temporal&pageSize=25') {
+        return new Promise<Response>((resolve) => {
+          resolveList = resolve;
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
+    fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+    expect(await screen.findByText('Settings permissions:')).toBeTruthy();
+
+    const completeList = resolveList;
+    if (!completeList) {
+      throw new Error('Expected workflow list request to be pending.');
+    }
+    completeList({
+      ok: true,
+      json: async () => ({ items: [{ workflowId: 'stale-row' }] }),
+    } as Response);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/settings');
+    });
+    expect(window.location.search).toBe('');
+    expect(screen.queryByText(/stale-row/i)).toBeNull();
+  });
+
   it('does not render operational metrics on the workflows home dashboard', async () => {
     window.history.replaceState({}, '', '/workflows');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
@@ -623,29 +1022,55 @@ describe('Dashboard shared entry', () => {
     );
   });
 
-  it('places workflow sidebar dividers on list items so row radius cannot curve them', async () => {
-    // A `border-bottom` on `.workflow-workspace-sidebar-row` curves at the
-    // corners because the row carries `border-radius`. The divider lives on the
-    // `li` container instead, keeping a straight hairline and rounded hover.
-    const listItemBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-list li');
-    expect(listItemBlock).toContain('border-bottom: 1px solid rgb(var(--mm-border) / 0.4)');
+  it('MM-1116 defines one workflow-list row metric token family for table and sidebar modes', async () => {
+    const rootBlock = cssRuleBlock(dashboardCss, ':root');
+    expect(rootBlock).toContain('--workflow-list-header-row-height: 2.75rem');
+    expect(rootBlock).toContain('--workflow-list-body-row-height: 4rem');
+    expect(rootBlock).toContain('--workflow-list-column-workflow-width: 20rem');
+    expect(rootBlock).toContain('--workflow-list-divider-width: 1px');
+    expect(rootBlock).toContain('--workflow-list-divider-color: rgb(var(--mm-border) / 0.72)');
 
-    const lastItemBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-list li:last-child');
-    expect(lastItemBlock).toContain('border-bottom: 0');
+    const tableWorkflowColumnBlock = cssRuleBlock(dashboardCss, '.queue-table-column-workflow');
+    expect(tableWorkflowColumnBlock).toContain('width: var(--workflow-list-column-workflow-width)');
 
-    const rowBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-row');
-    expect(rowBlock).toContain('border-radius: 0.4rem');
-    expect(rowBlock).not.toContain('border-bottom');
+    const shellBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-shell');
+    expect(shellBlock).toContain('grid-template-columns: var(--workflow-list-column-workflow-width) minmax(0, 1fr)');
+
+    const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
+    expect(sidebarBlock).toContain('border-right: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color)');
+  });
+
+  it('MM-1116 matches sidebar and full-table Workflow header styling through shared selectors', async () => {
+    const sharedHeaderBlock = cssRuleBlock(
+      dashboardCss,
+      '.queue-table-wrapper th,\n.workflow-workspace-sidebar-header-cell',
+    );
+    expect(sharedHeaderBlock).toContain('height: var(--workflow-list-header-row-height)');
+    expect(sharedHeaderBlock).toContain('background: rgb(var(--mm-panel) / 0.98)');
+    expect(sharedHeaderBlock).toContain('box-shadow: 0 1px 0 var(--workflow-list-divider-color)');
+    expect(sharedHeaderBlock).toContain('font-weight: 600');
+    expect(sharedHeaderBlock).toContain('color: rgb(var(--mm-ink) / 0.85)');
+
+    const sidebarHeaderBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-header-cell');
+    expect(sidebarHeaderBlock).toContain('padding: 0.5rem 0.75rem');
+    expect(sidebarHeaderBlock).toContain('text-align: left');
   });
 
   it('keeps workflow titles clamped to two consistent lines in the list and sidebar', async () => {
+    const tableRowBlock = cssRuleBlock(dashboardCss, '.workflow-list-data-slab tbody tr');
+    expect(tableRowBlock).toContain('height: var(--workflow-list-body-row-height)');
+
+    const tableWorkflowCellBlock = cssRuleBlock(dashboardCss, '.queue-table-cell-workflow');
+    expect(tableWorkflowCellBlock).toContain('height: var(--workflow-list-body-row-height)');
+
     const tableTitleBlock = cssRuleBlock(dashboardCss, '.workflow-list-row-title');
     expect(tableTitleBlock).toContain('display: -webkit-box');
     expect(tableTitleBlock).toContain('height: 2.5em');
     expect(tableTitleBlock).toContain('-webkit-line-clamp: 2');
 
     const sidebarRowBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-row');
-    expect(sidebarRowBlock).toContain('min-height: 3.75rem');
+    expect(sidebarRowBlock).toContain('height: var(--workflow-list-body-row-height)');
+    expect(sidebarRowBlock).toContain('max-height: var(--workflow-list-body-row-height)');
 
     const sidebarTitleBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-title');
     expect(sidebarTitleBlock).toContain('display: -webkit-box');
@@ -654,13 +1079,63 @@ describe('Dashboard shared entry', () => {
     expect(sidebarTitleBlock).not.toContain('white-space: nowrap');
   });
 
+  it('MM-1116 presents the workflow sidebar list region as a table slice rather than cards or menus', async () => {
+    const sidebarTableBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-table');
+    expect(sidebarTableBlock).toContain('display: grid');
+    expect(sidebarTableBlock).toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(sidebarTableBlock).toContain('border-radius: 0');
+    expect(sidebarTableBlock).toContain('box-shadow: none');
+    expect(sidebarTableBlock).not.toContain('menu');
+
+    const sidebarRowBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-row');
+    expect(sidebarRowBlock).not.toContain('border-radius');
+
+    const sidebarLastRowFrameBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-workspace-sidebar-table > :last-child .workflow-workspace-sidebar-row-frame:last-child',
+    );
+    expect(sidebarLastRowFrameBlock).toContain('border-bottom: 0');
+
+    const compactTableBlock = cssRuleBlock(dashboardCss, ".queue-table-wrapper[data-density='compact']");
+    expect(compactTableBlock).toContain('--workflow-list-body-row-height: var(--workflow-list-compact-body-row-height)');
+
+    const pinnedListBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-pinned-list');
+    expect(pinnedListBlock).toContain('position: sticky');
+    expect(pinnedListBlock).toContain('top: var(--workflow-list-header-row-height)');
+
+    const pinnedRowTitleBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-workspace-sidebar-row-pinned .workflow-workspace-sidebar-title',
+    );
+    expect(pinnedRowTitleBlock).toContain('-webkit-line-clamp: 1');
+  });
+
+  it('MM-1116 keeps sidebar/table mode changes aligned and reduced-motion safe', async () => {
+    const tableWorkflowCellBlock = cssRuleBlock(dashboardCss, '.queue-table-cell-workflow');
+    expect(tableWorkflowCellBlock).toContain('border-right: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color)');
+
+    const workflowWrapperBlock = cssRuleBlock(dashboardCss, '.workflow-list-data-slab .queue-table-wrapper');
+    expect(workflowWrapperBlock).toContain('transition: opacity 120ms ease');
+    expect(workflowWrapperBlock).not.toContain('translateX');
+    expect(workflowWrapperBlock).not.toContain('translate3d');
+
+    const reducedMotionBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      rule.selector.includes('.workflow-workspace-sidebar-table') &&
+      rule.selector.includes('.workflow-list-data-slab .queue-table-wrapper') &&
+      rule.parent?.type === 'atrule' &&
+      'params' in rule.parent &&
+      String(rule.parent.params).includes('prefers-reduced-motion: reduce')
+    ));
+    expect(reducedMotionBlock).toContain('transition-duration: 1ms !important');
+    expect(reducedMotionBlock).toContain('transform: none !important');
+  });
+
   it('keeps the workflow sidebar scrollbar close to its divider', async () => {
     const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
     expect(sidebarBlock).toContain('padding: 0 0.125rem 0 0');
 
-    const sidebarListBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-list');
-    expect(sidebarListBlock).toContain('padding: 0 0.125rem 0 0');
-    expect(sidebarListBlock).toContain('scrollbar-width: thin');
+    const sidebarTableBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-table');
+    expect(sidebarTableBlock).toContain('scrollbar-width: thin');
   });
 
   it('MM-1064 keeps workflow sidebar status icons compact inside status-colored containers', async () => {
@@ -1034,6 +1509,10 @@ describe('Dashboard shared entry', () => {
         rule.parent.params.includes('prefers-reduced-motion: reduce'),
     );
     expect(panelReducedMotionBlock).toContain('animation: none !important');
+  });
+
+  it('keeps the dashboard panel flush with the masthead', async () => {
+    expect(cssRuleBlock(dashboardCss, '.panel')).toContain('margin-top: 0;');
   });
 
   it('disables MM-961 fixed background attachment on mobile and touch/low-power devices', async () => {
@@ -1532,7 +2011,7 @@ describe('Dashboard shared entry', () => {
     );
   });
 
-  it('keeps the masthead brand left, navigation centered, and version aligned right on desktop', async () => {
+  it('keeps the masthead brand and list display grouped left, with version aligned right on desktop', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/dashboard.css`,
@@ -1540,10 +2019,13 @@ describe('Dashboard shared entry', () => {
     );
 
     expect(dashboardCss).toMatch(
-      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\);/s,
+      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*auto\s+auto\s+minmax\(0,\s*1fr\)\s+auto;/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /\.workflow-list-display-control\s*\{[^}]*justify-self:\s*start;/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-nav\s*\{[^}]*align-self:\s*stretch;[^}]*justify-content:\s*center;[^}]*justify-self:\s*center;/s,
@@ -1551,6 +2033,20 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).toMatch(
       /\.masthead-title-meta\s*\{[^}]*justify-self:\s*end;[^}]*justify-content:\s*flex-end;/s,
     );
+    const desktopMastheadRule = (selector: string) =>
+      cssRuleBlockMatching(
+        dashboardCss,
+        (rule) =>
+          normalizeCssSelector(rule.selector) === selector &&
+          rule.parent?.type === 'atrule' &&
+          rule.parent.name === 'media' &&
+          rule.parent.params.includes('min-width: 1181px'),
+      );
+    expect(desktopMastheadRule('.masthead-brand')).toContain('grid-column: 1;');
+    expect(desktopMastheadRule('.workflow-list-display-control')).toContain('grid-column: 2;');
+    expect(desktopMastheadRule('.masthead-nav')).toContain('grid-column: 1 / -1;');
+    expect(desktopMastheadRule('.masthead-title-meta')).toContain('grid-column: 4;');
+    expect(cssRuleBlock(dashboardCss, '.masthead-title-meta .version-badge')).toContain('white-space: nowrap;');
   });
 
   it('keeps navigation positions stable across route selection changes', async () => {
@@ -1652,27 +2148,22 @@ describe('Dashboard shared entry', () => {
     expect(darkBlock).toContain('--mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.95);');
   });
 
-  it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {
+  it('keeps masthead responsiveness separate from the mobile-only display control cutoff', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/dashboard.css`,
       'utf8',
     );
 
-    const mastheadBreakpointStart = dashboardCss.indexOf('@media (max-width: 1180px)');
-    const sharedMobileStart = dashboardCss.indexOf('@media (max-width: 900px)');
-    const mastheadResponsive = dashboardCss.slice(
-      mastheadBreakpointStart,
-      sharedMobileStart,
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 1180px\)\s*\{[\s\S]*\.masthead\s*\{/,
     );
-    const sharedMobile = dashboardCss.slice(sharedMobileStart);
-
-    expect(mastheadBreakpointStart).toBeGreaterThanOrEqual(0);
-    expect(sharedMobileStart).toBeGreaterThan(mastheadBreakpointStart);
-    expect(mastheadResponsive).toContain('.masthead {');
-    expect(mastheadResponsive).not.toContain('.grid-2 {');
-    expect(sharedMobile).toContain('.grid-2 {');
-    expect(sharedMobile).toContain('.queue-submit-form {');
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 767px\)\s*\{[\s\S]*\.workflow-list-display-control\s*\{[^}]*display:\s*none/s,
+    );
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 900px\)\s*\{[\s\S]*\.grid-2\s*\{/,
+    );
   });
 
   it('renders an explicit error state for unknown pages', async () => {

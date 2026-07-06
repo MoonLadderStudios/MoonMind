@@ -1,10 +1,8 @@
-import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserRouter } from 'react-router-dom';
-import { fireEvent, waitFor } from '@testing-library/react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient, screen } from '../utils/test-utils';
-import { readDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
 import { WorkflowsWorkspacePage } from './workflows-workspace';
 
 vi.mock('./workflow-list', () => ({
@@ -13,7 +11,19 @@ vi.mock('./workflow-list', () => ({
 
 vi.mock('./workflow-detail', () => ({
   default: () => <div data-testid="workflow-detail-entrypoint">Workflow detail entrypoint</div>,
-  WorkflowWorkspaceShell: () => <div data-testid="workflow-workspace-shell">Workflow workspace shell</div>,
+  WorkflowWorkspaceShell: ({
+    displayMode,
+  }: {
+    displayMode?: 'hidden' | 'sidebar' | 'table';
+  }) => (
+    <div data-testid="workflow-workspace-shell" data-display-mode={displayMode ?? 'unset'}>
+      Workflow workspace shell
+    </div>
+  ),
+}));
+
+vi.mock('./workflow-start', () => ({
+  default: () => <div data-testid="workflow-start-page">Create workflow</div>,
 }));
 
 function mockDesktopViewport(matches: boolean) {
@@ -42,21 +52,9 @@ function renderWorkspace(payload: BootPayload) {
 }
 
 describe('WorkflowsWorkspacePage', () => {
-  let fetchSpy: MockInstance;
-
   beforeEach(() => {
     vi.restoreAllMocks();
-    window.localStorage.clear();
     mockDesktopViewport(true);
-    fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        items: [
-          { workflowId: 'workflow-1', title: 'First workflow' },
-          { workflowId: 'workflow-2', title: 'Second workflow' },
-        ],
-      }),
-    } as Response);
     window.history.pushState({}, 'Workspace Test', '/workflows/test-123?source=temporal');
   });
 
@@ -85,81 +83,52 @@ describe('WorkflowsWorkspacePage', () => {
     expect(screen.queryByTestId('workflow-detail-entrypoint')).toBeNull();
   });
 
-  it('MM-1117 opens the persisted selected workflow from table mode when the row is authorized', async () => {
-    window.history.pushState({}, 'Workflow Table', '/workflows?source=temporal&stateIn=completed&pageSize=50');
-    updateDashboardPreferences({ lastSelectedWorkflowId: 'workflow-2' });
+  it('keeps /workflows as the table primary surface', () => {
+    window.history.pushState({}, 'Workspace Table Test', '/workflows');
 
     renderWorkspace({ page: 'dashboard', apiBase: '/api' });
 
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe('/workflows/workflow-2');
-    });
-    expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
-    expect(fetchSpy).toHaveBeenCalledWith('/api/executions?source=temporal&stateIn=completed&pageSize=50');
-    expect(window.location.search).not.toContain('workflowListDisplayMode');
+    expect(screen.getByTestId('workflow-list-page')).toBeTruthy();
+    expect(screen.queryByTestId('workflow-workspace-shell')).toBeNull();
   });
 
-  it('MM-1117 opens the first visible workflow from the current list query when no selection exists', async () => {
-    window.history.pushState({}, 'Workflow Table', '/workflows?source=temporal&repoContains=moon%2Frepo');
+  it('renders the create workflow route as the create surface', () => {
+    window.history.pushState({}, 'Workspace Create Test', '/workflows/new');
 
     renderWorkspace({ page: 'dashboard', apiBase: '/api' });
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe('/workflows/workflow-1');
-    });
-    expect(readDashboardPreferences().workflowListDisplayMode).toBe('sidebar');
-    expect(fetchSpy).toHaveBeenCalledWith('/api/executions?source=temporal&repoContains=moon%2Frepo&pageSize=25');
+    expect(screen.getByTestId('workflow-start-page')).toBeTruthy();
+    expect(screen.queryByTestId('workflow-list-page')).toBeNull();
+    expect(screen.queryByTestId('workflow-workspace-shell')).toBeNull();
   });
 
-  it('MM-1117 resolves table mode from the live browser search after list filters change', async () => {
-    window.history.pushState({}, 'Workflow Table', '/workflows?source=temporal&stateIn=failed');
+  it('renders first-workflow resolution status in the workflow detail loading area', () => {
+    window.history.pushState({}, 'Workspace Opening Test', '/workflows');
 
-    renderWorkspace({ page: 'dashboard', apiBase: '/api' });
-    window.history.replaceState({}, 'Workflow Table', '/workflows?source=temporal&repoContains=moon%2Frepo');
-
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe('/workflows/workflow-1');
-    });
-    expect(fetchSpy).toHaveBeenCalledWith('/api/executions?source=temporal&repoContains=moon%2Frepo&pageSize=25');
-  });
-
-  it('MM-1117 stays on table mode when hidden mode has no selectable workflow to open', async () => {
-    window.history.pushState({}, 'Workflow Table', '/workflows?source=temporal&stateIn=failed');
-    fetchSpy.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ items: [] }),
-    } as Response);
-
-    renderWorkspace({ page: 'dashboard', apiBase: '/api' });
-
-    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
-
-    expect(await screen.findByText('No workflow is available to open from this list.')).toBeTruthy();
-    expect(window.location.pathname).toBe('/workflows');
-    expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
-  });
-
-  it('MM-1117 reports unavailable navigation when table mode resolution fails', async () => {
-    window.history.pushState({}, 'Workflow Table', '/workflows?source=temporal&stateIn=failed');
-    fetchSpy.mockResolvedValueOnce({
-      ok: true,
-      json: async () => {
-        throw new Error('invalid json');
+    renderWorkspace({
+      page: 'dashboard',
+      apiBase: '/api',
+      initialData: {
+        workflowListDisplayMode: 'sidebar',
+        workflowListDisplayStatus: 'Opening first workflow...',
       },
-    } as unknown as Response);
+    });
 
-    renderWorkspace({ page: 'dashboard', apiBase: '/api' });
+    expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+    expect(screen.getByText('Opening first workflow...')).toBeTruthy();
+    expect(screen.getByTestId('loading-placeholder-detail')).toBeTruthy();
+    expect(screen.queryByTestId('workflow-list-page')).toBeNull();
+  });
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+  it('passes the resolved hidden/sidebar mode into detail workspace composition', () => {
+    renderWorkspace({
+      page: 'dashboard',
+      apiBase: '/api',
+      initialData: {
+        workflowListDisplayMode: 'hidden',
+      },
+    });
 
-    expect(await screen.findByText('Workflow navigation is unavailable.')).toBeTruthy();
-    expect(window.location.pathname).toBe('/workflows');
-    expect(readDashboardPreferences().workflowListDisplayMode).toBe('sidebar');
+    expect(screen.getByTestId('workflow-workspace-shell').getAttribute('data-display-mode')).toBe('hidden');
   });
 });

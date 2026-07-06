@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  workflowListApiQueryFromContext,
   workflowListContextParams,
   workflowListHrefFromContext,
 } from "./workflowListContext";
@@ -9,12 +10,12 @@ describe("workflowListContextParams", () => {
   it("preserves supported workflow list filters for detail sidebar queries", () => {
     const params = workflowListContextParams(
       new URLSearchParams(
-        "source=temporal&integration=jira&repo=MoonMind&state=executing&limit=10&pageSize=10",
+        "source=temporal&integration=jira&repo=MoonMind&state=executing&limit=10",
       ),
     );
 
     expect(params.toString()).toBe(
-      "source=temporal&integration=jira&repo=MoonMind&state=executing&limit=10&pageSize=10",
+      "source=temporal&integration=jira&repo=MoonMind&state=executing&limit=10",
     );
   });
 
@@ -26,14 +27,16 @@ describe("workflowListContextParams", () => {
     expect(params.toString()).toBe("integration=jira");
   });
 
-  it("drops display mode and unsafe detail payload parameters", () => {
-    const params = workflowListContextParams(
+  it("normalizes a list route query into the matching executions API query", () => {
+    const query = workflowListApiQueryFromContext(
       new URLSearchParams(
-        "stateIn=completed&workflowListDisplayMode=hidden&rawPrompt=secret&draft=full&token=abc&presignedUrl=https%3A%2F%2Fexample.test&logs=large&artifacts=payload&detailPayload=large",
+        "stateIn=executing&limit=50&progressSignalIn=awaiting_external&unsafe=1",
       ),
     );
 
-    expect(params.toString()).toBe("stateIn=completed");
+    expect(query).toBe(
+      "stateIn=executing&progressSignalIn=awaiting_external&source=temporal&pageSize=50",
+    );
   });
 
   it("converts API-style pageSize to table limit when linking back to the workflow list", () => {

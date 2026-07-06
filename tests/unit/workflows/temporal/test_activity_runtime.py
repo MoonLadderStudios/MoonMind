@@ -120,7 +120,8 @@ async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -
     assert '"BLOCKED"' in prepared
     assert '"advance"' in prepared
     assert '"reattempt_current_step"' in prepared
-    assert "create_pull_request" in prepared
+    assert '`FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"' in prepared
+    assert "raw diagnostic" in prepared
 
 
 async def test_prepare_managed_codex_turn_appends_vocab_when_path_already_present() -> None:
@@ -137,7 +138,7 @@ async def test_prepare_managed_codex_turn_appends_vocab_when_path_already_presen
     assert prepared.count("complete structured verifier JSON") == 0
     assert '"FULLY_IMPLEMENTED"' in prepared
     assert '"advance"' in prepared
-    assert "create_pull_request" in prepared
+    assert "workflow-specific destination" in prepared
 
 
 async def test_codex_skill_payload_rejects_auto_publish_mode() -> None:
@@ -4958,6 +4959,7 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
             workspace = tmp_path / "workspace"
             verify_path = workspace / "var/artifacts/moonspec-verify/final.json"
             verify_path.parent.mkdir(parents=True)
+            large_evidence = "verified evidence " * 2000
             verify_path.write_text(
                 json.dumps(
                     {
@@ -4966,6 +4968,12 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
                         "recommendedNextAction": "advance",
                         "recoverableInCurrentRuntime": True,
                         "remainingWork": [],
+                        "requirementCoverage": [
+                            {
+                                "requirement": "large verification evidence",
+                                "evidence": large_evidence,
+                            }
+                        ],
                     }
                 ),
                 encoding="utf-8",
@@ -5030,9 +5038,20 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
                 result.metadata["gateResultRef"]
             )
             assert "contractViolations" not in result.metadata["moonSpecVerify"]
+            assert "requirementCoverage" not in result.metadata["moonSpecVerify"]
+            AgentRunResult(**result.model_dump(mode="json", by_alias=True))
+
+            _artifact, artifact_path = await service.read_path(
+                artifact_id=result.metadata["gateResultRef"],
+                principal="system:agent_runtime",
+            )
+            persisted_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            assert persisted_payload["requirementCoverage"][0]["evidence"] == (
+                large_evidence
+            )
 
 
-async def test_agent_runtime_publish_artifacts_flags_moonspec_contract_violations(
+async def test_agent_runtime_publish_artifacts_canonicalizes_moonspec_next_action(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5105,8 +5124,14 @@ async def test_agent_runtime_publish_artifacts_flags_moonspec_contract_violation
                 )
             )
 
-            violations = result.metadata["moonSpecVerify"]["contractViolations"]
-            assert any("create_pull_request" in item for item in violations)
+            verify_payload = result.metadata["moonSpecVerify"]
+            assert verify_payload["recommendedNextAction"] == "advance"
+            assert (
+                verify_payload["rawRecommendedNextAction"]
+                == "create_pull_request"
+            )
+            assert "contractViolations" not in verify_payload
+            AgentRunResult(**result.model_dump(mode="json", by_alias=True))
 
 
 async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_report_body(

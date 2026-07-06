@@ -5,7 +5,6 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
 import { markWorkflowListReturnFocusIntent } from '../lib/workflowListContext';
-import { updateDashboardPreferences } from '../utils/dashboardPreferences';
 import { WorkflowListPage } from './workflow-list';
 import '../styles/dashboard.css';
 
@@ -68,25 +67,30 @@ describe('Workflows Entrypoint', () => {
     expect(document.querySelector('.queue-table-wrapper')).toBeTruthy();
   });
 
-  it('MM-1117 resolves direct /workflows visits to the full table despite persisted hidden mode', async () => {
-    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
+  it('MM-1113 renders only authorized workflow rows returned by the list endpoint', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'authorized-table-row',
+            workflowId: 'authorized-table-row',
+            source: 'temporal',
+            title: 'Authorized table workflow',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    await screen.findAllByText('Example task');
-    expect(document.querySelector('.workflow-workspace-shell')).toBeNull();
-    expect(document.querySelector('.queue-table-wrapper')).toBeTruthy();
-    expect(window.location.pathname).toBe('/workflows');
-  });
-
-  it('MM-1117 honors API-style pageSize when opening the full list', async () => {
-    window.history.pushState({}, 'Page size context', '/workflows?pageSize=100&stateIn=completed');
-
-    renderWithClient(<WorkflowListPage payload={mockPayload} />);
-
-    await screen.findAllByText('Example task');
-    expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&stateIn=completed&pageSize=100');
-    expect(window.location.search).toBe('?stateIn=completed&limit=100');
+    expect(await screen.findByRole('row', { name: /Authorized table workflow/i })).toBeTruthy();
+    expect(screen.queryByText(/unauthorized/i)).toBeNull();
+    expect(screen.queryByRole('link', { name: /unauthorized/i })).toBeNull();
   });
 
   it('shows structured API validation detail when the workflow list request fails', async () => {
@@ -116,6 +120,8 @@ describe('Workflows Entrypoint', () => {
     const workflowFilter = screen.getByRole('button', {
       name: 'Workflow filter. No filter applied.',
     });
+    const workflowHeader = workflowFilter.closest('.workflow-list-column-header');
+    expect(workflowHeader?.querySelector('.table-sort-button')?.textContent).toContain('Workflow');
     fireEvent.click(workflowFilter);
     expect(screen.getByRole('dialog', { name: 'Workflow filter' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Progress filter. No filter applied.' })).toBeTruthy();
@@ -2043,10 +2049,13 @@ describe('Workflows Entrypoint', () => {
     // The slab intentionally allows overflow so the row actions popover
     // can extend below the table without being clipped.
     expect(getComputedStyle(dataSlab as HTMLElement).overflow).toBe('visible');
+    expect(getComputedStyle(tableWrapper as HTMLElement).width).toBe('100%');
+    expect(getComputedStyle(tableWrapper as HTMLElement).maxWidth).toBe('100%');
     expect(getComputedStyle(tableWrapper as HTMLElement).overflowX).toBe('auto');
     expect(getComputedStyle(tableWrapper as HTMLElement).overflowY).toBe('visible');
     expect(getComputedStyle(tableWrapper as HTMLElement).scrollPaddingTop).not.toBe('auto');
     expect(getComputedStyle(table as HTMLElement).borderCollapse).toBe('separate');
+    expect(getComputedStyle(table as HTMLElement).width).toBe('100%');
     expect(getComputedStyle(tableHead as HTMLElement).position).toBe('sticky');
     expect(getComputedStyle(tableHead as HTMLElement).top).toBe('0px');
     expect(getComputedStyle(firstHeader as HTMLElement).position).toBe('sticky');

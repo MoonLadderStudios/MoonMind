@@ -9,6 +9,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
@@ -20,11 +21,6 @@ import {
 } from "../lib/temporalTaskEditing";
 import { renderWithClient } from "../utils/test-utils";
 import {
-  readDashboardPreferences,
-  updateDashboardPreferences,
-} from "../utils/dashboardPreferences";
-import { WorkflowListPage } from "./workflow-list";
-import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
   buildCapabilityChips,
   CAPABILITY_CATALOG,
@@ -34,6 +30,7 @@ import {
   preferredTemplate,
   resolveDefaultProviderProfileId,
   resolveObjectiveInstructions,
+  workflowStartFormSnapshot,
   WORKFLOW_START_HEADING_QUOTES,
   WorkflowStartPage,
 } from "./workflow-start";
@@ -41,6 +38,50 @@ import {
 vi.mock("../lib/navigation", () => ({
   navigateTo: vi.fn(),
 }));
+
+describe("workflowStartFormSnapshot", () => {
+  it("distinguishes selected radio and checkbox options that share a group name", () => {
+    const form = document.createElement("form");
+    form.innerHTML = `
+      <input type="radio" name="color" value="red" checked />
+      <input type="radio" name="color" value="blue" />
+      <input type="checkbox" name="flags" value="dry-run" checked />
+      <input type="checkbox" name="flags" value="publish" />
+    `;
+
+    const initial = workflowStartFormSnapshot(form);
+    const red = form.querySelector('input[value="red"]');
+    const blue = form.querySelector('input[value="blue"]');
+    const dryRun = form.querySelector('input[value="dry-run"]');
+    const publish = form.querySelector('input[value="publish"]');
+    if (
+      !(red instanceof HTMLInputElement) ||
+      !(blue instanceof HTMLInputElement) ||
+      !(dryRun instanceof HTMLInputElement) ||
+      !(publish instanceof HTMLInputElement)
+    ) {
+      throw new Error("Expected test inputs to exist");
+    }
+
+    red.checked = false;
+    blue.checked = true;
+    expect(workflowStartFormSnapshot(form)).not.toBe(initial);
+
+    red.checked = true;
+    blue.checked = false;
+    dryRun.checked = false;
+    publish.checked = true;
+    expect(workflowStartFormSnapshot(form)).not.toBe(initial);
+  });
+});
+
+function renderWorkflowStartPage(payload: BootPayload) {
+  return renderWithClient(
+    <MemoryRouter initialEntries={[`${window.location.pathname}${window.location.search}`]}>
+      <WorkflowStartPage payload={payload} />
+    </MemoryRouter>,
+  );
+}
 
 describe("buildEditParametersPatch", () => {
   it("uses submitted runtime fields as authoritative when canonical edit metadata is cleared", () => {
@@ -125,6 +166,12 @@ describe("WorkflowStartPage loading placeholders", () => {
           json: async () => ({ items: { worker: [] }, legacyItems: [] }),
         } as Response);
       }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
       return Promise.resolve({
         ok: true,
         json: async () => ({}),
@@ -146,20 +193,147 @@ describe("WorkflowStartPage loading placeholders", () => {
       },
     };
 
-    renderWithClient(
-      <WorkflowStartPage
-        payload={{
+    renderWorkflowStartPage({
           ...mockPayload,
           initialData: {
             dashboardConfig,
           },
-        }}
-      />,
-    );
+        });
 
     expect(screen.getByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     expect(screen.getByText("Workflow start editable draft loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-form-controls")).toBeTruthy();
+  });
+});
+
+describe("WorkflowStartPage workflow list display modes", () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    window.history.pushState({}, "Create Workflow", "/workflows/new");
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith("/api/executions?")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                workflowId: "mm:create-sidebar",
+                title: "Sidebar workflow",
+                status: "completed",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+        } as Response);
+      }
+      if (url.includes("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("renders Create without a workflow list in hidden mode", () => {
+    renderWorkflowStartPage({
+          ...mockPayload,
+          initialData: {
+            ...(mockPayload.initialData as Record<string, unknown>),
+            workflowListDisplayMode: "hidden",
+          },
+        });
+
+    expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
+    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
+  });
+
+  it("renders Create with the workflow list as a sidebar in sidebar mode", async () => {
+    renderWorkflowStartPage({
+          ...mockPayload,
+          initialData: {
+            ...(mockPayload.initialData as Record<string, unknown>),
+            workflowListDisplayMode: "sidebar",
+          },
+        });
+
+    const sidebar = await screen.findByRole("complementary", { name: "Workflow navigation" });
+    expect((await within(sidebar).findByRole("link", { name: /Sidebar workflow/i })).getAttribute("href")).toBe(
+      "/workflows/mm%3Acreate-sidebar?source=temporal",
+    );
+    expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
+  });
+
+  it("keeps Create form state mounted when toggling between sidebar and hidden modes", async () => {
+    const view = renderWorkflowStartPage({
+          ...mockPayload,
+          initialData: {
+            ...(mockPayload.initialData as Record<string, unknown>),
+            workflowListDisplayMode: "sidebar",
+          },
+        });
+
+    expect(await screen.findByRole("complementary", { name: "Workflow navigation" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Preserve this draft while toggling the list." },
+    });
+
+    view.rerender(
+      <MemoryRouter initialEntries={["/workflows/new"]}>
+        <WorkflowStartPage
+          payload={{
+            ...mockPayload,
+            initialData: {
+              ...(mockPayload.initialData as Record<string, unknown>),
+              workflowListDisplayMode: "hidden",
+            },
+          }}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
+    expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(
+      "Preserve this draft while toggling the list.",
+    );
+    expect(document.querySelector(".workflow-start-workspace")?.getAttribute("data-sidebar-collapsed")).toBe("true");
+  });
+
+  it("does not render the Create sidebar when workflow navigation is disabled", () => {
+    renderWorkflowStartPage({
+          ...mockPayload,
+          initialData: {
+            ...(mockPayload.initialData as Record<string, unknown>),
+            dashboardConfig: {
+              ...mockDashboardConfig,
+              features: {
+                temporalDashboard: {
+                  listEnabled: false,
+                },
+              },
+            },
+            workflowListDisplayMode: "sidebar",
+          },
+        });
+
+    expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
+    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
+    expect(document.querySelector(".workflow-start-workspace")?.getAttribute("data-sidebar-collapsed")).toBe("true");
   });
 });
 
@@ -644,7 +818,7 @@ describe("WorkflowStart schedule mode entry", () => {
             json: async () => ({ items: [] }),
           } as Response);
         }
-        if (url.startsWith("/api/v1/provider-profiles")) {
+      if (url.includes("/api/v1/provider-profiles")) {
           return Promise.resolve({
             ok: true,
             json: async () => [],
@@ -705,200 +879,6 @@ describe("WorkflowStart schedule mode entry", () => {
     expect(scheduleMode.value).toBe("immediate");
   });
 
-  it("MM-1117 defaults direct Create visits to hidden mode unless sidebar is persisted", async () => {
-    updateDashboardPreferences({ workflowListDisplayMode: "table" });
-
-    const first = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    await screen.findByLabelText("Instructions");
-    expect(screen.getByRole("button", { name: "Open workflow sidebar" })).toBeTruthy();
-    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
-
-    first.unmount();
-    updateDashboardPreferences({ workflowListDisplayMode: "sidebar" });
-
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    expect(await screen.findByRole("complementary", { name: "Workflow navigation" })).toBeTruthy();
-    expect(window.location.pathname).toBe("/workflows/new");
-  });
-
-  it("MM-1117 keeps Create draft fields independent from sidebar list loading", async () => {
-    updateDashboardPreferences({ workflowListDisplayMode: "sidebar" });
-    let resolveList: (response: Response) => void = () => undefined;
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.startsWith("/api/executions?")) {
-        if (url.includes("workflowType=") || url.includes("entry=")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ items: [] }),
-          } as Response);
-        }
-        return new Promise<Response>((resolve) => {
-          resolveList = resolve;
-        });
-      }
-      if (url.startsWith("/api/workflows/skills")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
-        } as Response);
-      }
-      if (url.startsWith("/api/v1/provider-profiles")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [],
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({}),
-      } as Response);
-    });
-
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
-    fireEvent.change(instructions, { target: { value: "Draft while list loads." } });
-    expect(await screen.findByText("Loading workflows...")).toBeTruthy();
-    expect(instructions.value).toBe("Draft while list loads.");
-
-    await act(async () => {
-      resolveList({
-        ok: true,
-        json: async () => ({
-          items: [{ workflowId: "workflow-1", title: "Existing workflow" }],
-        }),
-      } as Response);
-    });
-
-    expect(await screen.findByRole("link", { name: "Existing workflow" })).toBeTruthy();
-    expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(
-      "Draft while list loads.",
-    );
-  });
-
-  it("MM-1117 treats null Create sidebar list responses as empty lists", async () => {
-    updateDashboardPreferences({ workflowListDisplayMode: "sidebar" });
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.startsWith("/api/executions?")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => null,
-        } as Response);
-      }
-      if (url.startsWith("/api/workflows/skills")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
-        } as Response);
-      }
-      if (url.startsWith("/api/v1/provider-profiles")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [],
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({}),
-      } as Response);
-    });
-
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    expect(await screen.findByRole("complementary", { name: "Workflow navigation" })).toBeTruthy();
-    expect(await screen.findByText("No workflows match the current list filters.")).toBeTruthy();
-  });
-
-  it("MM-1117 keeps the Create sidebar list cache separate from the full workflow list", async () => {
-    updateDashboardPreferences({ workflowListDisplayMode: "sidebar" });
-    const executionResponses = [
-      {
-        ok: true,
-        json: async () => ({
-          items: [{ workflowId: "workflow-1", title: "Existing workflow" }],
-        }),
-      } as Response,
-      {
-        ok: true,
-        json: async () => ({
-          items: [{ taskId: "task-123", title: "Full list workflow", state: "completed" }],
-          count: 1,
-          nextPageToken: "next-page",
-        }),
-      } as Response,
-    ];
-    const emptyExecutionResponse = {
-      ok: true,
-      json: async () => ({ items: [] }),
-    } as Response;
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.startsWith("/api/executions?")) {
-        return Promise.resolve(executionResponses.shift() ?? emptyExecutionResponse);
-      }
-      if (url.startsWith("/api/workflows/skills")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
-        } as Response);
-      }
-      if (url.startsWith("/api/v1/provider-profiles")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [],
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({}),
-      } as Response);
-    });
-
-    const view = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    expect(await screen.findByRole("link", { name: "Existing workflow" })).toBeTruthy();
-    const callsBeforeFullList = fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("/api/executions?")).length;
-    window.history.pushState({}, "Workflow List", "/workflows");
-    view.rerender(<WorkflowListPage payload={{ page: "workflow-list", apiBase: "/api" }} />);
-
-    await waitFor(() => {
-      expect(fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("/api/executions?")).length).toBeGreaterThan(
-        callsBeforeFullList,
-      );
-    });
-  });
-
-  it("MM-1117 prompts before opening the full workflow list with a dirty Create draft", async () => {
-    updateDashboardPreferences({ workflowListDisplayMode: "sidebar" });
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
-    fireEvent.change(instructions, { target: { value: "Do not discard this draft." } });
-    fireEvent.click(await screen.findByRole("button", { name: "Expand to full list" }));
-
-    expect(confirmSpy).toHaveBeenCalledWith("Leave this workflow draft and open the full workflow list?");
-    expect(navigateTo).not.toHaveBeenCalledWith("/workflows");
-    expect(readDashboardPreferences().workflowListDisplayMode).toBe("sidebar");
-  });
-
-  it("MM-1117 persists Create list-mode changes without writing mode into the URL", async () => {
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    await screen.findByLabelText("Instructions");
-
-    fireEvent.click(screen.getByRole("button", { name: "Open workflow sidebar" }));
-    expect(await screen.findByRole("complementary", { name: "Workflow navigation" })).toBeTruthy();
-    expect(readDashboardPreferences().workflowListDisplayMode).toBe("sidebar");
-    expect(window.location.href).not.toContain("workflowListDisplayMode");
-
-    fireEvent.click(screen.getByRole("button", { name: "Close sidebar" }));
-    expect(readDashboardPreferences().workflowListDisplayMode).toBe("hidden");
-    expect(screen.getByRole("button", { name: "Open workflow sidebar" })).toBeTruthy();
-    expect(window.location.href).not.toContain("workflowListDisplayMode");
-  });
 });
 
 describe.skip("Task Create Entrypoint", () => {
@@ -7989,7 +7969,8 @@ describe.skip("Task Create Entrypoint", () => {
       Array.from(publishModeSelect.options).some(
         (option) =>
           option.value === "auto" &&
-          option.text === "Auto — selected skill decides" &&
+          option.text === "Auto" &&
+          option.getAttribute("title") === "Auto — selected skill decides" &&
           option.disabled,
       ),
     ).toBe(true);

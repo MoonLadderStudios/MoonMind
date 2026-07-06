@@ -44,9 +44,9 @@ describe('dashboardPreferences', () => {
         liveUpdatesEnabled: false,
         createExpertMode: true,
         debugFieldsVisible: false,
-        workflowListDisplayMode: 'sidebar',
-        lastSelectedWorkflowId: 'workflow-123',
+        workflowWorkspaceSidebarCollapsed: true,
         preferredDetailTab: 'steps',
+        lastSelectedWorkflowId: 'workflow-123',
         defaultRuntime: 'codex_cli',
       });
 
@@ -57,7 +57,7 @@ describe('dashboardPreferences', () => {
       expect(reloaded.workflowListColumnVisibility.progress).toBe(false);
       expect(reloaded.createExpertMode).toBe(true);
       expect(reloaded.debugFieldsVisible).toBe(false);
-      expect(reloaded.workflowListDisplayMode).toBe('sidebar');
+      expect(reloaded.workflowWorkspaceSidebarCollapsed).toBe(true);
       expect(reloaded.lastSelectedWorkflowId).toBe('workflow-123');
       expect(reloaded.preferredDetailTab).toBe('steps');
     });
@@ -111,7 +111,7 @@ describe('dashboardPreferences', () => {
             workflowListPageSize: 7, // unsupported page size
             preferredDetailTab: 'nope', // invalid enum
             liveUpdatesEnabled: 'yes', // wrong type
-            workflowListDisplayMode: 'drawer', // invalid enum
+            workflowWorkspaceSidebarCollapsed: 'yes', // wrong type
             lastSelectedWorkflowId: '  workflow-456  ',
             createExpertMode: true, // valid
             workflowListColumnVisibility: { repository: false, bogus: true },
@@ -125,7 +125,7 @@ describe('dashboardPreferences', () => {
       expect(prefs.workflowListPageSize).toBe(DEFAULT_DASHBOARD_PREFERENCES.workflowListPageSize);
       expect(prefs.preferredDetailTab).toBe('overview'); // reset
       expect(prefs.liveUpdatesEnabled).toBe(true); // reset to default
-      expect(prefs.workflowListDisplayMode).toBeUndefined(); // reset to default
+      expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(false); // reset to default
       expect(prefs.lastSelectedWorkflowId).toBe('workflow-456'); // trimmed
       expect(prefs.createExpertMode).toBe(true); // kept
       expect(prefs.workflowListColumnVisibility.repository).toBe(false); // kept
@@ -187,26 +187,26 @@ describe('dashboardPreferences', () => {
       expect(parsed.preferences.workflowListColumnVisibility).not.toHaveProperty('nextAction');
     });
 
-    it('MM-1117 keeps valid persisted workflow list display and selected workflow preferences', () => {
+    it('MM-1000 keeps a valid persisted workflow workspace sidebar collapse preference', () => {
       const prefs = sanitizeDashboardPreferences({
-        workflowListDisplayMode: 'hidden',
-        lastSelectedWorkflowId: 'workflow-789',
+        workflowWorkspaceSidebarCollapsed: true,
       });
 
-      expect(prefs.workflowListDisplayMode).toBe('hidden');
-      expect(prefs.lastSelectedWorkflowId).toBe('workflow-789');
+      expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(true);
     });
 
-    it('MM-1117 round-trips explicit table display mode and trims selected workflow ids', () => {
-      writeDashboardPreferences({
-        ...DEFAULT_DASHBOARD_PREFERENCES,
-        workflowListDisplayMode: 'table',
-        lastSelectedWorkflowId: '  workflow-table-1  ',
+    it('MM-1113 keeps a valid last selected workflow preference', () => {
+      const prefs = sanitizeDashboardPreferences({
+        lastSelectedWorkflowId: '  remembered-workflow  ',
       });
 
-      const prefs = readDashboardPreferences();
-      expect(prefs.workflowListDisplayMode).toBe('table');
-      expect(prefs.lastSelectedWorkflowId).toBe('workflow-table-1');
+      expect(prefs.lastSelectedWorkflowId).toBe('remembered-workflow');
+    });
+
+    it('MM-1113 sanitizes invalid last selected workflow values to the default', () => {
+      for (const candidate of [null, undefined, 42, false, {}, []]) {
+        expect(sanitizeDashboardPreferences({ lastSelectedWorkflowId: candidate }).lastSelectedWorkflowId).toBe('');
+      }
     });
   });
 
@@ -216,11 +216,13 @@ describe('dashboardPreferences', () => {
         ...DEFAULT_DASHBOARD_PREFERENCES,
         workflowListDensity: 'compact',
         createExpertMode: true,
+        lastSelectedWorkflowId: 'remembered-workflow',
       });
       expect(storedRaw()).not.toBeNull();
 
       const reset = resetDashboardPreferences();
       expect(reset).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+      expect(reset.lastSelectedWorkflowId).toBe('');
       expect(storedRaw()).toBeNull();
       // A subsequent read also yields defaults.
       expect(readDashboardPreferences()).toEqual(DEFAULT_DASHBOARD_PREFERENCES);

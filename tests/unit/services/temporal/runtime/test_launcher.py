@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -37,6 +38,133 @@ def _make_request(**overrides) -> AgentExecutionRequest:
     )
     defaults.update(overrides)
     return AgentExecutionRequest(**defaults)
+
+@pytest.mark.asyncio
+async def test_claude_workspace_trust_config_merges_existing_projects(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    config_dir = tmp_path / "home" / ".claude"
+    config_file = tmp_path / "home" / ".claude.json"
+    workspace = tmp_path / "workspaces" / "mm:trust-run" / "repo"
+    workspace.mkdir(parents=True)
+    existing_workspace = tmp_path / "workspaces" / "existing" / "repo"
+    existing_workspace.mkdir(parents=True)
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "theme": "dark",
+                "projects": {
+                    str(existing_workspace.resolve()): {"custom": "kept"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    await launcher._ensure_claude_workspace_trust_config(
+        config_dir=config_dir,
+        config_file=config_file,
+        workspace_path=str(workspace),
+        run_as_user=None,
+    )
+
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    assert config["theme"] == "dark"
+    assert config["projects"][str(existing_workspace.resolve())]["custom"] == "kept"
+    assert (
+        config["projects"][str(workspace.resolve())]["hasTrustDialogAccepted"]
+        is True
+    )
+
+@pytest.mark.asyncio
+async def test_claude_workspace_trust_config_resets_invalid_json(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    config_dir = tmp_path / "home" / ".claude"
+    config_file = tmp_path / "home" / ".claude.json"
+    workspace = tmp_path / "workspaces" / "trust-run" / "repo"
+    workspace.mkdir(parents=True)
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{not-json", encoding="utf-8")
+
+    await launcher._ensure_claude_workspace_trust_config(
+        config_dir=config_dir,
+        config_file=config_file,
+        workspace_path=str(workspace),
+        run_as_user=None,
+    )
+
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    assert config["version"] == 1
+    assert (
+        config["projects"][str(workspace.resolve())]["hasTrustDialogAccepted"]
+        is True
+    )
+
+@pytest.mark.asyncio
+async def test_claude_workspace_trust_config_resets_non_object_sections(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    config_dir = tmp_path / "home" / ".claude"
+    config_file = tmp_path / "home" / ".claude.json"
+    workspace = tmp_path / "workspaces" / "trust-run" / "repo"
+    workspace.mkdir(parents=True)
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "projects": {
+                    str(workspace.resolve()): ["not", "an", "object"],
+                    "other": {"kept": True},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    await launcher._ensure_claude_workspace_trust_config(
+        config_dir=config_dir,
+        config_file=config_file,
+        workspace_path=str(workspace),
+        run_as_user=None,
+    )
+
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    assert config["projects"]["other"]["kept"] is True
+    assert (
+        config["projects"][str(workspace.resolve())]["hasTrustDialogAccepted"]
+        is True
+    )
+
+@pytest.mark.asyncio
+async def test_run_checked_command_redacts_auth_paths(tmp_path, monkeypatch):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+
+    class _FakeProcess:
+        returncode = 1
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b"/home/app/.claude.json token=raw-secret failed"
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await launcher._run_checked_command("python3", "/home/app/.claude.json")
+
+    message = str(exc_info.value)
+    assert "/home/app/.claude.json" not in message
+    assert "[REDACTED_AUTH_PATH]" in message
+    assert "token=[REDACTED]" in message
 
 def test_build_command_default():
     store = ManagedRunStore("/tmp/test-store")
@@ -2231,6 +2359,67 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
     assert (run_root / ".moonmind" / "bin" / "gh").exists()
 
 @pytest.mark.asyncio
+async def test_launch_pretrusts_claude_code_without_privilege_drop(
+    tmp_path, monkeypatch
+):
+    captured_launches: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    trust_calls: list[dict[str, object]] = []
+
+    class _FakeProcess:
+        pid = 4242
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        captured_launches.append((args, kwargs))
+        return _FakeProcess()
+
+    async def _fake_ensure(self, **kwargs):
+        trust_calls.append(kwargs)
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._ensure_claude_workspace_trust_config",
+        _fake_ensure,
+    )
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    workspace_root = tmp_path / "workspaces" / "non-root-run" / "repo"
+    workspace_root.mkdir(parents=True)
+
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        passthrough_env_keys=[],
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="non-root-run",
+        request=_make_request(),
+        profile=profile,
+        workspace_path=str(workspace_root),
+    )
+    await process.wait()
+
+    assert len(trust_calls) == 1
+    trust_call = trust_calls[0]
+    assert trust_call["run_as_user"] is None
+    assert trust_call["workspace_path"] == str(workspace_root)
+    assert trust_call["config_file"] == Path(os.environ["HOME"]) / ".claude.json"
+    assert captured_launches
+    assert captured_launches[-1][0][0] == "claude"
+
 @pytest.mark.asyncio
 async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypatch):
     """When launched as root for claude_code runtime, the process should:
@@ -2335,13 +2524,14 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     assert "app:app" in chown_call
     assert str(run_root) in chown_call
 
-    # Verify config creation was attempted via runuser
+    # Verify config trust materialization was attempted via runuser
     assert len(config_creation_calls) == 1, (
         f"Expected 1 config creation call, got {len(config_creation_calls)}"
     )
     config_call_str = " ".join(str(arg) for arg in config_creation_calls[0])
     assert "python3" in config_call_str
-    assert "pathlib" in config_call_str
+    assert "hasTrustDialogAccepted" in config_call_str
+    assert str(workspace_root.resolve()) in config_creation_calls[0]
 
     # Verify runuser was used instead of direct subprocess exec
     # Filter to find the final launch runuser (not the config creation one)
@@ -3004,6 +3194,9 @@ async def test_launch_adds_trusted_jira_tool_hint_for_claude_jira_skill(
         async def wait(self) -> int:
             return 0
 
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
     async def _fake_create_subprocess_exec(*args, **_kwargs):
         nonlocal captured_args
         captured_args = args
@@ -3071,6 +3264,9 @@ async def test_launch_preserves_missing_instruction_ref_without_jira_skill(
 
         async def wait(self) -> int:
             return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
 
     async def _fake_create_subprocess_exec(*_args, **_kwargs):
         return _FakeProcess()

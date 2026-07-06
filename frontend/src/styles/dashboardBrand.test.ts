@@ -39,4 +39,16 @@ describe('dashboard masthead brand styles', () => {
       'font-size: clamp(1.12rem, 1.7vw, 1.52rem);',
     );
   });
+
+  it('MM-1114 hides the workflow list display control on mobile and preserves accessible focus tokens', () => {
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 767px\)\s*\{[\s\S]*\.workflow-list-display-control\s*\{[^}]*display:\s*none/s,
+    );
+    expect(cssRuleBlock('.workflow-list-display-option:focus-visible')).toContain(
+      'box-shadow: var(--mm-control-focus-ring);',
+    );
+    expect(cssRuleBlock('.workflow-list-display-option[aria-pressed="true"]')).toContain(
+      'border-color: rgb(var(--mm-accent) / 0.6);',
+    );
+  });
 });
