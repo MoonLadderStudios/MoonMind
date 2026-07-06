@@ -29,7 +29,7 @@ http://localhost:8000
 
 Operators should treat these host ports as the documented local access points. Inside the Compose network, services may still call MoonMind by its service-local URL, such as `http://api:8000`, when that is the container port exposed by the API service.
 
-The default Compose configuration also trusts the browser-visible Omnigent origin for WebSocket handshakes and multipart upload routes. It derives `OMNIGENT_ACCOUNTS_BASE_URL` and `OMNIGENT_WS_ALLOWED_ORIGINS` from `OMNIGENT_PORT`, so changing `OMNIGENT_PORT` without a custom hostname keeps local chat and file-upload requests aligned. When an operator exposes Omnigent through a different public hostname, set `OMNIGENT_ACCOUNTS_BASE_URL` to that origin; set `OMNIGENT_WS_ALLOWED_ORIGINS` only when additional trusted browser origins are required.
+The default Compose configuration also trusts the browser-visible Omnigent origin for WebSocket handshakes and multipart upload routes. Without a custom hostname, it derives local `OMNIGENT_ACCOUNTS_BASE_URL` and `OMNIGENT_WS_ALLOWED_ORIGINS` values from `OMNIGENT_PORT`, so changing `OMNIGENT_PORT` keeps local chat and file-upload requests aligned. When an operator exposes Omnigent through a different public hostname, set `OMNIGENT_ACCOUNTS_BASE_URL` to that origin; by default, `OMNIGENT_WS_ALLOWED_ORIGINS` then trusts only that public origin. Set `OMNIGENT_WS_ALLOWED_ORIGINS` explicitly only when additional trusted browser origins are required.
 
 ## DOC-REQ-002 Default Startup
 
@@ -187,7 +187,7 @@ On Linux and macOS, a host-level check such as `lsof -i :7000` or `lsof -i :8000
 
 ### Trusted Omnigent Origins
 
-If Omnigent chat or file upload actions return `Forbidden: this endpoint requires a trusted Origin header`, confirm that the browser URL exactly matches one of the comma-separated origins in `OMNIGENT_WS_ALLOWED_ORIGINS`. The repository default covers `http://localhost:<OMNIGENT_PORT>` and `http://127.0.0.1:<OMNIGENT_PORT>`, plus any configured `OMNIGENT_ACCOUNTS_BASE_URL`. For public or reverse-proxied deployments, set `OMNIGENT_ACCOUNTS_BASE_URL` to the browser-visible origin and restart `omnigent`.
+If Omnigent chat or file upload actions return `Forbidden: this endpoint requires a trusted Origin header`, confirm that the browser URL exactly matches one of the comma-separated origins in `OMNIGENT_WS_ALLOWED_ORIGINS`. The repository local default covers `http://localhost:<OMNIGENT_PORT>` and `http://127.0.0.1:<OMNIGENT_PORT>`. For public or reverse-proxied deployments, set `OMNIGENT_ACCOUNTS_BASE_URL` to the browser-visible origin and restart `omnigent`; set `OMNIGENT_WS_ALLOWED_ORIGINS` only when that deployment needs more than the configured public origin.
 
 ### Host Config Mount Conflicts
 
