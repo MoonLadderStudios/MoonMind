@@ -1417,7 +1417,7 @@ async def test_fetch_result_reads_from_store(tmp_path: Path):
 async def test_fetch_result_surfaces_auto_publish_evidence_for_fix_comments(
     tmp_path: Path,
 ):
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime, timedelta
 
     from moonmind.schemas.agent_runtime_models import ManagedRunRecord
     from moonmind.workflows.temporal.publish_auto_evidence import (
@@ -1428,6 +1428,7 @@ async def test_fetch_result_surfaces_auto_publish_evidence_for_fix_comments(
     workspace_path = tmp_path / "workspace"
     artifacts_path = workspace_path / "artifacts"
     artifacts_path.mkdir(parents=True)
+    started_at = datetime.now(tz=UTC) - timedelta(seconds=1)
     (artifacts_path / "publish_result.json").write_text(
         (
             "{\n"
@@ -1446,6 +1447,7 @@ async def test_fetch_result_surfaces_auto_publish_evidence_for_fix_comments(
             '  "merged": false,\n'
             '  "prUrl": null,\n'
             '  "blockedReason": null,\n'
+            '  "rawLog": "must not enter Temporal metadata",\n'
             '  "verificationCommands": [\n'
             '    "git rev-parse HEAD",\n'
             '    "git ls-remote origin refs/heads/codex/dnd-barbarian-class-design-20260705"\n'
@@ -1462,7 +1464,7 @@ async def test_fetch_result_surfaces_auto_publish_evidence_for_fix_comments(
             agent_id="codex_cli",
             runtime_id="codex_cli",
             status="completed",
-            started_at=datetime.now(tz=UTC),
+            started_at=started_at,
             workspace_path=str(workspace_path),
         )
     )
@@ -1476,16 +1478,170 @@ async def test_fetch_result_surfaces_auto_publish_evidence_for_fix_comments(
         run_store=store,
     )
 
-    result = await adapter.fetch_result("run-result-fix-comments-publish-evidence")
+    direct_result = await adapter.fetch_result(
+        "run-result-fix-comments-publish-evidence"
+    )
+    assert "publishResult" not in direct_result.metadata
+
+    result = await adapter.fetch_result(
+        "run-result-fix-comments-publish-evidence",
+        include_workspace_auto_publish_evidence=True,
+    )
 
     publish_result = result.metadata["publishResult"]
     assert result.failure_class is None
     assert publish_result["skillId"] == "fix-comments"
     assert publish_result["pushed"] is True
+    assert "rawLog" not in publish_result
     assert (
         parse_auto_publish_evidence(publish_result).finish_code
         == "PUBLISHED_BRANCH"
     )
+
+
+async def test_fetch_result_ignores_stale_auto_publish_evidence(
+    tmp_path: Path,
+):
+    import os
+    from datetime import UTC, datetime, timedelta
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    artifacts_path = workspace_path / "artifacts"
+    artifacts_path.mkdir(parents=True)
+    publish_path = artifacts_path / "publish_result.json"
+    publish_path.write_text(
+        (
+            "{\n"
+            '  "schemaVersion": "moonmind.publish.auto.v1",\n'
+            '  "mode": "auto",\n'
+            '  "owner": "agent",\n'
+            '  "skillId": "fix-comments",\n'
+            '  "status": "verified",\n'
+            '  "action": "push",\n'
+            '  "repository": "MoonLadderStudios/Tactics",\n'
+            '  "branch": "codex/dnd-barbarian-class-design-20260705",\n'
+            '  "localHead": "96ff4e3852352a8afab9e4251d0221bda5acefea",\n'
+            '  "remoteBranchHead": "96ff4e3852352a8afab9e4251d0221bda5acefea",\n'
+            '  "remoteVerified": true,\n'
+            '  "pushed": true,\n'
+            '  "merged": false,\n'
+            '  "prUrl": null,\n'
+            '  "blockedReason": null,\n'
+            '  "verificationCommands": ["git rev-parse HEAD"]\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    started_at = datetime.now(tz=UTC)
+    stale_time = (started_at - timedelta(minutes=5)).timestamp()
+    os.utime(publish_path, (stale_time, stale_time))
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-stale-publish-evidence",
+            agent_id="codex_cli",
+            runtime_id="codex_cli",
+            status="completed",
+            started_at=started_at,
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-stale-publish-evidence",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-stale-publish-evidence",
+        include_workspace_auto_publish_evidence=True,
+    )
+
+    assert "publishResult" not in result.metadata
+
+
+async def test_fetch_result_does_not_bypass_pr_resolver_publish_normalization(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime, timedelta
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    resolver_dir = workspace_path / "var" / "pr_resolver"
+    artifact_dir = workspace_path / "artifacts"
+    resolver_dir.mkdir(parents=True)
+    artifact_dir.mkdir(parents=True)
+    (resolver_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "merged",\n'
+            '  "merge_outcome": "merged",\n'
+            '  "mergeAutomationDisposition": "merged"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "publish_result.json").write_text(
+        (
+            "{\n"
+            '  "schemaVersion": "moonmind.publish.auto.v1",\n'
+            '  "mode": "auto",\n'
+            '  "owner": "agent",\n'
+            '  "skillId": "pr-resolver",\n'
+            '  "status": "verified",\n'
+            '  "action": "merge",\n'
+            '  "repository": "MoonLadderStudios/MoonMind",\n'
+            '  "branch": "codex/fix-auto-publish-evidence-adapter",\n'
+            '  "remoteVerified": true,\n'
+            '  "pushed": false,\n'
+            '  "merged": true,\n'
+            '  "prUrl": null,\n'
+            '  "blockedReason": null,\n'
+            '  "verificationCommands": ["gh pr view 3008"]\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-invalid-publish-evidence",
+            agent_id="codex_cli",
+            runtime_id="codex_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC) - timedelta(seconds=1),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-invalid-publish-evidence",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-invalid-publish-evidence",
+        pr_resolver_expected=True,
+        include_workspace_auto_publish_evidence=True,
+    )
+
+    assert result.metadata["mergeAutomationDisposition"] == "merged"
+    assert "publishResult" not in result.metadata
 
 
 async def test_fetch_result_marks_failed_pr_resolver_artifact_as_failure(

@@ -9182,11 +9182,13 @@ class TemporalAgentRuntimeActivities:
         )
         workspace_github_token: str | None = None
         try:
-            result = await adapter.fetch_result(
-                run_id,
-                pr_resolver_expected=pr_resolver_expected,
-                pr_resolver_merge_gate_owned=pr_resolver_merge_gate_owned,
-            )
+            fetch_kwargs: dict[str, Any] = {
+                "pr_resolver_expected": pr_resolver_expected,
+                "pr_resolver_merge_gate_owned": pr_resolver_merge_gate_owned,
+            }
+            if publish_mode == "auto":
+                fetch_kwargs["include_workspace_auto_publish_evidence"] = True
+            result = await adapter.fetch_result(run_id, **fetch_kwargs)
             record = self._run_store.load(run_id)
             if record is not None:
                 if record.workspace_path:

@@ -51,6 +51,10 @@ from moonmind.workflows.executions.runtime_defaults import resolve_runtime_defau
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready_from_payload,
 )
+from moonmind.workflows.temporal.publish_auto_evidence import (
+    AutoPublishEvidenceError,
+    parse_auto_publish_evidence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -298,15 +302,62 @@ def _github_repository_from_pr_url(value: str) -> str:
     return ""
 
 
-def _load_auto_publish_result(
+def _load_auto_publish_result_payload(
     workspace_path: str | None,
+    *,
+    not_before: datetime | None = None,
 ) -> dict[str, Any] | None:
-    """Load agent-written auto-publish evidence from the repo workspace."""
+    """Load raw agent-written auto-publish evidence from the repo workspace."""
 
     workspace = str(workspace_path or "").strip()
     if not workspace:
         return None
-    return _load_json_dict(Path(workspace) / _AUTO_PUBLISH_RESULT_PATH)
+    path = Path(workspace) / _AUTO_PUBLISH_RESULT_PATH
+    if not _path_modified_at_or_after(path, not_before):
+        return None
+    return _load_json_dict(path)
+
+
+def _path_modified_at_or_after(path: Path, not_before: datetime | None) -> bool:
+    """Return whether *path* exists and is fresh enough for this run."""
+
+    if not path.exists():
+        return False
+    if not_before is None:
+        return True
+    cutoff = not_before if not_before.tzinfo is not None else not_before.replace(tzinfo=UTC)
+    try:
+        modified_at = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    except OSError:
+        return False
+    return modified_at >= cutoff
+
+
+def _canonical_auto_publish_result(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return a compact canonical evidence payload, dropping unknown fields."""
+
+    try:
+        evidence = parse_auto_publish_evidence(payload)
+    except AutoPublishEvidenceError:
+        return None
+    return {
+        "schemaVersion": evidence.schema_version,
+        "mode": evidence.mode,
+        "owner": evidence.owner,
+        "skillId": evidence.skill_id,
+        "status": evidence.status,
+        "action": evidence.action,
+        "repository": evidence.repository,
+        "branch": evidence.branch,
+        "localHead": evidence.local_head,
+        "remoteBranchHead": evidence.remote_branch_head,
+        "remoteVerified": evidence.remote_verified,
+        "pushed": evidence.pushed,
+        "merged": evidence.merged,
+        "prUrl": evidence.pr_url,
+        "blockedReason": evidence.blocked_reason,
+        "verificationCommands": list(evidence.verification_commands),
+    }
 
 
 def _pr_resolver_auto_publish_verification_commands(
@@ -351,7 +402,7 @@ def _normalize_pr_resolver_auto_publish_result(
         schema_version == _AUTO_PUBLISH_SCHEMA_VERSION
         and status in _AUTO_PUBLISH_ALLOWED_STATUSES
     ):
-        return dict(payload)
+        return _canonical_auto_publish_result(payload)
 
     disposition = _pr_resolver_disposition(dict(resolver_payload))
     resolver_status = _pr_resolver_status(dict(resolver_payload))
@@ -707,7 +758,7 @@ def _derive_pr_resolver_metadata(
     )
     if head_sha:
         metadata["headSha"] = head_sha
-    publish_payload = _load_auto_publish_result(workspace_path)
+    publish_payload = _load_auto_publish_result_payload(workspace_path)
     if publish_payload is not None:
         publish_result = _normalize_pr_resolver_auto_publish_result(
             publish_payload,
@@ -954,6 +1005,7 @@ class ManagedAgentAdapter:
         *,
         pr_resolver_expected: bool = False,
         pr_resolver_merge_gate_owned: bool = False,
+        include_workspace_auto_publish_evidence: bool = False,
     ) -> AgentRunResult:
         """Return result from the run store, falling back to empty if no store.
 
@@ -990,10 +1042,21 @@ class ManagedAgentAdapter:
                     record.workspace_path,
                     merge_gate_owned=pr_resolver_merge_gate_owned,
                 )
-                if "publishResult" not in metadata:
-                    publish_payload = _load_auto_publish_result(record.workspace_path)
+                if (
+                    include_workspace_auto_publish_evidence
+                    and "publishResult" not in metadata
+                    and _load_pr_resolver_result(record.workspace_path) is None
+                ):
+                    publish_payload = _load_auto_publish_result_payload(
+                        record.workspace_path,
+                        not_before=record.started_at,
+                    )
                     if publish_payload is not None:
-                        metadata["publishResult"] = publish_payload
+                        publish_result = _canonical_auto_publish_result(
+                            publish_payload
+                        )
+                        if publish_result is not None:
+                            metadata["publishResult"] = publish_result
                 if pr_resolver_expected:
                     derived_failure_class, derived_summary = _derive_pr_resolver_failure(
                         record.workspace_path,
