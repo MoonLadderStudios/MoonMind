@@ -44,7 +44,8 @@ describe('dashboardPreferences', () => {
         liveUpdatesEnabled: false,
         createExpertMode: true,
         debugFieldsVisible: false,
-        workflowWorkspaceSidebarCollapsed: true,
+        workflowListDisplayMode: 'sidebar',
+        lastSelectedWorkflowId: 'workflow-123',
         preferredDetailTab: 'steps',
         defaultRuntime: 'codex_cli',
       });
@@ -56,7 +57,8 @@ describe('dashboardPreferences', () => {
       expect(reloaded.workflowListColumnVisibility.progress).toBe(false);
       expect(reloaded.createExpertMode).toBe(true);
       expect(reloaded.debugFieldsVisible).toBe(false);
-      expect(reloaded.workflowWorkspaceSidebarCollapsed).toBe(true);
+      expect(reloaded.workflowListDisplayMode).toBe('sidebar');
+      expect(reloaded.lastSelectedWorkflowId).toBe('workflow-123');
       expect(reloaded.preferredDetailTab).toBe('steps');
     });
 
@@ -109,7 +111,8 @@ describe('dashboardPreferences', () => {
             workflowListPageSize: 7, // unsupported page size
             preferredDetailTab: 'nope', // invalid enum
             liveUpdatesEnabled: 'yes', // wrong type
-            workflowWorkspaceSidebarCollapsed: 'yes', // wrong type
+            workflowListDisplayMode: 'drawer', // invalid enum
+            lastSelectedWorkflowId: '  workflow-456  ',
             createExpertMode: true, // valid
             workflowListColumnVisibility: { repository: false, bogus: true },
             workflowListDefaultStatuses: ['executing', 42, '  failed  ', ''],
@@ -122,7 +125,8 @@ describe('dashboardPreferences', () => {
       expect(prefs.workflowListPageSize).toBe(DEFAULT_DASHBOARD_PREFERENCES.workflowListPageSize);
       expect(prefs.preferredDetailTab).toBe('overview'); // reset
       expect(prefs.liveUpdatesEnabled).toBe(true); // reset to default
-      expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(false); // reset to default
+      expect(prefs.workflowListDisplayMode).toBeUndefined(); // reset to default
+      expect(prefs.lastSelectedWorkflowId).toBe('workflow-456'); // trimmed
       expect(prefs.createExpertMode).toBe(true); // kept
       expect(prefs.workflowListColumnVisibility.repository).toBe(false); // kept
       expect(prefs.workflowListColumnVisibility).not.toHaveProperty('bogus'); // dropped
@@ -183,12 +187,14 @@ describe('dashboardPreferences', () => {
       expect(parsed.preferences.workflowListColumnVisibility).not.toHaveProperty('nextAction');
     });
 
-    it('MM-1000 keeps a valid persisted workflow workspace sidebar collapse preference', () => {
+    it('MM-1117 keeps valid persisted workflow list display and selected workflow preferences', () => {
       const prefs = sanitizeDashboardPreferences({
-        workflowWorkspaceSidebarCollapsed: true,
+        workflowListDisplayMode: 'hidden',
+        lastSelectedWorkflowId: 'workflow-789',
       });
 
-      expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(true);
+      expect(prefs.workflowListDisplayMode).toBe('hidden');
+      expect(prefs.lastSelectedWorkflowId).toBe('workflow-789');
     });
   });
 

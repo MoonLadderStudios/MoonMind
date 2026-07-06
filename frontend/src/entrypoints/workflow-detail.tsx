@@ -596,9 +596,10 @@ export function WorkflowWorkspaceShell({
   const cfg = readDashboardConfig(payload);
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
-  const [sidebarOpen, setSidebarOpen] = useState(
-    () => !readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
-  );
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    const mode = readDashboardPreferences().workflowListDisplayMode;
+    return mode !== 'hidden';
+  });
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
@@ -640,6 +641,10 @@ export function WorkflowWorkspaceShell({
     ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
     : null;
 
+  useEffect(() => {
+    updateDashboardPreferences({ lastSelectedWorkflowId: workflowId });
+  }, [workflowId]);
+
   return (
     <div
       className="workflow-workspace-shell"
@@ -656,7 +661,7 @@ export function WorkflowWorkspaceShell({
           search={search}
           closeButtonRef={closeButtonRef}
           onClose={() => {
-            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+            updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
             setSidebarOpen(false);
             window.setTimeout(() => openButtonRef.current?.focus(), 0);
           }}
@@ -667,7 +672,7 @@ export function WorkflowWorkspaceShell({
           type="button"
           className="secondary workflow-workspace-open-sidebar workflow-workspace-sidebar-control"
           onClick={() => {
-            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
+            updateDashboardPreferences({ workflowListDisplayMode: 'sidebar' });
             setSidebarOpen(true);
             window.setTimeout(() => closeButtonRef.current?.focus(), 0);
           }}

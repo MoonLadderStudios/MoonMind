@@ -954,7 +954,7 @@ describe('Workflow Detail Entrypoint', () => {
     );
   });
 
-  it('MM-1000 persists collapsed sidebar state across desktop detail reloads without changing the route', async () => {
+  it('MM-1117 persists hidden display mode across desktop detail reloads without changing the route', async () => {
     window.history.pushState({}, 'Workspace Collapse Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -968,11 +968,12 @@ describe('Workflow Detail Entrypoint', () => {
     expect(openSidebar).toBeTruthy();
     expect(document.activeElement).toBe(openSidebar);
     expect(window.location.pathname).toBe('/workflows/test-123');
-    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('test-123');
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
   });
 
-  it('MM-1000 opens desktop detail routes by default unless the sidebar collapse preference is persisted', async () => {
+  it('MM-1117 opens desktop detail routes by default unless hidden display mode is persisted', async () => {
     window.history.pushState({}, 'Workspace Reload Default Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -983,18 +984,26 @@ describe('Workflow Detail Entrypoint', () => {
 
     cleanup();
     window.localStorage.clear();
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     expect(await screen.findByRole('button', { name: 'Open workflow sidebar' })).toBeTruthy();
+
+    cleanup();
+    window.localStorage.clear();
+    updateDashboardPreferences({ workflowListDisplayMode: 'table' });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
   });
 
-  it('MM-1000 restores the sidebar from persisted collapse without refetching selected detail data', async () => {
+  it('MM-1117 restores the sidebar from hidden mode without refetching selected detail data', async () => {
     window.history.pushState({}, 'Workspace Reopen Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
 
     renderWithClient(
       <WorkflowDetailEntrypoint
@@ -1020,7 +1029,7 @@ describe('Workflow Detail Entrypoint', () => {
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close sidebar' }));
     expect(sidebar).toBeTruthy();
-    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(false);
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('sidebar');
     expect(
       fetchSpy.mock.calls.filter(
         ([input]) => String(input) === '/api/executions/test-123?source=temporal',
@@ -1028,11 +1037,11 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBe(detailCallsBeforeOpen);
   });
 
-  it('MM-1000 keeps persisted collapsed state out of mobile standalone detail routing', async () => {
+  it('MM-1117 keeps persisted hidden mode out of mobile standalone detail routing', async () => {
     window.history.pushState({}, 'Workspace Mobile Collapse Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(false);
     mockWorkflowWorkspaceFetches();
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
@@ -1146,7 +1155,7 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState({}, 'Workspace Motion Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
 
     const { container } = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 

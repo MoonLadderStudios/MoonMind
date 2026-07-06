@@ -22,4 +22,14 @@ describe("workflowListContextParams", () => {
 
     expect(params.toString()).toBe("integration=jira");
   });
+
+  it("drops display mode and unsafe detail payload parameters", () => {
+    const params = workflowListContextParams(
+      new URLSearchParams(
+        "stateIn=completed&workflowListDisplayMode=hidden&rawPrompt=secret&draft=full&token=abc&presignedUrl=https%3A%2F%2Fexample.test&logs=large&artifacts=payload&detailPayload=large",
+      ),
+    );
+
+    expect(params.toString()).toBe("stateIn=completed");
+  });
 });

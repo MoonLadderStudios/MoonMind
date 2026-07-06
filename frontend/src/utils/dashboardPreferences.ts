@@ -26,6 +26,8 @@ export const DASHBOARD_PREFERENCES_VERSION = 1;
 
 export type WorkflowListDensity = 'comfortable' | 'compact';
 
+export type WorkflowListDisplayMode = 'hidden' | 'sidebar' | 'table';
+
 export type WorkflowDetailTab = 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
 
 // Columns the operator may hide on the workflow list. The workflow title column
@@ -68,8 +70,10 @@ export type DashboardPreferences = {
   createExpertMode: boolean;
   /** Whether diagnostic debug fields are surfaced on the workflow detail page. */
   debugFieldsVisible: boolean;
-  /** Whether the desktop workflow detail sidebar is collapsed on reload. */
-  workflowWorkspaceSidebarCollapsed: boolean;
+  /** Last explicit workflow list display mode selected by the operator. */
+  workflowListDisplayMode: WorkflowListDisplayMode | undefined;
+  /** Last explicit workflow selected by the operator. */
+  lastSelectedWorkflowId: string | undefined;
   /** Preferred default workflow detail tab. */
   preferredDetailTab: WorkflowDetailTab;
   /** Preferred runtime default for the create page, where safe. */
@@ -94,7 +98,8 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   liveUpdatesEnabled: true,
   createExpertMode: false,
   debugFieldsVisible: true,
-  workflowWorkspaceSidebarCollapsed: false,
+  workflowListDisplayMode: undefined,
+  lastSelectedWorkflowId: undefined,
   preferredDetailTab: 'overview',
   defaultRuntime: '',
   defaultProviderProfile: '',
@@ -148,6 +153,10 @@ function sanitizeBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
+function sanitizeWorkflowListDisplayMode(value: unknown): WorkflowListDisplayMode | undefined {
+  return value === 'hidden' || value === 'sidebar' || value === 'table' ? value : undefined;
+}
+
 function sanitizeDetailTab(value: unknown): WorkflowDetailTab {
   return WORKFLOW_DETAIL_TABS.includes(value as WorkflowDetailTab)
     ? (value as WorkflowDetailTab)
@@ -156,6 +165,11 @@ function sanitizeDetailTab(value: unknown): WorkflowDetailTab {
 
 function sanitizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function sanitizeOptionalString(value: unknown): string | undefined {
+  const sanitized = sanitizeString(value);
+  return sanitized ? sanitized : undefined;
 }
 
 /**
@@ -184,10 +198,8 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
       value.debugFieldsVisible,
       DEFAULT_DASHBOARD_PREFERENCES.debugFieldsVisible,
     ),
-    workflowWorkspaceSidebarCollapsed: sanitizeBoolean(
-      value.workflowWorkspaceSidebarCollapsed,
-      DEFAULT_DASHBOARD_PREFERENCES.workflowWorkspaceSidebarCollapsed,
-    ),
+    workflowListDisplayMode: sanitizeWorkflowListDisplayMode(value.workflowListDisplayMode),
+    lastSelectedWorkflowId: sanitizeOptionalString(value.lastSelectedWorkflowId),
     preferredDetailTab: sanitizeDetailTab(value.preferredDetailTab),
     defaultRuntime: sanitizeString(value.defaultRuntime),
     defaultProviderProfile: sanitizeString(value.defaultProviderProfile),
