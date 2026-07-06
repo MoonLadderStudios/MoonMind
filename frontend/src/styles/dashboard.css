@@ -2945,16 +2945,11 @@ tr[data-proposal-id].proposal-consuming td {
 .status-initializing,
 .status-ready,
 .status-reviewing,
-.status-planning {
+.status-planning,
+.status-finalizing {
   color: rgb(var(--mm-status-setup, 37 99 235));
   background: rgb(var(--mm-status-setup, 37 99 235) / 0.14);
   border-color: rgb(var(--mm-status-setup, 37 99 235) / 0.62);
-}
-
-.status-finalizing {
-  color: rgb(var(--mm-status-finalizing, 100 116 139));
-  background: rgb(var(--mm-status-finalizing, 100 116 139) / 0.14);
-  border-color: rgb(var(--mm-status-finalizing, 100 116 139) / 0.62);
 }
 
 .status-succeeded,
