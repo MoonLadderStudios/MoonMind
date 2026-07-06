@@ -57,6 +57,7 @@ import {
   workflowDetailHref,
   workflowListApiQueryFromContext,
 } from '../lib/workflowListContext';
+import { requestWorkflowStartRouteChange } from '../lib/workflowStartRouteGuard';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
 type PageImport = () => Promise<{ default: PageComponent }>;
@@ -675,11 +676,11 @@ function RoutedDashboardPage({
     const search = new URLSearchParams(location.search);
     pendingRequestRef.current = null;
     setResolutionStatus(null);
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
 
     if (location.pathname.replace(/\/$/, '') === '/workflows' && selectedMode !== 'table') {
       const requestId = Symbol();
       pendingRequestRef.current = requestId;
+      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
       setRequestedMode(selectedMode);
       setResolutionStatus('Opening first workflow...');
       try {
@@ -725,7 +726,16 @@ function RoutedDashboardPage({
     }
     const current = `${location.pathname}${location.search}`;
     if (resolved.targetPath !== current) {
+      if (
+        location.pathname.replace(/\/$/, '') === '/workflows/new' &&
+        !requestWorkflowStartRouteChange(resolved.targetPath)
+      ) {
+        return;
+      }
+      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
       navigate(resolved.targetPath);
+    } else {
+      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
     }
   };
 

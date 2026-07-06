@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   workflowListApiQueryFromContext,
   workflowListContextParams,
+  workflowListHrefFromContext,
 } from "./workflowListContext";
 
 describe("workflowListContextParams", () => {
@@ -34,7 +35,16 @@ describe("workflowListContextParams", () => {
     );
 
     expect(query).toBe(
-      "stateIn=executing&progressSignalIn=awaiting_external&source=temporal&pageSize=50",
+      "source=temporal&pageSize=50&stateIn=executing&progressSignalIn=awaiting_external",
     );
+  });
+
+  it("converts API-style pageSize to table limit when linking back to the workflow list", () => {
+    const href = workflowListHrefFromContext(
+      new URLSearchParams("source=temporal&pageSize=100&stateIn=completed&nextPageToken=page-2"),
+      { markDetailReturn: true },
+    );
+
+    expect(href).toBe("/workflows?stateIn=completed&limit=100&returnFromWorkflowDetail=1");
   });
 });

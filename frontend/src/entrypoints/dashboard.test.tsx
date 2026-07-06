@@ -718,7 +718,7 @@ describe('Dashboard shared entry', () => {
       }
       if (
         url ===
-        '/api/executions?stateIn=completed&source=jules&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&pageSize=50'
+        '/api/executions?source=jules&pageSize=50&stateIn=completed&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli'
       ) {
         return Promise.resolve({
           ok: true,
@@ -736,7 +736,7 @@ describe('Dashboard shared entry', () => {
       expect(window.location.pathname).toBe('/workflows/first-query-row');
     });
     expect(fetchSpy).toHaveBeenCalledWith(
-      '/api/executions?stateIn=completed&source=jules&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&pageSize=50',
+      '/api/executions?source=jules&pageSize=50&stateIn=completed&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli',
     );
     expect(window.location.search).toContain('stateIn=completed');
     expect(window.location.search).toContain('source=jules');
@@ -756,7 +756,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/executions/unauthorized-123?source=temporal') {
         return Promise.resolve({ ok: false, status: 403, statusText: 'Forbidden' } as Response);
       }
-      if (url === '/api/executions?stateIn=completed&source=temporal&pageSize=50') {
+      if (url === '/api/executions?source=temporal&pageSize=50&stateIn=completed') {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -790,7 +790,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/executions/secret-remembered?source=temporal') {
         return Promise.resolve({ ok: false, status: 403, statusText: 'Forbidden' } as Response);
       }
-      if (url === '/api/executions?stateIn=completed&source=temporal&pageSize=25') {
+      if (url === '/api/executions?source=temporal&pageSize=25&stateIn=completed') {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -820,7 +820,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/executions?stateIn=running&source=temporal&pageSize=25') {
+      if (url === '/api/executions?source=temporal&pageSize=25&stateIn=running') {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [{ taskId: 'authorized-task-row', title: 'Authorized task row' }] }),
@@ -881,7 +881,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/executions?stateIn=failed&source=temporal&pageSize=25') {
+      if (url === '/api/executions?source=temporal&pageSize=25&stateIn=failed') {
         return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
       }
       return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
@@ -904,7 +904,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/executions?stateIn=completed&source=temporal&pageSize=25') {
+      if (url === '/api/executions?source=temporal&pageSize=25&stateIn=completed') {
         return Promise.resolve({ ok: true, json: async () => null } as Response);
       }
       return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
@@ -927,7 +927,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/executions?stateIn=failed&source=temporal&pageSize=25') {
+      if (url === '/api/executions?source=temporal&pageSize=25&stateIn=failed') {
         return Promise.resolve({ ok: false, status: 503, statusText: 'Service Unavailable' } as Response);
       }
       return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
@@ -950,7 +950,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/executions?stateIn=running&source=temporal&pageSize=25') {
+      if (url === '/api/executions?source=temporal&pageSize=25&stateIn=running') {
         return new Promise<Response>((resolve) => {
           resolveList = resolve;
         });

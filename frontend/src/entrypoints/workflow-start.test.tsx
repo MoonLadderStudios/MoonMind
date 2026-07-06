@@ -764,6 +764,8 @@ describe("WorkflowStart schedule mode entry", () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
+    window.localStorage.clear();
+    window.history.pushState({}, "Task Create", "/workflows/new");
     fetchSpy = vi
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL) => {
@@ -876,6 +878,7 @@ describe("WorkflowStart schedule mode entry", () => {
     )) as HTMLSelectElement;
     expect(scheduleMode.value).toBe("immediate");
   });
+
 });
 
 describe.skip("Task Create Entrypoint", () => {

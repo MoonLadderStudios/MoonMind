@@ -114,6 +114,11 @@ function pathWithSearch(pathname: string, search: string | URLSearchParams | nul
 function workflowListPathFromContext(search: string | URLSearchParams | null | undefined): string {
   const source = typeof search === 'string' ? new URLSearchParams(search.replace(/^\?/, '')) : search;
   const params = workflowListContextParams(source ?? new URLSearchParams());
+  const pageSize = params.get('pageSize');
+  if (!params.has('limit') && pageSize) {
+    params.set('limit', pageSize);
+  }
+  params.delete('pageSize');
   const query = params.toString();
   return query ? `/workflows?${query}` : '/workflows';
 }

@@ -142,6 +142,17 @@ describe('resolveWorkflowListDisplay', () => {
     });
   });
 
+  it('converts API-style pageSize context to table limit for table mode navigation', () => {
+    expect(resolveWorkflowListDisplay({
+      pathname: '/workflows/mm%3A123/debug',
+      search: '?source=temporal&pageSize=100&stateIn=completed',
+      requestedMode: 'table',
+    })).toMatchObject({
+      routeAction: 'navigate-workflows',
+      targetPath: '/workflows?source=temporal&stateIn=completed&limit=100',
+    });
+  });
+
   it('keeps create as primary and renders the workflow list as a sidebar in sidebar mode', () => {
     expect(resolveWorkflowListDisplay({ pathname: '/workflows/new', requestedMode: 'sidebar' })).toMatchObject({
       requestedMode: 'sidebar',
