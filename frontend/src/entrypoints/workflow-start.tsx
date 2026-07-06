@@ -26,7 +26,7 @@ import {
 import {
   readWorkflowListDisplayMode,
 } from "../lib/workflowListDisplayMode";
-import { WorkflowWorkspaceSidebarPanel } from "./workflow-detail";
+import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowWorkspaceSidebar";
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
