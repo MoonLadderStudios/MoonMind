@@ -15,6 +15,11 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { DashboardApp } from './dashboard-app';
 import { navigateTo } from '../lib/navigation';
+import {
+  DASHBOARD_PREFERENCES_STORAGE_KEY,
+  DASHBOARD_PREFERENCES_VERSION,
+  DEFAULT_DASHBOARD_PREFERENCES,
+} from '../utils/dashboardPreferences';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -320,9 +325,30 @@ describe('Dashboard shared entry', () => {
   afterEach(() => {
     fetchSpy.mockRestore();
     window.WebSocket = originalWebSocket;
+    window.localStorage.clear();
     document.querySelectorAll('[data-nav]').forEach((node) => node.remove());
     window.history.replaceState({}, '', '/');
   });
+
+  function writeDashboardPreferences(overrides: Partial<typeof DEFAULT_DASHBOARD_PREFERENCES>) {
+    window.localStorage.setItem(
+      DASHBOARD_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: DASHBOARD_PREFERENCES_VERSION,
+        preferences: {
+          ...DEFAULT_DASHBOARD_PREFERENCES,
+          ...overrides,
+        },
+      }),
+    );
+  }
+
+  function workflowDisplayRadio(value: string): HTMLInputElement {
+    const group = screen.getByRole('radiogroup', { name: 'Workflow list display' });
+    const radio = group.querySelector<HTMLInputElement>(`input[value="${value}"]`);
+    expect(radio).toBeTruthy();
+    return radio!;
+  }
 
   it('MM-1107 animates lucide nav icons from the whole route link hover', async () => {
     window.history.replaceState({}, '', '/workflows');
@@ -410,6 +436,115 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Settings permissions:')).toBeTruthy();
     expect(screen.queryByRole('radiogroup', { name: 'Workflow list display' })).toBeNull();
+  });
+
+  it('MM-1118 keeps workflow list controls and sidebars off every unsupported dashboard route', async () => {
+    for (const route of ['/settings', '/schedules', '/manifests']) {
+      window.history.replaceState({}, '', route);
+      const view = renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading...')).toBeNull();
+      });
+      expect(screen.queryByRole('radiogroup', { name: 'Workflow list display' })).toBeNull();
+      expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+
+      view.unmount();
+    }
+  });
+
+  it('MM-1118 keyboard-selects hidden mode from the Workflows table through the first authorized row', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=completed');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?stateIn=completed&pageSize=25&source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              { workflowId: 'mm:authorized-first', title: 'Authorized first row' },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found', text: async () => '' } as Response);
+    });
+
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    const hiddenOption = workflowDisplayRadio('hidden');
+    hiddenOption.focus();
+    fireEvent.keyDown(hiddenOption, { key: ' ', code: 'Space' });
+    fireEvent.click(hiddenOption);
+
+    expect((await screen.findByRole('status')).textContent).toBe('Opening first workflow...');
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/mm%3Aauthorized-first');
+    });
+    expect(window.location.search).toBe('?stateIn=completed&source=temporal');
+    expect(document.activeElement).toBe(hiddenOption);
+  });
+
+  it('MM-1118 does not open an unauthorized remembered workflow from the masthead fallback', async () => {
+    writeDashboardPreferences({
+      lastSelectedWorkflowId: 'mm:unauthorized',
+      workflowListDisplayMode: 'table',
+    });
+    window.history.replaceState({}, '', '/workflows?source=temporal');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions/mm%3Aunauthorized?source=temporal') {
+        return Promise.resolve({ ok: false, status: 403, statusText: 'Forbidden', json: async () => ({}) } as Response);
+      }
+      if (url === '/api/executions?source=temporal&pageSize=25') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              { workflowId: 'mm:authorized-visible', title: 'Authorized visible row' },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found', text: async () => '' } as Response);
+    });
+
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(workflowDisplayRadio('sidebar'));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/mm%3Aauthorized-visible');
+    });
+    expect(window.location.pathname).not.toContain('unauthorized');
+  });
+
+  it('MM-1118 keeps Create primary content beside sidebar mode and unmounts it for table mode', async () => {
+    writeDashboardPreferences({ workflowListDisplayMode: 'hidden' });
+    window.history.replaceState({}, '', '/workflows/new');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    expect(workflowDisplayRadio('hidden').checked).toBe(true);
+    fireEvent.click(workflowDisplayRadio('sidebar'));
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    expect(workflowDisplayRadio('sidebar').checked).toBe(true);
+
+    fireEvent.click(workflowDisplayRadio('table'));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows');
+    });
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    expect(screen.queryByText('Workflow start route loaded')).toBeNull();
   });
 
   it('does not register a dashboard proposal review page for MM-859', async () => {
@@ -695,7 +830,7 @@ describe('Dashboard shared entry', () => {
     expect(cssRuleBlock(dashboardCss, '.queue-table-wrapper th')).toContain(
       'height: var(--workflow-list-header-row-height)',
     );
-    expect(cssRuleBlock(dashboardCss, '.queue-table-wrapper td')).toContain(
+    expect(cssRuleBlocks(dashboardCss, '.queue-table-wrapper td').join('\n')).toContain(
       'height: var(--workflow-list-body-row-height)',
     );
     expect(cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-header')).toContain(
@@ -1583,7 +1718,7 @@ describe('Dashboard shared entry', () => {
     );
 
     expect(dashboardCss).toMatch(
-      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\);/s,
+      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*auto\s+auto\s+minmax\(0,\s*1fr\)\s+auto;/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,

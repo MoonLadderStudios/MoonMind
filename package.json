@@ -19,9 +19,9 @@
     "contracts:check": "npm run api:types:check",
     "ui:typecheck": "tsc --noEmit -p frontend/tsconfig.json",
     "ui:lint": "eslint -c frontend/eslint.config.mjs frontend/src",
-    "ui:test": "vitest run --config frontend/vite.config.ts",
-    "ui:test:workflow-start": "./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/workflow-start.test.tsx",
-    "ui:test:watch": "vitest --config frontend/vite.config.ts",
+    "ui:test": "./tools/test_unit.sh --dashboard-only --ui-args",
+    "ui:test:workflow-start": "./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/workflow-start.test.tsx",
+    "ui:test:watch": "node ./node_modules/vitest/vitest.mjs --config frontend/vite.config.ts",
     "api:types": "bash tools/run_repo_python.sh tools/generate_openapi_types.py",
     "api:types:check": "npm run api:types && git diff --exit-code -- frontend/src/generated/openapi.ts",
     "frontend:ci": "npm run ui:typecheck && npm run ui:lint && npm run ui:test && npm run ui:build:check"

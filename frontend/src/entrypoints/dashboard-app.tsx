@@ -410,6 +410,24 @@ function WorkflowListDisplayControl({
     return workflowId ? workflowDetailHref(workflowId, new URLSearchParams(location.search)) : null;
   }, [apiBase, location.search]);
 
+  const resolveRememberedWorkflowHref = useCallback(
+    async (workflowId: string): Promise<string | null> => {
+      const source = new URLSearchParams(location.search).get('source') || 'temporal';
+      try {
+        const response = await fetch(
+          `${apiBase}/executions/${encodeURIComponent(workflowId)}?source=${encodeURIComponent(source)}`,
+        );
+        if (!response.ok) {
+          return null;
+        }
+        return workflowDetailHref(workflowId, new URLSearchParams(location.search));
+      } catch {
+        return null;
+      }
+    },
+    [apiBase, location.search],
+  );
+
   const selectMode = useCallback(
     async (mode: WorkflowListDisplayMode) => {
       if (!contract || !isWorkflowListDisplayModeSupported(contract, mode)) return;
@@ -427,8 +445,11 @@ function WorkflowListDisplayControl({
       if (contract.surface === 'workflows-table') {
         const rememberedWorkflowId = preferences.lastSelectedWorkflowId.trim();
         if (rememberedWorkflowId) {
-          navigate(workflowDetailHref(rememberedWorkflowId, new URLSearchParams(location.search)));
-          return;
+          const rememberedHref = await resolveRememberedWorkflowHref(rememberedWorkflowId);
+          if (rememberedHref) {
+            navigate(rememberedHref);
+            return;
+          }
         }
         setStatusMessage('Opening first workflow...');
         try {
@@ -449,6 +470,7 @@ function WorkflowListDisplayControl({
       navigate,
       preferences.lastSelectedWorkflowId,
       resolveFirstWorkflowHref,
+      resolveRememberedWorkflowHref,
     ],
   );
 
@@ -653,6 +675,11 @@ function RoutedDashboardPage({
 }) {
   const location = useLocation();
   const route = resolveDashboardRoute(location.pathname);
+  const preferences = useDashboardPreferenceSnapshot();
+  const workflowDisplayMode = effectiveWorkflowListDisplayMode(
+    location.pathname,
+    preferences.workflowListDisplayMode,
+  );
 
   if (!route) {
     return (
@@ -672,11 +699,6 @@ function RoutedDashboardPage({
 
   const routedPayload = payloadForDashboardRoute(payload, route, uiInfo);
   const layout = readSharedLayout(routedPayload);
-  const preferences = useDashboardPreferenceSnapshot();
-  const workflowDisplayMode = effectiveWorkflowListDisplayMode(
-    location.pathname,
-    preferences.workflowListDisplayMode,
-  );
   const workflowStartSidebar = route.page === 'workflow-start' && workflowDisplayMode === 'sidebar'
     ? <WorkflowListSidebarSurface payload={routedPayload} search={new URLSearchParams(location.search)} />
     : null;

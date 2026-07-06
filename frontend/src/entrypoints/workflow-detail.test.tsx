@@ -964,11 +964,13 @@ describe('Workflow Detail Entrypoint', () => {
     const closeSidebar = await screen.findByRole('button', { name: 'Close sidebar' });
     fireEvent.click(closeSidebar);
 
-    const openSidebar = await screen.findByRole('button', { name: 'Open workflow sidebar' });
-    expect(openSidebar).toBeTruthy();
-    expect(document.activeElement).toBe(openSidebar);
+    await waitFor(() => {
+      expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    });
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
     expect(window.location.pathname).toBe('/workflows/test-123');
     expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
   });
 
@@ -983,18 +985,26 @@ describe('Workflow Detail Entrypoint', () => {
 
     cleanup();
     window.localStorage.clear();
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({
+      workflowWorkspaceSidebarCollapsed: true,
+      workflowListDisplayMode: 'hidden',
+    });
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('button', { name: 'Open workflow sidebar' })).toBeTruthy();
+    expect(await screen.findByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
   });
 
-  it('MM-1000 restores the sidebar from persisted collapse without refetching selected detail data', async () => {
+  it('MM-1118 restores the sidebar from hidden display mode without refetching selected detail data', async () => {
     window.history.pushState({}, 'Workspace Reopen Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({
+      workflowWorkspaceSidebarCollapsed: true,
+      workflowListDisplayMode: 'hidden',
+    });
 
     renderWithClient(
       <WorkflowDetailEntrypoint
@@ -1010,15 +1020,17 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    await screen.findByRole('button', { name: 'Open workflow sidebar' });
     await screen.findByRole('heading', { name: 'Workflow Detail' });
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     const detailCallsBeforeOpen = fetchSpy.mock.calls.filter(
       ([input]) => String(input) === '/api/executions/test-123?source=temporal',
     ).length;
-    fireEvent.click(screen.getByRole('button', { name: 'Open workflow sidebar' }));
+    updateDashboardPreferences({
+      workflowWorkspaceSidebarCollapsed: false,
+      workflowListDisplayMode: 'sidebar',
+    });
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close sidebar' }));
     expect(sidebar).toBeTruthy();
     expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(false);
     expect(
@@ -1146,18 +1158,22 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState({}, 'Workspace Motion Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({
+      workflowWorkspaceSidebarCollapsed: true,
+      workflowListDisplayMode: 'hidden',
+    });
 
     const { container } = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('button', { name: 'Open workflow sidebar' })).toBeTruthy();
+    expect(await screen.findByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
     expect(container.querySelector('.workflow-workspace-shell')?.getAttribute('data-sidebar-collapsed')).toBe(
       'true',
     );
 
     const dashboardCss = await readDashboardCss();
     expect(dashboardCss).toMatch(
-      /\.workflow-workspace-shell\s*\{[^}]*grid-template-columns:\s*minmax\(14rem,\s*17rem\) minmax\(0,\s*1fr\);/,
+      /\.workflow-workspace-shell\s*\{[^}]*grid-template-columns:\s*minmax\(14rem,\s*var\(--workflow-list-column-workflow-width\)\) minmax\(0,\s*1fr\);/,
     );
     expect(dashboardCss).toMatch(
       /@media \(min-width:\s*768px\) and \(max-width:\s*85rem\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*auto minmax\(0,\s*1fr\);[\s\S]*column-gap:\s*1rem;/,
