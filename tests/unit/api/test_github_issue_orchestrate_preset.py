@@ -123,7 +123,7 @@ async def test_github_issue_orchestrate_seed_exposes_issue_picker_and_tools(tmp_
         "assessment_artifact_path": "artifacts/github-issue-orchestrate-assessment.json",
         "constraints": "{{ inputs.constraints }}",
     }
-    assert template.steps[3]["tool"]["inputs"]["assessmentArtifactPath"] == (
+    assert template.steps[4]["tool"]["inputs"]["assessmentArtifactPath"] == (
         "artifacts/github-issue-orchestrate-assessment.json"
     )
 
