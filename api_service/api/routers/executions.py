@@ -9998,7 +9998,7 @@ def _first_mapping_value(
             return source[key]
     return None
 
-def _recurring_task_payload(
+def _recurring_workflow_payload(
     parameters: Mapping[str, Any],
 ) -> tuple[str | None, dict[str, Any]]:
     for key in ("workflow", "task"):
@@ -10028,9 +10028,9 @@ async def _resolve_recurring_runtime_metadata(
     if isinstance(raw_initial_parameters, Mapping):
         parameter_payload = raw_initial_parameters
 
-    _task_key, task_payload = _recurring_task_payload(parameter_payload)
+    _task_key, task_payload = _recurring_workflow_payload(parameter_payload)
     if not task_payload and parameter_payload is not request_payload:
-        _task_key, task_payload = _recurring_task_payload(request_payload)
+        _task_key, task_payload = _recurring_workflow_payload(request_payload)
 
     runtime_payload = (
         task_payload.get("runtime")
@@ -10135,7 +10135,7 @@ def _stamp_recurring_runtime_metadata(
     if "effort" in runtime_metadata:
         initial_parameters["effort"] = runtime_metadata.get("effort")
 
-    task_key, task_payload = _recurring_task_payload(initial_parameters)
+    task_key, task_payload = _recurring_workflow_payload(initial_parameters)
     if task_key is None:
         return
 
@@ -10215,7 +10215,7 @@ def _build_recurring_target(
 
     root_propose_tasks = target_payload.pop("proposeTasks", None)
     root_proposal_policy = target_payload.pop("proposalPolicy", None)
-    task_key, task_payload = _recurring_task_payload(target_payload)
+    task_key, task_payload = _recurring_workflow_payload(target_payload)
     if task_key is not None:
         propose_tasks_value = (
             task_payload["proposeTasks"]
