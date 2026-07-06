@@ -1,3 +1,5 @@
+import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -41,6 +43,56 @@ def _load_compose() -> dict:
         compose_path.read_text(encoding="utf-8"),
         Loader=UniqueKeySafeLoader,
     )
+
+def _require_docker_compose() -> None:
+    if shutil.which("docker") is None:
+        pytest.skip("docker CLI is not available")
+
+    compose_version = subprocess.run(
+        ["docker", "compose", "version"],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if compose_version.returncode != 0:
+        pytest.skip("docker compose plugin is not available")
+
+def _render_omnigent_compose_env(extra_env: dict[str, str]) -> dict[str, str]:
+    _require_docker_compose()
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+    }
+    for name in ("DOCKER_CONFIG", "DOCKER_CONTEXT", "DOCKER_HOST"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    env.update(extra_env)
+
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--env-file",
+            "/dev/null",
+            "-f",
+            "docker-compose.yaml",
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    config = json.loads(result.stdout)
+    return {
+        str(key): str(value)
+        for key, value in config["services"]["omnigent"]["environment"].items()
+    }
 
 def _env_map(environment: object) -> dict[str, str]:
     if isinstance(environment, dict):
@@ -136,18 +188,7 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     )
 
 def test_documented_compose_startup_config_succeeds_without_env_file(tmp_path):
-    if shutil.which("docker") is None:
-        pytest.skip("docker CLI is not available")
-
-    compose_version = subprocess.run(
-        ["docker", "compose", "version"],
-        cwd=REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if compose_version.returncode != 0:
-        pytest.skip("docker compose plugin is not available")
+    _require_docker_compose()
 
     env_path = REPO_ROOT / ".env"
     hidden_env_path = tmp_path / ".env"
@@ -169,6 +210,36 @@ def test_documented_compose_startup_config_succeeds_without_env_file(tmp_path):
             shutil.move(str(hidden_env_path), str(env_path))
 
     assert result.returncode == 0, result.stderr
+
+def test_omnigent_trusted_origins_render_local_and_public_defaults():
+    local_env = _render_omnigent_compose_env({"OMNIGENT_PORT": "8010"})
+
+    assert local_env["OMNIGENT_ACCOUNTS_BASE_URL"] == "http://localhost:8010"
+    assert local_env["OMNIGENT_WS_ALLOWED_ORIGINS"] == (
+        "http://localhost:8010,http://127.0.0.1:8010"
+    )
+
+    public_env = _render_omnigent_compose_env(
+        {"OMNIGENT_ACCOUNTS_BASE_URL": "https://omnigent.example.test"}
+    )
+
+    assert public_env["OMNIGENT_ACCOUNTS_BASE_URL"] == "https://omnigent.example.test"
+    assert public_env["OMNIGENT_WS_ALLOWED_ORIGINS"] == (
+        "https://omnigent.example.test"
+    )
+
+    explicit_env = _render_omnigent_compose_env(
+        {
+            "OMNIGENT_ACCOUNTS_BASE_URL": "https://omnigent.example.test",
+            "OMNIGENT_WS_ALLOWED_ORIGINS": (
+                "https://omnigent.example.test,https://admin.example.test"
+            ),
+        }
+    )
+
+    assert explicit_env["OMNIGENT_WS_ALLOWED_ORIGINS"] == (
+        "https://omnigent.example.test,https://admin.example.test"
+    )
 
 def test_merge_automation_workflow_worker_polls_dedicated_user_workflow_queue():
     compose = _load_compose()
@@ -427,7 +498,11 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     assert omnigent_env["OMNIGENT_AUTH_ENABLED"] == "${OMNIGENT_AUTH_ENABLED:-1}"
     assert omnigent_env["OMNIGENT_AUTH_PROVIDER"] == "${OMNIGENT_AUTH_PROVIDER:-}"
     assert omnigent_env["OMNIGENT_ACCOUNTS_BASE_URL"] == (
-        "${OMNIGENT_ACCOUNTS_BASE_URL:-http://localhost:8000}"
+        "${OMNIGENT_ACCOUNTS_BASE_URL:-http://localhost:${OMNIGENT_PORT:-8000}}"
+    )
+    assert omnigent_env["OMNIGENT_WS_ALLOWED_ORIGINS"] == (
+        "${OMNIGENT_WS_ALLOWED_ORIGINS:-${OMNIGENT_ACCOUNTS_BASE_URL:-http://"
+        "localhost:${OMNIGENT_PORT:-8000},http://127.0.0.1:${OMNIGENT_PORT:-8000}}}"
     )
     assert omnigent_env["OMNIGENT_ACCOUNTS_AUTO_OPEN"] == (
         "${OMNIGENT_ACCOUNTS_AUTO_OPEN:-0}"
@@ -455,6 +530,7 @@ def test_omnigent_env_template_and_example_config_for_mm_970():
         "OMNIGENT_AUTH_PROVIDER",
         "OMNIGENT_ACCOUNTS_COOKIE_SECRET",
         "OMNIGENT_ACCOUNTS_BASE_URL",
+        "OMNIGENT_WS_ALLOWED_ORIGINS",
         "OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD",
         "OMNIGENT_ACCOUNTS_SESSION_TTL_HOURS",
         "OMNIGENT_ACCOUNTS_INVITE_TTL_HOURS",
