@@ -744,7 +744,10 @@ function RoutedDashboardPage({
     );
   }
 
-  if (route.page === 'workflow-start' && isUiInfoPending) {
+  if (
+    isUiInfoPending &&
+    (route.page === 'workflow-start' || route.currentPath === '/workflows/new')
+  ) {
     return (
       <AppShell
         dataWidePanel={route.dataWidePanel}

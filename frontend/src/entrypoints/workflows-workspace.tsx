@@ -5,6 +5,7 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import WorkflowListPage from './workflow-list';
 import WorkflowDetailEntrypoint, { WorkflowWorkspaceShell } from './workflow-detail';
+import WorkflowStartPage from './workflow-start';
 import {
   readWorkflowListDisplayMode,
 } from '../lib/workflowListDisplayMode';
@@ -46,6 +47,10 @@ function decodeWorkflowIdFromPath(pathname: string): string | null {
   }
 }
 
+function isCreatePath(pathname: string): boolean {
+  return pathname.replace(/\/$/, '') === '/workflows/new';
+}
+
 type WorkflowsWorkspaceDashboardConfig = {
   features?: {
     temporalDashboard?: {
@@ -70,6 +75,7 @@ function readWorkflowListDisplayStatus(payload: BootPayload): string | null {
 export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const location = useLocation();
   const workflowId = decodeWorkflowIdFromPath(location.pathname);
+  const createRoute = isCreatePath(location.pathname);
   const search = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const isDesktop = useIsDesktop();
   const cfg = readWorkflowsWorkspaceDashboardConfig(payload);
@@ -78,6 +84,18 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const listEnabled = temporalDashboard?.listEnabled !== false;
   const displayMode = readWorkflowListDisplayMode(payload);
   const displayStatus = readWorkflowListDisplayStatus(payload);
+
+  if (createRoute) {
+    return (
+      <section
+        className="workflows-workspace-page workflows-workspace-page--create"
+        aria-label="Workflows workspace"
+        data-jira-issue="MM-1115"
+      >
+        <WorkflowStartPage payload={payload} />
+      </section>
+    );
+  }
 
   if (!workflowId) {
     if (displayStatus === 'Opening first workflow...') {

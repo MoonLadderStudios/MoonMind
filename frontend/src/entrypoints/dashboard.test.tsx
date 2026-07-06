@@ -188,9 +188,12 @@ vi.mock('./workflow-list', () => ({
 }));
 
 vi.mock('./workflows-workspace', () => ({
-  default: () => {
+  default: ({ payload }: { payload: BootPayload }) => {
     const isDetailRoute =
       window.location.pathname.startsWith('/workflows/') && window.location.pathname !== '/workflows/new';
+    const isCreateRoute = window.location.pathname === '/workflows/new';
+    const initialData = payload.initialData as { dashboardConfig?: Record<string, unknown> } | undefined;
+    const repository = initialData?.dashboardConfig?.defaultRepository;
     return (
       <div data-testid="workflows-workspace-route">
         <a href="/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95?source=temporal">
@@ -198,6 +201,11 @@ vi.mock('./workflows-workspace', () => ({
         </a>
         {isDetailRoute ? (
           <div>Workflow detail route loaded: {window.location.pathname}</div>
+        ) : isCreateRoute ? (
+          <>
+            <div>Workflow start route loaded</div>
+            <div>Workflow start default repository: {typeof repository === 'string' ? repository : 'none'}</div>
+          </>
         ) : (
           <div>Workflow list route loaded</div>
         )}
@@ -859,7 +867,9 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
-    expect((await screen.findByRole('status')).textContent).toContain('No workflow to open.');
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toContain('No workflow to open.');
+    });
     expect(window.location.pathname).toBe('/workflows');
   });
 
@@ -880,7 +890,9 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
-    expect((await screen.findByRole('status')).textContent).toContain('No workflow to open.');
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toContain('No workflow to open.');
+    });
     expect(window.location.pathname).toBe('/workflows');
   });
 

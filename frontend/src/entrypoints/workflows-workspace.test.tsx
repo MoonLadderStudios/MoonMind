@@ -22,6 +22,10 @@ vi.mock('./workflow-detail', () => ({
   ),
 }));
 
+vi.mock('./workflow-start', () => ({
+  default: () => <div data-testid="workflow-start-page">Create workflow</div>,
+}));
+
 function mockDesktopViewport(matches: boolean) {
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
@@ -85,6 +89,16 @@ describe('WorkflowsWorkspacePage', () => {
     renderWorkspace({ page: 'dashboard', apiBase: '/api' });
 
     expect(screen.getByTestId('workflow-list-page')).toBeTruthy();
+    expect(screen.queryByTestId('workflow-workspace-shell')).toBeNull();
+  });
+
+  it('renders the create workflow route as the create surface', () => {
+    window.history.pushState({}, 'Workspace Create Test', '/workflows/new');
+
+    renderWorkspace({ page: 'dashboard', apiBase: '/api' });
+
+    expect(screen.getByTestId('workflow-start-page')).toBeTruthy();
+    expect(screen.queryByTestId('workflow-list-page')).toBeNull();
     expect(screen.queryByTestId('workflow-workspace-shell')).toBeNull();
   });
 

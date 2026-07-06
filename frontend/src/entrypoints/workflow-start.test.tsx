@@ -30,6 +30,7 @@ import {
   preferredTemplate,
   resolveDefaultProviderProfileId,
   resolveObjectiveInstructions,
+  workflowStartFormSnapshot,
   WORKFLOW_START_HEADING_QUOTES,
   WorkflowStartPage,
 } from "./workflow-start";
@@ -37,6 +38,42 @@ import {
 vi.mock("../lib/navigation", () => ({
   navigateTo: vi.fn(),
 }));
+
+describe("workflowStartFormSnapshot", () => {
+  it("distinguishes selected radio and checkbox options that share a group name", () => {
+    const form = document.createElement("form");
+    form.innerHTML = `
+      <input type="radio" name="color" value="red" checked />
+      <input type="radio" name="color" value="blue" />
+      <input type="checkbox" name="flags" value="dry-run" checked />
+      <input type="checkbox" name="flags" value="publish" />
+    `;
+
+    const initial = workflowStartFormSnapshot(form);
+    const red = form.querySelector('input[value="red"]');
+    const blue = form.querySelector('input[value="blue"]');
+    const dryRun = form.querySelector('input[value="dry-run"]');
+    const publish = form.querySelector('input[value="publish"]');
+    if (
+      !(red instanceof HTMLInputElement) ||
+      !(blue instanceof HTMLInputElement) ||
+      !(dryRun instanceof HTMLInputElement) ||
+      !(publish instanceof HTMLInputElement)
+    ) {
+      throw new Error("Expected test inputs to exist");
+    }
+
+    red.checked = false;
+    blue.checked = true;
+    expect(workflowStartFormSnapshot(form)).not.toBe(initial);
+
+    red.checked = true;
+    blue.checked = false;
+    dryRun.checked = false;
+    publish.checked = true;
+    expect(workflowStartFormSnapshot(form)).not.toBe(initial);
+  });
+});
 
 function renderWorkflowStartPage(payload: BootPayload) {
   return renderWithClient(

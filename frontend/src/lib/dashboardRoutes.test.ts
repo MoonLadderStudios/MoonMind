@@ -30,8 +30,12 @@ describe('dashboard route resolution', () => {
     }
   });
 
-  it('keeps the new workflow route on the start page', () => {
-    expect(resolveDashboardRoute('/workflows/new')?.page).toBe('workflow-start');
+  it('keeps the new workflow route inside the workspace compositor', () => {
+    expect(resolveDashboardRoute('/workflows/new')).toEqual({
+      page: 'workflows-workspace',
+      dataWidePanel: true,
+      currentPath: '/workflows/new',
+    });
   });
 
   it('rejects encoded slashes inside workflow IDs', () => {

@@ -6,6 +6,7 @@ import {
   type CSSProperties,
   type Dispatch,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
   type Ref,
   type SetStateAction,
@@ -23,6 +24,7 @@ import {
   type RouteIconHandle,
 } from 'lucide-animated';
 import { Virtuoso } from 'react-virtuoso';
+import { Link, useInRouterContext } from 'react-router-dom';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
@@ -424,21 +426,47 @@ function WorkflowSidebarRow({
   const active = Boolean(activeWorkflowId) && workflowId === activeWorkflowId;
   const status = row.rawState || row.state || row.status || 'unknown';
   const title = row.title?.trim() || workflowId || 'Untitled workflow';
+  const href = workflowDetailHref(workflowId, search);
+  const inRouterContext = useInRouterContext();
+  const className = `workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`;
+  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (inRouterContext) {
+      event.preventDefault();
+    }
+  };
+  const content = (
+    <>
+      <span className="workflow-workspace-sidebar-row-main">
+        {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
+        <span className="workflow-workspace-sidebar-title">{title}</span>
+      </span>
+      <WorkflowSidebarStatusIcon status={status} />
+    </>
+  );
   return (
     <li>
-      <a
-        className={`workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`}
-        href={workflowDetailHref(workflowId, search)}
-        aria-current={active ? 'page' : undefined}
-        data-active={active ? 'true' : 'false'}
-        data-pinned={pinned ? 'true' : 'false'}
-      >
-        <span className="workflow-workspace-sidebar-row-main">
-          {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
-          <span className="workflow-workspace-sidebar-title">{title}</span>
-        </span>
-        <WorkflowSidebarStatusIcon status={status} />
-      </a>
+      {inRouterContext ? (
+        <Link
+          className={className}
+          to={href}
+          aria-current={active ? 'page' : undefined}
+          data-active={active ? 'true' : 'false'}
+          data-pinned={pinned ? 'true' : 'false'}
+        >
+          {content}
+        </Link>
+      ) : (
+        <a
+          className={className}
+          href={href}
+          aria-current={active ? 'page' : undefined}
+          data-active={active ? 'true' : 'false'}
+          data-pinned={pinned ? 'true' : 'false'}
+          onClick={handleClick}
+        >
+          {content}
+        </a>
+      )}
     </li>
   );
 }
