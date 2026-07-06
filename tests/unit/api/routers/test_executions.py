@@ -10845,8 +10845,14 @@ def test_get_execution_steps_uses_terminal_step_ledger_timeout(
     )
     observed_timeouts: list[float] = []
 
-    async def passthrough_timeout(awaitable, *, timeout: float):
-        observed_timeouts.append(timeout)
+    async def passthrough_timeout(
+        awaitable,
+        timeout: float | None = None,
+        *_args,
+        **_kwargs,
+    ):
+        if timeout is not None:
+            observed_timeouts.append(timeout)
         return await awaitable
 
     with (
