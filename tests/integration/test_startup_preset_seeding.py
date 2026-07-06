@@ -138,17 +138,38 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             (step.get("skill") or step.get("tool"))["id"]
             for step in jira_orchestrate_template.steps
         ]
-        assert jira_orchestrate_steps[0] == "jira.update_issue_status"
-        assert jira_orchestrate_steps[1] == "jira.check_blockers"
-        assert jira_orchestrate_steps[2] == "jira.load_preset_brief"
+        assert jira_orchestrate_steps[0] == "jira.check_blockers"
+        assert jira_orchestrate_steps[1] == "jira.load_preset_brief"
+        assert jira_orchestrate_steps[2] == "auto"
+        assert jira_orchestrate_steps[3] == "jira.update_issue_status"
         assert "moonspec-implement" in jira_orchestrate_steps
         assert "moonspec-verify" in jira_orchestrate_steps
         assert jira_orchestrate_steps[-1] == "jira-issue-updater"
-        assert len(jira_orchestrate_steps) == 26
+        assert len(jira_orchestrate_steps) == 25
         assert jira_orchestrate_steps.count("moonspec-implement") == 7
         assert jira_orchestrate_steps.count("moonspec-verify") == 7
         assert jira_orchestrate_steps.count("moonspec-doc-reconcile") == 1
-        blocker_step = jira_orchestrate_template.steps[1]
+        jira_orchestrate_titles = [
+            step["title"] for step in jira_orchestrate_template.steps
+        ]
+        assert "Split broad designs when needed" not in jira_orchestrate_titles
+        classify_step = next(
+            step
+            for step in jira_orchestrate_template.steps
+            if step["title"] == "Classify request and resume point"
+        )
+        assert "upstream breakdown/selector workflow" in classify_step[
+            "instructions"
+        ]
+        specify_step = next(
+            step
+            for step in jira_orchestrate_template.steps
+            if step["title"] == "Create or select MoonSpec"
+        )
+        assert "Do not run moonspec-breakdown from this preset" in specify_step[
+            "instructions"
+        ]
+        blocker_step = jira_orchestrate_template.steps[0]
         assert blocker_step["title"] == "Check Jira blockers before implementation"
         assert blocker_step["type"] == "tool"
         assert blocker_step["tool"]["id"] == "jira.check_blockers"
@@ -159,7 +180,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "non-blocker" in blocker_step["instructions"]
         assert "status cannot be determined" in blocker_step["instructions"]
         assert "stop the orchestration immediately" in blocker_step["instructions"]
-        brief_step = jira_orchestrate_template.steps[2]
+        brief_step = jira_orchestrate_template.steps[1]
         assert brief_step["title"] == "Load Jira preset brief"
         assert brief_step["type"] == "tool"
         assert brief_step["tool"]["id"] == "jira.load_preset_brief"

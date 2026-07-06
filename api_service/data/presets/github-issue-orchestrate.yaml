@@ -150,26 +150,6 @@ steps:
     inputs:
       repository: '{{ inputs.github_issue.repository }}'
       issueNumber: '{{ inputs.github_issue.number }}'
-- title: Mark GitHub issue In Progress
-  type: tool
-  instructions: 'Read artifacts/github-issue-orchestrate-assessment.json (or the recorded
-    verdict from the assess step) before changing GitHub.
-
-
-    If the recorded verdict is FULLY_IMPLEMENTED, skip the In Progress update because the
-    issue is already implemented. If the recorded verdict is BLOCKED, stop without changing
-    GitHub. Otherwise mark GitHub issue {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
-    }} as In Progress using the configured GitHub issue update strategy.'
-  tool:
-    id: github.update_issue_status
-    requiredCapabilities:
-    - gh
-    inputs:
-      repository: '{{ inputs.github_issue.repository }}'
-      issueNumber: '{{ inputs.github_issue.number }}'
-      targetStatus: In Progress
-      mode: start
-      assessmentArtifactPath: artifacts/github-issue-orchestrate-assessment.json
 - title: Classify request and resume point
   instructions: 'Use the GitHub issue preset brief for {{ inputs.github_issue.repository }}#{{
     inputs.github_issue.number }} as the canonical MoonSpec orchestration input.
@@ -189,37 +169,66 @@ steps:
     Source design path (optional): {{ inputs.source_design_path }}.
 
 
-    Classify the input as a single-story feature request, broad technical or declarative design,
-    or existing feature directory.
+    Classify the input only to decide whether GitHub Issue Orchestrate is eligible for one-story
+    MoonSpec orchestration.
 
-    Inspect existing MoonSpec artifacts and resume from the first incomplete stage instead
-    of regenerating valid later-stage artifacts.'
+    Continue when artifacts/github-issue-orchestrate-assessment.json records FULLY_IMPLEMENTED,
+    when the GitHub issue preset brief is exactly one independently testable story, or when
+    Source design path points at an active feature directory with an existing one-story spec.md.
+    If none of those exceptions apply and the issue brief is broad, multi-story, requires implementing
+    all stories, or needs story selection before implementation, stop before MoonSpec lifecycle
+    work begins and report that the issue must be routed through moonspec-breakdown or another
+    upstream breakdown/selector workflow before GitHub Issue Orchestrate can continue.
+
+    For eligible one-story inputs, inspect existing MoonSpec artifacts and resume from the
+    first incomplete stage instead of regenerating valid later-stage artifacts.'
   skill:
     id: auto
     args: {}
-- title: Create or select MoonSpec
-  instructions: 'For a single-story GitHub issue preset brief, run moonspec-specify unless
-    an active spec.md already passes the specify gate.
+- title: Mark GitHub issue In Progress
+  type: tool
+  instructions: 'Read artifacts/github-issue-orchestrate-assessment.json (or the recorded
+    verdict from the assess step) before changing GitHub.
 
-    For a broad technical or declarative design, run moonspec-breakdown first, then select
-    the recommended first generated spec unless the issue brief explicitly requires processing
-    all specs.
+
+    This step runs only after the classify step confirms the issue is eligible for GitHub
+    Issue Orchestrate, is already FULLY_IMPLEMENTED, or is resuming from an eligible source
+    design path. If the recorded verdict is FULLY_IMPLEMENTED, skip the In Progress update
+    because the issue is already implemented. If the recorded verdict is BLOCKED, stop without
+    changing GitHub. Otherwise mark GitHub issue {{ inputs.github_issue.repository }}#{{
+    inputs.github_issue.number }} as In Progress using the configured GitHub issue update
+    strategy.'
+  tool:
+    id: github.update_issue_status
+    requiredCapabilities:
+    - gh
+    inputs:
+      repository: '{{ inputs.github_issue.repository }}'
+      issueNumber: '{{ inputs.github_issue.number }}'
+      targetStatus: In Progress
+      mode: start
+      assessmentArtifactPath: artifacts/github-issue-orchestrate-assessment.json
+- title: Create or select MoonSpec
+  instructions: 'Before running moonspec-specify, validate that the GitHub issue preset
+    brief is exactly one independently testable story or that the active feature directory
+    has an existing one-story spec.md.
+
+    If artifacts/github-issue-orchestrate-assessment.json records FULLY_IMPLEMENTED, skip
+    MoonSpec creation and preserve the no-code-change result for final GitHub status update.
+    If the issue brief is not already one independently testable story and the active feature
+    directory does not have an existing one-story spec.md, stop and report that it must be
+    routed through moonspec-breakdown or another upstream selector before this orchestration
+    can continue. Do not run moonspec-breakdown from this preset and do not select a story
+    inline.
+
+    For an eligible single-story GitHub issue preset brief, run moonspec-specify unless an
+    active spec.md already passes the specify gate.
 
     Preserve GitHub issue {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
     }} and the original preset brief in spec.md so final verification can compare against
     them.'
   skill:
     id: moonspec-specify
-    args: {}
-- title: Split broad designs when needed
-  instructions: 'Run moonspec-breakdown only when the GitHub issue preset brief is a broad
-    technical or declarative design with multiple independently testable stories.
-
-    Keep each generated spec isolated and process specs in dependency order when multiple
-    specs are required by {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
-    }}.'
-  skill:
-    id: auto
     args: {}
 - title: Plan selected spec
   instructions: 'Run moonspec-plan when plan.md or required design artifacts are missing or

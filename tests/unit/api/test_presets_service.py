@@ -2902,12 +2902,11 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 (step.get("skill") or step.get("tool"))["id"]
                 for step in template.steps
             ] == [
-                "jira.update_issue_status",
                 "jira.check_blockers",
                 "jira.load_preset_brief",
                 "auto",
+                "jira.update_issue_status",
                 "moonspec-specify",
-                "auto",
                 "moonspec-plan",
                 "moonspec-tasks",
                 "moonspec-align",
@@ -2933,134 +2932,141 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 context={},
             )
 
-            assert len(expanded["steps"]) == 26
+            assert len(expanded["steps"]) == 25
+            assert expanded["steps"][0]["title"] == "Check Jira blockers before implementation"
             assert expanded["steps"][0]["type"] == "tool"
-            assert expanded["steps"][0]["tool"]["id"] == "jira.update_issue_status"
+            assert expanded["steps"][0]["tool"]["id"] == "jira.check_blockers"
             assert expanded["steps"][0]["tool"]["inputs"] == {
-                "issueKey": "MM-328",
-                "targetStatus": "In Progress",
-            }
-            assert "MM-328" in expanded["steps"][0]["instructions"]
-            assert "In Progress" in expanded["steps"][0]["instructions"]
-            assert expanded["steps"][1]["title"] == "Check Jira blockers before implementation"
-            assert expanded["steps"][1]["type"] == "tool"
-            assert expanded["steps"][1]["tool"]["id"] == "jira.check_blockers"
-            assert expanded["steps"][1]["tool"]["inputs"] == {
                 "targetIssueKey": "MM-328",
                 "blockerPreflight": {
                     "targetIssueKey": "MM-328",
                     "linkType": "Blocks",
                 },
             }
-            assert expanded["steps"][1]["targetIssueKey"] == "MM-328"
-            assert expanded["steps"][1]["blockerPreflight"] == {
+            assert expanded["steps"][0]["targetIssueKey"] == "MM-328"
+            assert expanded["steps"][0]["blockerPreflight"] == {
                 "targetIssueKey": "MM-328",
                 "linkType": "Blocks",
             }
-            assert "Jira issue MM-328" in expanded["steps"][1]["instructions"]
-            assert "deterministic trusted Jira blocker preflight" in expanded["steps"][1]["instructions"]
-            assert "other issue as outwardIssue" in expanded["steps"][1]["instructions"]
-            assert "other issue as inwardIssue" in expanded["steps"][1]["instructions"]
-            assert "MUST NOT block this orchestration" in expanded["steps"][1]["instructions"]
-            assert "blocker" in expanded["steps"][1]["instructions"]
-            assert "Done" in expanded["steps"][1]["instructions"]
-            assert "non-blocker" in expanded["steps"][1]["instructions"]
-            assert "status cannot be determined" in expanded["steps"][1][
+            assert "Jira issue MM-328" in expanded["steps"][0]["instructions"]
+            assert "deterministic trusted Jira blocker preflight" in expanded["steps"][0]["instructions"]
+            assert "other issue as outwardIssue" in expanded["steps"][0]["instructions"]
+            assert "other issue as inwardIssue" in expanded["steps"][0]["instructions"]
+            assert "MUST NOT block this orchestration" in expanded["steps"][0]["instructions"]
+            assert "blocker" in expanded["steps"][0]["instructions"]
+            assert "Done" in expanded["steps"][0]["instructions"]
+            assert "non-blocker" in expanded["steps"][0]["instructions"]
+            assert "status cannot be determined" in expanded["steps"][0][
                 "instructions"
             ]
-            assert "raw Jira credentials" in expanded["steps"][1]["instructions"]
-            assert "web scraping" in expanded["steps"][1]["instructions"]
-            assert "stop the orchestration immediately" in expanded["steps"][1][
+            assert "raw Jira credentials" in expanded["steps"][0]["instructions"]
+            assert "web scraping" in expanded["steps"][0]["instructions"]
+            assert "stop the orchestration immediately" in expanded["steps"][0][
                 "instructions"
             ]
-            assert expanded["steps"][2]["type"] == "tool"
-            assert expanded["steps"][2]["tool"]["id"] == "jira.load_preset_brief"
-            assert expanded["steps"][2]["tool"]["inputs"] == {
+            assert expanded["steps"][1]["type"] == "tool"
+            assert expanded["steps"][1]["tool"]["id"] == "jira.load_preset_brief"
+            assert expanded["steps"][1]["tool"]["inputs"] == {
                 "issueKey": "MM-328",
                 "artifactPath": "artifacts/jira-orchestrate-brief.json",
             }
-            assert "Jira preset brief" in expanded["steps"][2]["instructions"]
-            assert "Keep the scope narrow." in expanded["steps"][3]["instructions"]
-            assert expanded["steps"][11]["title"] == "Remediate verification gaps 1 of 6"
-            assert expanded["steps"][11]["skill"]["id"] == "moonspec-implement"
-            assert "ADDITIONAL_WORK_NEEDED" in expanded["steps"][11]["instructions"]
-            assert "verification report's gaps" in expanded["steps"][11]["instructions"]
-            assert expanded["steps"][10]["skill"]["id"] == "moonspec-verify"
-            assert "Verification robustness rules" in expanded["steps"][10][
+            assert "Jira preset brief" in expanded["steps"][1]["instructions"]
+            assert "Keep the scope narrow." in expanded["steps"][2]["instructions"]
+            assert "one independently testable story" in expanded["steps"][2]["instructions"]
+            assert "upstream breakdown/selector workflow" in expanded["steps"][2]["instructions"]
+            assert expanded["steps"][3]["type"] == "tool"
+            assert expanded["steps"][3]["tool"]["id"] == "jira.update_issue_status"
+            assert expanded["steps"][3]["tool"]["inputs"] == {
+                "issueKey": "MM-328",
+                "targetStatus": "In Progress",
+            }
+            assert "MM-328" in expanded["steps"][3]["instructions"]
+            assert "In Progress" in expanded["steps"][3]["instructions"]
+            assert "one independently testable story" in expanded["steps"][4]["instructions"]
+            assert "Do not run moonspec-breakdown from this preset" in expanded["steps"][4]["instructions"]
+            assert "Split broad designs when needed" not in [
+                step["title"] for step in expanded["steps"]
+            ]
+            assert expanded["steps"][10]["title"] == "Remediate verification gaps 1 of 6"
+            assert expanded["steps"][10]["skill"]["id"] == "moonspec-implement"
+            assert "ADDITIONAL_WORK_NEEDED" in expanded["steps"][10]["instructions"]
+            assert "verification report's gaps" in expanded["steps"][10]["instructions"]
+            assert expanded["steps"][9]["skill"]["id"] == "moonspec-verify"
+            assert "Verification robustness rules" in expanded["steps"][9][
                 "instructions"
             ]
-            assert "embedding_provider_not_configured" in expanded["steps"][10][
+            assert "embedding_provider_not_configured" in expanded["steps"][9][
                 "instructions"
             ]
-            assert "disclosed scope exclusions" in expanded["steps"][10][
+            assert "disclosed scope exclusions" in expanded["steps"][9][
                 "instructions"
             ]
-            assert "Verification robustness rules" in expanded["steps"][12][
+            assert "Verification robustness rules" in expanded["steps"][11][
                 "instructions"
             ]
-            assert expanded["steps"][22]["title"] == "Verify remediation 6 of 6"
-            assert expanded["steps"][22]["skill"]["id"] == "moonspec-verify"
-            assert "controlling verification gate" in expanded["steps"][22][
+            assert expanded["steps"][21]["title"] == "Verify remediation 6 of 6"
+            assert expanded["steps"][21]["skill"]["id"] == "moonspec-verify"
+            assert "controlling verification gate" in expanded["steps"][21][
                 "instructions"
             ]
-            assert "Verification robustness rules" in expanded["steps"][22][
+            assert "Verification robustness rules" in expanded["steps"][21][
                 "instructions"
             ]
-            assert expanded["steps"][23]["title"] == "Reconcile declarative docs"
-            assert expanded["steps"][23]["annotations"] == {
+            assert expanded["steps"][22]["title"] == "Reconcile declarative docs"
+            assert expanded["steps"][22]["annotations"] == {
                 "jiraOrchestrateRole": "doc-reconciliation"
             }
-            assert expanded["steps"][23]["skill"]["id"] == "moonspec-doc-reconcile"
-            assert "FULLY_IMPLEMENTED" in expanded["steps"][23]["instructions"]
-            assert "no_update_required" in expanded["steps"][23]["instructions"]
-            assert "Source Document Drift" in expanded["steps"][23]["instructions"]
+            assert expanded["steps"][22]["skill"]["id"] == "moonspec-doc-reconcile"
+            assert "FULLY_IMPLEMENTED" in expanded["steps"][22]["instructions"]
+            assert "no_update_required" in expanded["steps"][22]["instructions"]
+            assert "Source Document Drift" in expanded["steps"][22]["instructions"]
             assert "artifacts/jira-orchestrate-doc-reconcile.json" in expanded[
                 "steps"
-            ][23]["instructions"]
+            ][22]["instructions"]
             assert "Escalation does not block pull request creation" in expanded[
                 "steps"
-            ][23]["instructions"]
+            ][22]["instructions"]
             assert "Do not commit, push, or create a pull request" in expanded[
                 "steps"
-            ][23]["instructions"]
-            assert expanded["steps"][24]["title"] == "Create pull request"
-            assert expanded["steps"][24]["annotations"] == {
+            ][22]["instructions"]
+            assert expanded["steps"][23]["title"] == "Create pull request"
+            assert expanded["steps"][23]["annotations"] == {
                 "jiraOrchestrateRole": "pull-request-handoff"
             }
-            assert "post-remediation moonspec-verify" in expanded["steps"][24][
+            assert "post-remediation moonspec-verify" in expanded["steps"][23][
                 "instructions"
             ]
-            assert "pull request title must include MM-328" in expanded["steps"][24][
+            assert "pull request title must include MM-328" in expanded["steps"][23][
                 "instructions"
             ]
-            assert "parent workflow must use the pull request URL" in expanded["steps"][24][
+            assert "parent workflow must use the pull request URL" in expanded["steps"][23][
                 "instructions"
             ]
-            assert "explicit PR-publication step" in expanded["steps"][24][
+            assert "explicit PR-publication step" in expanded["steps"][23][
                 "instructions"
             ]
-            assert "controlling instruction for this step only" in expanded["steps"][24][
+            assert "controlling instruction for this step only" in expanded["steps"][23][
                 "instructions"
             ]
-            assert "merge automation" in expanded["steps"][24]["instructions"]
-            assert "non-draft pull request" in expanded["steps"][24]["instructions"]
-            assert "isDraft value is false" in expanded["steps"][24]["instructions"]
-            assert "confirmed non-draft" in expanded["steps"][24]["instructions"]
-            assert "artifacts/jira-orchestrate-pr.json" in expanded["steps"][24][
+            assert "merge automation" in expanded["steps"][23]["instructions"]
+            assert "non-draft pull request" in expanded["steps"][23]["instructions"]
+            assert "isDraft value is false" in expanded["steps"][23]["instructions"]
+            assert "confirmed non-draft" in expanded["steps"][23]["instructions"]
+            assert "artifacts/jira-orchestrate-pr.json" in expanded["steps"][23][
                 "instructions"
             ]
-            assert "doc reconciliation outcome" in expanded["steps"][24][
+            assert "doc reconciliation outcome" in expanded["steps"][23][
                 "instructions"
             ]
-            assert expanded["steps"][25]["skill"]["id"] == "jira-issue-updater"
-            assert expanded["steps"][25]["annotations"] == {
+            assert expanded["steps"][24]["skill"]["id"] == "jira-issue-updater"
+            assert expanded["steps"][24]["annotations"] == {
                 "jiraOrchestrateRole": "code-review-handoff"
             }
-            assert "pull_request_url" in expanded["steps"][25]["instructions"]
-            assert "stop without changing Jira" in expanded["steps"][25][
+            assert "pull_request_url" in expanded["steps"][24]["instructions"]
+            assert "stop without changing Jira" in expanded["steps"][24][
                 "instructions"
             ]
-            assert "status Review" in expanded["steps"][25]["instructions"]
+            assert "status Review" in expanded["steps"][24]["instructions"]
             assert all(
                 step["title"] != "Return Jira orchestration report"
                 for step in expanded["steps"]
@@ -3387,10 +3393,9 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "Load GitHub issue brief",
         "Assess existing implementation state",
         "Check GitHub issue blockers before orchestration",
-        "Mark GitHub issue In Progress",
         "Classify request and resume point",
+        "Mark GitHub issue In Progress",
         "Create or select MoonSpec",
-        "Split broad designs when needed",
         "Plan selected spec",
         "Generate TDD task breakdown",
         "Align MoonSpec artifacts",
@@ -3412,6 +3417,10 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "Create pull request",
         "Finalize GitHub issue status",
     ]
+    assert "one independently testable story" in expanded["steps"][3]["instructions"]
+    assert "upstream breakdown/selector workflow" in expanded["steps"][3]["instructions"]
+    assert "one independently testable story" in expanded["steps"][5]["instructions"]
+    assert "Do not run moonspec-breakdown from this preset" in expanded["steps"][5]["instructions"]
     assert expanded["steps"][0]["tool"]["id"] == "github.load_issue_preset_brief"
     assert expanded["steps"][0]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
@@ -3419,71 +3428,71 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "artifactPath": "artifacts/github-issue-orchestrate-brief.json",
     }
     assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
-    assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
-    assert expanded["steps"][3]["tool"]["inputs"] == {
+    assert expanded["steps"][4]["tool"]["id"] == "github.update_issue_status"
+    assert expanded["steps"][4]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
         "issueNumber": "1067",
         "targetStatus": "In Progress",
         "mode": "start",
         "assessmentArtifactPath": "artifacts/github-issue-orchestrate-assessment.json",
     }
-    assert expanded["steps"][26]["tool"]["id"] == "github.update_issue_status"
-    assert expanded["steps"][26]["tool"]["inputs"] == {
+    assert expanded["steps"][25]["tool"]["id"] == "github.update_issue_status"
+    assert expanded["steps"][25]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
         "issueNumber": "1067",
         "mode": "finalize_after_pr_or_done",
         "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
         "verificationArtifactPath": "var/artifacts/moonspec-verify/github-issue-orchestrate.json",
     }
-    assert expanded["steps"][11]["skill"]["id"] == "moonspec-verify"
-    assert expanded["steps"][11]["skill"]["args"]["verify_artifact_path"] == (
+    assert expanded["steps"][10]["skill"]["id"] == "moonspec-verify"
+    assert expanded["steps"][10]["skill"]["args"]["verify_artifact_path"] == (
         "var/artifacts/moonspec-verify/github-issue-orchestrate.json"
     )
-    assert expanded["steps"][23]["annotations"] == {
+    assert expanded["steps"][22]["annotations"] == {
         "jiraOrchestrateRole": "moonspec-verification-gate",
         "moonSpecRemediationAttempt": 6,
         "moonSpecRemediationMaxAttempts": 6,
         "moonSpecFinalRemediationGate": True,
     }
-    assert expanded["steps"][23]["skill"]["args"]["verify_artifact_path"] == (
+    assert expanded["steps"][22]["skill"]["args"]["verify_artifact_path"] == (
         "var/artifacts/moonspec-verify/github-issue-orchestrate.json"
     )
-    assert expanded["steps"][24]["annotations"] == {
+    assert expanded["steps"][23]["annotations"] == {
         "jiraOrchestrateRole": "doc-reconciliation"
     }
-    assert expanded["steps"][25]["annotations"] == {
+    assert expanded["steps"][24]["annotations"] == {
         "jiraOrchestrateRole": "pull-request-handoff"
     }
-    assert expanded["steps"][26]["annotations"] == {
+    assert expanded["steps"][25]["annotations"] == {
         "jiraOrchestrateRole": "code-review-handoff"
     }
-    assert "ADDITIONAL_WORK_NEEDED or NO_DETERMINATION" in expanded["steps"][23][
+    assert "ADDITIONAL_WORK_NEEDED or NO_DETERMINATION" in expanded["steps"][22][
         "instructions"
     ]
-    assert "do not continue to pull request creation" in expanded["steps"][23][
+    assert "do not continue to pull request creation" in expanded["steps"][22][
         "instructions"
     ]
     assert "only when the controlling post-remediation verdict is FULLY_IMPLEMENTED" in expanded[
         "steps"
-    ][24]["instructions"]
-    assert "If the latest verdict is not FULLY_IMPLEMENTED" in expanded["steps"][24][
+    ][23]["instructions"]
+    assert "If the latest verdict is not FULLY_IMPLEMENTED" in expanded["steps"][23][
         "instructions"
     ]
     assert "stop without committing, pushing, creating a pull request" in expanded["steps"][
-        25
+        24
     ]["instructions"]
-    assert "terminal verifier outcomes" in expanded["steps"][26]["instructions"]
-    assert "must stop before this status update" in expanded["steps"][26][
+    assert "terminal verifier outcomes" in expanded["steps"][25]["instructions"]
+    assert "must stop before this status update" in expanded["steps"][25][
         "instructions"
     ]
     assert "FULLY_IMPLEMENTED and no MoonSpec implementation work ran" in expanded[
         "steps"
-    ][11]["instructions"]
-    assert "skip doc reconciliation" in expanded["steps"][24]["instructions"]
-    assert "skip pull request creation entirely" in expanded["steps"][25][
+    ][10]["instructions"]
+    assert "skip doc reconciliation" in expanded["steps"][23]["instructions"]
+    assert "skip pull request creation entirely" in expanded["steps"][24][
         "instructions"
     ]
-    assert "apply the configured Done strategy" in expanded["steps"][26][
+    assert "apply the configured Done strategy" in expanded["steps"][25][
         "instructions"
     ]
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [

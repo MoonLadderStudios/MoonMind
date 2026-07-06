@@ -86,19 +86,6 @@ inputs:
     required: false
     default: true
 steps:
-  - title: Move Jira issue to In Progress
-    type: tool
-    instructions: |-
-      Change Jira issue {{ inputs.jira_issue_key }} to status In Progress before implementation starts.
-
-      Use the deterministic trusted Jira status tool. It must look up Jira's available transitions, match In Progress against transition target statuses or transition names, apply the returned transition ID, and re-fetch the issue when possible to report the confirmed status.
-    tool:
-      id: jira.update_issue_status
-      requiredCapabilities:
-        - jira
-      args:
-        issueKey: "{{ inputs.jira_issue_key }}"
-        targetStatus: In Progress
   - title: Check Jira blockers before implementation
     type: tool
     instructions: |-
@@ -153,25 +140,37 @@ steps:
       If the brief points at an implementation document, treat it as runtime source requirements.
       Source design path (optional): {{ inputs.source_design_path }}.
 
-      Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
-      Inspect existing MoonSpec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
+      Classify the input only to decide whether Jira Orchestrate is eligible for one-story MoonSpec orchestration.
+
+      Continue only when the Jira preset brief is exactly one independently testable story, or when Source design path points at an active feature directory with an existing one-story spec.md. If the issue brief is broad, multi-story, requires implementing all stories, or needs story selection before implementation, stop before MoonSpec lifecycle work begins and report that the issue must be routed through moonspec-breakdown or another upstream breakdown/selector workflow before Jira Orchestrate can continue.
+
+      For eligible one-story inputs, inspect existing MoonSpec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
     skill:
       id: auto
       args: {}
+  - title: Move Jira issue to In Progress
+    type: tool
+    instructions: |-
+      Change Jira issue {{ inputs.jira_issue_key }} to status In Progress only after blocker preflight passes and the classify step confirms this Jira issue is eligible for Jira Orchestrate or is resuming from an eligible source design path.
+
+      Use the deterministic trusted Jira status tool. It must look up Jira's available transitions, match In Progress against transition target statuses or transition names, apply the returned transition ID, and re-fetch the issue when possible to report the confirmed status.
+    tool:
+      id: jira.update_issue_status
+      requiredCapabilities:
+        - jira
+      args:
+        issueKey: "{{ inputs.jira_issue_key }}"
+        targetStatus: In Progress
   - title: Create or select MoonSpec
     instructions: |-
-      For a single-story Jira preset brief, run moonspec-specify unless an active spec.md already passes the specify gate.
-      For a broad technical or declarative design, run moonspec-breakdown first, then select the recommended first generated spec unless the issue brief explicitly requires processing all specs.
+      Before running moonspec-specify, validate that the Jira preset brief is exactly one independently testable story or that the active feature directory has an existing one-story spec.md.
+
+      If the issue brief is not already one independently testable story and the active feature directory does not have an existing one-story spec.md, stop and report that it must be routed through moonspec-breakdown or another upstream selector before this orchestration can continue. Do not run moonspec-breakdown from this preset and do not select a story inline.
+
+      For an eligible single-story Jira preset brief, run moonspec-specify unless an active spec.md already passes the specify gate.
       Preserve Jira issue {{ inputs.jira_issue_key }} and the original preset brief in spec.md so final verification can compare against them.
     skill:
       id: moonspec-specify
-      args: {}
-  - title: Split broad designs when needed
-    instructions: |-
-      Run moonspec-breakdown only when the Jira preset brief is a broad technical or declarative design with multiple independently testable stories.
-      Keep each generated spec isolated and process specs in dependency order when multiple specs are required by {{ inputs.jira_issue_key }}.
-    skill:
-      id: auto
       args: {}
   - title: Plan selected spec
     instructions: |-
