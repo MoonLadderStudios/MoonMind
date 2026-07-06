@@ -937,7 +937,9 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'No list' }));
 
-    expect((await screen.findByRole('status')).textContent).toContain('Workflow list is unavailable.');
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toContain('Workflow list is unavailable.');
+    });
     expect(window.location.pathname).toBe('/workflows');
     expect(window.location.search).toBe('?stateIn=failed');
   });
