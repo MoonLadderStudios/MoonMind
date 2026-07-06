@@ -10056,18 +10056,24 @@ async def _resolve_recurring_runtime_metadata(
             )
         canonical_target_runtime = normalized_rt
 
-    raw_profile_id = str(
-        runtime_payload.get("profileId")
-        or runtime_payload.get("providerProfile")
-        or runtime_payload.get("executionProfileRef")
-        or task_payload.get("profileId")
-        or task_payload.get("providerProfile")
-        or parameter_payload.get("profileId")
-        or parameter_payload.get("providerProfile")
-        or request_payload.get("profileId")
-        or request_payload.get("providerProfile")
-        or ""
-    ).strip() or None
+    raw_profile_id = None
+    for candidate_profile_id in (
+        runtime_payload.get("profileId"),
+        runtime_payload.get("providerProfile"),
+        runtime_payload.get("executionProfileRef"),
+        task_payload.get("profileId"),
+        task_payload.get("providerProfile"),
+        parameter_payload.get("profileId"),
+        parameter_payload.get("providerProfile"),
+        request_payload.get("profileId"),
+        request_payload.get("providerProfile"),
+    ):
+        if candidate_profile_id is None:
+            continue
+        normalized_profile_id = str(candidate_profile_id).strip()
+        if normalized_profile_id:
+            raw_profile_id = normalized_profile_id
+            break
     raw_requested_model: str | None = runtime_payload.get("model") or None
     if raw_requested_model is None:
         raw_requested_model = parameter_payload.get(

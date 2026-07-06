@@ -7726,6 +7726,7 @@ def test_create_task_shaped_recurring_schedule_preserves_runtime_selection(
                 "type": "workflow",
                 "payload": {
                     "targetRuntime": "codex",
+                    "providerProfile": "codex-profile",
                     "schedule": {
                         "mode": "recurring",
                         "cron": "0 * * * *",
@@ -7737,6 +7738,7 @@ def test_create_task_shaped_recurring_schedule_preserves_runtime_selection(
                             "mode": "codex",
                             "model": "gpt-5.3-codex-spark",
                             "effort": "xhigh",
+                            "profileId": "   ",
                         },
                     },
                 },
@@ -7753,9 +7755,12 @@ def test_create_task_shaped_recurring_schedule_preserves_runtime_selection(
     assert stored_payload["requestedModel"] == "gpt-5.3-codex-spark"
     assert stored_payload["modelSource"] == "task_override"
     assert stored_payload["effort"] == "xhigh"
+    assert stored_payload["profileId"] == "codex-profile"
     assert stored_runtime["mode"] == "codex_cli"
     assert stored_runtime["model"] == "gpt-5.3-codex-spark"
     assert stored_runtime["effort"] == "xhigh"
+    assert stored_runtime["profileId"] == "codex-profile"
+    assert stored_runtime["providerProfile"] == "codex-profile"
 
 
 def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
