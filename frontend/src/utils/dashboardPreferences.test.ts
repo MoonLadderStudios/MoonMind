@@ -6,10 +6,8 @@ import {
   DEFAULT_DASHBOARD_PREFERENCES,
   readDashboardPreferences,
   resetDashboardPreferences,
-  resolveWorkflowListDisplayMode,
   sanitizeDashboardPreferences,
   updateDashboardPreferences,
-  workflowListDisplaySurface,
   writeDashboardPreferences,
 } from './dashboardPreferences';
 
@@ -48,6 +46,7 @@ describe('dashboardPreferences', () => {
         debugFieldsVisible: false,
         workflowWorkspaceSidebarCollapsed: true,
         preferredDetailTab: 'steps',
+        lastSelectedWorkflowId: 'workflow-123',
         defaultRuntime: 'codex_cli',
       });
 
@@ -59,6 +58,7 @@ describe('dashboardPreferences', () => {
       expect(reloaded.createExpertMode).toBe(true);
       expect(reloaded.debugFieldsVisible).toBe(false);
       expect(reloaded.workflowWorkspaceSidebarCollapsed).toBe(true);
+      expect(reloaded.lastSelectedWorkflowId).toBe('workflow-123');
       expect(reloaded.preferredDetailTab).toBe('steps');
     });
 
@@ -112,6 +112,7 @@ describe('dashboardPreferences', () => {
             preferredDetailTab: 'nope', // invalid enum
             liveUpdatesEnabled: 'yes', // wrong type
             workflowWorkspaceSidebarCollapsed: 'yes', // wrong type
+            lastSelectedWorkflowId: '  workflow-456  ',
             createExpertMode: true, // valid
             workflowListColumnVisibility: { repository: false, bogus: true },
             workflowListDefaultStatuses: ['executing', 42, '  failed  ', ''],
@@ -125,6 +126,7 @@ describe('dashboardPreferences', () => {
       expect(prefs.preferredDetailTab).toBe('overview'); // reset
       expect(prefs.liveUpdatesEnabled).toBe(true); // reset to default
       expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(false); // reset to default
+      expect(prefs.lastSelectedWorkflowId).toBe('workflow-456'); // trimmed
       expect(prefs.createExpertMode).toBe(true); // kept
       expect(prefs.workflowListColumnVisibility.repository).toBe(false); // kept
       expect(prefs.workflowListColumnVisibility).not.toHaveProperty('bogus'); // dropped
@@ -192,6 +194,20 @@ describe('dashboardPreferences', () => {
 
       expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(true);
     });
+
+    it('MM-1113 keeps a valid last selected workflow preference', () => {
+      const prefs = sanitizeDashboardPreferences({
+        lastSelectedWorkflowId: '  remembered-workflow  ',
+      });
+
+      expect(prefs.lastSelectedWorkflowId).toBe('remembered-workflow');
+    });
+
+    it('MM-1113 sanitizes invalid last selected workflow values to the default', () => {
+      for (const candidate of [null, undefined, 42, false, {}, []]) {
+        expect(sanitizeDashboardPreferences({ lastSelectedWorkflowId: candidate }).lastSelectedWorkflowId).toBe('');
+      }
+    });
   });
 
   describe('reset behavior (MM-964 reset behavior)', () => {
@@ -200,39 +216,16 @@ describe('dashboardPreferences', () => {
         ...DEFAULT_DASHBOARD_PREFERENCES,
         workflowListDensity: 'compact',
         createExpertMode: true,
+        lastSelectedWorkflowId: 'remembered-workflow',
       });
       expect(storedRaw()).not.toBeNull();
 
       const reset = resetDashboardPreferences();
       expect(reset).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+      expect(reset.lastSelectedWorkflowId).toBe('');
       expect(storedRaw()).toBeNull();
       // A subsequent read also yields defaults.
       expect(readDashboardPreferences()).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
-    });
-  });
-
-  describe('workflow list display mode resolution', () => {
-    it('classifies participating workflow surfaces from their path', () => {
-      expect(workflowListDisplaySurface('/workflows')).toBe('table');
-      expect(workflowListDisplaySurface('/workflows/')).toBe('table');
-      expect(workflowListDisplaySurface('/workflows/new')).toBe('create');
-      expect(workflowListDisplaySurface('/workflows/abc-123/steps')).toBe('detail');
-      expect(workflowListDisplaySurface('/settings')).toBeNull();
-    });
-
-    it('resolves table, create, and detail modes from one shared preference rule', () => {
-      expect(resolveWorkflowListDisplayMode('/workflows')).toBe('table');
-      expect(resolveWorkflowListDisplayMode('/workflows/new')).toBe('sidebar');
-      expect(resolveWorkflowListDisplayMode('/workflows/abc-123')).toBe('sidebar');
-      expect(resolveWorkflowListDisplayMode('/settings')).toBeNull();
-
-      updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
-      expect(resolveWorkflowListDisplayMode('/workflows/new')).toBe('hidden');
-      expect(resolveWorkflowListDisplayMode('/workflows/abc-123')).toBe('hidden');
-
-      updateDashboardPreferences({ workflowListDisplayMode: 'table' });
-      expect(resolveWorkflowListDisplayMode('/workflows/new')).toBe('hidden');
-      expect(resolveWorkflowListDisplayMode('/workflows/abc-123')).toBe('sidebar');
     });
   });
 });

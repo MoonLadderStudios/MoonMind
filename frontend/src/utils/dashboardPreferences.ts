@@ -27,7 +27,6 @@ export const DASHBOARD_PREFERENCES_VERSION = 1;
 export type WorkflowListDensity = 'comfortable' | 'compact';
 
 export type WorkflowDetailTab = 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
-export type WorkflowListDisplayMode = 'hidden' | 'sidebar' | 'table';
 
 // Columns the operator may hide on the workflow list. The workflow title column
 // is the primary anchor and is intentionally not toggleable, so it is excluded
@@ -71,8 +70,8 @@ export type DashboardPreferences = {
   debugFieldsVisible: boolean;
   /** Whether the desktop workflow detail sidebar is collapsed on reload. */
   workflowWorkspaceSidebarCollapsed: boolean;
-  /** Preferred workflow list display mode for participating workflow surfaces. */
-  workflowListDisplayMode: WorkflowListDisplayMode;
+  /** Last workflow explicitly opened by the operator. */
+  lastSelectedWorkflowId: string;
   /** Preferred default workflow detail tab. */
   preferredDetailTab: WorkflowDetailTab;
   /** Preferred runtime default for the create page, where safe. */
@@ -98,7 +97,7 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   createExpertMode: false,
   debugFieldsVisible: true,
   workflowWorkspaceSidebarCollapsed: false,
-  workflowListDisplayMode: 'sidebar',
+  lastSelectedWorkflowId: '',
   preferredDetailTab: 'overview',
   defaultRuntime: '',
   defaultProviderProfile: '',
@@ -158,12 +157,6 @@ function sanitizeDetailTab(value: unknown): WorkflowDetailTab {
     : DEFAULT_DASHBOARD_PREFERENCES.preferredDetailTab;
 }
 
-function sanitizeWorkflowListDisplayMode(value: unknown): WorkflowListDisplayMode {
-  return value === 'hidden' || value === 'sidebar' || value === 'table'
-    ? value
-    : DEFAULT_DASHBOARD_PREFERENCES.workflowListDisplayMode;
-}
-
 function sanitizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -198,7 +191,7 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
       value.workflowWorkspaceSidebarCollapsed,
       DEFAULT_DASHBOARD_PREFERENCES.workflowWorkspaceSidebarCollapsed,
     ),
-    workflowListDisplayMode: sanitizeWorkflowListDisplayMode(value.workflowListDisplayMode),
+    lastSelectedWorkflowId: sanitizeString(value.lastSelectedWorkflowId),
     preferredDetailTab: sanitizeDetailTab(value.preferredDetailTab),
     defaultRuntime: sanitizeString(value.defaultRuntime),
     defaultProviderProfile: sanitizeString(value.defaultProviderProfile),
@@ -265,27 +258,6 @@ export function updateDashboardPreferences(
 ): DashboardPreferences {
   const current = readDashboardPreferences();
   return writeDashboardPreferences({ ...current, ...patch });
-}
-
-export function workflowListDisplaySurface(pathname: string): 'table' | 'create' | 'detail' | null {
-  const path = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
-  if (path === '/workflows') return 'table';
-  if (path === '/workflows/new') return 'create';
-  if (path.startsWith('/workflows/')) return 'detail';
-  return null;
-}
-
-export function resolveWorkflowListDisplayMode(
-  pathname: string,
-): WorkflowListDisplayMode | null {
-  const surface = workflowListDisplaySurface(pathname);
-  if (!surface) return null;
-  if (surface === 'table') return 'table';
-  const persisted = readDashboardPreferences().workflowListDisplayMode;
-  if (persisted === 'hidden' || persisted === 'sidebar') {
-    return persisted;
-  }
-  return surface === 'create' ? 'hidden' : 'sidebar';
 }
 
 /**

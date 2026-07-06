@@ -1,0 +1,107 @@
+{
+  "handoffType": "jira-orchestrate-intake",
+  "updatedAt": "2026-07-05T18:51:59Z",
+  "jiraIssueKey": "MM-1114",
+  "sourceIssueTraceability": {
+    "sourceIssueKey": "MM-1111",
+    "source": "managed task constraint",
+    "localEvidence": "No repository file or existing workspace artifact mentioning MM-1111 was found during bounded intake search."
+  },
+  "classification": {
+    "inputType": "single-story feature request",
+    "reason": "The trusted Jira preset brief identifies one Jira Story to render a masthead workflow list display radio group. The referenced design document is a runtime source requirement for this implementation story, not a request to author or split a broad declarative design."
+  },
+  "intent": "runtime implementation workflow",
+  "sourceStory": {
+    "summary": "Render the masthead workflow list display radio group",
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "sourceSections": [
+      "6. Masthead radio control",
+      "12. Accessibility requirements"
+    ],
+    "claimIds": [
+      "CLAIM-docs-ui-workflowlistdisplaymodes-006",
+      "CLAIM-docs-ui-workflowlistdisplaymodes-012"
+    ],
+    "coverageIds": [
+      "DESIGN-REQ-006",
+      "DESIGN-REQ-012"
+    ]
+  },
+  "canonicalInput": {
+    "trustedSource": "moonmind.jira.get_issue",
+    "artifactPath": "artifacts/jira-orchestrate-brief.json",
+    "jiraPresetBrief": "MM-1114: Render the masthead workflow list display radio group\n\nSource Reference\nSource Document: docs/UI/WorkflowListDisplayModes.md\nSource Title: Workflow List Display Modes\nSource Sections:\n- 6. Masthead radio control\n- 12. Accessibility requirements\nCanonical Claim IDs:\n- CLAIM-docs-ui-workflowlistdisplaymodes-006\n- CLAIM-docs-ui-workflowlistdisplaymodes-012\nCoverage IDs:\n- DESIGN-REQ-006\n- DESIGN-REQ-012\nAs a keyboard and pointer user, I need a single masthead radio control for workflow list visibility so I can change between No list, Sidebar list, and Full screen table from participating pages.\n\nAcceptance criteria\n- The control appears immediately after the MoonMind brand area and before route navigation on participating desktop pages.\n- The control uses Square, PanelLeft, and Rows3 Lucide icons with No list, Sidebar list, and Full screen table labels/tooltips.\n- The control exposes radiogroup semantics named Workflow list display and each option announces label plus checked state.\n- Tab enters the group, arrow keys change options, and visible focus styling follows dashboard control tokens.\n- Non-participating pages hide or disable the control, with hiding preferred, and mobile users do not encounter unusable desktop-only sidebar controls.\nRequirements\n- Use one radio group rather than unrelated buttons.\n- Reflect the resolved mode after navigation settles.\n- Provide deterministic focus behavior after route-changing selections.",
+    "sourceDesignClassification": "canonical declarative UI contract used as runtime source requirements",
+    "acceptanceCriteria": [
+      "The control appears immediately after the MoonMind brand area and before route navigation on participating desktop pages.",
+      "The control uses Square, PanelLeft, and Rows3 Lucide icons with No list, Sidebar list, and Full screen table labels/tooltips.",
+      "The control exposes radiogroup semantics named Workflow list display and each option announces label plus checked state.",
+      "Tab enters the group, arrow keys change options, and visible focus styling follows dashboard control tokens.",
+      "Non-participating pages hide or disable the control, with hiding preferred, and mobile users do not encounter unusable desktop-only sidebar controls."
+    ],
+    "requirements": [
+      "Use one radio group rather than unrelated buttons.",
+      "Reflect the resolved mode after navigation settles.",
+      "Provide deterministic focus behavior after route-changing selections.",
+      "Preserve source issue MM-1111 traceability in downstream MoonSpec artifacts and final verification."
+    ]
+  },
+  "artifactResumeInspection": {
+    "status": "no_existing_moonspec_artifacts_found",
+    "checkedLocations": [
+      "artifacts/",
+      "var/",
+      "docs/tmp/",
+      "repository root MoonSpec artifacts",
+      "workspace root under /work/agent_jobs/mm:33e9ebda-7e5d-48f9-a973-b14618746ba3"
+    ],
+    "checkedPatterns": [
+      "MM-1114",
+      "1114",
+      "MM-1111",
+      "Workflow list display",
+      "Masthead radio control",
+      "moonspec",
+      "story breakdown",
+      "handoff",
+      "spec.md",
+      "plan.md",
+      "tasks.md"
+    ],
+    "validArtifactsToPreserve": [],
+    "evidence": [
+      "docs/UI/WorkflowListDisplayModes.md exists and contains section 6, Masthead radio control, with the Square, PanelLeft, Rows3, radiogroup, placement, participation, and mobile hiding requirements.",
+      "docs/UI/WorkflowListDisplayModes.md exists and contains section 12, Accessibility requirements, including immediate keyboard reachability after the brand link, stable accessible name, checked-state announcement, deterministic focus after route navigation, and hidden desktop-only controls on mobile.",
+      "No active repository-root spec.md, plan.md, research.md, quickstart.md, data-model.md, or tasks.md was found.",
+      "No docs/tmp or workspace artifact for MM-1114 was found before this intake handoff.",
+      "No repository file or workspace artifact for MM-1111 was found; MM-1111 is preserved from the managed task constraint as source issue traceability."
+    ],
+    "resumeFrom": "Specify",
+    "nextStageReason": "Specify is the first incomplete stage because there are no valid existing MoonSpec feature artifacts for MM-1114 to preserve or resume from."
+  },
+  "stageGateStatus": {
+    "ClassifyRequestAndResumePoint": "COMPLETE",
+    "Specify": "INCOMPLETE",
+    "Plan": "NOT_STARTED",
+    "Tasks": "NOT_STARTED",
+    "Align": "NOT_STARTED",
+    "Implement": "NOT_STARTED",
+    "Verify": "NOT_STARTED",
+    "DocReconcile": "NOT_STARTED"
+  },
+  "stageExecution": {
+    "performedInThisStep": false,
+    "reason": "This managed step is limited to Jira Orchestrate intake classification and artifact resume inspection. It must not run specification, planning, task generation, implementation, verification, publishing, pull request creation, or Jira transitions."
+  },
+  "downstreamInstructions": {
+    "useBriefAsCanonicalInput": true,
+    "treatImplementationDocumentAsRuntimeSourceRequirements": true,
+    "sourceDesignPath": "docs/UI/WorkflowListDisplayModes.md",
+    "sourceIssueKey": "MM-1111",
+    "resumeFromFirstIncompleteStage": "Specify",
+    "runAsRuntimeImplementationWorkflow": true,
+    "doNotRegenerateValidLaterStageArtifacts": true,
+    "preserveExistingArtifacts": []
+  }
+}

@@ -2,18 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
-import {
-  resolveWorkflowListDisplayMode,
-  updateDashboardPreferences,
-  type WorkflowListDisplayMode,
-} from '../utils/dashboardPreferences';
-import { requestWorkflowStartRouteChange } from '../lib/workflowStartRouteGuard';
+import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import WorkflowListPage from './workflow-list';
-import WorkflowDetailEntrypoint, {
-  WorkflowWorkspaceShell,
-  WorkflowWorkspaceSidebarLayout,
-} from './workflow-detail';
+import WorkflowDetailEntrypoint, { WorkflowWorkspaceShell } from './workflow-detail';
 import WorkflowStartPage from './workflow-start';
+import {
+  readWorkflowListDisplayMode,
+} from '../lib/workflowListDisplayMode';
 
 const DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
 
@@ -72,87 +67,69 @@ function readWorkflowsWorkspaceDashboardConfig(
   return raw?.dashboardConfig;
 }
 
+function readWorkflowListDisplayStatus(payload: BootPayload): string | null {
+  const raw = payload.initialData as { workflowListDisplayStatus?: unknown } | undefined;
+  return typeof raw?.workflowListDisplayStatus === 'string' ? raw.workflowListDisplayStatus : null;
+}
+
 export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const location = useLocation();
   const workflowId = decodeWorkflowIdFromPath(location.pathname);
-  const search = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const createRoute = isCreatePath(location.pathname);
-  const [displayMode, setDisplayMode] = useState<WorkflowListDisplayMode>(() => (
-    resolveWorkflowListDisplayMode(location.pathname) ?? 'sidebar'
-  ));
+  const search = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const isDesktop = useIsDesktop();
   const cfg = readWorkflowsWorkspaceDashboardConfig(payload);
   const temporalDashboard = cfg?.features?.temporalDashboard;
   const workspaceShellEnabled = temporalDashboard?.workspaceShellEnabled !== false;
   const listEnabled = temporalDashboard?.listEnabled !== false;
-
-  useEffect(() => {
-    setDisplayMode(resolveWorkflowListDisplayMode(location.pathname) ?? 'sidebar');
-  }, [location.pathname]);
-
-  useEffect(() => {
-    const update = (event: Event) => {
-      const nextMode = event instanceof CustomEvent ? event.detail : undefined;
-      if (nextMode === 'hidden' || nextMode === 'sidebar' || nextMode === 'table') {
-        updateDashboardPreferences({ workflowListDisplayMode: nextMode });
-        setDisplayMode(nextMode);
-      }
-    };
-    window.addEventListener('moonmind:workflow-list-display-mode', update);
-    return () => window.removeEventListener('moonmind:workflow-list-display-mode', update);
-  }, []);
-
-  if (!workflowId && !createRoute) {
-    return (
-      <section className="workflows-workspace-page" aria-label="Workflows workspace" data-jira-issue="MM-1061 MM-1115">
-        <WorkflowListPage payload={payload} />
-      </section>
-    );
-  }
+  const displayMode = readWorkflowListDisplayMode(payload);
+  const displayStatus = readWorkflowListDisplayStatus(payload);
 
   if (createRoute) {
-    if (!isDesktop || !workspaceShellEnabled || !listEnabled) {
-      return (
-        <section
-          className="workflows-workspace-page workflows-workspace-page--create"
-          aria-label="Workflows workspace"
-          data-jira-issue="MM-1115"
-        >
-          <WorkflowStartPage payload={payload} />
-        </section>
-      );
-    }
-
     return (
       <section
-        className={`workflows-workspace-page workflows-workspace-page--create workflows-workspace-page--selected${displayMode === 'hidden' ? ' workflows-workspace-page--hidden-list' : ''}`}
+        className="workflows-workspace-page workflows-workspace-page--create"
         aria-label="Workflows workspace"
         data-jira-issue="MM-1115"
       >
-        <WorkflowWorkspaceSidebarLayout
-          payload={payload}
-          search={search}
-          activeWorkflowId=""
-          primaryAriaLabel="Create workflow"
-          sidebarHidden={displayMode === 'hidden'}
-          onSidebarClose={() => {
-            updateDashboardPreferences({
-              workflowWorkspaceSidebarCollapsed: true,
-              workflowListDisplayMode: 'hidden',
-            });
-            setDisplayMode('hidden');
-            window.dispatchEvent(new CustomEvent('moonmind:workflow-list-display-mode', { detail: 'hidden' }));
-          }}
-          onSidebarNavigate={requestWorkflowStartRouteChange}
-        >
-          <WorkflowStartPage payload={payload} />
-        </WorkflowWorkspaceSidebarLayout>
+        <WorkflowStartPage payload={payload} />
       </section>
     );
   }
 
   if (!workflowId) {
-    return <WorkflowListPage payload={payload} />;
+    if (displayStatus === 'Opening first workflow...') {
+      return (
+        <section
+          className="workflows-workspace-page workflows-workspace-page--selected"
+          aria-label="Workflows workspace"
+          data-jira-issue="MM-1061"
+        >
+          <div
+            className="workflow-workspace-shell"
+            data-sidebar-collapsed="true"
+            data-workflow-list-display-mode={displayMode ?? 'hidden'}
+          >
+            <main className="workflow-workspace-detail" aria-label="Workflow detail">
+              <div className="workflow-workspace-opening-state" role="status">
+                <LoadingPlaceholder
+                  surface="workflow-detail"
+                  region="details"
+                  variant="detail"
+                  preserveContext
+                />
+                <p>{displayStatus}</p>
+              </div>
+            </main>
+          </div>
+        </section>
+      );
+    }
+    return (
+      <section className="workflows-workspace-page" aria-label="Workflows workspace" data-jira-issue="MM-1061">
+        <WorkflowListPage payload={payload} />
+      </section>
+    );
   }
 
   if (!isDesktop || !workspaceShellEnabled || !listEnabled) {
@@ -163,13 +140,13 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
     <section
       className="workflows-workspace-page workflows-workspace-page--selected"
       aria-label="Workflows workspace"
-      data-jira-issue="MM-1061 MM-1115"
+      data-jira-issue="MM-1061"
     >
       <WorkflowWorkspaceShell
         payload={payload}
         workflowId={workflowId}
         search={search}
-        displayMode={displayMode === 'hidden' ? 'hidden' : 'sidebar'}
+        displayMode={displayMode}
       />
     </section>
   );

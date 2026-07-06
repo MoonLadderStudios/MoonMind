@@ -46,6 +46,14 @@ const WORKFLOW_LIST_CONTEXT_ALLOWLIST = new Set([
   'targetSkillNotIn',
   'targetSkillBlank',
   'titleContains',
+  'progressPctFrom',
+  'progressPctTo',
+  'progressBucketIn',
+  'progressBucketNotIn',
+  'progressSignalIn',
+  'progressSignalNotIn',
+  'progressStepTitleContains',
+  'progressBlank',
   'scheduledFrom',
   'scheduledTo',
   'scheduledBlank',
@@ -66,6 +74,15 @@ export function workflowListContextParams(source: URLSearchParams): URLSearchPar
     }
   });
   return params;
+}
+
+export function workflowListApiQueryFromContext(source: URLSearchParams): string {
+  const pageSize = source.get('limit') || source.get('pageSize') || '25';
+  const params = workflowListContextParams(source);
+  params.delete('limit');
+  params.set('source', params.get('source') || 'temporal');
+  params.set('pageSize', pageSize);
+  return params.toString();
 }
 
 export function workflowDetailHref(workflowId: string, source: URLSearchParams): string {

@@ -710,6 +710,31 @@ describe('Workflow Detail Entrypoint', () => {
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
   });
 
+  it('filters the reusable workflow workspace sidebar from its header control', async () => {
+    window.history.pushState({}, 'Workspace Sidebar Filter Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(within(sidebar).getByText('Workflow')).toBeTruthy();
+    expect(await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i })).toBeTruthy();
+    expect(await within(sidebar).findByRole('link', { name: /Another workflow/i })).toBeTruthy();
+
+    const workflowFilter = within(sidebar).getByRole('button', { name: 'Workflow sidebar filter. No filter applied.' });
+    const workflowHeader = workflowFilter.closest('.workflow-list-column-header');
+    expect(workflowHeader?.querySelector('.workflow-workspace-sidebar-header-title')?.textContent).toContain('Workflow');
+
+    fireEvent.click(workflowFilter);
+    fireEvent.change(screen.getByLabelText('Workflow sidebar filter value'), {
+      target: { value: 'Another' },
+    });
+
+    expect(within(sidebar).queryByRole('link', { name: /MM-997 selected workflow/i })).toBeNull();
+    expect(within(sidebar).getByRole('link', { name: /Another workflow/i })).toBeTruthy();
+  });
+
   it('MM-999 pins the selected workflow above sidebar rows when it is outside the filtered result', async () => {
     window.history.pushState({}, 'Workspace Pinned Current Test', '/workflows/test-123?source=temporal&stateIn=completed');
     mockDesktopViewport(true);
@@ -726,6 +751,47 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(sidebar).getByRole('link', { name: /Filtered workflow/i }).getAttribute('aria-current')).toBeNull();
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+  });
+
+  it('MM-1113 keeps authorized remembered workflows outside filters in the current group only', async () => {
+    window.history.pushState({}, 'Workspace Remembered Current Test', '/workflows/test-123?source=temporal&stateIn=completed');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetchesWithSelectedOutsideList();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const pinnedGroup = await within(sidebar).findByRole('list', { name: 'Current workflow' });
+    const filterMatchingList = within(sidebar).getByRole('list', { name: 'Workflow navigation list' });
+    expect(within(pinnedGroup).getByRole('link', { name: /MM-999 selected workflow outside filters/i })).toBeTruthy();
+    expect(within(filterMatchingList).queryByRole('link', { name: /MM-999 selected workflow outside filters/i })).toBeNull();
+    expect(within(filterMatchingList).getByRole('link', { name: /Filtered workflow/i })).toBeTruthy();
+  });
+
+  it('MM-1113 renders only authorized sidebar rows returned by the list endpoint', async () => {
+    window.history.pushState({}, 'Workspace Authorized Sidebar Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches({
+      rows: [
+        {
+          workflowId: 'test-123',
+          taskId: 'test-123',
+          source: 'temporal',
+          title: 'Authorized sidebar workflow',
+          status: 'running',
+          state: 'executing',
+          rawState: 'executing',
+          createdAt: '2026-04-09T00:00:00Z',
+        },
+      ],
+    });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(await within(sidebar).findByRole('link', { name: /Authorized sidebar workflow/i })).toBeTruthy();
+    expect(within(sidebar).queryByText(/unauthorized/i)).toBeNull();
+    expect(within(sidebar).queryByRole('link', { name: /unauthorized/i })).toBeNull();
   });
 
   it('MM-1064 renders compact sidebar status icons for canonical lifecycle states', async () => {
@@ -829,9 +895,7 @@ describe('Workflow Detail Entrypoint', () => {
     const pinned = within(pinnedGroup).getByRole('link', { name: /MM-997 selected workflow/i });
     expect(pinned.getAttribute('aria-current')).toBe('page');
     expect(pinned.getAttribute('data-pinned')).toBe('true');
-    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe(
-      '/workflows?stateIn=failed&returnFromWorkflowDetail=1',
-    );
+    expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&stateIn=failed&pageSize=25');
   });
@@ -927,11 +991,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(anotherWorkflow.getAttribute('href')).toBe(
       '/workflows/test-456?source=temporal&limit=10&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira',
     );
-    const expandLink = within(sidebar).getByRole('link', { name: 'Expand to full list' });
-    expect(expandLink.getAttribute('href')).toBe(
-      '/workflows?limit=10&repoContains=moon%2Frepo&integration=jira&returnFromWorkflowDetail=1',
-    );
-    expect(expandLink.getAttribute('href')).not.toContain('token=');
+    expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('selectedWorkflowId=');
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('sort=');
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('token=');
@@ -954,43 +1014,58 @@ describe('Workflow Detail Entrypoint', () => {
     );
   });
 
-  it('MM-1000 persists collapsed sidebar state across desktop detail reloads without changing the route', async () => {
+  it('renders hidden mode from the shared display model without changing the detail route', async () => {
     window.history.pushState({}, 'Workspace Collapse Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
 
-    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+    const { container } = renderWithClient(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            ...(stepsPayload.initialData as Record<string, unknown>),
+            workflowListDisplayMode: 'hidden',
+          },
+        }}
+      />,
+    );
 
-    const closeSidebar = await screen.findByRole('button', { name: 'Close sidebar' });
-    fireEvent.click(closeSidebar);
-
-    const openSidebar = await screen.findByRole('button', { name: 'Open workflow sidebar' });
-    expect(openSidebar).toBeTruthy();
-    expect(document.activeElement).toBe(openSidebar);
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    expect(container.querySelector('.workflow-workspace-shell')?.getAttribute('data-workflow-list-display-mode')).toBe(
+      'hidden',
+    );
     expect(window.location.pathname).toBe('/workflows/test-123');
-    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
   });
 
-  it('MM-1000 opens desktop detail routes by default unless the sidebar collapse preference is persisted', async () => {
+  it('defaults desktop detail routes to sidebar unless the previous collapse preference requests hidden mode', async () => {
     window.history.pushState({}, 'Workspace Reload Default Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
 
-    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+    const firstRender = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+    expect(firstRender.container.querySelector('.workflow-workspace-shell')?.getAttribute('data-workflow-list-display-mode')).toBe(
+      'sidebar',
+    );
 
     cleanup();
     window.localStorage.clear();
     updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
 
-    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+    const secondRender = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('button', { name: 'Open workflow sidebar' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    expect(secondRender.container.querySelector('.workflow-workspace-shell')?.getAttribute('data-workflow-list-display-mode')).toBe(
+      'hidden',
+    );
   });
 
-  it('MM-1000 restores the sidebar from persisted collapse without refetching selected detail data', async () => {
+  it('shared sidebar mode overrides a persisted collapse preference without refetching selected detail data', async () => {
     window.history.pushState({}, 'Workspace Reopen Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -1001,6 +1076,7 @@ describe('Workflow Detail Entrypoint', () => {
         payload={{
           ...stepsPayload,
           initialData: {
+            workflowListDisplayMode: 'sidebar',
             dashboardConfig: {
               ...((stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig),
               pollIntervalsMs: { detail: 60000, list: 60000 },
@@ -1010,17 +1086,14 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    await screen.findByRole('button', { name: 'Open workflow sidebar' });
     await screen.findByRole('heading', { name: 'Workflow Detail' });
     const detailCallsBeforeOpen = fetchSpy.mock.calls.filter(
       ([input]) => String(input) === '/api/executions/test-123?source=temporal',
     ).length;
-    fireEvent.click(screen.getByRole('button', { name: 'Open workflow sidebar' }));
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close sidebar' }));
     expect(sidebar).toBeTruthy();
-    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(false);
+    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
     expect(
       fetchSpy.mock.calls.filter(
         ([input]) => String(input) === '/api/executions/test-123?source=temporal',
@@ -1041,7 +1114,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
   });
 
-  it('MM-1000 keeps workspace sidebar full-list navigation compact', async () => {
+  it('replaces workspace sidebar full-list navigation with the shared mode model', async () => {
     window.history.pushState(
       {},
       'Workspace Expand Test',
@@ -1053,27 +1126,11 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    const expand = within(sidebar).getByRole('link', { name: 'Expand to full list' });
-    expect(expand.getAttribute('href')).toBe(
-      '/workflows?stateIn=completed&repoContains=moon%2Frepo&limit=10&returnFromWorkflowDetail=1',
-    );
-    expect(expand.getAttribute('href')).not.toContain('source=');
-    expect(expand.getAttribute('href')).not.toContain('nextPageToken=');
-    expect(expand.getAttribute('href')).not.toContain('sort=');
-    expect(expand.getAttribute('href')).not.toContain('selectedWorkflowId=');
-    expect(expand.getAttribute('href')).not.toContain('unsafe=');
-    expect(expand.getAttribute('class') || '').toContain('workflow-workspace-expand-list');
-    expect(expand.getAttribute('class') || '').toContain('secondary');
-    expect(expand.getAttribute('class') || '').not.toContain('button');
-    expect(expand.querySelector('svg.lucide-arrow-right')).toBeTruthy();
-    const closeSidebar = within(sidebar).getByRole('button', { name: 'Close sidebar' });
-    expect(closeSidebar.getAttribute('class') || '').toContain(
-      'workflow-workspace-close-sidebar',
-    );
-    expect(closeSidebar.compareDocumentPosition(expand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
+    expect(within(sidebar).queryByRole('button', { name: 'Close sidebar' })).toBeNull();
   });
 
-  it('MM-1008 keeps the close-sidebar control compact', async () => {
+  it('MM-1008 does not render separate covered-page sidebar controls', async () => {
     window.history.pushState({}, 'Workspace Controls Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -1081,19 +1138,12 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    expect(within(sidebar).getByRole('button', { name: 'Close sidebar' }).getAttribute('class') || '').toContain(
-      'workflow-workspace-close-sidebar',
-    );
-    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('class') || '').toContain(
-      'workflow-workspace-expand-list',
-    );
+    expect(within(sidebar).queryByRole('button', { name: 'Close sidebar' })).toBeNull();
+    expect(within(sidebar).queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
 
     const dashboardCss = await readDashboardCss();
-    expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list,[\s\S]*?\.workflow-workspace-close-sidebar,[\s\S]*?width:\s*2rem;/);
-    expect(dashboardCss).toMatch(/\.workflow-workspace-control-icon,[\s\S]*?\.workflow-workspace-expand-list svg[\s\S]*?width:\s*1\.05rem;/);
-    expect(dashboardCss).toMatch(
-      /\.workflow-workspace-sidebar-control:hover,[\s\S]*?background-image:\s*linear-gradient\(145deg,\s*rgb\(var\(--mm-accent\) \/ 0\.35\),\s*rgb\(var\(--mm-accent-2\) \/ 0\.25\)\);/,
-    );
+    expect(dashboardCss).not.toMatch(/\.workflow-workspace-expand-list,[\s\S]*?\.workflow-workspace-close-sidebar/);
   });
 
   it('MM-1002 renders sidebar titles and statuses as React text', async () => {
@@ -1127,7 +1177,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(sidebar.querySelector('script')).toBeNull();
   });
 
-  it('MM-1005 expands to the plain workflow list when no filter context exists', async () => {
+  it('MM-1005 leaves table expansion to the shared masthead mode model', async () => {
     window.history.pushState({}, 'Workspace Plain Expand Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -1135,11 +1185,8 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    const expandLink = within(sidebar).getByRole('link', { name: 'Expand to full list' });
-    expect(expandLink.getAttribute('href')).toBe('/workflows');
-
-    fireEvent.click(expandLink);
-    expect(window.sessionStorage.getItem(WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY)).toBe('1');
+    expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
+    expect(window.sessionStorage.getItem(WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY)).toBeNull();
   });
 
   it('keeps desktop detail positioning stable when the workspace sidebar is collapsed', async () => {
@@ -1150,7 +1197,9 @@ describe('Workflow Detail Entrypoint', () => {
 
     const { container } = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('button', { name: 'Open workflow sidebar' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(container.querySelector('.workflow-workspace-shell')?.getAttribute('data-sidebar-collapsed')).toBe(
       'true',
     );
@@ -1160,13 +1209,16 @@ describe('Workflow Detail Entrypoint', () => {
       /\.workflow-workspace-shell\s*\{[^}]*grid-template-columns:\s*minmax\(14rem,\s*17rem\) minmax\(0,\s*1fr\);/,
     );
     expect(dashboardCss).toMatch(
-      /@media \(min-width:\s*768px\) and \(max-width:\s*85rem\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*auto minmax\(0,\s*1fr\);[\s\S]*column-gap:\s*1rem;/,
+      /@media \(min-width:\s*768px\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
     );
     expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.workflow-workspace-shell,[\s\S]*\.workflow-workspace-detail[\s\S]*transition:\s*none !important;[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,
     );
     expect(dashboardCss).toMatch(
       /\.workflow-workspace-detail\s*\{[^}]*max-width:\s*66rem;/,
+    );
+    expect(dashboardCss).toMatch(
+      /\.workflow-workspace-shell\[data-sidebar-collapsed="true"\] \.workflow-workspace-detail\s*\{[^}]*grid-column:\s*1 \/ -1;/,
     );
   });
 

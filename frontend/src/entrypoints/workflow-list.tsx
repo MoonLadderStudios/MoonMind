@@ -7,6 +7,10 @@ import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
+import {
+  WorkflowColumnFilterButton,
+  WorkflowColumnHeader,
+} from '../components/WorkflowColumnHeader';
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
 import {
   WORKFLOW_LIST_CONTEXT_RETURN_PARAM,
@@ -1290,6 +1294,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     updateDashboardPreferences({ liveUpdatesEnabled: enabled });
   }, []);
 
+  const rememberExplicitWorkflowSelection = useCallback((workflowId: string) => {
+    if (workflowId) {
+      updateDashboardPreferences({ lastSelectedWorkflowId: workflowId });
+    }
+  }, []);
+
   const handlePageSizeChange = useCallback(
     (size: number) => {
       setPageSize(size);
@@ -2432,51 +2442,42 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             aria-sort={sortable ? ariaSort : undefined}
                             className="workflow-list-header-cell"
                           >
-                            <div className="workflow-list-column-header">
-                              {sortable ? (
-                                <button
-                                  type="button"
-                                  className="table-sort-button"
-                                  onClick={() => onHeaderClick(field)}
-                                  aria-label={ariaLabel}
-                                  title={CURRENT_PAGE_SORT_NOTICE}
-                                >
-                                  {label}
-                                  {sortIndicator(field)}
-                                  <span className="sr-only">{sortHint}</span>
-                                </button>
-                              ) : (
-                                <span className="workflow-list-static-header">{label}</span>
-                              )}
-                              {filterField ? (
-                                <div
-                                  className="workflow-list-column-filter"
-                                  ref={isFilterOpen ? desktopFilterRef : null}
-                                >
-                                  <button
-                                    type="button"
-                                    className={`workflow-list-column-filter-button${filterValue ? ' is-active' : ''}`}
-                                    aria-label={
+                            {filterField ? (
+                              <WorkflowColumnHeader
+                                label={
+                                  sortable ? (
+                                    <button
+                                      type="button"
+                                      className="table-sort-button"
+                                      onClick={() => onHeaderClick(field)}
+                                      aria-label={ariaLabel}
+                                      title={CURRENT_PAGE_SORT_NOTICE}
+                                    >
+                                      {label}
+                                      {sortIndicator(field)}
+                                      <span className="sr-only">{sortHint}</span>
+                                    </button>
+                                  ) : (
+                                    <span className="workflow-list-static-header">{label}</span>
+                                  )
+                                }
+                                filterButton={
+                                  <WorkflowColumnFilterButton
+                                    active={Boolean(filterValue)}
+                                    expanded={isFilterOpen}
+                                    ariaLabel={
                                       filterValue
                                         ? `${label} column filter: ${filterValue}`
                                         : `${label} filter. No filter applied.`
                                     }
-                                    aria-haspopup="dialog"
-                                    aria-expanded={isFilterOpen}
                                     onClick={() => {
                                       setDraftFilters(filters);
                                       setDesktopFilterField((current) => (current === filterField ? null : filterField));
                                     }}
-                                  >
-                                    <svg
-                                      aria-hidden="true"
-                                      className="workflow-list-column-filter-icon"
-                                      viewBox="0 0 16 16"
-                                      focusable="false"
-                                    >
-                                      <path d="M2 4h12v1.6H2V4ZM4.5 7.2h7v1.6h-7V7.2ZM6.5 10.4h3v1.6h-3v-1.6Z" />
-                                    </svg>
-                                  </button>
+                                  />
+                                }
+                                filterRef={isFilterOpen ? desktopFilterRef : null}
+                              >
                                   {isFilterOpen ? (
                                     <div
                                       className="workflow-list-column-filter-popover"
@@ -2528,9 +2529,22 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                                       </div>
                                     </div>
                                   ) : null}
-                                </div>
-                              ) : null}
-                            </div>
+                              </WorkflowColumnHeader>
+                            ) : sortable ? (
+                              <button
+                                type="button"
+                                className="table-sort-button"
+                                onClick={() => onHeaderClick(field)}
+                                aria-label={ariaLabel}
+                                title={CURRENT_PAGE_SORT_NOTICE}
+                              >
+                                {label}
+                                {sortIndicator(field)}
+                                <span className="sr-only">{sortHint}</span>
+                              </button>
+                            ) : (
+                              <span className="workflow-list-static-header">{label}</span>
+                            )}
                           </th>
                         );
                       })}
@@ -2556,6 +2570,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             <a
                               href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                               className="workflow-list-row-title"
+                              onClick={() => rememberExplicitWorkflowSelection(rowWorkflowId(row))}
                             >
                               {row.title}
                             </a>
@@ -2616,6 +2631,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <a
                           href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                           className="queue-card-title"
+                          onClick={() => rememberExplicitWorkflowSelection(rowWorkflowId(row))}
                         >
                           {row.title}
                         </a>
@@ -2654,6 +2670,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                         className="button secondary queue-card-details-action"
                         role="button"
+                        onClick={() => rememberExplicitWorkflowSelection(rowWorkflowId(row))}
                       >
                         View details
                       </a>

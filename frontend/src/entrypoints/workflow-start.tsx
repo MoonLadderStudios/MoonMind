@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useInRouterContext, useLocation } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { LoadingPlaceholder } from "../components/dashboard/LoadingPlaceholder";
@@ -22,7 +23,11 @@ import {
   type TemporalTaskEditingExecutionContract,
   type TemporalTaskInputAttachmentRef,
 } from "../lib/temporalTaskEditing";
+import {
+  readWorkflowListDisplayMode,
+} from "../lib/workflowListDisplayMode";
 import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
+import { WorkflowWorkspaceSidebarPanel } from "./workflow-detail";
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
@@ -5526,7 +5531,7 @@ function StepContextBar({
   );
 }
 
-export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
+function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
   const pageMode = useMemo(
@@ -12813,8 +12818,12 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 value={publishMode}
                 onChange={(event) => setPublishMode(event.target.value)}
               >
-                <option value="auto" disabled={!autoPublishAvailable}>
-                  Auto — selected skill decides
+                <option
+                  value="auto"
+                  disabled={!autoPublishAvailable}
+                  title="Auto — selected skill decides"
+                >
+                  Auto
                 </option>
                 <option value="none">None</option>
                 <option value="branch" disabled={!mergeAutomationAvailable}>
@@ -13003,4 +13012,53 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
+
+export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
+  const inRouterContext = useInRouterContext();
+  if (inRouterContext) {
+    return <WorkflowStartPageWithRouterLocation payload={payload} />;
+  }
+  return (
+    <WorkflowStartPageWithSearch
+      payload={payload}
+      searchString={typeof window !== "undefined" ? window.location.search : ""}
+    />
+  );
+}
+
+function WorkflowStartPageWithRouterLocation({ payload }: { payload: BootPayload }) {
+  const { search: searchString } = useLocation();
+  return <WorkflowStartPageWithSearch payload={payload} searchString={searchString} />;
+}
+
+function WorkflowStartPageWithSearch({
+  payload,
+  searchString,
+}: {
+  payload: BootPayload;
+  searchString: string;
+}) {
+  const displayMode = readWorkflowListDisplayMode(payload);
+  const search = useMemo(
+    () => new URLSearchParams(searchString),
+    [searchString],
+  );
+  if (displayMode !== "sidebar") {
+    return <WorkflowStartPageContent payload={payload} />;
+  }
+
+  return (
+    <div
+      className="workflow-start-workspace workflow-workspace-shell"
+      data-sidebar-collapsed="false"
+      data-workflow-list-display-mode="sidebar"
+    >
+      <WorkflowWorkspaceSidebarPanel payload={payload} search={search} defaultSource="temporal" />
+      <main className="workflow-start-primary" aria-label="Create workflow">
+        <WorkflowStartPageContent payload={payload} />
+      </main>
+    </div>
+  );
+}
+
 export default WorkflowStartPage;
