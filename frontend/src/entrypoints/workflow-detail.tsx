@@ -606,7 +606,6 @@ export function WorkflowWorkspaceShell({
     const prefs = readDashboardPreferences();
     return prefs.workflowListDisplayMode === 'hidden' ? 'hidden' : 'sidebar';
   });
-  const [sidebarOpen, setSidebarOpen] = useState(() => displayMode !== 'hidden');
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
@@ -656,7 +655,6 @@ export function WorkflowWorkspaceShell({
     const syncDisplayMode = () => {
       const next = readDashboardPreferences().workflowListDisplayMode === 'hidden' ? 'hidden' : 'sidebar';
       setDisplayMode(next);
-      setSidebarOpen(next !== 'hidden');
     };
     window.addEventListener(DASHBOARD_PREFERENCES_CHANGED_EVENT, syncDisplayMode);
     window.addEventListener('storage', syncDisplayMode);
@@ -669,11 +667,11 @@ export function WorkflowWorkspaceShell({
   return (
     <div
       className="workflow-workspace-shell"
-      data-sidebar-collapsed={sidebarOpen ? 'false' : 'true'}
+      data-sidebar-collapsed={displayMode === 'sidebar' ? 'false' : 'true'}
       data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008"
       data-source-issue="MM-975"
     >
-      {sidebarOpen ? (
+      {displayMode === 'sidebar' ? (
         <WorkflowSidebar
           workflowId={workflowId}
           workflowsQuery={workflowsQuery}
@@ -686,28 +684,9 @@ export function WorkflowWorkspaceShell({
               workflowWorkspaceSidebarCollapsed: true,
               workflowListDisplayMode: 'hidden',
             });
-            setSidebarOpen(false);
             window.setTimeout(() => openButtonRef.current?.focus(), 0);
           }}
         />
-      ) : displayMode === 'sidebar' ? (
-        <button
-          ref={openButtonRef}
-          type="button"
-          className="secondary workflow-workspace-open-sidebar workflow-workspace-sidebar-control"
-          onClick={() => {
-            updateDashboardPreferences({
-              workflowWorkspaceSidebarCollapsed: false,
-              workflowListDisplayMode: 'sidebar',
-            });
-            setSidebarOpen(true);
-            window.setTimeout(() => closeButtonRef.current?.focus(), 0);
-          }}
-          aria-label="Open workflow sidebar"
-          title="Open workflow sidebar"
-        >
-          {SIDEBAR_TOGGLE_ICON}
-        </button>
       ) : null}
       <main className="workflow-workspace-detail" aria-label="Workflow detail">
         <WorkflowDetailPage payload={payload} />

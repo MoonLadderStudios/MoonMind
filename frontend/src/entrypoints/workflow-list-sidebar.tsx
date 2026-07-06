@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, type MouseEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { z } from 'zod';
 
@@ -6,6 +7,7 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { StatusIcon } from '../utils/statusIcons';
 import { formatStatusLabel } from '../utils/formatters';
 import { updateDashboardPreferences } from '../utils/dashboardPreferences';
+import { WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT } from '../lib/workflowListDisplay';
 import {
   workflowDetailHref,
   workflowListContextParams,
@@ -33,8 +35,9 @@ export function workflowListSidebarRowId(row: WorkflowListSidebarRow): string {
 }
 
 export function workflowListSidebarQuery(search: URLSearchParams): string {
-  const pageSize = search.get('limit') || search.get('pageSize') || '25';
-  const params = workflowListContextParams(search);
+  const copy = new URLSearchParams(search);
+  const pageSize = copy.get('limit') || copy.get('pageSize') || '25';
+  const params = workflowListContextParams(copy);
   params.delete('limit');
   params.set('pageSize', pageSize);
   if (!params.has('source')) {
@@ -69,24 +72,39 @@ function WorkflowListSidebarRowLink({
 }) {
   const workflowId = workflowListSidebarRowId(row);
   const active = Boolean(activeWorkflowId && workflowId === activeWorkflowId);
+  const href = workflowDetailHref(workflowId, search);
+  const handleClick = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
+    if (!event.defaultPrevented && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+      const guardEvent = new CustomEvent(WORKFLOW_START_TABLE_MODE_NAVIGATION_EVENT, {
+        bubbles: true,
+        cancelable: true,
+      });
+      window.dispatchEvent(guardEvent);
+      if (guardEvent.defaultPrevented) {
+        event.preventDefault();
+        return;
+      }
+    }
+    updateDashboardPreferences({ lastSelectedWorkflowId: workflowId });
+  }, [workflowId]);
   const status = row.rawState || row.state || row.status || 'unknown';
   const title = row.title?.trim() || workflowId || 'Untitled workflow';
   return (
     <li>
-      <a
+      <Link
         className={`workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`}
-        href={workflowDetailHref(workflowId, search)}
+        to={href}
         aria-current={active ? 'page' : undefined}
         data-active={active ? 'true' : 'false'}
         data-pinned={pinned ? 'true' : 'false'}
-        onClick={() => updateDashboardPreferences({ lastSelectedWorkflowId: workflowId })}
+        onClick={handleClick}
       >
         <span className="workflow-workspace-sidebar-row-main">
           {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
           <span className="workflow-workspace-sidebar-title">{title}</span>
         </span>
         <WorkflowListSidebarStatusIcon status={status} />
-      </a>
+      </Link>
     </li>
   );
 }
@@ -134,6 +152,9 @@ export function WorkflowListSidebarSurface({
   activeWorkflowId?: string | null;
   pinnedCurrentRow?: WorkflowListSidebarRow | null;
 }) {
+  const cfg = (payload.initialData as { dashboardConfig?: { features?: { temporalDashboard?: { listEnabled?: boolean } }; pollIntervalsMs?: { list?: number } } } | undefined)?.dashboardConfig;
+  const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
+  const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
   const listQuery = useMemo(() => workflowListSidebarQuery(search), [search]);
   const workflowsQuery: UseQueryResult<z.infer<typeof WorkflowListSidebarResponseSchema>, Error> = useQuery({
     queryKey: ['workflow-list-sidebar', listQuery],
@@ -144,7 +165,8 @@ export function WorkflowListSidebarSurface({
       }
       return WorkflowListSidebarResponseSchema.parse(await response.json());
     },
-    refetchInterval: 5000,
+    enabled: listEnabled,
+    refetchInterval: listEnabled ? listPoll : false,
   });
   const rows = workflowsQuery.data?.items || [];
   const filteredRows = rows.filter((row) => workflowListSidebarRowId(row));

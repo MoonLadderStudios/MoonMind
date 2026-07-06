@@ -5784,29 +5784,26 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const jiraProjectSelectionInitializedRef = useRef(false);
   const jiraBoardSelectionInitializedRef = useRef(false);
   const hasCreateDraftContent = useMemo(() => {
-    if (pageMode.mode !== "create") {
-      return false;
-    }
     return (
-      steps.some(
+      (steps ?? []).some(
         (step) =>
-          step.instructions.trim() ||
-          step.skillId.trim() ||
-          step.toolId.trim() ||
-          step.presetKey.trim() ||
-          step.inputAttachments.length > 0 ||
-          step.explicitRequiredCapabilities.length > 0,
+          step?.instructions?.trim() ||
+          step?.skillId?.trim() ||
+          step?.toolId?.trim() ||
+          step?.presetKey?.trim() ||
+          (step?.inputAttachments?.length ?? 0) > 0 ||
+          (step?.explicitRequiredCapabilities?.length ?? 0) > 0,
       ) ||
-      selectedObjectiveAttachmentFiles.length > 0 ||
-      Object.values(selectedStepAttachmentFiles).some((files) => files.length > 0) ||
-      selectedDependencies.length > 0 ||
-      branch.trim() ||
+      (selectedObjectiveAttachmentFiles?.length ?? 0) > 0 ||
+      Object.values(selectedStepAttachmentFiles ?? {}).some((files) => (files?.length ?? 0) > 0) ||
+      (selectedDependencies?.length ?? 0) > 0 ||
+      Boolean(branch?.trim()) ||
       branchTouched ||
       scheduleMode !== "immediate" ||
-      scheduledFor.trim() ||
-      scheduleDeferredMinutes.trim() ||
-      scheduleCron.trim() ||
-      scheduleName.trim()
+      Boolean(scheduledFor?.trim()) ||
+      Boolean(scheduleDeferredMinutes?.trim()) ||
+      Boolean(scheduleCron?.trim()) ||
+      Boolean(scheduleName?.trim())
     );
   }, [
     branch,

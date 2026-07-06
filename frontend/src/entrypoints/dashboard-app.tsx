@@ -38,6 +38,7 @@ import {
 import {
   workflowDetailHref,
   workflowListContextParams,
+  workflowListHrefFromContext,
 } from '../lib/workflowListContext';
 import { WorkflowListSidebarSurface } from './workflow-list-sidebar';
 
@@ -452,7 +453,7 @@ function WorkflowListDisplayControl({
       });
 
       if (mode === 'table') {
-        navigate('/workflows');
+        navigate(workflowListHrefFromContext(new URLSearchParams(location.search)));
         return;
       }
 
@@ -507,7 +508,6 @@ function WorkflowListDisplayControl({
               key={mode.value}
               className={`workflow-list-display-option${effectiveMode === mode.value ? ' is-selected' : ''}`}
               title={mode.label}
-              aria-label={mode.label}
             >
               <input
                 type="radio"
@@ -515,6 +515,7 @@ function WorkflowListDisplayControl({
                 value={mode.value}
                 checked={effectiveMode === mode.value}
                 disabled={!supported}
+                aria-label={mode.label}
                 onChange={() => void selectMode(mode.value)}
               />
               <Icon aria-hidden="true" focusable="false" size={16} />
@@ -632,11 +633,13 @@ function AppShell({
   dataWidePanel,
   uiInfo,
   workflowStartSidebar,
+  workflowStartSurface = false,
   children,
 }: {
   dataWidePanel: boolean;
   uiInfo: DashboardUiInfo | null;
   workflowStartSidebar?: ReactNode;
+  workflowStartSurface?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -664,8 +667,11 @@ function AppShell({
           <DashboardAlerts />
         </div>
         <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
-          {workflowStartSidebar ? (
-            <div className="workflow-workspace-shell workflow-workspace-shell--create">
+          {workflowStartSurface ? (
+            <div
+              className="workflow-workspace-shell workflow-workspace-shell--create"
+              data-sidebar-collapsed={workflowStartSidebar ? 'false' : 'true'}
+            >
               {workflowStartSidebar}
               <main className="workflow-workspace-detail workflow-workspace-detail--create" aria-label="Create workflow">
                 {children}
@@ -725,6 +731,7 @@ function RoutedDashboardPage({
       dataWidePanel={layout.dataWidePanel === true || workflowStartSidebar !== null}
       uiInfo={uiInfo}
       workflowStartSidebar={workflowStartSidebar}
+      workflowStartSurface={route.page === 'workflow-start'}
     >
       <PageContent key={routeKey} payload={routedPayload} />
     </AppShell>

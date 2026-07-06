@@ -283,5 +283,6 @@ export function resetDashboardPreferences(): DashboardPreferences {
   } catch {
     // Best-effort reset; defaults are returned regardless.
   }
+  window.dispatchEvent(new Event(DASHBOARD_PREFERENCES_CHANGED_EVENT));
   return { ...DEFAULT_DASHBOARD_PREFERENCES };
 }
