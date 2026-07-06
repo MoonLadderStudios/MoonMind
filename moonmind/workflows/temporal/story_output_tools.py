@@ -3473,6 +3473,11 @@ async def check_jira_blockers(
     if not target_issue_key:
         raise ValueError("targetIssueKey is required for Jira blocker preflight.")
 
+    assessment_verdict, _ = _jira_assessment_verdict(inputs, _context)
+    assessment_output = (
+        {"assessmentVerdict": assessment_verdict} if assessment_verdict else {}
+    )
+
     service = jira_service_factory()
     try:
         target_issue = await service.get_issue(
@@ -3494,6 +3499,7 @@ async def check_jira_blockers(
                 "decision": "blocked",
                 "blockingIssues": [],
                 "summary": summary,
+                **assessment_output,
             },
         )
 
@@ -3559,6 +3565,7 @@ async def check_jira_blockers(
                     target_issue_key=target_issue_key,
                     unresolved=unresolved,
                 ),
+                **assessment_output,
             },
         )
 
@@ -3575,6 +3582,7 @@ async def check_jira_blockers(
             "blockingIssues": [],
             "resolvedBlockingIssues": blockers,
             "summary": summary,
+            **assessment_output,
         },
     )
 
@@ -4513,8 +4521,8 @@ def _assessment_verdict_from_text(value: Any) -> str:
         r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)\b",
         r"(?is)\brecorded\s+verdict\b[^.\n:]*[:\s`]+"
         r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)\b",
-        r"(?is)\"verdict\"\s*:\s*\""
-        r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)\"",
+        r"(?is)['\"]verdict['\"]\s*:\s*['\"]"
+        r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)['\"]",
     )
     for pattern in patterns:
         match = re.search(pattern, text)
@@ -4536,8 +4544,12 @@ def _jira_assessment_verdict(
             inputs,
             context,
         )
-        if artifact_available:
+        if artifact_available and artifact_verdict:
             return artifact_verdict, True
+
+    verdict = _assessment_verdict_from_mapping(inputs)
+    if verdict:
+        return verdict, True
 
     previous_outputs = _mapping(
         inputs.get("previousOutputs")
@@ -4550,6 +4562,11 @@ def _jira_assessment_verdict(
         return verdict, True
     for key in ("lastAssistantText", "assistantText", "summary", "operator_summary"):
         verdict = _assessment_verdict_from_text(previous_outputs.get(key))
+        if verdict:
+            return verdict, True
+
+    for key in ("lastAssistantText", "assistantText", "summary", "operator_summary"):
+        verdict = _assessment_verdict_from_text(inputs.get(key))
         if verdict:
             return verdict, True
 

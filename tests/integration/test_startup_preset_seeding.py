@@ -365,6 +365,14 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         implement_blocker_step = expanded_steps[2]
         assert implement_blocker_step["type"] == "tool"
         assert implement_blocker_step["tool"]["id"] == "jira.check_blockers"
+        assert implement_blocker_step["tool"]["inputs"] == {
+            "targetIssueKey": "MM-999",
+            "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
+            "blockerPreflight": {
+                "targetIssueKey": "MM-999",
+                "linkType": "Blocks",
+            },
+        }
         assert (
             "deterministic trusted Jira blocker preflight"
             in implement_blocker_step["instructions"]

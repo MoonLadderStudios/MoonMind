@@ -3108,6 +3108,7 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
             assert expanded["steps"][2]["tool"]["id"] == "jira.check_blockers"
             assert expanded["steps"][2]["tool"]["inputs"] == {
                 "targetIssueKey": "MM-742",
+                "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
                 "blockerPreflight": {
                     "targetIssueKey": "MM-742",
                     "linkType": "Blocks",
