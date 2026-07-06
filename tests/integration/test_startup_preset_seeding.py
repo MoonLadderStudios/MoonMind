@@ -180,7 +180,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "non-blocker" in blocker_step["instructions"]
         assert "status cannot be determined" in blocker_step["instructions"]
         assert "stop the orchestration immediately" in blocker_step["instructions"]
-        brief_step = jira_orchestrate_template.steps[2]
+        brief_step = jira_orchestrate_template.steps[1]
         assert brief_step["title"] == "Load Jira preset brief"
         assert brief_step["type"] == "tool"
         assert brief_step["tool"]["id"] == "jira.load_preset_brief"
