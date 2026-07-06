@@ -1056,6 +1056,40 @@ async def test_default_skill_registry_payload_routes_jira_preset_brief_to_integr
     assert route.fleet == INTEGRATIONS_FLEET
     assert route.task_queue == "mm.activity.integrations"
 
+async def test_default_skill_registry_payload_routes_jira_status_update_to_integrations():
+    payload = _default_skill_registry_payload(
+        parameters={
+            "workflow": {
+                "steps": [
+                    {
+                        "tool": {
+                            "type": "skill",
+                            "name": "jira.update_issue_status",
+                        }
+                    }
+                ]
+            }
+        }
+    )
+
+    skills = payload.get("skills")
+    assert isinstance(skills, list)
+    assert len(skills) == 1
+    definition = skills[0]
+
+    assert definition["name"] == "jira.update_issue_status"
+    assert definition["requirements"]["capabilities"] == ["integration:jira"]
+    assert definition["policies"]["timeouts"] == {
+        "start_to_close_seconds": 60,
+        "schedule_to_close_seconds": 120,
+    }
+
+    parsed = parse_skill_registry(payload)
+    assert parsed[0].required_capabilities == ("integration:jira",)
+    route = build_default_activity_catalog().resolve_skill(parsed[0])
+    assert route.fleet == INTEGRATIONS_FLEET
+    assert route.task_queue == "mm.activity.integrations"
+
 async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_fleet():
     bindings = build_activity_bindings(
         build_default_activity_catalog(),

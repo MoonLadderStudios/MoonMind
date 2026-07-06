@@ -171,12 +171,15 @@ steps:
     - jira
     args:
       targetIssueKey: '{{ inputs.jira_issue_key }}'
+      assessmentArtifactPath: artifacts/jira-implement-assessment.json
       blockerPreflight:
         targetIssueKey: '{{ inputs.jira_issue_key }}'
         linkType: Blocks
 - title: Move Jira issue to In Progress
-  instructions: 'Read artifacts/jira-implement-assessment.json (or the previous step''s
-    recorded verdict) before doing anything.
+  type: tool
+  instructions: 'Read the previous step''s carried assessmentVerdict first, falling
+    back to artifacts/jira-implement-assessment.json only when the tool can resolve
+    that artifact, before doing anything.
 
 
     If the recorded verdict is FULLY_IMPLEMENTED, skip the In Progress transition
@@ -190,15 +193,18 @@ steps:
 
 
     Otherwise (PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED), change Jira issue {{ inputs.jira_issue_key
-    }} to status In Progress before implementation starts. Use the trusted Jira issue
-    updater workflow and Jira transition tools. Match In Progress against the issue''s
-    available transitions or target statuses; do not guess transition IDs. Re-fetch
-    the issue when possible and report the confirmed status.'
-  skill:
-    id: jira-issue-updater
+    }} to status In Progress before implementation starts. Use the deterministic trusted
+    Jira status tool. It must look up Jira''s available transitions, match In Progress
+    against transition target statuses or transition names, apply the returned transition
+    ID, and re-fetch the issue when possible to report the confirmed status.'
+  tool:
+    id: jira.update_issue_status
     requiredCapabilities:
     - jira
-    args: {}
+    args:
+      issueKey: '{{ inputs.jira_issue_key }}'
+      targetStatus: In Progress
+      assessmentArtifactPath: artifacts/jira-implement-assessment.json
 - kind: include
   slug: issue-implement-work-pr
   alias: work-pr

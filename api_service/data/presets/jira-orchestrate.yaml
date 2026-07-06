@@ -149,15 +149,18 @@ steps:
       id: auto
       args: {}
   - title: Move Jira issue to In Progress
+    type: tool
     instructions: |-
       Change Jira issue {{ inputs.jira_issue_key }} to status In Progress only after blocker preflight passes and the classify step confirms this Jira issue is eligible for Jira Orchestrate or is resuming from an eligible source design path.
 
-      Use the trusted Jira issue updater workflow and Jira transition tools. Match In Progress against the issue's available transitions or target statuses; do not guess transition IDs. Re-fetch the issue when possible and report the confirmed status.
-    skill:
-      id: jira-issue-updater
+      Use the deterministic trusted Jira status tool. It must look up Jira's available transitions, match In Progress against transition target statuses or transition names, apply the returned transition ID, and re-fetch the issue when possible to report the confirmed status.
+    tool:
+      id: jira.update_issue_status
       requiredCapabilities:
         - jira
-      args: {}
+      args:
+        issueKey: "{{ inputs.jira_issue_key }}"
+        targetStatus: In Progress
   - title: Create or select MoonSpec
     instructions: |-
       Before running moonspec-specify, validate that the Jira preset brief is exactly one independently testable story or that the active feature directory has an existing one-story spec.md.

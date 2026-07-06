@@ -2092,7 +2092,8 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
     assert task["steps"][1]["tool"]["id"] == "jira.load_preset_brief"
     assert task["steps"][2]["title"] == "Classify request and resume point"
     assert task["steps"][3]["title"] == "Move Jira issue to In Progress"
-    assert task["steps"][3]["skill"]["id"] == "jira-issue-updater"
+    assert task["steps"][3]["type"] == "tool"
+    assert task["steps"][3]["tool"]["id"] == "jira.update_issue_status"
     assert "MM-501" in task["steps"][3]["instructions"]
     assert task["steps"][7]["skill"]["id"] == "moonspec-tasks"
     assert task["steps"][9]["skill"]["id"] == "moonspec-implement"
@@ -2161,8 +2162,8 @@ async def test_child_jira_orchestrate_workflow_payload_expands_seeded_template_s
     assert "task" not in expanded_parameters
     assert expanded_parameters["stepCount"] == 26
     assert len(task["steps"]) == 26
-    assert task["steps"][0]["skill"]["id"] == "jira-issue-updater"
-    assert task["steps"][0]["type"] == "skill"
+    assert task["steps"][0]["tool"]["id"] == "jira.update_issue_status"
+    assert task["steps"][0]["type"] == "tool"
     assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
     assert task["authoredPresets"][0]["presetSlug"] == "jira-orchestrate"
 
@@ -2179,10 +2180,12 @@ async def test_child_jira_orchestrate_workflow_payload_expands_seeded_template_s
     first_node = plan["nodes"][0]
     assert first_node["id"].startswith("tpl:jira-orchestrate:01")
     assert first_node["tool"] == {
-        "type": "agent_runtime",
-        "name": "codex_cli",
+        "type": "skill",
+        "name": "jira.update_issue_status",
     }
-    assert first_node["inputs"]["selectedSkill"] == "jira-issue-updater"
+    assert first_node["inputs"]["issueKey"] == "MM-820"
+    assert first_node["inputs"]["targetStatus"] == "In Progress"
+    assert "selectedSkill" not in first_node["inputs"]
 
 
 @pytest.mark.asyncio
@@ -2223,7 +2226,7 @@ async def test_child_preset_expansion_prefers_workflow_payload_over_legacy_task(
     assert expanded_parameters["task"] == legacy_task
     task = expanded_parameters["workflow"]
     assert expanded_parameters["stepCount"] == 26
-    assert task["steps"][0]["skill"]["id"] == "jira-issue-updater"
+    assert task["steps"][0]["tool"]["id"] == "jira.update_issue_status"
     assert "MM-821" in task["steps"][0]["instructions"]
 
 
