@@ -2803,7 +2803,7 @@ def test_moonspec_verify_gate_detects_remaining_remediation_budget(
         {
             "id": "verify-1",
             "inputs": {
-                "title": "Verify remediation 1 of 6",
+                "title": "Verify remediation attempt 1 of 6",
                 "selectedSkill": "moonspec-verify",
             },
         },
@@ -2812,7 +2812,7 @@ def test_moonspec_verify_gate_detects_remaining_remediation_budget(
             "annotations": {"jiraOrchestrateRole": "moonspec-remediation"},
             "skill": {"id": "moonspec-implement"},
             "inputs": {
-                "title": "Remediate verification gaps 2 of 6",
+                "title": "Remediate verification gaps — attempt 2 of 6",
             },
         },
         {
@@ -2841,7 +2841,7 @@ def test_moonspec_verify_gate_ignores_remediation_steps_over_budget(
         {
             "id": "verify-1",
             "inputs": {
-                "title": "Verify remediation 1 of 1",
+                "title": "Verify remediation attempt 1 of 1",
                 "selectedSkill": "moonspec-verify",
             },
         },
@@ -2853,7 +2853,7 @@ def test_moonspec_verify_gate_ignores_remediation_steps_over_budget(
                 "moonSpecRemediationMaxAttempts": 1,
             },
             "skill": {"id": "moonspec-implement"},
-            "inputs": {"title": "Remediate verification gaps 2 of 1"},
+            "inputs": {"title": "Remediate verification gaps — attempt 2 of 1"},
         },
     ]
 
@@ -2882,7 +2882,7 @@ def test_moonspec_verify_gate_skips_loop_steps_after_passing_verdict(
             "moonSpecRemediationMaxAttempts": 6,
         },
         "inputs": {
-            "title": "Verify remediation 2 of 6",
+            "title": "Verify remediation attempt 2 of 6",
             "selectedSkill": "moonspec-verify",
         },
     }
@@ -3019,6 +3019,33 @@ def test_moonspec_verify_gate_records_nested_summary_and_report(
     assert gate_context["degraded"] is False
 
 
+def test_moonspec_verify_gate_records_remediation_attempt_identity(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="tpl:jira-orchestrate:1.0.0:13:verify",
+        node={
+            "annotations": {
+                "jiraOrchestrateRole": "moonspec-verification-gate",
+                "moonSpecRemediationAttempt": 2,
+                "moonSpecRemediationMaxAttempts": 6,
+            }
+        },
+        outputs={
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "operator_summary": "One gap remains after the second attempt.",
+            "diagnostics_ref": "art_remediation_verification_2",
+        },
+    )
+
+    gate_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert gate_context["artifactType"] == "remediation.verification"
+    assert gate_context["remediationAttempt"] == 2
+    assert gate_context["verifiesRemediationAttempt"] == 2
+    assert gate_context["maxRemediationAttempts"] == 6
+    assert gate_context["diagnosticsRef"] == "art_remediation_verification_2"
+
+
 def test_moonspec_verify_gate_fails_closed_for_verdict_looking_prose_output(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -3081,7 +3108,7 @@ def test_moonspec_verify_blocked_attempt_one_stops_with_remaining_budget(
         {
             "id": "verify-1",
             "inputs": {
-                "title": "Verify remediation 1 of 6",
+                "title": "Verify remediation attempt 1 of 6",
                 "selectedSkill": "moonspec-verify",
             },
         },
@@ -3089,7 +3116,7 @@ def test_moonspec_verify_blocked_attempt_one_stops_with_remaining_budget(
             "id": "remediate-2",
             "annotations": {"jiraOrchestrateRole": "moonspec-remediation"},
             "skill": {"id": "moonspec-implement"},
-            "inputs": {"title": "Remediate verification gaps 2 of 6"},
+            "inputs": {"title": "Remediate verification gaps — attempt 2 of 6"},
         },
     ]
 

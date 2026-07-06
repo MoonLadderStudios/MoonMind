@@ -202,10 +202,10 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
     assert "make no code changes" in steps[10]["instructions"]
     assert steps[11]["skill"]["id"] == "moonspec-verify"
 
-    assert steps[12]["title"] == "Remediate verification gaps 1 of 6"
+    assert steps[12]["title"] == "Remediate verification gaps — attempt 1 of 6"
     assert steps[12]["annotations"]["jiraOrchestrateRole"] == "moonspec-remediation"
     assert "ADDITIONAL_WORK_NEEDED" in steps[12]["instructions"]
-    assert steps[23]["title"] == "Verify remediation 6 of 6"
+    assert steps[23]["title"] == "Verify remediation attempt 6 of 6"
     assert steps[23]["annotations"]["moonSpecFinalRemediationGate"] is True
     assert "controlling verification gate" in steps[23]["instructions"]
 

@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
+    TemporalArtifact,
     TemporalArtifactLink,
     TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
@@ -1522,6 +1523,23 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
                 {"steps": ["diagnose", "act"]},
             ),
             (
+                "remediation.attempt",
+                "reports/remediation_attempt-1.json",
+                {
+                    "schemaVersion": "v1",
+                    "attempt": 1,
+                    "maxAttempts": 6,
+                    "inputVerificationRef": {"artifact_id": "art_verify_initial"},
+                    "knownGaps": [
+                        {"gapId": "gap-1", "status": "addressed"},
+                        {"gapId": "gap-2", "status": "deferred"},
+                    ],
+                    "changedFiles": ["moonmind/example.py"],
+                    "targetedChecks": [{"command": "pytest tests/unit/example.py"}],
+                    "nextVerificationRequired": True,
+                },
+            ),
+            (
                 "remediation.decision_log",
                 "logs/remediation_decision_log.ndjson",
                 {"decision": "acting"},
@@ -1566,6 +1584,7 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
                     TemporalArtifactLink.link_type.in_(
                         [
                             "remediation.plan",
+                            "remediation.attempt",
                             "remediation.decision_log",
                             "remediation.action_request",
                             "remediation.action_result",
@@ -1578,6 +1597,7 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
         ).scalars().all()
         assert [artifact.metadata_json["artifact_type"] for artifact in artifacts] == [
             "remediation.plan",
+            "remediation.attempt",
             "remediation.decision_log",
             "remediation.action_request",
             "remediation.action_result",
@@ -1586,12 +1606,24 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
         ]
         assert {link.link_type for link in links} == {
             "remediation.plan",
+            "remediation.attempt",
             "remediation.decision_log",
             "remediation.action_request",
             "remediation.action_result",
             "remediation.verification",
             "remediation.summary",
         }
+        attempt_artifact = next(
+            artifact
+            for artifact in artifacts
+            if artifact.metadata_json["artifact_type"] == "remediation.attempt"
+        )
+        assert attempt_artifact.metadata_json["attempt"] == 1
+        assert attempt_artifact.metadata_json["maxAttempts"] == 6
+        assert attempt_artifact.metadata_json["knownGapCount"] == 2
+        assert attempt_artifact.metadata_json["addressedGapCount"] == 1
+        assert attempt_artifact.metadata_json["deferredGapCount"] == 1
+        assert attempt_artifact.metadata_json["targetedCheckCount"] == 1
         remediation_record = await session.get(
             TemporalExecutionCanonicalRecord, remediation.workflow_id
         )
@@ -2214,6 +2246,18 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
         assert result["artifactRefs"]["actionRequest"]
         assert result["artifactRefs"]["actionResult"]
         assert result["artifactRefs"]["verification"]
+        verification_artifact = await session.get(
+            TemporalArtifact,
+            result["artifactRefs"]["verification"],
+        )
+        assert verification_artifact is not None
+        assert verification_artifact.metadata_json["artifact_type"] == (
+            "remediation.verification"
+        )
+        assert verification_artifact.metadata_json["actionKind"] == action_kind
+        assert verification_artifact.metadata_json["actionId"] == (
+            authority.to_dict()["request"]["actionId"]
+        )
         assert {artifact.link_type for artifact in artifact_links} == {
             "remediation.action_request",
             "remediation.action_result",

@@ -29,6 +29,7 @@ REMEDIATION_ARTIFACT_TYPES = frozenset(
     {
         "remediation.context",
         "remediation.plan",
+        "remediation.attempt",
         "remediation.decision_log",
         "remediation.action_request",
         "remediation.action_result",
@@ -679,6 +680,49 @@ class RemediationLifecyclePublisher:
             "name": name,
             "schemaVersion": REMEDIATION_CONTEXT_SCHEMA_VERSION,
         }
+        for key in (
+            "attempt",
+            "maxAttempts",
+            "verifiesRemediationAttempt",
+            "knownGapCount",
+            "addressedGapCount",
+            "deferredGapCount",
+            "unsafeGapCount",
+            "stillFailingGapCount",
+            "targetedCheckCount",
+            "actionKind",
+            "actionId",
+        ):
+            value = safe_payload.get(key)
+            if isinstance(value, str) and value.strip():
+                metadata_json[key] = value.strip()
+            elif isinstance(value, int) and not isinstance(value, bool):
+                metadata_json[key] = value
+        if artifact_type == "remediation.attempt":
+            known_gaps = safe_payload.get("knownGaps")
+            if isinstance(known_gaps, Sequence) and not isinstance(
+                known_gaps, (str, bytes, bytearray)
+            ):
+                metadata_json.setdefault("knownGapCount", len(known_gaps))
+                status_counts: dict[str, int] = {}
+                for gap in known_gaps:
+                    if isinstance(gap, Mapping):
+                        status = _string_or_none(gap.get("status"))
+                        if status:
+                            status_counts[status] = status_counts.get(status, 0) + 1
+                for status, metadata_key in (
+                    ("addressed", "addressedGapCount"),
+                    ("deferred", "deferredGapCount"),
+                    ("unsafe", "unsafeGapCount"),
+                    ("still_failing", "stillFailingGapCount"),
+                ):
+                    if status in status_counts:
+                        metadata_json.setdefault(metadata_key, status_counts[status])
+            targeted_checks = safe_payload.get("targetedChecks")
+            if isinstance(targeted_checks, Sequence) and not isinstance(
+                targeted_checks, (str, bytes, bytearray)
+            ):
+                metadata_json.setdefault("targetedCheckCount", len(targeted_checks))
         if target_workflow_id := _string_or_none(target_workflow_id):
             metadata_json["targetWorkflowId"] = target_workflow_id
         if target_run_id := _string_or_none(target_run_id):

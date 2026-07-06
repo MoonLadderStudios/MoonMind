@@ -293,7 +293,7 @@ steps:
     id: moonspec-verify
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
-- title: Remediate verification gaps 1 of 6
+- title: Remediate verification gaps — attempt 1 of 6
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 1
@@ -317,6 +317,9 @@ steps:
     when feasible.
 
 
+    Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
+
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable
     in this runtime, such as by running a skipped command or inspecting available files. Otherwise
     stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE,
@@ -332,7 +335,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 1 of 6
+- title: Verify remediation attempt 1 of 6
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 1
@@ -355,6 +358,9 @@ steps:
     skip every remaining remediation attempt, and do not create a pull request.
 
 
+    Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
+
+
     When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
     to "advance". The workflow runtime owns pull request creation; do not encode pull
     request creation or any step-specific destination in recommendedNextAction.'
@@ -362,7 +368,7 @@ steps:
     id: moonspec-verify
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
-- title: Remediate verification gaps 2 of 6
+- title: Remediate verification gaps — attempt 2 of 6
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 2
@@ -386,6 +392,9 @@ steps:
     when feasible.
 
 
+    Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
+
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable
     in this runtime, such as by running a skipped command or inspecting available files. Otherwise
     stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE,
@@ -401,7 +410,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 2 of 6
+- title: Verify remediation attempt 2 of 6
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 2
@@ -424,6 +433,9 @@ steps:
     skip every remaining remediation attempt, and do not create a pull request.
 
 
+    Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
+
+
     When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
     to "advance". The workflow runtime owns pull request creation; do not encode pull
     request creation or any step-specific destination in recommendedNextAction.'
@@ -431,7 +443,7 @@ steps:
     id: moonspec-verify
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
-- title: Remediate verification gaps 3 of 6
+- title: Remediate verification gaps — attempt 3 of 6
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 3
@@ -455,6 +467,9 @@ steps:
     when feasible.
 
 
+    Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
+
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable
     in this runtime, such as by running a skipped command or inspecting available files. Otherwise
     stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE,
@@ -470,7 +485,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 3 of 6
+- title: Verify remediation attempt 3 of 6
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 3
@@ -493,6 +508,9 @@ steps:
     skip every remaining remediation attempt, and do not create a pull request.
 
 
+    Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
+
+
     When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
     to "advance". The workflow runtime owns pull request creation; do not encode pull
     request creation or any step-specific destination in recommendedNextAction.'
@@ -500,7 +518,7 @@ steps:
     id: moonspec-verify
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
-- title: Remediate verification gaps 4 of 6
+- title: Remediate verification gaps — attempt 4 of 6
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 4
@@ -524,6 +542,9 @@ steps:
     when feasible.
 
 
+    Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
+
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable
     in this runtime, such as by running a skipped command or inspecting available files. Otherwise
     stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE,
@@ -539,7 +560,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 4 of 6
+- title: Verify remediation attempt 4 of 6
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 4
@@ -562,6 +583,9 @@ steps:
     skip every remaining remediation attempt, and do not create a pull request.
 
 
+    Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
+
+
     When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
     to "advance". The workflow runtime owns pull request creation; do not encode pull
     request creation or any step-specific destination in recommendedNextAction.'
@@ -569,7 +593,7 @@ steps:
     id: moonspec-verify
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
-- title: Remediate verification gaps 5 of 6
+- title: Remediate verification gaps — attempt 5 of 6
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 5
@@ -593,6 +617,9 @@ steps:
     when feasible.
 
 
+    Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
+
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable
     in this runtime, such as by running a skipped command or inspecting available files. Otherwise
     stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE,
@@ -608,7 +635,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 5 of 6
+- title: Verify remediation attempt 5 of 6
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 5
@@ -631,6 +658,9 @@ steps:
     skip every remaining remediation attempt, and do not create a pull request.
 
 
+    Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
+
+
     When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
     to "advance". The workflow runtime owns pull request creation; do not encode pull
     request creation or any step-specific destination in recommendedNextAction.'
@@ -638,7 +668,7 @@ steps:
     id: moonspec-verify
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
-- title: Remediate verification gaps 6 of 6
+- title: Remediate verification gaps — attempt 6 of 6
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 6
@@ -662,6 +692,9 @@ steps:
     when feasible.
 
 
+    Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
+
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable
     in this runtime, such as by running a skipped command or inspecting available files. Otherwise
     stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE,
@@ -677,7 +710,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 6 of 6
+- title: Verify remediation attempt 6 of 6
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 6
@@ -696,6 +729,9 @@ steps:
     request creation. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
     classify runtime or infrastructure causes as environment failure, stop immediately, and
     do not create a pull request.
+
+
+    Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
 
 
     If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction

@@ -3291,6 +3291,18 @@ function metadataString(metadata: Record<string, unknown>, ...keys: string[]): s
   return '';
 }
 
+function metadataNumber(metadata: Record<string, unknown>, ...keys: string[]): number | null {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const parsed = Number.parseInt(value.trim(), 10);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
 function metadataStrings(metadata: Record<string, unknown>, ...keys: string[]): string {
   return keys
     .map((key) => {
@@ -6609,6 +6621,7 @@ function remediationArtifactLabel(type: string): string {
   const labels: Record<string, string> = {
     'remediation.context': 'Context',
     'remediation.plan': 'Plan',
+    'remediation.attempt': 'Remediation Attempt',
     'remediation.decision_log': 'Decision Log',
     'remediation.action_request': 'Action Request',
     'remediation.action_result': 'Action Result',
@@ -6616,6 +6629,51 @@ function remediationArtifactLabel(type: string): string {
     'remediation.summary': 'Summary',
   };
   return labels[type] ?? type.replace(/^remediation\./, '').replaceAll('_', ' ');
+}
+
+function remediationAttemptLabel(metadata: Record<string, unknown>, type: string): string {
+  const attempt = metadataNumber(metadata, 'attempt', 'remediationAttempt', 'verifiesRemediationAttempt');
+  const maxAttempts = metadataNumber(metadata, 'maxAttempts', 'maxRemediationAttempts');
+  if (attempt === null) {
+    return type === 'remediation.verification' ? 'Full verification' : '—';
+  }
+  return maxAttempts === null ? `Attempt ${attempt}` : `Attempt ${attempt} of ${maxAttempts}`;
+}
+
+function remediationEvidenceDetails(metadata: Record<string, unknown>, type: string): string {
+  const parts: string[] = [];
+  const verifiesAttempt = metadataNumber(metadata, 'verifiesRemediationAttempt');
+  if (verifiesAttempt !== null) {
+    parts.push(`verifies attempt ${verifiesAttempt}`);
+  }
+  const gapSummary = metadataString(metadata, 'knownGapSummary', 'gapSummary');
+  if (gapSummary) {
+    parts.push(gapSummary);
+  } else {
+    const known = metadataNumber(metadata, 'knownGapCount');
+    const addressed = metadataNumber(metadata, 'addressedGapCount');
+    const deferred = metadataNumber(metadata, 'deferredGapCount');
+    const unsafe = metadataNumber(metadata, 'unsafeGapCount');
+    const stillFailing = metadataNumber(metadata, 'stillFailingGapCount');
+    if (known !== null) parts.push(`${known} known gaps`);
+    if (addressed !== null) parts.push(`${addressed} addressed`);
+    if (deferred !== null) parts.push(`${deferred} deferred`);
+    if (unsafe !== null) parts.push(`${unsafe} unsafe`);
+    if (stillFailing !== null) parts.push(`${stillFailing} still failing`);
+  }
+  const targetedChecks = metadataNumber(metadata, 'targetedCheckCount', 'targetedChecksCount');
+  if (targetedChecks !== null) {
+    parts.push(`${targetedChecks} targeted checks`);
+  }
+  const actionKind = metadataString(metadata, 'actionKind');
+  const actionId = metadataString(metadata, 'actionId');
+  if (type === 'remediation.verification' && (actionKind || actionId)) {
+    parts.push(`action verification ${actionKind || actionId}`);
+  }
+  if (type === 'remediation.verification' && !actionKind && !actionId) {
+    parts.push('authoritative full verification');
+  }
+  return parts.length > 0 ? parts.join('; ') : '—';
 }
 
 function remediationListValue(items: string[] | null | undefined): string {
@@ -6850,6 +6908,8 @@ function RemediationEvidencePanel({
           <thead>
             <tr>
               <th>Evidence</th>
+              <th>Attempt</th>
+              <th>Details</th>
               <th>Artifact</th>
               <th>Action</th>
             </tr>
@@ -6858,6 +6918,8 @@ function RemediationEvidencePanel({
             {remediationArtifacts.map(({ artifact, type }) => (
               <tr key={artifact.artifactId}>
                 <td>{remediationArtifactLabel(type)}</td>
+                <td>{remediationAttemptLabel(artifact.metadata, type)}</td>
+                <td>{remediationEvidenceDetails(artifact.metadata, type)}</td>
                 <td><code>{artifact.artifactId}</code></td>
                 <td>
                   <a className="button secondary" href={artifactDownloadHref(apiBase, artifact)}>

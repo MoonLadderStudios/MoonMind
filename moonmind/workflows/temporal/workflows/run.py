@@ -4948,6 +4948,7 @@ class MoonMindRunWorkflow:
         *,
         node_id: str,
         outputs: Mapping[str, Any],
+        node: Mapping[str, Any] | None = None,
     ) -> None:
         gate_result = self._moonspec_verify_gate_result(outputs)
         verdict = gate_result.verdict
@@ -5019,6 +5020,17 @@ class MoonMindRunWorkflow:
             gate_context["summary"] = reason
         if diagnostics_ref:
             gate_context["diagnosticsRef"] = diagnostics_ref
+        if (
+            node is not None
+            and self._moonspec_step_role(node) == "moonspec-verification-gate"
+        ):
+            attempt, max_attempts = self._moonspec_remediation_attempt_metadata(node)
+            if attempt is not None:
+                gate_context["remediationAttempt"] = attempt
+                gate_context["verifiesRemediationAttempt"] = attempt
+                gate_context["artifactType"] = "remediation.verification"
+            if max_attempts is not None:
+                gate_context["maxRemediationAttempts"] = max_attempts
         self._publish_context["moonSpecGate"] = gate_context
 
     @staticmethod
@@ -8528,6 +8540,7 @@ class MoonMindRunWorkflow:
                     self._record_moonspec_verify_gate(
                         node_id=node_id,
                         outputs=outputs_for_gate,
+                        node=node,
                     )
                     gate_verdict = self._normalize_moonspec_verify_verdict(
                         self._moonspec_gate_verdict

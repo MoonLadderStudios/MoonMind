@@ -166,7 +166,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         remediation_step = next(
             step
             for step in jira_orchestrate_template.steps
-            if step["title"] == "Remediate verification gaps 1 of 6"
+            if step["title"] == "Remediate verification gaps — attempt 1 of 6"
         )
         assert remediation_step["skill"]["id"] == "moonspec-implement"
         assert "ADDITIONAL_WORK_NEEDED" in remediation_step["instructions"]
@@ -174,7 +174,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         remediation_verify_step = next(
             step
             for step in jira_orchestrate_template.steps
-            if step["title"] == "Verify remediation 6 of 6"
+            if step["title"] == "Verify remediation attempt 6 of 6"
         )
         assert remediation_verify_step["skill"]["id"] == "moonspec-verify"
         assert remediation_verify_step["skill"]["args"]["verify_artifact_path"] == (
@@ -263,7 +263,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             for step in expanded_orchestrate_without_verify["steps"]
         ]
         assert "Verify completion" not in no_verify_orchestrate_titles
-        assert "Verify remediation 6 of 6" not in no_verify_orchestrate_titles
+        assert "Verify remediation attempt 6 of 6" not in no_verify_orchestrate_titles
         assert "Reconcile declarative docs" not in no_verify_orchestrate_titles
         assert "moonspec-verify" not in no_verify_orchestrate_skill_ids
         assert "Implement the task breakdown" in no_verify_orchestrate_titles
@@ -348,8 +348,8 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert implement_step_titles[3] == "Move Jira issue to In Progress"
         assert "Implement the issue" in implement_step_titles
         assert "Verify implementation" in implement_step_titles
-        assert "Remediate verification gaps 1 of 6" in implement_step_titles
-        assert "Verify remediation 6 of 6" in implement_step_titles
+        assert "Remediate verification gaps — attempt 1 of 6" in implement_step_titles
+        assert "Verify remediation attempt 6 of 6" in implement_step_titles
         assert "Create pull request" in implement_step_titles
         assert implement_step_titles[-1] == "Finalize Jira status"
         implement_brief_step = expanded_steps[0]
@@ -434,7 +434,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         remediation_step = next(
             step
             for step in expanded_steps
-            if step["title"] == "Remediate verification gaps 1 of 6"
+            if step["title"] == "Remediate verification gaps — attempt 1 of 6"
         )
         assert remediation_step["annotations"] == {
             "issueImplementRole": "moonspec-remediation",
@@ -444,7 +444,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         verify_remediation_step = next(
             step
             for step in expanded_steps
-            if step["title"] == "Verify remediation 6 of 6"
+            if step["title"] == "Verify remediation attempt 6 of 6"
         )
         assert verify_remediation_step["skill"]["args"]["verify_artifact_path"] == (
             "artifacts/jira-implement-verify.json"
@@ -497,8 +497,8 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             for step in expanded_without_verify["steps"]
         ]
         assert "Verify implementation" not in no_verify_titles
-        assert "Verify remediation 6 of 6" not in no_verify_titles
-        assert "Remediate verification gaps 1 of 6" not in no_verify_titles
+        assert "Verify remediation attempt 6 of 6" not in no_verify_titles
+        assert "Remediate verification gaps — attempt 1 of 6" not in no_verify_titles
         assert "moonspec-verify" not in no_verify_skill_ids
         assert "Implement the issue" in no_verify_titles
         assert "Create pull request" in no_verify_titles

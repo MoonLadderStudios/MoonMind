@@ -4927,7 +4927,7 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
                             "inputs": {
                                 "runtime": {"mode": "codex"},
                                 "selectedSkill": "moonspec-implement",
-                                "title": "Remediate verification gaps 6 of 6",
+                                "title": "Remediate verification gaps — attempt 6 of 6",
                                 "annotations": {
                                     "jiraOrchestrateRole": "moonspec-remediation",
                                 },

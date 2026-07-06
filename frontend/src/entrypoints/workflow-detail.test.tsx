@@ -6303,6 +6303,99 @@ describe('Workflow Detail Entrypoint', () => {
     expect(dashboardCss).toMatch(/\.td-remediation-list\s+code\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
   });
 
+  it('renders remediation evidence as attempt-scoped with per-gap details', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-remediation-attempts/artifacts?source=temporal');
+    const mockExecution = {
+      taskId: 'test-remediation-attempts',
+      workflowId: 'test-remediation-attempts',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      entry: 'user_workflow',
+      title: 'Attempt remediation task',
+      summary: 'Remediation evidence exists.',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      createdAt: '2026-04-22T00:00:00Z',
+      updatedAt: '2026-04-22T00:00:01Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-remediation-attempts/remediations?direction=')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifacts: [
+              {
+                artifactId: 'art-remediation-attempt-1',
+                contentType: 'application/json',
+                sizeBytes: 320,
+                status: 'complete',
+                metadata: {
+                  artifact_type: 'remediation.attempt',
+                  attempt: 1,
+                  maxAttempts: 6,
+                  knownGapCount: 4,
+                  addressedGapCount: 3,
+                  deferredGapCount: 1,
+                  targetedCheckCount: 2,
+                },
+                links: [],
+              },
+              {
+                artifactId: 'art-remediation-verification-1',
+                contentType: 'application/json',
+                sizeBytes: 240,
+                status: 'complete',
+                metadata: {
+                  artifact_type: 'remediation.verification',
+                  verifiesRemediationAttempt: 1,
+                  maxRemediationAttempts: 6,
+                },
+                links: [],
+              },
+              {
+                artifactId: 'art-action-verification',
+                contentType: 'application/json',
+                sizeBytes: 160,
+                status: 'complete',
+                metadata: {
+                  artifact_type: 'remediation.verification',
+                  actionKind: 'session.terminate',
+                  actionId: 'action-1',
+                },
+                links: [],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
+    expect(screen.getByText('Remediation Attempt')).toBeTruthy();
+    expect(screen.getAllByText('Attempt 1 of 6').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('4 known gaps; 3 addressed; 1 deferred; 2 targeted checks')).toBeTruthy();
+    expect(screen.getByText('verifies attempt 1; authoritative full verification')).toBeTruthy();
+    expect(screen.getByText('action verification session.terminate')).toBeTruthy();
+    expect(screen.queryByText('Remediate verification gaps 1 of 6')).toBeNull();
+  });
+
   it('renders workflow detail as separated matte evidence and action regions', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {

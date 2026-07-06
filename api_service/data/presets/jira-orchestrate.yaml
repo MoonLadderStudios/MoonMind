@@ -218,7 +218,7 @@ steps:
       id: moonspec-verify
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
-  - title: Remediate verification gaps 1 of 6
+  - title: Remediate verification gaps — attempt 1 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -233,6 +233,8 @@ steps:
 
       If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report's gaps and remaining work as the authoritative bounded implementation backlog. Run moonspec-implement to fix the reported implementation or validation gaps, update tasks.md only for work actually completed, and run the focused unit or integration checks named by the verification report when feasible.
 
+      Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
       If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable in this runtime, such as by running a skipped command or inspecting available files. Otherwise stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal for Jira Orchestrate remediation, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
       Do not broaden the selected story scope, do not create a pull request, and do not move Jira during remediation.
@@ -241,7 +243,7 @@ steps:
       args: {}
       requiredCapabilities:
         - git
-  - title: Verify remediation 1 of 6
+  - title: Verify remediation attempt 1 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
@@ -256,12 +258,14 @@ steps:
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
+      Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
+
       When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
       id: moonspec-verify
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
-  - title: Remediate verification gaps 2 of 6
+  - title: Remediate verification gaps — attempt 2 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -276,6 +280,8 @@ steps:
 
       If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report's gaps and remaining work as the authoritative bounded implementation backlog. Run moonspec-implement to fix the reported implementation or validation gaps, update tasks.md only for work actually completed, and run the focused unit or integration checks named by the verification report when feasible.
 
+      Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
       If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable in this runtime, such as by running a skipped command or inspecting available files. Otherwise stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal for Jira Orchestrate remediation, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
       Do not broaden the selected story scope, do not create a pull request, and do not move Jira during remediation.
@@ -284,7 +290,7 @@ steps:
       args: {}
       requiredCapabilities:
         - git
-  - title: Verify remediation 2 of 6
+  - title: Verify remediation attempt 2 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
@@ -299,12 +305,14 @@ steps:
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
+      Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
+
       When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
       id: moonspec-verify
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
-  - title: Remediate verification gaps 3 of 6
+  - title: Remediate verification gaps — attempt 3 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -319,6 +327,8 @@ steps:
 
       If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report's gaps and remaining work as the authoritative bounded implementation backlog. Run moonspec-implement to fix the reported implementation or validation gaps, update tasks.md only for work actually completed, and run the focused unit or integration checks named by the verification report when feasible.
 
+      Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
       If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable in this runtime, such as by running a skipped command or inspecting available files. Otherwise stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal for Jira Orchestrate remediation, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
       Do not broaden the selected story scope, do not create a pull request, and do not move Jira during remediation.
@@ -327,7 +337,7 @@ steps:
       args: {}
       requiredCapabilities:
         - git
-  - title: Verify remediation 3 of 6
+  - title: Verify remediation attempt 3 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
@@ -342,12 +352,14 @@ steps:
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
+      Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
+
       When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
       id: moonspec-verify
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
-  - title: Remediate verification gaps 4 of 6
+  - title: Remediate verification gaps — attempt 4 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -362,6 +374,8 @@ steps:
 
       If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report's gaps and remaining work as the authoritative bounded implementation backlog. Run moonspec-implement to fix the reported implementation or validation gaps, update tasks.md only for work actually completed, and run the focused unit or integration checks named by the verification report when feasible.
 
+      Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
       If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable in this runtime, such as by running a skipped command or inspecting available files. Otherwise stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal for Jira Orchestrate remediation, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
       Do not broaden the selected story scope, do not create a pull request, and do not move Jira during remediation.
@@ -370,7 +384,7 @@ steps:
       args: {}
       requiredCapabilities:
         - git
-  - title: Verify remediation 4 of 6
+  - title: Verify remediation attempt 4 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
@@ -385,12 +399,14 @@ steps:
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
+      Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
+
       When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
       id: moonspec-verify
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
-  - title: Remediate verification gaps 5 of 6
+  - title: Remediate verification gaps — attempt 5 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -405,6 +421,8 @@ steps:
 
       If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report's gaps and remaining work as the authoritative bounded implementation backlog. Run moonspec-implement to fix the reported implementation or validation gaps, update tasks.md only for work actually completed, and run the focused unit or integration checks named by the verification report when feasible.
 
+      Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
       If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable in this runtime, such as by running a skipped command or inspecting available files. Otherwise stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal for Jira Orchestrate remediation, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
       Do not broaden the selected story scope, do not create a pull request, and do not move Jira during remediation.
@@ -413,7 +431,7 @@ steps:
       args: {}
       requiredCapabilities:
         - git
-  - title: Verify remediation 5 of 6
+  - title: Verify remediation attempt 5 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
@@ -428,12 +446,14 @@ steps:
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
+      Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
+
       When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
       id: moonspec-verify
       args:
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
-  - title: Remediate verification gaps 6 of 6
+  - title: Remediate verification gaps — attempt 6 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-remediation
@@ -448,6 +468,8 @@ steps:
 
       If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report's gaps and remaining work as the authoritative bounded implementation backlog. Run moonspec-implement to fix the reported implementation or validation gaps, update tasks.md only for work actually completed, and run the focused unit or integration checks named by the verification report when feasible.
 
+      Record one attempt-scoped remediation artifact at reports/remediation_attempt-<attempt>.json with artifact_type remediation.attempt. Include schemaVersion v1, attempt, maxAttempts, inputVerificationRef, knownGaps with addressed/deferred/unsafe/still_failing statuses, changedFiles, targetedChecks, and nextVerificationRequired true. Targeted local or policy-required action checks belong inside this remediation attempt artifact; do not model them as sibling full-verifier steps unless policy explicitly requires a full verifier.
+
       If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable in this runtime, such as by running a skipped command or inspecting available files. Otherwise stop and report the exact blocker. If the latest verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal for Jira Orchestrate remediation, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
       Do not broaden the selected story scope, do not create a pull request, and do not move Jira during remediation.
@@ -456,7 +478,7 @@ steps:
       args: {}
       requiredCapabilities:
         - git
-  - title: Verify remediation 6 of 6
+  - title: Verify remediation attempt 6 of 6
     enabled: '{{ inputs.run_verify }}'
     annotations:
       jiraOrchestrateRole: moonspec-verification-gate
@@ -469,6 +491,8 @@ steps:
       Run moonspec-verify after remediation attempt 6, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
 
       This is the controlling verification gate for Jira Orchestrate publication. If the verdict is ADDITIONAL_WORK_NEEDED or NO_DETERMINATION, the remediation budget is exhausted: stop the orchestration, report the gaps or missing evidence, and do not continue to pull request creation. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify runtime or infrastructure causes as environment failure, stop immediately, and do not create a pull request.
+
+      Record the post-attempt verifier output as artifact_type remediation.verification and include verifiesRemediationAttempt with this attempt number. The verdict must be authoritative for the whole target state, not just one gap.
 
       If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
     skill:
