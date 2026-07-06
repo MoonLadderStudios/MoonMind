@@ -94,19 +94,21 @@ async def test_github_issue_orchestrate_seed_exposes_issue_picker_and_tools(tmp_
         "commentPullRequestUrl"
     ] is True
 
-    assert [step.get("kind", "step") for step in template.steps[:4]] == [
+    assert [step.get("kind", "step") for step in template.steps[:5]] == [
         "step",
         "include",
+        "step",
         "step",
         "step",
     ]
     assert [
         (step.get("tool") or step.get("skill") or {}).get("id")
-        for step in template.steps[:4]
+        for step in template.steps[:5]
     ] == [
         "github.load_issue_preset_brief",
         None,
         "github.check_issue_blockers",
+        "auto",
         "github.update_issue_status",
     ]
     assert template.steps[1]["slug"] == "issue-implement-assessment"
