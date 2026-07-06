@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { workflowDetailHref } from '../lib/workflowListContext';
+import {
+  buildWorkflowListQueryParams,
+  workflowListQueryString,
+} from '../lib/workflowListQuery';
+import {
+  readDashboardPreferences,
+  updateDashboardPreferences,
+  type WorkflowListDisplayMode,
+} from '../utils/dashboardPreferences';
 import WorkflowListPage from './workflow-list';
 import WorkflowDetailEntrypoint, { WorkflowWorkspaceShell } from './workflow-detail';
 
@@ -58,8 +68,51 @@ function readWorkflowsWorkspaceDashboardConfig(
   return raw?.dashboardConfig;
 }
 
+function workflowWorkspaceRowId(row: unknown): string {
+  if (!row || typeof row !== 'object') {
+    return '';
+  }
+  const record = row as { workflowId?: unknown; taskId?: unknown };
+  const id = typeof record.workflowId === 'string' ? record.workflowId : record.taskId;
+  return typeof id === 'string' ? id.trim() : '';
+}
+
+function WorkflowListDisplayModeControl({
+  mode,
+  resolving,
+  onSelect,
+}: {
+  mode: WorkflowListDisplayMode;
+  resolving: boolean;
+  onSelect: (mode: WorkflowListDisplayMode) => void;
+}) {
+  return (
+    <fieldset className="workflow-list-display-mode-control" aria-label="Workflow list display">
+      <legend className="sr-only">Workflow list display</legend>
+      {[
+        ['hidden', 'No list'],
+        ['sidebar', 'Sidebar list'],
+        ['table', 'Full screen table'],
+      ].map(([value, label]) => (
+        <label key={value} className="workflow-list-display-mode-option">
+          <input
+            type="radio"
+            name="workflow-list-display-mode"
+            value={value}
+            checked={mode === value}
+            disabled={resolving}
+            onChange={() => onSelect(value as WorkflowListDisplayMode)}
+          />
+          <span>{label}</span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const workflowId = decodeWorkflowIdFromPath(location.pathname);
   const search = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const isDesktop = useIsDesktop();
@@ -67,10 +120,62 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const temporalDashboard = cfg?.features?.temporalDashboard;
   const workspaceShellEnabled = temporalDashboard?.workspaceShellEnabled !== false;
   const listEnabled = temporalDashboard?.listEnabled !== false;
+  const [tableModeStatus, setTableModeStatus] = useState<string | null>(null);
+  const [resolvingTableMode, setResolvingTableMode] = useState(false);
+
+  const resolveTableModeSelection = async (mode: WorkflowListDisplayMode) => {
+    updateDashboardPreferences({ workflowListDisplayMode: mode });
+    setTableModeStatus(null);
+    if (mode === 'table') {
+      return;
+    }
+
+    setResolvingTableMode(true);
+    try {
+      const listQueryParams = buildWorkflowListQueryParams(search);
+      const listQuery = workflowListQueryString(listQueryParams);
+      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
+      if (!response.ok) {
+        setTableModeStatus('Workflow navigation is unavailable.');
+        return;
+      }
+      const data = (await response.json()) as { items?: unknown[] };
+      const rows = Array.isArray(data.items) ? data.items : [];
+      const ids = rows.map(workflowWorkspaceRowId).filter(Boolean);
+      const lastSelectedWorkflowId = readDashboardPreferences().lastSelectedWorkflowId;
+      const selectedId =
+        lastSelectedWorkflowId && ids.includes(lastSelectedWorkflowId)
+          ? lastSelectedWorkflowId
+          : ids[0];
+
+      if (!selectedId) {
+        setTableModeStatus('No workflow is available to open from this list.');
+        return;
+      }
+
+      navigate(workflowDetailHref(selectedId, listQueryParams));
+    } finally {
+      setResolvingTableMode(false);
+    }
+  };
 
   if (!workflowId) {
     return (
       <section className="workflows-workspace-page" aria-label="Workflows workspace" data-jira-issue="MM-1061">
+        {isDesktop ? (
+          <WorkflowListDisplayModeControl
+            mode="table"
+            resolving={resolvingTableMode}
+            onSelect={(mode) => {
+              void resolveTableModeSelection(mode);
+            }}
+          />
+        ) : null}
+        {isDesktop && tableModeStatus ? (
+          <p className="workflow-list-display-mode-status" role="status">
+            {tableModeStatus}
+          </p>
+        ) : null}
         <WorkflowListPage payload={payload} />
       </section>
     );
