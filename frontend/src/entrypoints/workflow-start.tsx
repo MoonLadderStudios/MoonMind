@@ -12745,7 +12745,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 onChange={(event) => setPublishMode(event.target.value)}
               >
                 <option value="auto" disabled={!autoPublishAvailable}>
-                  Auto — selected skill decides
+                  Auto
                 </option>
                 <option value="none">None</option>
                 <option value="branch" disabled={!mergeAutomationAvailable}>

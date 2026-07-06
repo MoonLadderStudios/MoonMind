@@ -7872,7 +7872,7 @@ describe.skip("Task Create Entrypoint", () => {
       Array.from(publishModeSelect.options).some(
         (option) =>
           option.value === "auto" &&
-          option.text === "Auto — selected skill decides" &&
+          option.text === "Auto" &&
           option.disabled,
       ),
     ).toBe(true);
