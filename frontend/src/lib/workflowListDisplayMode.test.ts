@@ -142,16 +142,16 @@ describe('resolveWorkflowListDisplay', () => {
     });
   });
 
-  it('keeps create as primary and hides unsupported sidebar mode', () => {
+  it('keeps create as primary and renders the workflow list as a sidebar in sidebar mode', () => {
     expect(resolveWorkflowListDisplay({ pathname: '/workflows/new', requestedMode: 'sidebar' })).toMatchObject({
       requestedMode: 'sidebar',
-      effectiveMode: 'hidden',
+      effectiveMode: 'sidebar',
       surface: 'workflow-start',
       routeAction: 'none',
       primarySurface: 'workflow-start',
-      listSurface: 'none',
+      listSurface: 'sidebar',
       targetPath: '/workflows/new',
-      status: 'Sidebar list is unavailable on Create.',
+      status: null,
     });
     expect(resolveWorkflowListDisplay({ pathname: '/workflows/new', requestedMode: 'hidden' })).toMatchObject({
       requestedMode: 'hidden',

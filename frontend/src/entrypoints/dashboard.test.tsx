@@ -238,12 +238,16 @@ vi.mock('./workflow-detail', () => {
 
 vi.mock('./workflow-start', () => ({
   default: ({ payload }: { payload: BootPayload }) => {
-    const initialData = payload.initialData as { dashboardConfig?: Record<string, unknown> } | undefined;
+    const initialData = payload.initialData as {
+      dashboardConfig?: Record<string, unknown>;
+      workflowListDisplayMode?: unknown;
+    } | undefined;
     const repository = initialData?.dashboardConfig?.defaultRepository;
     return (
       <>
         <div>Workflow start route loaded</div>
         <div>Workflow start default repository: {typeof repository === 'string' ? repository : 'none'}</div>
+        <div>Workflow start list display: {String(initialData?.workflowListDisplayMode ?? 'unset')}</div>
       </>
     );
   },
@@ -550,6 +554,26 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
     expect(screen.getByText('Workflow start default repository: MoonLadderStudios/MoonMind')).toBeTruthy();
+  });
+
+  it('MM-1121 keeps sidebar mode on the Create route', async () => {
+    window.history.replaceState({}, '', '/workflows/new?source=temporal');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('true');
+    await waitFor(() => {
+      expect(document.querySelector('.panel--data-wide')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    expect(screen.getByRole('button', { name: 'No list' }).getAttribute('aria-pressed')).toBe('true');
+    expect(window.location.pathname).toBe('/workflows/new');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('true');
+    expect(window.location.pathname).toBe('/workflows/new');
+    expect(window.location.search).toBe('?source=temporal');
   });
 
   it('MM-1029 navigateTo uses the SPA route event for dashboard-internal URLs', async () => {

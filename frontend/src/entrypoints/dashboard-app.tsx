@@ -671,8 +671,7 @@ function RoutedDashboardPage({
   }, [location.pathname]);
 
   const handleWorkflowListModeSelect = async (mode: WorkflowListDisplayMode) => {
-    const selectedMode =
-      location.pathname.replace(/\/$/, '') === '/workflows/new' && mode === 'sidebar' ? 'hidden' : mode;
+    const selectedMode = mode;
     const search = new URLSearchParams(location.search);
     pendingRequestRef.current = null;
     setResolutionStatus(null);

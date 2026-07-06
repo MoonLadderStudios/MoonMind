@@ -26,8 +26,21 @@ import {
 import {
   readWorkflowListDisplayMode,
 } from "../lib/workflowListDisplayMode";
+import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowWorkspaceSidebar";
 import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
-import { WorkflowWorkspaceSidebarPanel } from "./workflow-detail";
+
+type WorkflowStartDashboardConfig = {
+  features?: {
+    temporalDashboard?: {
+      listEnabled?: boolean;
+    };
+  };
+};
+
+function readWorkflowStartDashboardConfig(payload: BootPayload): WorkflowStartDashboardConfig | undefined {
+  const raw = payload.initialData as { dashboardConfig?: WorkflowStartDashboardConfig } | undefined;
+  return raw?.dashboardConfig;
+}
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
@@ -13043,17 +13056,24 @@ function WorkflowStartPageWithSearch({
     () => new URLSearchParams(searchString),
     [searchString],
   );
-  if (displayMode !== "sidebar") {
+  if (displayMode === "table") {
     return <WorkflowStartPageContent payload={payload} />;
   }
+  const cfg = readWorkflowStartDashboardConfig(payload);
+  const sidebarVisible = displayMode === "sidebar"
+    && cfg?.features?.temporalDashboard?.listEnabled !== false;
 
   return (
     <div
       className="workflow-start-workspace workflow-workspace-shell"
-      data-sidebar-collapsed="false"
-      data-workflow-list-display-mode="sidebar"
+      data-sidebar-collapsed={sidebarVisible ? "false" : "true"}
+      data-workflow-list-display-mode={displayMode}
     >
-      <WorkflowWorkspaceSidebarPanel payload={payload} search={search} defaultSource="temporal" />
+      {sidebarVisible ? (
+        <WorkflowWorkspaceSidebarPanel payload={payload} search={search} defaultSource="temporal" />
+      ) : (
+        <div className="workflow-workspace-sidebar-slot" hidden aria-hidden="true" />
+      )}
       <main className="workflow-start-primary" aria-label="Create workflow">
         <WorkflowStartPageContent payload={payload} />
       </main>

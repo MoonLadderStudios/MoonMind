@@ -278,6 +278,63 @@ describe("WorkflowStartPage workflow list display modes", () => {
     );
     expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
   });
+
+  it("keeps Create form state mounted when toggling between sidebar and hidden modes", async () => {
+    const view = renderWorkflowStartPage({
+          ...mockPayload,
+          initialData: {
+            ...(mockPayload.initialData as Record<string, unknown>),
+            workflowListDisplayMode: "sidebar",
+          },
+        });
+
+    expect(await screen.findByRole("complementary", { name: "Workflow navigation" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Preserve this draft while toggling the list." },
+    });
+
+    view.rerender(
+      <MemoryRouter initialEntries={["/workflows/new"]}>
+        <WorkflowStartPage
+          payload={{
+            ...mockPayload,
+            initialData: {
+              ...(mockPayload.initialData as Record<string, unknown>),
+              workflowListDisplayMode: "hidden",
+            },
+          }}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
+    expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(
+      "Preserve this draft while toggling the list.",
+    );
+    expect(document.querySelector(".workflow-start-workspace")?.getAttribute("data-sidebar-collapsed")).toBe("true");
+  });
+
+  it("does not render the Create sidebar when workflow navigation is disabled", () => {
+    renderWorkflowStartPage({
+          ...mockPayload,
+          initialData: {
+            ...(mockPayload.initialData as Record<string, unknown>),
+            dashboardConfig: {
+              ...mockDashboardConfig,
+              features: {
+                temporalDashboard: {
+                  listEnabled: false,
+                },
+              },
+            },
+            workflowListDisplayMode: "sidebar",
+          },
+        });
+
+    expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
+    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
+    expect(document.querySelector(".workflow-start-workspace")?.getAttribute("data-sidebar-collapsed")).toBe("true");
+  });
 });
 
 const mockDashboardConfig = {
