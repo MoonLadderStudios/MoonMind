@@ -5626,7 +5626,12 @@ class MoonMindRunWorkflow:
             )
             if key in compact_context
         }
-        essential_truncated_paths = list(truncated_paths)
+        essential_keys = set(essential_context)
+        essential_truncated_paths = [
+            path
+            for path in truncated_paths
+            if path.split(".", 1)[0].split("[", 1)[0] in essential_keys
+        ]
         essential_context = {
             key: MoonMindRunWorkflow._truncate_json_context_value(
                 value,

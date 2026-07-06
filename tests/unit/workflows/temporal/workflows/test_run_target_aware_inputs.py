@@ -594,7 +594,7 @@ def test_trusted_issue_context_discloses_truncation_in_essential_fallback() -> N
     truncation = parsed["contextTruncation"]
     assert truncation["truncated"] is True
     assert "jiraPresetBrief" in truncation["truncatedKeys"]
-    assert "jiraIssue.descriptionText" in truncation["truncatedKeys"]
+    assert "jiraIssue.descriptionText" not in truncation["truncatedKeys"]
     assert "recover the full content" in instruction
 
 
