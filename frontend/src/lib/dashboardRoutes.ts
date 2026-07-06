@@ -106,7 +106,7 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
     return { page: 'workflows-workspace', dataWidePanel: true, currentPath: path };
   }
   if (path === '/workflows/new') {
-    return { page: 'workflow-start', dataWidePanel: false, currentPath: path };
+    return { page: 'workflow-start', dataWidePanel: true, currentPath: path };
   }
   if (isWorkflowDetailPath(path) && path !== '/workflows/new') {
     return { page: 'workflows-workspace', dataWidePanel: true, currentPath: path };
