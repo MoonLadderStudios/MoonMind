@@ -69,7 +69,7 @@ _PR_RESOLVER_RESULT_PATHS: tuple[Path, ...] = (
     Path("var/pr_resolver/result.json"),
     Path("artifacts/pr_resolver_result.json"),
 )
-_PR_RESOLVER_AUTO_PUBLISH_RESULT_PATH = Path("artifacts/publish_result.json")
+_AUTO_PUBLISH_RESULT_PATH = Path("artifacts/publish_result.json")
 _PR_RESOLVER_ATTEMPTS_DIR = Path("var/pr_resolver/attempts")
 _PR_RESOLVER_FAILURE_STATUSES: frozenset[str] = frozenset(
     {"failed", "blocked", "attempts_exhausted"}
@@ -298,7 +298,7 @@ def _github_repository_from_pr_url(value: str) -> str:
     return ""
 
 
-def _load_pr_resolver_auto_publish_result(
+def _load_auto_publish_result(
     workspace_path: str | None,
 ) -> dict[str, Any] | None:
     """Load agent-written auto-publish evidence from the repo workspace."""
@@ -306,7 +306,7 @@ def _load_pr_resolver_auto_publish_result(
     workspace = str(workspace_path or "").strip()
     if not workspace:
         return None
-    return _load_json_dict(Path(workspace) / _PR_RESOLVER_AUTO_PUBLISH_RESULT_PATH)
+    return _load_json_dict(Path(workspace) / _AUTO_PUBLISH_RESULT_PATH)
 
 
 def _pr_resolver_auto_publish_verification_commands(
@@ -707,7 +707,7 @@ def _derive_pr_resolver_metadata(
     )
     if head_sha:
         metadata["headSha"] = head_sha
-    publish_payload = _load_pr_resolver_auto_publish_result(workspace_path)
+    publish_payload = _load_auto_publish_result(workspace_path)
     if publish_payload is not None:
         publish_result = _normalize_pr_resolver_auto_publish_result(
             publish_payload,
@@ -990,6 +990,10 @@ class ManagedAgentAdapter:
                     record.workspace_path,
                     merge_gate_owned=pr_resolver_merge_gate_owned,
                 )
+                if "publishResult" not in metadata:
+                    publish_payload = _load_auto_publish_result(record.workspace_path)
+                    if publish_payload is not None:
+                        metadata["publishResult"] = publish_payload
                 if pr_resolver_expected:
                     derived_failure_class, derived_summary = _derive_pr_resolver_failure(
                         record.workspace_path,
