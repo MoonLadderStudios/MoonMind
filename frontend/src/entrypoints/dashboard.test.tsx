@@ -1071,6 +1071,19 @@ describe('Dashboard shared entry', () => {
       '.workflow-workspace-sidebar-table > :last-child .workflow-workspace-sidebar-row-frame:last-child',
     );
     expect(sidebarLastRowFrameBlock).toContain('border-bottom: 0');
+
+    const compactTableBlock = cssRuleBlock(dashboardCss, ".queue-table-wrapper[data-density='compact']");
+    expect(compactTableBlock).toContain('--workflow-list-body-row-height: var(--workflow-list-compact-body-row-height)');
+
+    const pinnedListBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-pinned-list');
+    expect(pinnedListBlock).toContain('position: sticky');
+    expect(pinnedListBlock).toContain('top: var(--workflow-list-header-row-height)');
+
+    const pinnedRowTitleBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-workspace-sidebar-row-pinned .workflow-workspace-sidebar-title',
+    );
+    expect(pinnedRowTitleBlock).toContain('-webkit-line-clamp: 1');
   });
 
   it('MM-1116 keeps sidebar/table mode changes aligned and reduced-motion safe', async () => {

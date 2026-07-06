@@ -79,6 +79,7 @@
   --mm-executing-letter-bright: var(--mm-status-shimmer-letter-bright);
   --workflow-list-header-row-height: 2.75rem;
   --workflow-list-body-row-height: 4rem;
+  --workflow-list-compact-body-row-height: 3rem;
   --workflow-list-column-workflow-width: 20rem;
   --workflow-list-divider-width: 1px;
   --workflow-list-divider-color: rgb(var(--mm-border) / 0.72);
@@ -2243,6 +2244,10 @@ tbody tr:hover {
 }
 
 /* MM-964: compact density preference tightens the workflow list rows. */
+.queue-table-wrapper[data-density='compact'] {
+  --workflow-list-body-row-height: var(--workflow-list-compact-body-row-height);
+}
+
 .queue-table-wrapper[data-density='compact'] th,
 .queue-table-wrapper[data-density='compact'] td {
   padding: 0.3rem 0.45rem;
@@ -7409,8 +7414,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-sidebar-pinned-list {
+  position: sticky;
+  top: var(--workflow-list-header-row-height);
+  z-index: 6;
   flex: 0 0 auto;
   overflow: visible;
+  background: rgb(var(--mm-panel) / 0.98);
 }
 
 .workflow-workspace-sidebar-row-frame {
@@ -7447,7 +7456,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-sidebar-row-pinned {
+  padding-block: 0.38rem;
   background: rgb(var(--mm-accent) / 0.06);
+}
+
+.workflow-workspace-sidebar-row-pinned .workflow-workspace-sidebar-title {
+  height: 1.25em;
+  -webkit-line-clamp: 1;
 }
 
 .workflow-workspace-sidebar-row:hover,
@@ -7486,8 +7501,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .workflow-workspace-sidebar-kicker {
   color: rgb(var(--mm-accent));
-  font-size: 0.7rem;
+  font-size: 0.62rem;
   font-weight: 700;
+  line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
