@@ -120,6 +120,8 @@ describe('Workflows Entrypoint', () => {
     const workflowFilter = screen.getByRole('button', {
       name: 'Workflow filter. No filter applied.',
     });
+    const workflowHeader = workflowFilter.closest('.workflow-list-column-header');
+    expect(workflowHeader?.querySelector('.workflow-list-column-header-label')?.textContent).toContain('Workflow');
     fireEvent.click(workflowFilter);
     expect(screen.getByRole('dialog', { name: 'Workflow filter' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Progress filter. No filter applied.' })).toBeTruthy();

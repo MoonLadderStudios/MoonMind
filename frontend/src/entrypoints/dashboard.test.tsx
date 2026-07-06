@@ -1388,6 +1388,8 @@ describe('Dashboard shared entry', () => {
   });
 
   it('enforces MM-961 reduced-motion suppression for the panel entry animation', async () => {
+    expect(cssRuleBlock(dashboardCss, '.panel')).toContain('margin-top: 0;');
+
     const panelReducedMotionBlock = cssRuleBlockMatching(
       dashboardCss,
       (rule) =>
@@ -1908,15 +1910,19 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
     );
+    expect(cssRuleBlock(dashboardCss, '.masthead-brand')).toContain('grid-column: 1;');
     expect(dashboardCss).toMatch(
       /\.workflow-list-display-control\s*\{[^}]*justify-self:\s*start;/s,
     );
+    expect(cssRuleBlock(dashboardCss, '.workflow-list-display-control')).toContain('grid-column: 2;');
     expect(dashboardCss).toMatch(
       /\.masthead-nav\s*\{[^}]*align-self:\s*stretch;[^}]*justify-content:\s*center;[^}]*justify-self:\s*center;/s,
     );
+    expect(cssRuleBlock(dashboardCss, '.masthead-nav')).toContain('grid-column: 3;');
     expect(dashboardCss).toMatch(
       /\.masthead-title-meta\s*\{[^}]*justify-self:\s*end;[^}]*justify-content:\s*flex-end;/s,
     );
+    expect(cssRuleBlock(dashboardCss, '.masthead-title-meta')).toContain('grid-column: 4;');
     expect(cssRuleBlock(dashboardCss, '.masthead-title-meta .version-badge')).toContain('white-space: nowrap;');
   });
 

@@ -22,12 +22,15 @@ import {
   RouteIcon,
   type RouteIconHandle,
 } from 'lucide-animated';
-import { ListFilter } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
+import {
+  WorkflowColumnFilterButton,
+  WorkflowColumnHeader,
+} from '../components/WorkflowColumnHeader';
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { CANONICAL_STEP_STATUSES, StatusIcon } from '../utils/statusIcons';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
@@ -520,22 +523,18 @@ function WorkflowSidebarHeader({
 
   return (
     <header className="workflow-workspace-sidebar-header">
-      <span className="workflow-workspace-sidebar-header-title">Workflow</span>
       <div className="workflow-workspace-sidebar-filter" ref={filterRef}>
-        <button
-          type="button"
-          className={`workflow-list-column-filter-button${active ? ' is-active' : ''}`}
-          aria-label={active ? `Workflow sidebar filter: ${filterText}` : 'Workflow sidebar filter. No filter applied.'}
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          onClick={() => setOpen((value) => !value)}
-        >
-          <ListFilter
-            className="workflow-list-column-filter-icon"
-            size={15}
-            aria-hidden="true"
-          />
-        </button>
+        <WorkflowColumnHeader
+          label={<span className="workflow-workspace-sidebar-header-title">Workflow</span>}
+          filterButton={
+            <WorkflowColumnFilterButton
+              active={active}
+              expanded={open}
+              ariaLabel={active ? `Workflow sidebar filter: ${filterText}` : 'Workflow sidebar filter. No filter applied.'}
+              onClick={() => setOpen((value) => !value)}
+            />
+          }
+        />
         {open ? (
           <div
             className="workflow-workspace-sidebar-filter-popover workflow-list-column-filter-popover"

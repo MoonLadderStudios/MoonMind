@@ -243,6 +243,7 @@ samp {
 .masthead-brand {
   display: inline-flex;
   align-items: center;
+  grid-column: 1;
   justify-self: start;
   gap: 0.55rem;
   min-width: 0;
@@ -281,6 +282,7 @@ samp {
 .workflow-list-display-control {
   display: inline-flex;
   align-items: center;
+  grid-column: 2;
   justify-self: start;
   gap: 0.25rem;
   min-width: 0;
@@ -348,6 +350,7 @@ samp {
 .masthead-title-meta {
   display: flex;
   align-items: center;
+  grid-column: 4;
   justify-self: end;
   justify-content: flex-end;
   flex-wrap: nowrap;
@@ -462,6 +465,7 @@ h1 {
 .masthead-nav {
   position: relative;
   display: flex;
+  grid-column: 3;
   align-self: stretch;
   justify-content: center;
   justify-self: center;
@@ -575,7 +579,7 @@ h1 {
 }
 
 .panel {
-  margin-top: 1rem;
+  margin-top: 0;
   margin-left: auto;
   margin-right: auto;
   max-width: min(72rem, calc(100vw - 2rem));
@@ -903,6 +907,14 @@ h1 {
   min-width: 0;
 }
 
+.workflow-list-column-header-label {
+  min-width: 0;
+  color: rgb(var(--mm-ink));
+  font-size: 0.82rem;
+  font-weight: 720;
+  line-height: 1.2;
+}
+
 .workflow-list-column-filter {
   position: relative;
   flex: 0 0 auto;
@@ -912,8 +924,8 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.65rem;
-  height: 1.65rem;
+  width: 2rem;
+  height: 2rem;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 0.45rem;
@@ -937,9 +949,9 @@ h1 {
 
 .workflow-list-column-filter-icon {
   display: block;
-  width: 0.82rem;
-  height: 0.82rem;
-  fill: currentColor;
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke-width: 2;
 }
 
 .workflow-list-column-filter-popover {
@@ -7307,14 +7319,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-sidebar-header-title {
-  color: rgb(var(--mm-ink));
-  font-size: 0.82rem;
-  font-weight: 720;
+  color: inherit;
+  font: inherit;
 }
 
 .workflow-workspace-sidebar-filter {
   position: relative;
-  display: inline-flex;
+  display: block;
+  width: 100%;
 }
 
 .workflow-workspace-sidebar-filter-popover {
