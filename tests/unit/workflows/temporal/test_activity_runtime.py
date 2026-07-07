@@ -122,6 +122,9 @@ async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -
     assert '"reattempt_current_step"' in prepared
     assert '`FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"' in prepared
     assert "raw diagnostic" in prepared
+    assert "map-entry" in prepared
+    assert "missing map assets" in prepared
+    assert "non-blocking limitations" in prepared
 
 
 async def test_prepare_managed_codex_turn_appends_vocab_when_path_already_present() -> None:
@@ -139,6 +142,7 @@ async def test_prepare_managed_codex_turn_appends_vocab_when_path_already_presen
     assert '"FULLY_IMPLEMENTED"' in prepared
     assert '"advance"' in prepared
     assert "workflow-specific destination" in prepared
+    assert "external-service checks as advisory" in prepared
 
 
 async def test_codex_skill_payload_rejects_auto_publish_mode() -> None:
