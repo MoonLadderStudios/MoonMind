@@ -6356,11 +6356,11 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
 
     assert response.status_code == 201
     called_kwargs = service.create_execution.await_args.kwargs
-    assert called_kwargs["title"] == "feature/resolve-pr"
+    assert called_kwargs["title"] == "PR Resolver: feature/resolve-pr"
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    assert initial_parameters["workflow"]["title"] == "feature/resolve-pr"
+    assert initial_parameters["workflow"]["title"] == "PR Resolver: feature/resolve-pr"
     assert initial_parameters["workflow"]["git"] == {
         "startingBranch": "feature/resolve-pr",
     }
@@ -6392,9 +6392,9 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_non_default_git_br
 
     assert response.status_code == 201
     called_kwargs = service.create_execution.await_args.kwargs
-    assert called_kwargs["title"] == "feature/resolve-pr"
+    assert called_kwargs["title"] == "PR Resolver: feature/resolve-pr"
     initial_parameters = called_kwargs["initial_parameters"]
-    assert initial_parameters["workflow"]["title"] == "feature/resolve-pr"
+    assert initial_parameters["workflow"]["title"] == "PR Resolver: feature/resolve-pr"
     assert initial_parameters["workflow"]["git"] == {
         "branch": "feature/resolve-pr",
     }
@@ -6429,6 +6429,110 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_numeric_pr_selecto
         "initial_parameters"
     ]
     assert initial_parameters["workflow"]["inputs"] == {"pr": 2733}
+
+
+def test_create_task_shaped_execution_synthesizes_generic_title(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "title": "Run",
+                    "runtime": {"mode": "claude_code"},
+                    "tool": {
+                        "type": "skill",
+                        "name": "jira-verify",
+                        "inputs": {"issueKey": "KANDY-123"},
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    assert called_kwargs["title"] == "Jira Verify: KANDY-123"
+    initial_parameters = called_kwargs["initial_parameters"]
+    assert initial_parameters["workflow"]["title"] == "Jira Verify: KANDY-123"
+
+
+def test_create_task_shaped_execution_synthesizes_issue_pr_title_without_repo(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "title": "Run",
+                    "runtime": {"mode": "claude_code"},
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "tool": {
+                        "type": "skill",
+                        "name": "jira-pr-verify",
+                        "inputs": {
+                            "issueKey": "KANDY-123",
+                            "pullRequestUrl": "https://github.com/org/repo/pull/456",
+                            "repository": "org/repo",
+                        },
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    assert called_kwargs["title"] == "Jira PR Verify: KANDY-123 — PR #456"
+    initial_parameters = called_kwargs["initial_parameters"]
+    assert (
+        initial_parameters["workflow"]["title"]
+        == "Jira PR Verify: KANDY-123 — PR #456"
+    )
+
+
+def test_create_task_shaped_execution_keeps_meaningful_title_after_synthesis(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "title": "Verify auth redirect fix",
+                    "runtime": {"mode": "claude_code"},
+                    "tool": {
+                        "type": "skill",
+                        "name": "jira-pr-verify",
+                        "inputs": {
+                            "issueKey": "KANDY-123",
+                            "pullRequestUrl": "https://github.com/org/repo/pull/456",
+                        },
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    assert called_kwargs["title"] == "Verify auth redirect fix"
+    initial_parameters = called_kwargs["initial_parameters"]
+    assert initial_parameters["workflow"]["title"] == "Verify auth redirect fix"
 
 
 def _pentest_workflow_payload(
@@ -7555,9 +7659,9 @@ def test_create_task_shaped_execution_derives_pr_resolver_title_from_tool_inputs
 
     assert response.status_code == 201
     called_kwargs = service.create_execution.await_args.kwargs
-    assert called_kwargs["title"] == "feature/from-tool-inputs"
+    assert called_kwargs["title"] == "PR Resolver: feature/from-tool-inputs"
     initial_parameters = called_kwargs["initial_parameters"]
-    assert initial_parameters["workflow"]["title"] == "feature/from-tool-inputs"
+    assert initial_parameters["workflow"]["title"] == "PR Resolver: feature/from-tool-inputs"
 
 def test_create_task_shaped_execution_once_schedule_sets_start_delay(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
