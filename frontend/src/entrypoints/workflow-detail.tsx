@@ -14,7 +14,7 @@ import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
-import { ExecutionStatusPill, StepLedgerStatusPill } from '../components/ExecutionStatusPill';
+import { ExecutionStatusPill, StepExecutionStatusPill, StepLedgerStatusPill } from '../components/ExecutionStatusPill';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { CANONICAL_STEP_STATUSES, StatusIcon } from '../utils/statusIcons';
@@ -4496,7 +4496,7 @@ function StepExecutionHistoryRow({
     <li className="step-execution-history-item">
       <div className="step-execution-history-head">
         <span className="step-execution-pill">Execution {execution.executionOrdinal}</span>
-        <ExecutionStatusPill status={execution.status} />
+        <StepExecutionStatusPill status={execution.status} />
         <span className="step-timing-chip">{executionTimingLabel(execution)}</span>
         <span className="step-execution-reason">{formatStatusLabel(execution.reason)}</span>
         {downstreamInvalidated ? (

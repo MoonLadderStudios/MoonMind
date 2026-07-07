@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ExecutionStatusPill } from './ExecutionStatusPill';
+import { ExecutionStatusPill, StepExecutionStatusPill } from './ExecutionStatusPill';
 
 describe('ExecutionStatusPill', () => {
   afterEach(() => {
@@ -44,5 +44,22 @@ describe('ExecutionStatusPill', () => {
     render(<ExecutionStatusPill status="awaiting_external" />);
 
     expect(screen.getByText('Awaiting external').className).toContain('status-awaiting-external');
+  });
+
+  it('keeps step execution artifact statuses visible in execution history', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    render(
+      <>
+        <StepExecutionStatusPill status="running" />
+        <StepExecutionStatusPill status="checking" />
+        <StepExecutionStatusPill status="succeeded" />
+      </>,
+    );
+
+    expect(screen.getByText('Running').className).toContain('status-running');
+    expect(screen.getByText('Checking').className).toContain('status-running');
+    expect(screen.getByText('Succeeded').className).toContain('status-completed');
+    expect(warn).not.toHaveBeenCalled();
   });
 });

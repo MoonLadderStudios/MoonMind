@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   STEP_EXECUTION_STATUS_KEYS,
   STEP_LEDGER_STATUS_KEYS,
+  formatStepExecutionStatusLabel,
   formatStepStatusLabel,
+  stepExecutionStatusPillProps,
   stepStatusPillProps,
 } from './stepStatus';
 
@@ -31,7 +33,7 @@ describe('step status helpers', () => {
     }
   });
 
-  it('keeps step execution artifact-only statuses out of step ledger helpers', () => {
+  it('keeps step execution artifact-only statuses visible through execution helpers', () => {
     expect(STEP_EXECUTION_STATUS_KEYS).toEqual([
       'pending',
       'preparing',
@@ -47,6 +49,8 @@ describe('step status helpers', () => {
     ]);
 
     for (const status of STEP_EXECUTION_STATUS_KEYS) {
+      expect(formatStepExecutionStatusLabel(status, 'Unknown')).not.toBe('Unknown');
+      expect(stepExecutionStatusPillProps(status).className).toContain('status');
       if ((STEP_LEDGER_STATUS_KEYS as readonly string[]).includes(status)) {
         expect(formatStepStatusLabel(status, 'Unknown')).not.toBe('Unknown');
         expect(stepStatusPillProps(status).className).toContain('status');
@@ -75,6 +79,22 @@ describe('step status helpers', () => {
     expect(stepStatusPillProps('completed')).toEqual({ className: 'status status-completed' });
     expect(stepStatusPillProps('failed')).toEqual({ className: 'status status-failed' });
     expect(stepStatusPillProps('skipped')).toEqual({ className: 'status status-neutral' });
+  });
+
+  it('formats step execution artifact statuses with visible labels', () => {
+    expect(formatStepExecutionStatusLabel('preparing')).toBe('Preparing');
+    expect(formatStepExecutionStatusLabel('running')).toBe('Running');
+    expect(formatStepExecutionStatusLabel('checking')).toBe('Checking');
+    expect(formatStepExecutionStatusLabel('succeeded')).toBe('Succeeded');
+    expect(formatStepExecutionStatusLabel('blocked')).toBe('Blocked');
+    expect(formatStepExecutionStatusLabel('superseded')).toBe('Superseded');
+
+    expect(stepExecutionStatusPillProps('preparing')).toEqual({ className: 'status status-scheduled' });
+    expect(stepExecutionStatusPillProps('running')).toEqual({ className: 'status status-running' });
+    expect(stepExecutionStatusPillProps('checking')).toEqual({ className: 'status status-running' });
+    expect(stepExecutionStatusPillProps('succeeded')).toEqual({ className: 'status status-completed' });
+    expect(stepExecutionStatusPillProps('blocked')).toEqual({ className: 'status status-failed' });
+    expect(stepExecutionStatusPillProps('superseded')).toEqual({ className: 'status status-neutral' });
   });
 
   it('rejects workflow-only, artifact-only, and prototype keys with neutral diagnostics', () => {
