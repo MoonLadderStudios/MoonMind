@@ -140,6 +140,7 @@ def _admin_profile(**overrides):
     return RemediationSecurityProfile(**data)
 
 CANONICAL_REMEDIATION_ACTIONS = {
+    "checkpoint_branch.create_from_remediation_context",
     "execution.pause",
     "execution.resume",
     "execution.request_rerun_same_workflow",

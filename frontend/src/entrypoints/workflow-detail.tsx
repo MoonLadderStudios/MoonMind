@@ -44,7 +44,6 @@ import {
 import { workflowWorkspaceRowFromDetail } from '../lib/workflowWorkspaceList';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
-  buildRemediationRuntimeRequestFields,
   buildWorkflowActionMenuItems,
   DEFAULT_REMEDIATION_ACTION_POLICY,
   DEFAULT_REMEDIATION_AUTHORITY,
@@ -53,6 +52,10 @@ import {
   isRemediationEligibleTarget,
   type WorkflowActionMenuItem,
 } from '../lib/workflowActions';
+import {
+  buildRemediationCreateDraft,
+  navigateToRemediationCreateDraft,
+} from '../lib/remediationCreateDraft';
 import {
   projectChatSessionBlocks,
   type ChatBlock as ProjectedChatBlock,
@@ -7229,38 +7232,20 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const createRemediationMutation = useMutation({
     mutationFn: async () => {
-      const response = await fetch(`${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          repository: execution?.repository ?? null,
-          ...buildRemediationRuntimeRequestFields(execution),
-          instructions: `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
-          remediation: {
-            mode: remediationMode,
-            authorityMode: remediationAuthority,
-            target: {
-              runId: latestRunId || runId || undefined,
-            },
-            actionPolicyRef: remediationActionPolicy.trim() || undefined,
-            evidencePolicy: {
-              includeStepLedger: true,
-              includeDiagnostics: true,
-              tailLines: 2000,
-            },
-            trigger: { type: 'manual' },
-          },
-        }),
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+      if (!execution) {
+        throw new Error('Workflow detail is required before remediation can be drafted.');
       }
-      return response.json();
+      const draft = buildRemediationCreateDraft(execution, {
+        mode: remediationMode,
+        authorityMode: remediationAuthority,
+        actionPolicyRef: remediationActionPolicy,
+        runId: latestRunId || runId,
+      });
+      navigateToRemediationCreateDraft(draft);
+      return { draft };
     },
     onSuccess: () => {
-      setActionNotice('Remediation workflow creation submitted.');
-      invalidate();
+      setActionNotice('Remediation draft opened in Create.');
     },
     onError: (error: Error) => setActionError(error.message),
   });

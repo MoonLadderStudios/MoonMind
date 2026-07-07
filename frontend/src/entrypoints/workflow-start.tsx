@@ -29,6 +29,11 @@ import {
 } from "../lib/workflowListDisplayMode";
 import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowWorkspaceSidebar";
 import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
+import {
+  clearRemediationCreateDraft,
+  readRemediationCreateDraft,
+  type RemediationCreateDraft,
+} from "../lib/remediationCreateDraft";
 
 type WorkflowStartDashboardConfig = {
   features?: {
@@ -5771,6 +5776,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [templateFeatureRequest, setTemplateFeatureRequest] = useState("");
   const [selectedDependencyWorkflowId, setSelectedDependencyWorkflowId] = useState("");
   const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
+  const [remediationDraft, setRemediationDraft] = useState<RemediationCreateDraft | null>(null);
+  const remediationDraftIdRef = useRef<string | null>(null);
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
@@ -5862,6 +5869,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const prevRuntimeRef = useRef(runtime);
   const prevProviderProfileRef = useRef(providerProfile);
   const temporalDraftAppliedRef = useRef<string | null>(null);
+  const remediationDraftAppliedRef = useRef<string | null>(null);
   const jiraProjectSelectionInitializedRef = useRef(false);
   const jiraBoardSelectionInitializedRef = useRef(false);
   const initialRouteGuardSnapshotRef = useRef<string>("");
@@ -6247,6 +6255,61 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     pageMode.mode,
     temporalDraftQuery.data,
   ]);
+
+  useEffect(() => {
+    if (pageMode.mode !== "create") {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("intent") !== "remediate") {
+      return;
+    }
+    const draftId = String(params.get("draftId") || "").trim();
+    if (!draftId || remediationDraftAppliedRef.current === draftId) {
+      return;
+    }
+    const draft = readRemediationCreateDraft(draftId);
+    if (!draft) {
+      setSubmitMessage("The remediation draft is no longer available. Open Remediate from the target workflow again.");
+      return;
+    }
+
+    remediationDraftAppliedRef.current = draftId;
+    remediationDraftIdRef.current = draftId;
+    setRemediationDraft(draft);
+    setRepository(draft.repository || "MoonLadderStudios/MoonMind");
+    if (draft.branch) {
+      setBranch(draft.branch);
+      setBranchTouched(false);
+    }
+    if (draft.publishMode) {
+      setPublishMode(normalizePublishModeForSubmit(draft.publishMode));
+    }
+    if (draft.runtime?.mode) {
+      prevRuntimeRef.current = draft.runtime.mode;
+      setRuntime(draft.runtime.mode);
+    }
+    if (draft.runtime?.profileId) {
+      prevProviderProfileRef.current = draft.runtime.profileId;
+      setProviderProfile(draft.runtime.profileId);
+    }
+    if (draft.runtime?.model) {
+      setModel(draft.runtime.model);
+      setModelManualOverride(true);
+    }
+    if (draft.runtime?.effort) {
+      setEffort(draft.runtime.effort);
+    }
+    if (draft.instructions) {
+      setSteps([
+        createStepStateEntry(1, {
+          title: "Remediate target workflow",
+          instructions: draft.instructions,
+        }),
+      ]);
+      setNextStepNumber(2);
+    }
+  }, [pageMode.mode, setSubmitMessage]);
 
   const dependencyOptionsQuery = useQuery({
     queryKey: ["workflow-start", "dependency-options", temporalListEndpoint],
@@ -10368,6 +10431,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ? { dependsOn: selectedDependencies }
         : {}),
     };
+    if (remediationDraft) {
+      taskPayload.remediation = remediationDraft.remediation;
+    }
 
     const requestBody: Record<string, unknown> = {
       type: "task",
@@ -10611,6 +10677,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           linkType: "input.attachment",
           label: attachment.filename,
         });
+      }
+      if (remediationDraftIdRef.current) {
+        clearRemediationCreateDraft(remediationDraftIdRef.current);
+        remediationDraftIdRef.current = null;
       }
       const redirectPath =
         String(created.redirectPath || "").trim() ||
@@ -11046,6 +11116,54 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           disabled={isTemporalFormBlocked}
           aria-busy={isTemporalFormBlocked}
         >
+        {remediationDraft ? (
+          <section
+            className="card queue-remediation-draft-summary stack"
+            aria-label="Remediation draft"
+            data-jira-issue="MM-1119"
+          >
+            <div className="queue-section-heading">
+              <div>
+                <h2>Remediation Draft</h2>
+                <p className="small">
+                  Target {remediationDraft.target.title || remediationDraft.target.workflowId}
+                </p>
+              </div>
+            </div>
+            <div className="grid-2">
+              <label>
+                Target workflow
+                <input value={remediationDraft.target.workflowId} readOnly />
+              </label>
+              <label>
+                Pinned run
+                <input value={remediationDraft.target.runId} readOnly />
+              </label>
+              <label>
+                Remediation mode
+                <input value={remediationDraft.remediation.mode} readOnly />
+              </label>
+              <label>
+                Authority
+                <input value={remediationDraft.remediation.authorityMode} readOnly />
+              </label>
+              <label>
+                Action policy
+                <input value={remediationDraft.remediation.actionPolicyRef || ""} readOnly />
+              </label>
+              <label>
+                Checkpoint refs
+                <input
+                  value={String(remediationDraft.target.stepSelectors?.length || 0)}
+                  readOnly
+                />
+              </label>
+            </div>
+            <p className="small">
+              Evidence preview: recovery, incident, step ledger, checkpoint branch, adapter, diagnostics, and linked artifact refs.
+            </p>
+          </section>
+        ) : null}
         <section
           className="card queue-steps-section stack"
           data-canonical-create-section="Steps"

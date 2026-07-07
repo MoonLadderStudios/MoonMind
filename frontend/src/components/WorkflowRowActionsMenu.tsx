@@ -12,16 +12,16 @@ import {
   taskEditHref,
 } from '../lib/temporalTaskEditing';
 import {
-  buildRemediationRuntimeRequestFields,
   buildWorkflowActionMenuItems,
-  DEFAULT_REMEDIATION_ACTION_POLICY,
-  DEFAULT_REMEDIATION_AUTHORITY,
-  DEFAULT_REMEDIATION_MODE,
   ExecutionActionsSchema,
   isRemediationEligibleTarget,
   type WorkflowActionMenuItem,
 } from '../lib/workflowActions';
 import { WorkflowActionsMenu } from './WorkflowActionsMenu';
+import {
+  buildRemediationCreateDraft,
+  navigateToRemediationCreateDraft,
+} from '../lib/remediationCreateDraft';
 
 /**
  * Focused projection of the execution detail payload. The row actions menu only
@@ -291,34 +291,13 @@ export function WorkflowRowActionsMenu({
 
   const createRemediationMutation = useMutation({
     mutationFn: async () => {
-      const response = await fetch(`${apiBase}/executions/${encodeURIComponent(workflowId)}/remediation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          repository: execution?.repository ?? null,
-          ...buildRemediationRuntimeRequestFields(execution),
-          instructions: `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
-          remediation: {
-            mode: DEFAULT_REMEDIATION_MODE,
-            authorityMode: DEFAULT_REMEDIATION_AUTHORITY,
-            target: { runId: runId || undefined },
-            actionPolicyRef: DEFAULT_REMEDIATION_ACTION_POLICY,
-            evidencePolicy: {
-              includeStepLedger: true,
-              includeDiagnostics: true,
-              tailLines: 2000,
-            },
-            trigger: { type: 'manual' },
-          },
-        }),
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+      if (!execution) {
+        throw new Error('Workflow detail is required before remediation can be drafted.');
       }
-      return response.json();
+      const draft = buildRemediationCreateDraft(execution, { runId });
+      navigateToRemediationCreateDraft(draft);
+      return { draft };
     },
-    onSuccess: invalidate,
     onError: onMutationError,
   });
 
