@@ -90,9 +90,38 @@ describe('resolveWorkflowListDisplay', () => {
     });
   });
 
-  it('preserves detail subroutes when switching only between hidden and sidebar', () => {
+  it.each(['chat', 'overview', 'steps', 'artifacts', 'runs', 'debug'])(
+    'preserves the %s detail subroute when switching only between hidden and sidebar',
+    (subroute) => {
+      const pathname = subroute === 'chat' ? '/workflows/mm%3A123/chat' : `/workflows/mm%3A123/${subroute}`;
+      expect(resolveWorkflowListDisplay({
+        pathname,
+        search: '?source=temporal',
+        requestedMode: 'hidden',
+      })).toMatchObject({
+        effectiveMode: 'hidden',
+        surface: 'workflow-detail',
+        routeAction: 'none',
+        primarySurface: 'workflow-detail',
+        listSurface: 'none',
+        selection: { workflowId: 'mm:123', source: 'route' },
+        targetPath: `${pathname}?source=temporal`,
+      });
+
+      expect(resolveWorkflowListDisplay({
+        pathname,
+        requestedMode: 'sidebar',
+      })).toMatchObject({
+        effectiveMode: 'sidebar',
+        routeAction: 'none',
+        targetPath: pathname,
+      });
+    },
+  );
+
+  it('preserves the default detail route when switching only between hidden and sidebar', () => {
     expect(resolveWorkflowListDisplay({
-      pathname: '/workflows/mm%3A123/steps',
+      pathname: '/workflows/mm%3A123',
       search: '?source=temporal',
       requestedMode: 'hidden',
     })).toMatchObject({
@@ -102,16 +131,16 @@ describe('resolveWorkflowListDisplay', () => {
       primarySurface: 'workflow-detail',
       listSurface: 'none',
       selection: { workflowId: 'mm:123', source: 'route' },
-      targetPath: '/workflows/mm%3A123/steps?source=temporal',
+      targetPath: '/workflows/mm%3A123?source=temporal',
     });
 
     expect(resolveWorkflowListDisplay({
-      pathname: '/workflows/mm%3A123/steps',
+      pathname: '/workflows/mm%3A123',
       requestedMode: 'sidebar',
     })).toMatchObject({
       effectiveMode: 'sidebar',
       routeAction: 'none',
-      targetPath: '/workflows/mm%3A123/steps',
+      targetPath: '/workflows/mm%3A123',
     });
   });
 

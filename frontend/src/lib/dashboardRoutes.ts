@@ -1,4 +1,5 @@
 import type { BootPayload } from '../boot/parseBootPayload';
+import { WORKFLOW_DETAIL_SUBROUTES } from './workflowDetailRoutes';
 
 export type DashboardPage =
   | 'index-health'
@@ -33,7 +34,7 @@ export type DashboardUiInfo = {
 
 const DETAIL_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const WORKFLOW_ID_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:{}-]{0,254}$/;
-const WORKFLOW_DETAIL_TABS = new Set(['steps', 'artifacts', 'runs', 'debug']);
+const WORKFLOW_DETAIL_TABS = new Set<string>(WORKFLOW_DETAIL_SUBROUTES);
 
 function withoutTrailingSlash(pathname: string): string {
   return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
