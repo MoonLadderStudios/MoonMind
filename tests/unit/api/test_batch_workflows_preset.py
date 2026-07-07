@@ -89,6 +89,7 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
                 "max_workflows",
                 "constraints",
                 "run_verify",
+                "update_jira_status_on_pass",
                 "additional_jql",
                 "repository",
                 "publish_mode",
@@ -109,6 +110,9 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
                 "skill:jira-verify",
                 "preset:jira-implement",
             ]
+            assert (
+                schema["properties"]["update_jira_status_on_pass"]["default"] is False
+            )
 
             assert schema["properties"]["publish_mode"]["enum"] == [
                 "none",
@@ -122,6 +126,7 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             assert ui_schema["run_ref"]["widget"] == "select"
             assert ui_schema["constraints"] == {"widget": "textarea", "advanced": True}
             assert ui_schema["run_verify"] == {"widget": "checkbox"}
+            assert ui_schema["update_jira_status_on_pass"] == {"widget": "checkbox"}
             assert ui_schema["additional_jql"] == {
                 "widget": "textarea",
                 "advanced": True,
@@ -142,6 +147,10 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             assert (
                 bindings["skill:jira-verify"]["repository"]
                 == "{{ target.repository }}"
+            )
+            assert (
+                bindings["skill:jira-verify"]["update_status"]
+                == "{{ shared.update_jira_status_on_pass }}"
             )
             assert (
                 bindings["preset:jira-implement"]["jira_issue"]
@@ -206,6 +215,7 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
                     "publish_mode": "none",
                     "constraints": "Be careful",
                     "run_verify": False,
+                    "update_jira_status_on_pass": True,
                     "additional_jql": "assignee = currentUser()",
                     "repository": "MoonLadderStudios/MoonMind",
                     "max_workflows": "10",
@@ -238,6 +248,7 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             assert orchestration["maxWorkflows"] == "10"
             assert orchestration["sharedInputs"]["constraints"] == "Be careful"
             assert orchestration["sharedInputs"]["run_verify"] is False
+            assert orchestration["sharedInputs"]["update_jira_status_on_pass"] is True
             assert (
                 orchestration["summaryArtifact"]
                 == "artifacts/batch-workflows-result.json"
@@ -248,6 +259,7 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             assert "runtimeInheritance" in step["instructions"]
             assert "--no-run-verify" in step["instructions"]
             assert " --run-verify" not in step["instructions"]
+            assert "--update-jira-status-on-pass" in step["instructions"]
 
             assert "git" in expanded["capabilities"]
             assert "gh" in expanded["capabilities"]

@@ -102,6 +102,18 @@ def test_bind_child_inputs_jira_verify_auto_binds_issue_object_and_key():
     assert inputs["constraints"] == "Be careful"
 
 
+def test_bind_child_inputs_jira_verify_can_enable_status_update_on_pass():
+    module = _load_module()
+    inputs = module["bind_child_inputs"](
+        _JIRA_TARGET,
+        "skill",
+        "jira-verify",
+        "Be careful",
+        update_jira_status_on_pass=True,
+    )
+    assert inputs["update_status"] is True
+
+
 def test_bind_child_inputs_jira_verify_uses_fallback_repository_when_missing():
     module = _load_module()
     no_repo_target = dict(_JIRA_TARGET)
@@ -230,6 +242,7 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     assert payload["task"]["publish"] == {"mode": "none"}
     assert payload["repository"] == "MoonLadderStudios/MoonMind"
     assert payload["task"]["inputs"]["jira_issue_key"] == "THOR-123"
+    assert payload["task"]["inputs"]["update_status"] is False
     assert payload["requiredCapabilities"] == ["git", "jira"]
     # The selected skill is authored as a direct skill task.
     assert payload["task"]["tool"] == {"type": "skill", "name": "jira-verify"}
@@ -323,6 +336,24 @@ def test_parse_args_accepts_run_ref_without_preset_version(tmp_path):
     assert not hasattr(args, "target_preset_version")
 
 
+def test_parse_args_accepts_update_jira_status_on_pass_flag(tmp_path):
+    module = _load_module()
+    targets = tmp_path / "targets.json"
+    targets.write_text("[]", encoding="utf-8")
+
+    args = module["_parse_args"](
+        [
+            "--targets",
+            str(targets),
+            "--run-ref",
+            "skill:jira-verify",
+            "--update-jira-status-on-pass",
+        ]
+    )
+
+    assert args.update_jira_status_on_pass is True
+
+
 def test_build_child_request_without_caller_omits_inheritance_directive():
     module = _load_module()
     runtime = module["RuntimeSelection"](mode="claude_code")
@@ -355,6 +386,20 @@ def test_build_child_request_maps_merge_automation_publish_mode_to_contract():
         "mode": "pr",
         "mergeAutomation": {"enabled": True},
     }
+
+
+def test_build_child_request_passes_jira_verify_status_update_flag():
+    module = _load_module()
+    request = module["build_child_request"](
+        _JIRA_TARGET,
+        config=_jira_config(module, update_jira_status_on_pass=True),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+
+    assert request is not None
+    assert request["payload"]["task"]["inputs"]["update_status"] is True
 
 
 def test_build_child_requests_caps_at_max_workflows():

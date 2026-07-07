@@ -41,6 +41,8 @@ Progress" with a single batch run.
 - `constraints` (string, optional): shared input copied to every child.
 - `run_verify` (boolean, optional): shared verification toggle copied to child
   implement presets. Default `true`.
+- `update_jira_status_on_pass` (boolean, optional): copied to `jira-verify`
+  child workflows as `update_status`. Default `false`.
 - `additional_jql` (string, optional): advanced JQL AND-clause appended to the
   project/status query.
 - `repository` (string, optional): repository override when workflow context
@@ -82,6 +84,7 @@ Progress" with a single batch run.
      --publish-mode <none|branch|pr|pr_with_merge_automation> \
      --constraints-file <optional path to shared constraints> \
      --run-verify | --no-run-verify \
+     --update-jira-status-on-pass | --no-update-jira-status-on-pass \
      --max-workflows <cap>
    ```
 

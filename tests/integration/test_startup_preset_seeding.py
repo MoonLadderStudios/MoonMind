@@ -796,15 +796,26 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "preset:jira-implement",
         ]
         assert batch_schema["properties"]["run_verify"]["default"] is True
+        assert (
+            batch_schema["properties"]["update_jira_status_on_pass"]["default"]
+            is False
+        )
         assert "source_kind" not in batch_schema["properties"]
         assert "target_preset_slug" not in batch_schema["properties"]
         assert "target_preset_version" not in batch_schema["properties"]
         assert batch_annotations["uiSchema"]["run_ref"]["widget"] == "select"
         assert batch_annotations["uiSchema"]["constraints"]["widget"] == "textarea"
         assert batch_annotations["uiSchema"]["run_verify"]["widget"] == "checkbox"
+        assert (
+            batch_annotations["uiSchema"]["update_jira_status_on_pass"]["widget"]
+            == "checkbox"
+        )
         assert batch_annotations["bindings"]["skill:jira-verify"][
             "jira_issue_key"
         ] == "{{ target.jiraIssue.key }}"
+        assert batch_annotations["bindings"]["skill:jira-verify"][
+            "update_status"
+        ] == "{{ shared.update_jira_status_on_pass }}"
         assert batch_annotations["bindings"]["preset:jira-implement"][
             "jira_issue_key"
         ] == "{{ target.jiraIssue.key }}"
@@ -834,6 +845,12 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert (
             batch_steps[0]["batchOrchestration"]["sharedInputs"]["run_verify"]
             == "{{ inputs.run_verify }}"
+        )
+        assert (
+            batch_steps[0]["batchOrchestration"]["sharedInputs"][
+                "update_jira_status_on_pass"
+            ]
+            == "{{ inputs.update_jira_status_on_pass }}"
         )
 
 @pytest.mark.asyncio
