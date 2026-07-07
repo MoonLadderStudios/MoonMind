@@ -8564,14 +8564,18 @@ def _derive_task_title(
     normalized_tool: Mapping[str, Any] | None = None,
     normalized_steps: Sequence[Mapping[str, Any]] = (),
 ) -> str | None:
-    synthesized = synthesize_workflow_title(
-        current_title=task_payload.get("title"),
-        task_payload=task_payload,
-        normalized_tool=normalized_tool,
-        normalized_steps=normalized_steps,
-    )
-    if synthesized:
-        return synthesized
+    current_title = str(task_payload.get("title") or "").strip()
+    if current_title and not is_generic_title(current_title):
+        return current_title[:_MAX_TASK_TITLE_LENGTH]
+    if normalized_tool is not None or normalized_steps:
+        synthesized = synthesize_workflow_title(
+            current_title=current_title,
+            task_payload=task_payload,
+            normalized_tool=normalized_tool,
+            normalized_steps=normalized_steps,
+        )
+        if synthesized:
+            return synthesized
     raw_steps = task_payload.get("steps")
     if isinstance(raw_steps, list):
         for item in raw_steps:
