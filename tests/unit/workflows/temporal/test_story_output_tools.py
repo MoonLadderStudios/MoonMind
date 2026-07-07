@@ -607,6 +607,42 @@ async def test_update_jira_issue_status_accepts_bold_previous_assessment_verdict
 
 
 @pytest.mark.asyncio
+async def test_update_jira_issue_status_accepts_underscore_wrapped_assessment_verdict(
+    tmp_path,
+) -> None:
+    service = _FakeJiraService()
+    service.issue_responses["MM-1125"] = {
+        "key": "MM-1125",
+        "fields": {"status": {"id": "1", "name": "Backlog"}},
+    }
+    service.transition_responses["MM-1125"] = {
+        "key": "MM-1125",
+        "fields": {"status": {"id": "3", "name": "In Progress"}},
+    }
+    service.transitions_response = {
+        "transitions": [
+            {"id": "31", "name": "In Progress", "to": {"name": "In Progress"}}
+        ]
+    }
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1125",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": str(tmp_path / "missing-assessment.json"),
+            "previousOutputs": {
+                "lastAssistantText": "Assessment complete: __PARTIALLY_IMPLEMENTED__.",
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "transitioned"
+    assert service.transition_requests[0].transition_id == "31"
+
+
+@pytest.mark.asyncio
 async def test_update_jira_issue_status_accepts_single_quoted_previous_verdict(
     tmp_path,
 ) -> None:
