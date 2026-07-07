@@ -33,10 +33,12 @@ annotations:
       jira_issue: '{{ target.jiraIssue }}'
       jira_issue_key: '{{ target.jiraIssue.key }}'
       constraints: '{{ shared.constraints }}'
+      run_verify: '{{ shared.run_verify }}'
     preset:github-issue-implement:
       github_issue: '{{ target.githubIssue }}'
       github_issue_ref: '{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}'
       constraints: '{{ shared.constraints }}'
+      run_verify: '{{ shared.run_verify }}'
   inputSchema:
     type: object
     required:
@@ -65,6 +67,11 @@ annotations:
       constraints:
         type: string
         title: Extra instructions / constraints
+      run_verify:
+        type: boolean
+        title: Run verification
+        description: Run verification in child implement workflows.
+        default: true
       additional_jql:
         type: string
         title: Additional JQL filter
@@ -87,6 +94,8 @@ annotations:
     constraints:
       widget: textarea
       advanced: true
+    run_verify:
+      widget: checkbox
     additional_jql:
       widget: textarea
       advanced: true
@@ -98,6 +107,7 @@ annotations:
   defaults:
     run_ref: skill:jira-verify
     max_workflows: '25'
+    run_verify: true
     publish_mode: none
 inputs:
 - name: jira_project_key
@@ -128,6 +138,11 @@ inputs:
   type: textarea
   required: false
   default: ''
+- name: run_verify
+  label: Run Verification
+  type: boolean
+  required: false
+  default: true
 - name: additional_jql
   label: Additional JQL Filter
   type: textarea
@@ -203,6 +218,7 @@ steps:
       runRef: '{{ inputs.run_ref }}'
     sharedInputs:
       constraints: '{{ inputs.constraints }}'
+      run_verify: '{{ inputs.run_verify }}'
     publish:
       mode: '{{ inputs.publish_mode }}'
     runtime:

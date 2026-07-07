@@ -567,6 +567,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "jira_board_id" not in {
             item["name"] for item in composite_template.inputs_schema
         }
+        assert "run_verify" in {
+            item["name"] for item in composite_template.inputs_schema
+        }
         assert [
             (step.get("skill") or step.get("tool"))["id"]
             for step in composite_template.steps
@@ -592,6 +595,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
             },
         }
+        assert downstream_step["jiraOrchestration"]["task"]["inputs"] == {
+            "run_verify": "{{ inputs.run_verify }}"
+        }
 
         result = await session.execute(
             select(Preset)
@@ -606,6 +612,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert implement_composite_template is not None
         assert implement_composite_template.title == "Breakdown and Jira Implement"
         assert "jira_board_id" not in {
+            item["name"] for item in implement_composite_template.inputs_schema
+        }
+        assert "run_verify" in {
             item["name"] for item in implement_composite_template.inputs_schema
         }
         assert [
@@ -635,6 +644,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
             },
         }
+        assert implement_downstream_step["jiraOrchestration"]["task"]["inputs"] == {
+            "run_verify": "{{ inputs.run_verify }}"
+        }
 
         for slug, title, downstream_skill in (
             (
@@ -659,6 +671,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             github_breakdown_template = result.scalar_one_or_none()
             assert github_breakdown_template is not None
             assert github_breakdown_template.title == title
+            assert "run_verify" in {
+                item["name"] for item in github_breakdown_template.inputs_schema
+            }
             assert [
                 (step.get("skill") or step.get("tool"))["id"]
                 for step in github_breakdown_template.steps
@@ -681,6 +696,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             assert github_downstream_step["githubOrchestration"]["task"]["publish"] == {
                 "mode": "{{ inputs.publish_mode }}",
             }
+            assert github_downstream_step["githubOrchestration"]["task"]["inputs"] == {
+                "run_verify": "{{ inputs.run_verify }}"
+            }
             assert github_downstream_step["githubOrchestration"]["traceability"] == {
                 "sourceIssueKey": "{{ inputs.source_issue_key }}"
             }
@@ -699,6 +717,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert final_status_step["tool"]["id"] == "github.update_issue_status"
         assert final_status_step["tool"]["inputs"]["verificationArtifactPath"] == (
             "var/artifacts/moonspec-verify/github-issue-orchestrate.json"
+        )
+        assert final_status_step["tool"]["inputs"]["requireVerification"] == (
+            "{{ inputs.run_verify }}"
         )
 
         result = await session.execute(
@@ -774,20 +795,28 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "skill:jira-verify",
             "preset:jira-implement",
         ]
+        assert batch_schema["properties"]["run_verify"]["default"] is True
         assert "source_kind" not in batch_schema["properties"]
         assert "target_preset_slug" not in batch_schema["properties"]
         assert "target_preset_version" not in batch_schema["properties"]
         assert batch_annotations["uiSchema"]["run_ref"]["widget"] == "select"
         assert batch_annotations["uiSchema"]["constraints"]["widget"] == "textarea"
+        assert batch_annotations["uiSchema"]["run_verify"]["widget"] == "checkbox"
         assert batch_annotations["bindings"]["skill:jira-verify"][
             "jira_issue_key"
         ] == "{{ target.jiraIssue.key }}"
         assert batch_annotations["bindings"]["preset:jira-implement"][
             "jira_issue_key"
         ] == "{{ target.jiraIssue.key }}"
+        assert batch_annotations["bindings"]["preset:jira-implement"][
+            "run_verify"
+        ] == "{{ shared.run_verify }}"
         assert batch_annotations["bindings"]["preset:github-issue-implement"][
             "github_issue_ref"
         ] == "{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}"
+        assert batch_annotations["bindings"]["preset:github-issue-implement"][
+            "run_verify"
+        ] == "{{ shared.run_verify }}"
         batch_steps = batch_template.steps
         assert len(batch_steps) == 1
         assert batch_steps[0]["skill"]["id"] == "batch-workflows"
@@ -801,6 +830,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert (
             batch_steps[0]["batchOrchestration"]["target"]["runRef"]
             == "{{ inputs.run_ref }}"
+        )
+        assert (
+            batch_steps[0]["batchOrchestration"]["sharedInputs"]["run_verify"]
+            == "{{ inputs.run_verify }}"
         )
 
 @pytest.mark.asyncio

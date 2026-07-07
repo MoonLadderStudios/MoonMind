@@ -124,10 +124,12 @@ def test_bind_child_inputs_jira_implement_preset_auto_binds_issue_object_and_key
         "preset",
         "jira-implement",
         "Be careful",
+        run_verify=False,
     )
     assert inputs["jira_issue"]["key"] == "THOR-123"
     assert inputs["jira_issue_key"] == "THOR-123"
     assert inputs["constraints"] == "Be careful"
+    assert inputs["run_verify"] is False
     assert "verification_mode" not in inputs
 
 
@@ -138,10 +140,12 @@ def test_bind_child_inputs_github_auto_binds_issue_object_and_ref():
         "preset",
         "github-issue-implement",
         "",
+        run_verify=False,
     )
     assert inputs["github_issue"]["number"] == 42
     assert inputs["github_issue_ref"] == "MoonLadderStudios/MoonMind#42"
     assert inputs["constraints"] == ""
+    assert inputs["run_verify"] is False
 
 
 def test_bind_child_inputs_returns_none_for_provider_mismatch():

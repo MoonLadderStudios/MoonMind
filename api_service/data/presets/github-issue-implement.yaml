@@ -71,13 +71,19 @@ annotations:
             type: array
             items:
               type: string
+      run_verify:
+        type: boolean
+        title: Run verification
+        description: Run the MoonSpec verification and remediation gate before pull request creation and GitHub issue handoff.
+        default: true
   uiSchema:
     github_issue:
       widget: github.issue-picker
       dataSource: github.issues
       searchPlaceholder: Search GitHub issues
       allowManualIssueEntry: true
-  defaults: {}
+  defaults:
+    run_verify: true
 inputs:
 - name: github_issue_ref
   label: GitHub Issue Reference
@@ -89,6 +95,11 @@ inputs:
   type: textarea
   required: false
   default: ''
+- name: run_verify
+  label: Run Verification
+  type: boolean
+  required: false
+  default: true
 steps:
 - title: Load GitHub issue brief
   type: tool
@@ -179,6 +190,7 @@ steps:
     verification_target: issue_brief
     remediation_max_attempts: '6'
     constraints: '{{ inputs.constraints }}'
+    run_verify: '{{ inputs.run_verify }}'
 - title: Finalize GitHub issue status
   type: tool
   instructions: 'Read artifacts/github-issue-implement-assessment.json (or the recorded
@@ -187,15 +199,21 @@ steps:
 
     If the recorded verdict is BLOCKED, stop without changing GitHub and report the
     blocking evidence. If the recorded verdict is FULLY_IMPLEMENTED, apply the configured
-    Done strategy. Otherwise read artifacts/github-issue-implement-verify.json and
-    require the latest controlling verifier result to report FULLY_IMPLEMENTED before
-    any Code Review update. Then read artifacts/github-issue-implement-pr.json, verify
-    it contains a pull_request_url for {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
-    }}, and apply the configured Code Review strategy with the pull request URL.
-    If the verifier artifact is missing, terminal, or still reports ADDITIONAL_WORK_NEEDED
-    after remediation is exhausted, stop without changing GitHub. Do not assume a
-    single organization''s workflow; use the configured label/comment/close strategy
-    exposed by the trusted GitHub update tool.'
+    Done strategy. Otherwise {% if inputs.run_verify %}read artifacts/github-issue-implement-verify.json
+    and require the latest controlling verifier result to report FULLY_IMPLEMENTED
+    before any Code Review update.{% else %}confirm implementation is complete and
+    the focused tests required by the issue have passed. Verification was disabled
+    for this workflow execution, so do not require artifacts/github-issue-implement-verify.json
+    or a moonspec-verify verdict before any Code Review update.{% endif %} Then
+    read artifacts/github-issue-implement-pr.json, verify it contains a pull_request_url
+    for {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}, and
+    apply the configured Code Review strategy with the pull request URL. {% if inputs.run_verify
+    %}If the verifier artifact is missing, terminal, or still reports ADDITIONAL_WORK_NEEDED
+    after remediation is exhausted, stop without changing GitHub.{% else %}If the
+    pull request artifact is missing or lacks a confirmed pull_request_url, stop
+    without changing GitHub.{% endif %} Do not assume a single organization''s workflow;
+    use the configured label/comment/close strategy exposed by the trusted GitHub
+    update tool.'
   tool:
     id: github.update_issue_status
     requiredCapabilities:
@@ -206,3 +224,4 @@ steps:
       mode: finalize_after_pr_or_done
       pullRequestArtifactPath: artifacts/github-issue-implement-pr.json
       verificationArtifactPath: artifacts/github-issue-implement-verify.json
+      requireVerification: '{{ inputs.run_verify }}'

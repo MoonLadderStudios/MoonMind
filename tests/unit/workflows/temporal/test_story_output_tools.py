@@ -359,6 +359,39 @@ async def test_update_github_issue_status_blocks_code_review_without_verificatio
 
 
 @pytest.mark.asyncio
+async def test_update_github_issue_status_allows_code_review_without_verification_when_disabled(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "requireVerification": False,
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert "mode code_review" in result.outputs["summary"]
+    assert service.token_requests == [
+        "MoonLadderStudios/MoonMind",
+        "MoonLadderStudios/MoonMind",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_update_github_issue_status_uses_previous_verification_payload(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1455,6 +1488,7 @@ async def test_create_github_issue_workflows_from_issue_mappings():
                 },
                 "task": {
                     "runtime": {"mode": "codex"},
+                    "inputs": {"run_verify": False},
                     "publish": {"mode": "pr"},
                 },
             },
@@ -1483,6 +1517,7 @@ async def test_create_github_issue_workflows_from_issue_mappings():
         "number": 11,
         "title": "First story",
     }
+    assert workflow["inputs"]["run_verify"] is False
     assert workflow["inputs"]["github_issue_ref"] == "MoonLadderStudios/MoonMind#11"
     assert "Source issue: MM-1063." in workflow["instructions"]
     assert "Source canonical claim IDs: DESIGN-REQ-007." in workflow["instructions"]
@@ -3669,6 +3704,7 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
             "task": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
+                "inputs": {"run_verify": False},
                 "publish": {
                     "mode": "pr",
                     "mergeAutomation": {"enabled": True},
@@ -3719,6 +3755,7 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
         "key": "MM-501",
         "summary": "First",
     }
+    assert first_parameters["workflow"]["inputs"]["run_verify"] is False
     assert "jira_issue_key" not in first_parameters["workflow"]["inputs"]
     assert "merge_automation" not in first_parameters["workflow"]["publish"]
     assert "MM-404" in first_parameters["workflow"]["instructions"]

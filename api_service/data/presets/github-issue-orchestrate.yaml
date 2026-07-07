@@ -71,13 +71,19 @@ annotations:
             type: array
             items:
               type: string
+      run_verify:
+        type: boolean
+        title: Run verification
+        description: Run the MoonSpec verification and remediation gate before pull request creation and GitHub issue handoff.
+        default: true
   uiSchema:
     github_issue:
       widget: github.issue-picker
       dataSource: github.issues
       searchPlaceholder: Search GitHub issues
       allowManualIssueEntry: true
-  defaults: {}
+  defaults:
+    run_verify: true
   jiraIssue: MM-1067
   sourceReference: MM-1063
 inputs:
@@ -96,6 +102,11 @@ inputs:
   type: textarea
   required: false
   default: ''
+- name: run_verify
+  label: Run Verification
+  type: boolean
+  required: false
+  default: true
 steps:
 - title: Load GitHub issue brief
   type: tool
@@ -278,6 +289,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify completion
+  enabled: '{{ inputs.run_verify }}'
   instructions: '/clear
 
 
@@ -303,6 +315,7 @@ steps:
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate verification gaps 1 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 1
@@ -342,6 +355,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 1 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 1
@@ -372,6 +386,7 @@ steps:
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate verification gaps 2 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 2
@@ -411,6 +426,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 2 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 2
@@ -441,6 +457,7 @@ steps:
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate verification gaps 3 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 3
@@ -480,6 +497,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 3 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 3
@@ -510,6 +528,7 @@ steps:
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate verification gaps 4 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 4
@@ -549,6 +568,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 4 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 4
@@ -579,6 +599,7 @@ steps:
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate verification gaps 5 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 5
@@ -618,6 +639,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 5 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 5
@@ -648,6 +670,7 @@ steps:
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate verification gaps 6 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-remediation
     moonSpecRemediationAttempt: 6
@@ -687,6 +710,7 @@ steps:
     requiredCapabilities:
     - git
 - title: Verify remediation 6 of 6
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 6
@@ -715,6 +739,7 @@ steps:
     args:
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Reconcile declarative docs
+  enabled: '{{ inputs.run_verify }}'
   annotations:
     jiraOrchestrateRole: doc-reconciliation
   instructions: '/clear
@@ -786,11 +811,14 @@ steps:
     }}#{{ inputs.github_issue.number }}.
 
 
-    Before committing, inspect the latest post-remediation moonspec-verify result and confirm
-    the verdict is FULLY_IMPLEMENTED. If the latest verdict is ADDITIONAL_WORK_NEEDED, NO_DETERMINATION,
-    BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, stop without
-    committing, pushing, creating a pull request, or changing GitHub issue status. Classify
-    runtime or infrastructure causes as environment failure.
+    {% if inputs.run_verify %}Before committing, inspect the latest post-remediation moonspec-verify
+    result and confirm the verdict is FULLY_IMPLEMENTED. If the latest verdict is ADDITIONAL_WORK_NEEDED,
+    NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
+    stop without committing, pushing, creating a pull request, or changing GitHub issue status.
+    Classify runtime or infrastructure causes as environment failure.{% else %}Before committing,
+    confirm implementation is complete and the focused tests required by the GitHub issue have
+    passed. Verification was disabled for this workflow execution, so do not require a moonspec-verify
+    report before creating a pull request.{% endif %}
 
 
     This GitHub Issue Orchestrate handoff step is the explicit PR-publication step for this
@@ -826,22 +854,25 @@ steps:
 
     - the active MoonSpec feature path
 
-    - verification verdict
+    - verification verdict, or a note that verification was disabled for this workflow execution
 
     - tests run
 
     - remaining risks
 
-    - the doc reconciliation outcome from artifacts/github-issue-orchestrate-doc-reconcile.json
+    - {% if inputs.run_verify %}the doc reconciliation outcome from artifacts/github-issue-orchestrate-doc-reconcile.json
     when present: updated canonical doc paths, the no-update rationale, or the escalation
-    issue reference
+    issue reference{% else %}a note that doc reconciliation was skipped because verification
+    was disabled{% endif %}
 
     - a Documentation Conformance section listing canonical sources, temporary artifacts consulted,
     claim coverage, and reconciliation outcomes
 
 
-    Canonical doc edits produced by the doc reconciliation step are intentional changes for
-    this issue and must be committed in the same pull request.
+    {% if inputs.run_verify %}Canonical doc edits produced by the doc reconciliation step
+    are intentional changes for this issue and must be committed in the same pull request.{% else
+    %}Do not require doc reconciliation output before committing because verification was
+    disabled and the doc reconciliation step was skipped.{% endif %}
 
 
     After creation and non-draft verification, record the confirmed pull request URL in the
@@ -867,13 +898,16 @@ steps:
     apply the configured Done strategy.
 
 
-    Otherwise read artifacts/github-issue-orchestrate-pr.json, verify it contains a pull_request_url
-    for {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}, and apply the
-    configured Code Review strategy with the pull request URL. Before using the trusted GitHub
-    update tool, confirm the latest post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED;
-    terminal verifier outcomes such as ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED,
-    FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION must stop before
-    this status update. Do not assume a single organization workflow; use the configured label/comment/close
+    Otherwise {% if inputs.run_verify %}before using the trusted GitHub update tool, confirm
+    the latest post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED; terminal
+    verifier outcomes such as ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE,
+    or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION must stop before this status update.{% else
+    %}confirm implementation is complete and the focused tests required by the GitHub issue
+    have passed. Verification was disabled for this workflow execution, so do not require
+    a moonspec-verify report before this status update.{% endif %} Then read artifacts/github-issue-orchestrate-pr.json,
+    verify it contains a pull_request_url for {{ inputs.github_issue.repository }}#{{
+    inputs.github_issue.number }}, and apply the configured Code Review strategy with the
+    pull request URL. Do not assume a single organization workflow; use the configured label/comment/close
     strategy exposed by the trusted GitHub update tool.'
   tool:
     id: github.update_issue_status
@@ -885,3 +919,4 @@ steps:
       mode: finalize_after_pr_or_done
       pullRequestArtifactPath: artifacts/github-issue-orchestrate-pr.json
       verificationArtifactPath: var/artifacts/moonspec-verify/github-issue-orchestrate.json
+      requireVerification: '{{ inputs.run_verify }}'

@@ -96,6 +96,7 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
         "source_design_path",
         "github_repository",
         "publish_mode",
+        "run_verify",
         "source_issue_key",
     ]
     assert [
@@ -134,6 +135,9 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
     assert downstream_step["githubOrchestration"]["task"]["publish"] == {
         "mode": "{{ inputs.publish_mode }}",
     }
+    assert downstream_step["githubOrchestration"]["task"]["inputs"] == {
+        "run_verify": "{{ inputs.run_verify }}",
+    }
 
 
 async def test_github_issue_breakdown_implement_expands_downstream_contract(tmp_path):
@@ -166,6 +170,9 @@ async def test_github_issue_breakdown_implement_expands_downstream_contract(tmp_
         "MoonLadderStudios/MoonMind"
     )
     assert steps[3]["githubOrchestration"]["task"]["runtime"]["mode"] == "codex"
+    assert steps[3]["githubOrchestration"]["task"]["inputs"] == {
+        "run_verify": True
+    }
     assert steps[3]["githubOrchestration"]["traceability"] == {
         "sourceIssueKey": "MM-1063"
     }

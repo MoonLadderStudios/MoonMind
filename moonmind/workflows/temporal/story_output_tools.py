@@ -1392,6 +1392,7 @@ def _downstream_task_payload(
     )
     runtime = _mapping(task_payload.get("runtime"))
     publish = _mapping(task_payload.get("publish"))
+    configured_inputs = dict(_mapping(task_payload.get("inputs")))
     merge_automation_value = (
         task_payload.get("mergeAutomation")
         or task_payload.get("merge_automation")
@@ -1419,6 +1420,7 @@ def _downstream_task_payload(
         "title": f"Run {preset_label} for {issue_key}: {summary}",
         "instructions": instructions,
         "inputs": {
+            **configured_inputs,
             "jira_issue": jira_issue_input,
             "source_design_path": source_design_path,
             "source_claim_ids": source_claim_ids,
@@ -1845,6 +1847,7 @@ def _github_downstream_workflow_payload(
     )
     runtime = _mapping(task_payload.get("runtime"))
     publish = _mapping(task_payload.get("publish"))
+    configured_inputs = dict(_mapping(task_payload.get("inputs")))
     github_issue_input = _github_issue_input_from_mapping(
         mapping=mapping,
         repository=repository,
@@ -1855,6 +1858,7 @@ def _github_downstream_workflow_payload(
         "title": f"Run {preset_label} for {github_issue_ref}: {summary}",
         "instructions": instructions,
         "inputs": {
+            **configured_inputs,
             "github_issue": github_issue_input,
             "github_issue_ref": github_issue_ref,
             "source_design_path": source_design_path,
@@ -4718,6 +4722,12 @@ def _github_status_pull_request_url(
     )
 
 
+def _github_status_requires_verification(inputs: Mapping[str, Any]) -> bool:
+    if "requireVerification" not in inputs:
+        return True
+    return _truthy(inputs.get("requireVerification"))
+
+
 async def update_github_issue_status(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -4731,6 +4741,7 @@ async def update_github_issue_status(
         _context,
     )
     issue_ref = f"{repository}#{issue_number}"
+    require_verification = _github_status_requires_verification(inputs)
     if mode in {"start", "in_progress"} and (
         inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path")
     ):
@@ -4765,7 +4776,7 @@ async def update_github_issue_status(
             )
     pull_request_url = _github_status_pull_request_url(inputs, _context)
     if mode == "finalize_after_pr_or_done":
-        if pull_request_url:
+        if pull_request_url and require_verification:
             if not (
                 inputs.get("verificationArtifactPath")
                 or inputs.get("verification_artifact_path")

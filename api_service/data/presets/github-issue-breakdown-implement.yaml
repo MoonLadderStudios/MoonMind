@@ -39,6 +39,11 @@ inputs:
       - pr
       - branch
       - none
+  - name: run_verify
+    label: Run Verification
+    type: boolean
+    required: false
+    default: true
   - name: source_issue_key
     label: Source Issue Key
     type: text
@@ -128,6 +133,8 @@ steps:
         repository: "{{ inputs.github_repository }}"
         runtime:
           mode: "{{ context.targetRuntime }}"
+        inputs:
+          run_verify: "{{ inputs.run_verify }}"
         publish:
           mode: "{{ inputs.publish_mode }}"
       traceability:

@@ -2722,6 +2722,9 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
             assert downstream_step["jiraOrchestration"]["task"]["runtime"] == {
                 "mode": "claude_code"
             }
+            assert downstream_step["jiraOrchestration"]["task"]["inputs"] == {
+                "run_verify": True
+            }
             assert downstream_step["jiraOrchestration"]["task"]["publish"] == {
                 "mode": "pr",
                 "mergeAutomation": {"enabled": False},
@@ -2821,6 +2824,9 @@ async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
             assert expanded["steps"][4]["jiraOrchestration"]["task"]["runtime"] == (
                 {"mode": "claude_code"}
             )
+            assert expanded["steps"][4]["jiraOrchestration"]["task"]["inputs"] == {
+                "run_verify": True
+            }
 
 async def test_jira_breakdown_uses_seeded_default_when_multiple_allowed_without_repo_policy(
     tmp_path,
@@ -3185,6 +3191,11 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
+            template = await service.get_template(
+                slug="github-issue-implement",
+                scope="global",
+                scope_ref=None,
+            )
             expanded = await service.expand_template(
                 slug="github-issue-implement",
                 scope="global",
@@ -3198,7 +3209,31 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
                 },
                 context={},
             )
+            no_verify = await service.expand_template(
+                slug="github-issue-implement",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 123,
+                    },
+                    "constraints": "",
+                    "run_verify": False,
+                },
+                context={},
+            )
 
+    assert template["annotations"]["inputSchema"]["properties"]["run_verify"] == {
+        "type": "boolean",
+        "title": "Run verification",
+        "description": "Run the MoonSpec verification and remediation gate before pull request creation and GitHub issue handoff.",
+        "default": True,
+    }
+    assert template["annotations"]["defaults"]["run_verify"] is True
+    assert next(item for item in template["inputs"] if item["name"] == "run_verify")[
+        "default"
+    ] is True
     assert [step["title"] for step in expanded["steps"]] == [
         "Load GitHub issue brief",
         "Assess existing implementation state",
@@ -3295,6 +3330,20 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert expanded["steps"][19]["tool"]["inputs"]["verificationArtifactPath"] == (
         "artifacts/github-issue-implement-verify.json"
     )
+    assert expanded["steps"][19]["tool"]["inputs"]["requireVerification"] is True
+    no_verify_titles = [step["title"] for step in no_verify["steps"]]
+    assert no_verify_titles == [
+        "Load GitHub issue brief",
+        "Assess existing implementation state",
+        "Check GitHub issue blockers before implementation",
+        "Mark GitHub issue In Progress",
+        "Implement the issue",
+        "Create pull request",
+        "Finalize GitHub issue status",
+    ]
+    assert "Verification was disabled" in no_verify["steps"][-2]["instructions"]
+    assert "Verification was disabled" in no_verify["steps"][-1]["instructions"]
+    assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
         "github-issue-implement",
         "issue-implement-assessment",
@@ -3374,6 +3423,11 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
                 scope=PresetScopeType.GLOBAL,
                 scope_ref=None,
             )
+            template_payload = await service.get_template(
+                slug="github-issue-orchestrate",
+                scope="global",
+                scope_ref=None,
+            )
             expanded = await service.expand_template(
                 slug="github-issue-orchestrate",
                 scope="global",
@@ -3388,7 +3442,32 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
                 },
                 context={},
             )
+            no_verify = await service.expand_template(
+                slug="github-issue-orchestrate",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 1067,
+                        "url": "https://github.com/MoonLadderStudios/MoonMind/issues/1067",
+                    },
+                    "constraints": "Keep preset scope bounded.",
+                    "run_verify": False,
+                },
+                context={},
+            )
 
+    assert template_payload["annotations"]["inputSchema"]["properties"]["run_verify"][
+        "type"
+    ] == "boolean"
+    assert template_payload["annotations"]["inputSchema"]["properties"]["run_verify"][
+        "default"
+    ] is True
+    assert template_payload["annotations"]["defaults"]["run_verify"] is True
+    assert next(
+        item for item in template_payload["inputs"] if item["name"] == "run_verify"
+    )["default"] is True
     assert [step["title"] for step in expanded["steps"]] == [
         "Load GitHub issue brief",
         "Assess existing implementation state",
@@ -3443,6 +3522,7 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "mode": "finalize_after_pr_or_done",
         "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
         "verificationArtifactPath": "var/artifacts/moonspec-verify/github-issue-orchestrate.json",
+        "requireVerification": True,
     }
     assert expanded["steps"][10]["skill"]["id"] == "moonspec-verify"
     assert expanded["steps"][10]["skill"]["args"]["verify_artifact_path"] == (
@@ -3508,6 +3588,25 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
     assert expanded["appliedTemplate"]["inputs"]["github_issue_ref"] == (
         "MoonLadderStudios/MoonMind#1067"
     )
+    no_verify_titles = [step["title"] for step in no_verify["steps"]]
+    assert no_verify_titles == [
+        "Load GitHub issue brief",
+        "Assess existing implementation state",
+        "Check GitHub issue blockers before orchestration",
+        "Classify request and resume point",
+        "Mark GitHub issue In Progress",
+        "Create or select MoonSpec",
+        "Plan selected spec",
+        "Generate TDD task breakdown",
+        "Align MoonSpec artifacts",
+        "Implement the task breakdown",
+        "Create pull request",
+        "Finalize GitHub issue status",
+    ]
+    assert all("moonspec-verify" != step["skill"]["id"] for step in no_verify["steps"] if "skill" in step)
+    assert "Verification was disabled" in no_verify["steps"][-2]["instructions"]
+    assert "Verification was disabled" in no_verify["steps"][-1]["instructions"]
+    assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
 
 
 async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
@@ -3607,6 +3706,7 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
             assert downstream["jiraOrchestration"]["task"] == {
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
+                "inputs": {"run_verify": True},
                 "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
             }
             assert downstream["jiraOrchestration"]["traceability"]["sourceIssueKey"] == (
@@ -3724,6 +3824,7 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
     assert downstream["jiraOrchestration"]["task"] == {
         "repository": "MoonLadderStudios/MoonMind",
         "runtime": {"mode": "codex_cli"},
+        "inputs": {"run_verify": True},
         "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
     }
     assert downstream["jiraOrchestration"]["traceability"] == {
@@ -3836,6 +3937,11 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
             assert "orchestration_mode" not in {
                 item["name"] for item in template_payload["inputs"]
             }
+            assert next(
+                item
+                for item in template_payload["inputs"]
+                if item["name"] == "run_verify"
+            )["default"] is True
 
             expanded = await service.expand_template(
                 slug="moonspec-orchestrate",
@@ -3846,6 +3952,18 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                     "orchestration_mode": "docs",
                     "source_design_path": "",
                     "constraints": "Keep the scope narrow.",
+                },
+                context={},
+            )
+            no_verify = await service.expand_template(
+                slug="moonspec-orchestrate",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "feature_request": "MM-366: Simplify Orchestrate Summary",
+                    "source_design_path": "",
+                    "constraints": "Keep the scope narrow.",
+                    "run_verify": False,
                 },
                 context={},
             )
@@ -3874,6 +3992,13 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 step["title"] != "Return orchestration report and defer publish actions"
                 for step in expanded["steps"]
             )
+            assert [step["title"] for step in no_verify["steps"]] == [
+                "Create or select MoonSpec",
+                "Plan selected spec",
+                "Generate TDD task breakdown",
+                "Align MoonSpec artifacts",
+                "Implement the task breakdown",
+            ]
 
             expanded_with_source_design = await service.expand_template(
                 slug="moonspec-orchestrate",

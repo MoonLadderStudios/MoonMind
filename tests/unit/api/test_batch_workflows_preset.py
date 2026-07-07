@@ -88,6 +88,7 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
                 "run_ref",
                 "max_workflows",
                 "constraints",
+                "run_verify",
                 "additional_jql",
                 "repository",
                 "publish_mode",
@@ -120,6 +121,7 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             ui_schema = annotations["uiSchema"]
             assert ui_schema["run_ref"]["widget"] == "select"
             assert ui_schema["constraints"] == {"widget": "textarea", "advanced": True}
+            assert ui_schema["run_verify"] == {"widget": "checkbox"}
             assert ui_schema["additional_jql"] == {
                 "widget": "textarea",
                 "advanced": True,
@@ -148,6 +150,14 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             assert (
                 bindings["preset:jira-implement"]["jira_issue_key"]
                 == "{{ target.jiraIssue.key }}"
+            )
+            assert (
+                bindings["preset:jira-implement"]["run_verify"]
+                == "{{ shared.run_verify }}"
+            )
+            assert (
+                bindings["preset:github-issue-implement"]["run_verify"]
+                == "{{ shared.run_verify }}"
             )
             assert (
                 bindings["preset:github-issue-implement"]["github_issue"]
@@ -195,6 +205,7 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
                     "run_ref": "skill:jira-verify",
                     "publish_mode": "none",
                     "constraints": "Be careful",
+                    "run_verify": False,
                     "additional_jql": "assignee = currentUser()",
                     "repository": "MoonLadderStudios/MoonMind",
                     "max_workflows": "10",
@@ -226,6 +237,7 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             assert orchestration["runtime"]["inherit"] == "caller"
             assert orchestration["maxWorkflows"] == "10"
             assert orchestration["sharedInputs"]["constraints"] == "Be careful"
+            assert orchestration["sharedInputs"]["run_verify"] is False
             assert (
                 orchestration["summaryArtifact"]
                 == "artifacts/batch-workflows-result.json"
