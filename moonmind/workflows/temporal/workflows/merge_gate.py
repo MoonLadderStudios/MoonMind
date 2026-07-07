@@ -51,6 +51,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_attempts=5,
 )
 MERGE_AUTOMATION_RESOLVER_PRIORITY = 10
+DEFAULT_RESOLVER_TIMEOUT_SECONDS = 9000
 _TOKEN_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(token|password|authorization|cookie)=\S+"
 )
@@ -330,6 +331,13 @@ def build_resolver_run_request(
         runtime_payload["model"] = runtime_model
     if runtime_effort:
         runtime_payload["effort"] = runtime_effort
+    timeout_policy = (
+        dict(template["timeoutPolicy"])
+        if isinstance(template.get("timeoutPolicy"), Mapping)
+        else {}
+    )
+    if timeout_policy.get("timeout_seconds") is None:
+        timeout_policy["timeout_seconds"] = DEFAULT_RESOLVER_TIMEOUT_SECONDS
     initial_parameters: dict[str, Any] = {
         "repo": pr.repo,
         "repository": pr.repo,
@@ -345,7 +353,9 @@ def build_resolver_run_request(
             "skill": {"id": "pr-resolver", "args": args},
             "runtime": runtime_payload,
             "publish": {"mode": "auto"},
+            "timeoutPolicy": dict(timeout_policy),
         },
+        "timeoutPolicy": dict(timeout_policy),
         "workspaceSpec": {
             "repository": pr.repo,
             "branch": pr.head_branch,
