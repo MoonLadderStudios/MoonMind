@@ -8554,10 +8554,10 @@ def _derive_task_title(
     instructions = str(task_payload.get("instructions") or "").strip()
     if not instructions:
         return None
-    first_line = instructions.splitlines()[0].strip()
-    if not first_line:
+    normalized = " ".join(instructions[: _MAX_TASK_TITLE_LENGTH * 2].split())
+    if not normalized:
         return None
-    return first_line[:_MAX_TASK_TITLE_LENGTH]
+    return normalized[:_MAX_TASK_TITLE_LENGTH]
 
 def _derive_workflow_summary(
     task_payload: dict[str, Any], input_artifact_ref: str | None

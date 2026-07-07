@@ -110,6 +110,7 @@ const PENTEST_VALIDATE_ACTIONS = [
 ];
 const PRESET_REAPPLY_REQUIRED_MESSAGE =
   "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.";
+const MAX_EXPLICIT_TITLE_LENGTH = 150;
 export const WORKFLOW_START_HEADING_QUOTES = [
   "What's the mission?",
   "Make it so",
@@ -151,6 +152,29 @@ export function workflowStartFormSnapshot(form: HTMLFormElement | null): string 
     }
   }
   return values.sort().join("\n");
+}
+
+export function deriveExplicitWorkflowTitle(sourceValue: string): string | undefined {
+  const source = sourceValue.trim();
+  if (!source) {
+    return undefined;
+  }
+  const normalized = source
+    .slice(0, MAX_EXPLICIT_TITLE_LENGTH * 2)
+    .split(/\s+/)
+    .join(" ")
+    .trim();
+  if (!normalized) {
+    return undefined;
+  }
+  // Strip markdown heading prefix (e.g., "# Title" -> "Title")
+  const cleaned = normalized.replace(/^#+\s*/, "").trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  return cleaned.length > MAX_EXPLICIT_TITLE_LENGTH
+    ? `${cleaned.slice(0, MAX_EXPLICIT_TITLE_LENGTH).trimEnd()}…`
+    : cleaned;
 }
 
 function workflowStartFormChanged(initialSnapshot: string): boolean {
@@ -10227,29 +10251,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     // Address: Gemini r3034477058 (trim before split), Copilot r3034495920
     // (derive from objectiveInstructions), Codex r3034482711 / Copilot r3034495938
     // (clamp to backend max of 150).
-    const _MAX_EXPLICIT_TITLE_LENGTH = 150;
-
     const explicitTitle = ((): string | undefined => {
       // Prefer the resolved objective text (which already falls back through
       // feature request, primary instructions, and template inputs) so that
       // preset-driven tasks derive titles from the same source the backend
       // would fall back to.
-      const source = objectiveInstructions.trim();
-      if (!source) {
-        return undefined;
-      }
-      const firstLine = source.split('\n')[0]?.trim();
-      if (!firstLine) {
-        return undefined;
-      }
-      // Strip markdown heading prefix (e.g., "# Title" -> "Title")
-      const cleaned = firstLine.replace(/^#+\s*/, '').trim();
-      if (!cleaned) {
-        return undefined;
-      }
-      return cleaned.length > _MAX_EXPLICIT_TITLE_LENGTH
-        ? `${cleaned.slice(0, _MAX_EXPLICIT_TITLE_LENGTH).trimEnd()}…`
-        : cleaned;
+      return deriveExplicitWorkflowTitle(objectiveInstructions);
     })();
 
     // Only include task-level agent skill selectors for real instruction bundles.
