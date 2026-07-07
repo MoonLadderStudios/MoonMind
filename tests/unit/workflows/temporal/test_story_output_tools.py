@@ -634,8 +634,17 @@ async def test_update_jira_issue_status_accepts_bold_previous_assessment_verdict
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "assistant_text",
+    [
+        "Assessment complete. Verdict: `PARTIALLY_IMPLEMENTED`.",
+        "Assessment complete! Verdict: `PARTIALLY_IMPLEMENTED`.",
+        "Assessment complete? Verdict: `PARTIALLY_IMPLEMENTED`.",
+    ],
+)
 async def test_update_jira_issue_status_accepts_sentence_previous_assessment_verdict(
     tmp_path,
+    assistant_text,
 ) -> None:
     service = _FakeJiraService()
     service.issue_responses["MM-1125"] = {
@@ -658,9 +667,7 @@ async def test_update_jira_issue_status_accepts_sentence_previous_assessment_ver
             "targetStatus": "In Progress",
             "assessmentArtifactPath": str(tmp_path / "missing-assessment.json"),
             "previousOutputs": {
-                "lastAssistantText": (
-                    "Assessment complete. Verdict: `PARTIALLY_IMPLEMENTED`."
-                ),
+                "lastAssistantText": assistant_text,
             },
         },
         jira_service_factory=lambda: service,
@@ -3317,7 +3324,7 @@ async def test_check_jira_blockers_preserves_sentence_previous_assessment_verdic
             "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
             "previousOutputs": {
                 "lastAssistantText": (
-                    "Assessment complete. Verdict: `PARTIALLY_IMPLEMENTED`."
+                    "Assessment complete! Verdict: `PARTIALLY_IMPLEMENTED`."
                 ),
             },
         },
@@ -3435,7 +3442,7 @@ async def test_jira_implement_status_update_uses_blocker_preserved_assessment_ve
             "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
             "previousOutputs": {
                 "lastAssistantText": (
-                    "Assessment complete. Verdict: `PARTIALLY_IMPLEMENTED`."
+                    "Assessment complete? Verdict: `PARTIALLY_IMPLEMENTED`."
                 ),
             },
         },
