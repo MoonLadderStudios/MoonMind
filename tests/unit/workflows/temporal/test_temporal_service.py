@@ -4114,8 +4114,10 @@ async def test_fresh_rerun_expands_unexpanded_jira_orchestrate_template(
     assert rerun.parameters["stepCount"] == 25
     assert len(workflow_payload["steps"]) == 25
     assert workflow_payload["steps"][0]["tool"]["id"] == "jira.check_blockers"
+    assert workflow_payload["steps"][3]["tool"]["id"] == "jira.update_issue_status"
     assert workflow_payload["steps"][6]["skill"]["id"] == "moonspec-tasks"
     assert workflow_payload["steps"][8]["skill"]["id"] == "moonspec-implement"
+    assert workflow_payload["steps"][24]["skill"]["id"] == "jira-issue-updater"
     assert workflow_payload["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
     assert workflow_payload["recovery"] == {
         "kind": "exact_full_rerun",

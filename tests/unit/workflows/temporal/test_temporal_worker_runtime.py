@@ -2164,6 +2164,7 @@ async def test_child_jira_orchestrate_workflow_payload_expands_seeded_template_s
     assert len(task["steps"]) == 25
     assert task["steps"][0]["tool"]["id"] == "jira.check_blockers"
     assert task["steps"][0]["type"] == "tool"
+    assert task["steps"][3]["tool"]["id"] == "jira.update_issue_status"
     assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
     assert task["authoredPresets"][0]["presetSlug"] == "jira-orchestrate"
 
@@ -2184,7 +2185,10 @@ async def test_child_jira_orchestrate_workflow_payload_expands_seeded_template_s
         "name": "jira.check_blockers",
     }
     assert first_node["inputs"]["targetIssueKey"] == "MM-820"
-    assert first_node["inputs"]["blockerPreflight"]["linkType"] == "Blocks"
+    assert first_node["inputs"]["blockerPreflight"] == {
+        "targetIssueKey": "MM-820",
+        "linkType": "Blocks",
+    }
     assert "selectedSkill" not in first_node["inputs"]
 
 
@@ -2227,7 +2231,8 @@ async def test_child_preset_expansion_prefers_workflow_payload_over_legacy_task(
     task = expanded_parameters["workflow"]
     assert expanded_parameters["stepCount"] == 25
     assert task["steps"][0]["tool"]["id"] == "jira.check_blockers"
-    assert "MM-821" in task["steps"][0]["instructions"]
+    assert task["steps"][3]["tool"]["id"] == "jira.update_issue_status"
+    assert "MM-821" in task["steps"][3]["instructions"]
 
 
 @pytest.mark.asyncio

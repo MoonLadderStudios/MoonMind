@@ -197,7 +197,7 @@ agent callbacks, and auth-profile controls, see
         "pr": "42",
         "branch": "feature/test",
         "mergeMethod": "squash",
-        "maxIterations": 3
+        "maxIterations": 5
       },
       "runtime": { "mode": "codex", "model": "...", "effort": "..." },
       "git": { "startingBranch": "feature/test", "newBranch": "feature/test" },

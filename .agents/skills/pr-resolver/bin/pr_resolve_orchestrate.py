@@ -34,6 +34,8 @@ from pr_resolve_contract import (  # noqa: E402
     remediation_next_step,
 )
 
+DEFAULT_MIN_ATTEMPTS_BEFORE_EXHAUSTED = 5
+
 SECRET_LIKE_RE = re.compile(
     r"(ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|"
     r"(?i:token|password)=\S+)"
@@ -101,6 +103,7 @@ def _build_result(
     max_attempts: int,
     finalize_max_retries: int,
     fix_max_iterations: int,
+    min_attempts_before_exhausted: int,
     history: list[dict[str, Any]],
     escalations: int,
     started_at: str,
@@ -124,6 +127,7 @@ def _build_result(
         "max_attempts": max_attempts,
         "finalize_max_retries": finalize_max_retries,
         "fix_max_iterations": fix_max_iterations,
+        "min_attempts_before_exhausted": min_attempts_before_exhausted,
         "escalations": escalations,
         "attempt_count": sum(1 for item in history if item.get("stage") == "finalize"),
         "started_at": started_at,
@@ -148,8 +152,14 @@ def run_orchestration(
     max_sleep_seconds: int,
     max_elapsed_seconds: int,
     merge_not_ready_grace_retries: int,
+    min_attempts_before_exhausted: int = DEFAULT_MIN_ATTEMPTS_BEFORE_EXHAUSTED,
 ) -> tuple[dict[str, Any], int]:
-    max_attempts = max(1, int(finalize_max_retries) + 1)
+    min_attempts_before_exhausted = max(1, int(min_attempts_before_exhausted))
+    max_attempts = max(
+        min_attempts_before_exhausted,
+        int(finalize_max_retries) + 1,
+        1,
+    )
     history: list[dict[str, Any]] = []
     escalations = 0
     finalize_only_retry_index = 0
@@ -172,6 +182,7 @@ def run_orchestration(
                 max_attempts=max_attempts,
                 finalize_max_retries=finalize_max_retries,
                 fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
                 history=history,
                 escalations=escalations,
                 started_at=started_at,
@@ -202,6 +213,7 @@ def run_orchestration(
                 max_attempts=max_attempts,
                 finalize_max_retries=finalize_max_retries,
                 fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
                 history=history,
                 escalations=escalations,
                 started_at=started_at,
@@ -219,6 +231,7 @@ def run_orchestration(
                 max_attempts=max_attempts,
                 finalize_max_retries=finalize_max_retries,
                 fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
                 history=history,
                 escalations=escalations,
                 started_at=started_at,
@@ -230,6 +243,7 @@ def run_orchestration(
             pending_progress_reason
             and reason
             and normalize_text(reason) == normalize_text(pending_progress_reason)
+            and attempt >= min_attempts_before_exhausted
         ):
             result = _build_result(
                 status="attempts_exhausted",
@@ -240,6 +254,7 @@ def run_orchestration(
                 max_attempts=max_attempts,
                 finalize_max_retries=finalize_max_retries,
                 fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
                 history=history,
                 escalations=escalations,
                 started_at=started_at,
@@ -263,6 +278,7 @@ def run_orchestration(
                 max_attempts=max_attempts,
                 finalize_max_retries=finalize_max_retries,
                 fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
                 history=history,
                 escalations=escalations,
                 started_at=started_at,
@@ -286,6 +302,7 @@ def run_orchestration(
                 max_attempts=max_attempts,
                 finalize_max_retries=finalize_max_retries,
                 fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
                 history=history,
                 escalations=escalations,
                 started_at=started_at,
@@ -303,6 +320,7 @@ def run_orchestration(
                 max_attempts=max_attempts,
                 finalize_max_retries=finalize_max_retries,
                 fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
                 history=history,
                 escalations=escalations,
                 started_at=started_at,
@@ -383,6 +401,7 @@ def run_orchestration(
                 max_attempts=max_attempts,
                 finalize_max_retries=finalize_max_retries,
                 fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
                 history=history,
                 escalations=escalations,
                 started_at=started_at,
@@ -399,6 +418,7 @@ def run_orchestration(
         max_attempts=max_attempts,
         finalize_max_retries=finalize_max_retries,
         fix_max_iterations=fix_max_iterations,
+        min_attempts_before_exhausted=min_attempts_before_exhausted,
         history=history,
         escalations=escalations,
         started_at=started_at,
@@ -533,7 +553,7 @@ def main() -> None:
     parser.add_argument(
         "--fix-max-iterations",
         type=int,
-        default=3,
+        default=5,
         help="Per full-remediation cycle max iterations.",
     )
     parser.add_argument(
@@ -541,6 +561,15 @@ def main() -> None:
         type=int,
         default=60,
         help="Number of finalize retries after the initial attempt.",
+    )
+    parser.add_argument(
+        "--min-attempts-before-exhausted",
+        type=int,
+        default=DEFAULT_MIN_ATTEMPTS_BEFORE_EXHAUSTED,
+        help=(
+            "Minimum finalize attempts before retryable/no-progress blockers "
+            "may return attempts_exhausted."
+        ),
     )
     parser.add_argument(
         "--base-sleep-seconds",
@@ -659,6 +688,7 @@ def main() -> None:
         monotonic_fn=time.monotonic,
         finalize_max_retries=args.finalize_max_retries,
         fix_max_iterations=args.fix_max_iterations,
+        min_attempts_before_exhausted=args.min_attempts_before_exhausted,
         base_sleep_seconds=args.base_sleep_seconds,
         max_sleep_seconds=args.max_sleep_seconds,
         max_elapsed_seconds=args.max_elapsed_seconds,

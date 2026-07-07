@@ -34,7 +34,7 @@ each queued `pr-resolver` child owns its repository publishing outcome.
 - `state` (string, optional): PR state filter for discovery. Default `open`. Other
   states print a warning.
 - `mergeMethod` (string, optional): Merge method passed to `pr-resolver`. Default `squash`.
-- `maxIterations` (number, optional): `pr-resolver` loop cap. Default `3`.
+- `maxIterations` (number, optional): `pr-resolver` loop cap. Default `5`.
 - `maxAttempts` (number, optional): Queue job `maxAttempts` for each created task. Default `3`.
 - `priority` (number, optional): Queue job priority. Default `0`.
 - `packageManagers` (list, optional): Allowlist of package managers, e.g. `pip`, `npm`,
@@ -139,7 +139,7 @@ Example `POST /api/recurring-workflows` body:
           "inputs": {
             "repo": "MoonLadderStudios/MoonMind",
             "mergeMethod": "squash",
-            "maxIterations": 3,
+            "maxIterations": 5,
             "packageManagers": ["pip", "npm", "github-actions"],
             "dryRun": false
           },
