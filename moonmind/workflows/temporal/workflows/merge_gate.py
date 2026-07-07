@@ -331,6 +331,13 @@ def build_resolver_run_request(
         runtime_payload["model"] = runtime_model
     if runtime_effort:
         runtime_payload["effort"] = runtime_effort
+    timeout_policy = (
+        dict(template["timeoutPolicy"])
+        if isinstance(template.get("timeoutPolicy"), Mapping)
+        else {}
+    )
+    if timeout_policy.get("timeout_seconds") is None:
+        timeout_policy["timeout_seconds"] = DEFAULT_RESOLVER_TIMEOUT_SECONDS
     initial_parameters: dict[str, Any] = {
         "repo": pr.repo,
         "repository": pr.repo,
@@ -346,7 +353,9 @@ def build_resolver_run_request(
             "skill": {"id": "pr-resolver", "args": args},
             "runtime": runtime_payload,
             "publish": {"mode": "auto"},
+            "timeoutPolicy": dict(timeout_policy),
         },
+        "timeoutPolicy": dict(timeout_policy),
         "workspaceSpec": {
             "repository": pr.repo,
             "branch": pr.head_branch,
@@ -361,16 +370,6 @@ def build_resolver_run_request(
     }
     if required_capabilities:
         initial_parameters["requiredCapabilities"] = required_capabilities
-    timeout_policy = template.get("timeoutPolicy")
-    initial_parameters["timeoutPolicy"] = (
-        dict(timeout_policy)
-        if isinstance(timeout_policy, Mapping)
-        else {"timeout_seconds": DEFAULT_RESOLVER_TIMEOUT_SECONDS}
-    )
-    initial_parameters["timeoutPolicy"].setdefault(
-        "timeout_seconds",
-        DEFAULT_RESOLVER_TIMEOUT_SECONDS,
-    )
     return {
         "workflow_type": "MoonMind.UserWorkflow",
         "title": title,

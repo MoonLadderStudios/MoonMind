@@ -700,6 +700,17 @@ class MoonMindMergeAutomationWorkflow:
                     await self._write_resolver_attempt(workflow_id=resolver_workflow_id)
                     self._publish_visibility()
                     return await self._finish()
+                except Exception:
+                    await self._write_resolver_attempt(workflow_id=resolver_workflow_id)
+                    recovery, recovered = await self._recover_after_resolver_issue()
+                    if recovered is not None:
+                        return recovered
+                    if recovery == RESOLVER_ISSUE_RECOVERY_REENTER_GATE:
+                        continue
+                    return await self._failed_resolver_summary(
+                        summary="pr-resolver child workflow failed before returning a result.",
+                        blocker_kind=DISPOSITION_FAILED,
+                    )
                 await self._write_resolver_attempt(
                     workflow_id=resolver_workflow_id,
                     result=resolver_result,
@@ -775,21 +786,11 @@ class MoonMindMergeAutomationWorkflow:
                     self._publish_visibility()
                     return await self._finish()
                 if resolver_disposition == DISPOSITION_MANUAL_REVIEW:
-                    recovery, recovered = await self._recover_after_resolver_issue()
-                    if recovered is not None:
-                        return recovered
-                    if recovery == RESOLVER_ISSUE_RECOVERY_REENTER_GATE:
-                        continue
                     return await self._failed_resolver_summary(
                         summary="pr-resolver requested manual review.",
                         blocker_kind=DISPOSITION_MANUAL_REVIEW,
                     )
                 if resolver_disposition == DISPOSITION_FAILED:
-                    recovery, recovered = await self._recover_after_resolver_issue()
-                    if recovered is not None:
-                        return recovered
-                    if recovery == RESOLVER_ISSUE_RECOVERY_REENTER_GATE:
-                        continue
                     return await self._failed_resolver_summary(
                         summary="pr-resolver reported failure.",
                         blocker_kind=DISPOSITION_FAILED,

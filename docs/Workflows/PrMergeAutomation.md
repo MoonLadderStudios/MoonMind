@@ -508,6 +508,9 @@ This is required because `pr-resolver` itself owns git push and merge behavior.
         "repo": "owner/repo",
         "pr": "123",
         "mergeMethod": "squash"
+      },
+      "timeoutPolicy": {
+        "timeout_seconds": 9000
       }
     }
   }
@@ -515,9 +518,11 @@ This is required because `pr-resolver` itself owns git push and merge behavior.
 ```
 
 The resolver child timeout MUST cover the resolver's own orchestration budget
-plus setup and artifact-publication time. The default resolver launch uses a
-9000-second `timeoutPolicy.timeout_seconds`, which is intentionally larger than
-the `pr-resolver` tool's 7200-second default `finalizeMaxElapsedSeconds`.
+plus setup and artifact-publication time. The default resolver launch carries a
+9000-second `timeoutPolicy.timeout_seconds` both at the child workflow input
+level and inside the task payload that becomes plan node inputs. This is
+intentionally larger than the `pr-resolver` tool's 7200-second default
+`finalizeMaxElapsedSeconds`.
 
 ### 13.3 Resolver child result contract extension
 
@@ -602,13 +607,20 @@ The recommended pattern is:
 4. `MoonMind.MergeAutomation` re-enters `awaiting_external`,
 5. once signal is re-established, it launches the next resolver child attempt.
 
-If a resolver child exits unsuccessfully or without a valid disposition, merge
-automation MUST refresh PR readiness before failing the parent. If that refresh
-shows the PR already merged, merge automation completes as `already_merged`. If
-the PR is still open but the head SHA advanced, merge automation treats that as
-durable resolver progress, updates the tracked head SHA, and re-enters the gate
-instead of failing immediately. If neither merge nor head advancement is
-observed, the resolver issue remains a terminal merge-automation failure.
+If a resolver child fails before returning a result, exits unsuccessfully, or
+returns a malformed disposition, merge automation MUST refresh PR readiness
+before failing the parent. If that refresh shows the PR already merged, merge
+automation completes as `already_merged`. If the PR is still open but the head
+SHA advanced, merge automation treats that as durable resolver progress, updates
+the tracked head SHA, and re-enters the gate instead of failing immediately. If
+neither merge nor head advancement is observed, the resolver issue remains a
+terminal merge-automation failure.
+
+Valid terminal resolver dispositions remain authoritative. A successful resolver
+child result with `mergeAutomationDisposition = "manual_review"` or
+`mergeAutomationDisposition = "failed"` MUST fail merge automation even if the PR
+head changed; those states intentionally request human review or report resolver
+failure rather than asking the gate to continue.
 
 ---
 

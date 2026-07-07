@@ -261,6 +261,9 @@ def test_build_resolver_run_request_uses_pr_resolver_and_publish_auto() -> None:
     assert request["initial_parameters"]["timeoutPolicy"] == {
         "timeout_seconds": DEFAULT_RESOLVER_TIMEOUT_SECONDS
     }
+    assert request["initial_parameters"]["task"]["timeoutPolicy"] == {
+        "timeout_seconds": DEFAULT_RESOLVER_TIMEOUT_SECONDS
+    }
 
 def test_build_resolver_run_request_pins_parent_provider_profile() -> None:
     request = build_resolver_run_request(
@@ -305,6 +308,26 @@ def test_build_resolver_run_request_preserves_explicit_timeout_policy() -> None:
     assert request["initial_parameters"]["timeoutPolicy"] == {
         "timeout_seconds": 12000,
         "heartbeat_seconds": 30,
+    }
+    assert request["initial_parameters"]["task"]["timeoutPolicy"] == {
+        "timeout_seconds": 12000,
+        "heartbeat_seconds": 30,
+    }
+
+def test_build_resolver_run_request_replaces_none_timeout_with_default() -> None:
+    request = build_resolver_run_request(
+        parent_workflow_id="mm:parent",
+        pull_request=_pull_request(),
+        jira_issue_key=None,
+        merge_method="squash",
+        resolver_template={"timeoutPolicy": {"timeout_seconds": None}},
+    )
+
+    assert request["initial_parameters"]["timeoutPolicy"] == {
+        "timeout_seconds": DEFAULT_RESOLVER_TIMEOUT_SECONDS
+    }
+    assert request["initial_parameters"]["task"]["timeoutPolicy"] == {
+        "timeout_seconds": DEFAULT_RESOLVER_TIMEOUT_SECONDS
     }
 
 def test_build_continue_as_new_input_preserves_compact_wait_state() -> None:
