@@ -429,6 +429,20 @@ class ManagedRuntimeLauncher:
             resolved_root
         )
 
+    async def _ensure_repo_artifacts_writable_by_runtime_user(
+        self,
+        *,
+        resolved_workspace_path: str | None,
+    ) -> None:
+        """Make MoonMind-created repo-local artifacts writable by managed runtimes."""
+
+        if os.geteuid() != 0 or resolved_workspace_path is None:
+            return
+        artifacts_dir = Path(resolved_workspace_path).resolve() / "artifacts"
+        if not artifacts_dir.exists():
+            return
+        await self._run_checked_command("chown", "-R", "app:app", str(artifacts_dir))
+
     def _resolve_workspace_ownership_root(
         self,
         *,
@@ -1280,6 +1294,17 @@ class ManagedRuntimeLauncher:
             except Exception:
                 logger.warning(
                     "strategy.prepare_workspace failed for run_id=%s runtime=%s",
+                    run_id,
+                    profile.runtime_id,
+                    exc_info=True,
+                )
+            try:
+                await self._ensure_repo_artifacts_writable_by_runtime_user(
+                    resolved_workspace_path=resolved_workspace_path,
+                )
+            except Exception:
+                logger.warning(
+                    "repo-local artifacts ownership repair failed for run_id=%s runtime=%s",
                     run_id,
                     profile.runtime_id,
                     exc_info=True,

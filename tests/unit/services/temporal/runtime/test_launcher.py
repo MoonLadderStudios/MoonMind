@@ -3645,6 +3645,36 @@ def test_build_generic_managed_agent_env_falls_back_to_run_id_without_workspace(
     assert "workspaces" not in env["MOONMIND_RUN_ROOT"]
 
 
+@pytest.mark.asyncio
+async def test_ensure_repo_artifacts_writable_chowns_context_artifacts_when_root(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    workspace = tmp_path / "run-1" / "repo"
+    artifacts_dir = workspace / "artifacts"
+    (artifacts_dir / "context").mkdir(parents=True)
+
+    chown_calls: list[tuple[object, ...]] = []
+
+    async def _fake_run_checked_command(self, *cmd, **kw):
+        if cmd[:2] == ("chown", "-R"):
+            chown_calls.append(cmd)
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._run_checked_command",
+        _fake_run_checked_command,
+    )
+
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+
+    await launcher._ensure_repo_artifacts_writable_by_runtime_user(
+        resolved_workspace_path=str(workspace)
+    )
+
+    assert chown_calls == [("chown", "-R", "app:app", str(artifacts_dir.resolve()))]
+
+
 def test_sanitize_artifacts_step_segment_blocks_traversal():
     sanitized = ManagedRuntimeLauncher._sanitize_artifacts_step_segment(
         "../../etc/passwd"

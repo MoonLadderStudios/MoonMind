@@ -2418,7 +2418,22 @@ def _compose_env_value(value: Any) -> str:
     return _env_value(value).replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+def _normalize_deployment_state_file_permissions(path: Path) -> None:
+    with contextlib.suppress(OSError):
+        parent_stat = path.parent.stat()
+        geteuid = getattr(os, "geteuid", lambda: -1)
+        if hasattr(os, "chown") and geteuid() == 0:
+            os.chown(path, parent_stat.st_uid, parent_stat.st_gid)
+    with contextlib.suppress(OSError):
+        path.chmod(0o664)
+
+
+def _atomic_write_bytes(
+    path: Path,
+    payload: bytes,
+    *,
+    normalize_permissions: bool = False,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
@@ -2432,6 +2447,8 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
+        if normalize_permissions:
+            _normalize_deployment_state_file_permissions(path)
         _fsync_parent_directory(path)
     finally:
         with contextlib.suppress(FileNotFoundError):
@@ -2554,9 +2571,17 @@ def _write_desired_state_files(
         for key, value in env_payload.items()
         if _env_value(value)
     )
-    _atomic_write_bytes(env_path, env_text.encode("utf-8"))
+    _atomic_write_bytes(
+        env_path,
+        env_text.encode("utf-8"),
+        normalize_permissions=True,
+    )
     json_text = json.dumps(record, sort_keys=True, default=str, indent=2) + "\n"
-    _atomic_write_bytes(json_path, json_text.encode("utf-8"))
+    _atomic_write_bytes(
+        json_path,
+        json_text.encode("utf-8"),
+        normalize_permissions=True,
+    )
 
 
 def _execution_ref_from_context(context: Mapping[str, Any]) -> Mapping[str, Any] | None:

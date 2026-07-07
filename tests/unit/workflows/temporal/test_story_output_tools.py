@@ -533,6 +533,33 @@ async def test_update_jira_issue_status_skips_start_for_fully_implemented_assess
 
 
 @pytest.mark.asyncio
+async def test_update_jira_issue_status_reads_relative_assessment_from_previous_workspace(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "repo"
+    assessment = workspace / "artifacts" / "jira-implement-assessment.json"
+    assessment.parent.mkdir(parents=True)
+    assessment.write_text('{"verdict": "FULLY_IMPLEMENTED"}', encoding="utf-8")
+    service = _FakeJiraService()
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1125",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
+            "previousOutputs": {"workspacePath": str(workspace)},
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "skipped"
+    assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+    assert service.get_issue_requests == []
+    assert service.transition_requests == []
+
+
+@pytest.mark.asyncio
 async def test_update_jira_issue_status_uses_previous_assessment_text_when_artifact_missing(
     tmp_path,
 ) -> None:

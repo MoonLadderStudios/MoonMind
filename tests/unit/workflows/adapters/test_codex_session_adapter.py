@@ -425,6 +425,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
         "artifact:session-checkpoint",
     ]
     assert result.metadata["instructionRef"] == "artifact:instructions"
+    assert result.metadata["workspacePath"] == str(workspace_path)
     assert (
         result.metadata["sessionSummary"]["latestSummaryRef"]
         == "artifact:session-summary"
