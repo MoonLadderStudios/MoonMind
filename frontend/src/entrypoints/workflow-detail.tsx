@@ -32,6 +32,12 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
+import { navigateTo } from '../lib/navigation';
+import {
+  buildRemediationCreateDraft,
+  remediationCreateDraftUrl,
+  storeRemediationCreateDraft,
+} from '../lib/remediationCreateDraft';
 import {
   readWorkflowListDisplayMode,
   type WorkflowListDisplayMode,
@@ -44,7 +50,6 @@ import {
 import { workflowWorkspaceRowFromDetail } from '../lib/workflowWorkspaceList';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
-  buildRemediationRuntimeRequestFields,
   buildWorkflowActionMenuItems,
   DEFAULT_REMEDIATION_ACTION_POLICY,
   DEFAULT_REMEDIATION_AUTHORITY,
@@ -7227,43 +7232,35 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     onError: (error: Error) => setActionError(error.message),
   });
 
-  const createRemediationMutation = useMutation({
-    mutationFn: async () => {
-      const response = await fetch(`${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          repository: execution?.repository ?? null,
-          ...buildRemediationRuntimeRequestFields(execution),
+  const openRemediationCreateDraft = () => {
+    if (!execution) {
+      setActionError('Workflow detail is required before remediation can start.');
+      return;
+    }
+    try {
+      const draft = buildRemediationCreateDraft(
+        {
+          ...execution,
+          runId: latestRunId || runId || execution.runId,
+        },
+        {
           instructions: `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
-          remediation: {
-            mode: remediationMode,
-            authorityMode: remediationAuthority,
-            target: {
-              runId: latestRunId || runId || undefined,
-            },
-            actionPolicyRef: remediationActionPolicy.trim() || undefined,
-            evidencePolicy: {
-              includeStepLedger: true,
-              includeDiagnostics: true,
-              tailLines: 2000,
-            },
-            trigger: { type: 'manual' },
+          evidencePolicy: {
+            includeStepLedger: true,
+            includeDiagnostics: true,
+            tailLines: 2000,
           },
-        }),
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
-      }
-      return response.json();
-    },
-    onSuccess: () => {
-      setActionNotice('Remediation workflow creation submitted.');
-      invalidate();
-    },
-    onError: (error: Error) => setActionError(error.message),
-  });
+        },
+      );
+      draft.remediation.mode = remediationMode;
+      draft.remediation.authorityMode = remediationAuthority;
+      draft.remediation.actionPolicyRef = remediationActionPolicy.trim() || undefined;
+      const draftId = storeRemediationCreateDraft(draft);
+      navigateTo(remediationCreateDraftUrl(draftId));
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to prepare remediation draft.');
+    }
+  };
 
   const remediationApprovalMutation = useMutation({
     mutationFn: async ({
@@ -7488,7 +7485,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     cancelMutation.isPending ||
     failedStepResumeMutation.isPending ||
     selectedStepRecoveryMutation.isPending ||
-    createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending ||
     checkpointBranchMutation.isPending;
   const editHref = workflowId
@@ -7602,10 +7598,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         setActiveWorkflowDialog('send-message');
       },
       onBypassDependencies,
-      onCreateRemediation: () => {
-        setActionError(null);
-        createRemediationMutation.mutate();
-      },
+    onCreateRemediation: () => {
+      setActionError(null);
+      openRemediationCreateDraft();
+    },
     },
   });
   const toolbarMenuItems: WorkflowActionMenuItem[] = [

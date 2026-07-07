@@ -19,6 +19,10 @@ import {
   buildTemporalSubmissionDraftFromExecution,
   resolveTaskSubmitPageMode,
 } from "../lib/temporalTaskEditing";
+import {
+  buildRemediationCreateDraft,
+  storeRemediationCreateDraft,
+} from "../lib/remediationCreateDraft";
 import { renderWithClient } from "../utils/test-utils";
 import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
@@ -905,6 +909,100 @@ describe("WorkflowStart schedule mode entry", () => {
     expect(scheduleMode.value).toBe("immediate");
   });
 
+});
+
+describe("WorkflowStart remediation draft intake", () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(navigateTo).mockReset();
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: ["pr-resolver"] }, legacyItems: [] }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      if (url.startsWith("/api/executions?")) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      if (url === "/api/executions") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            workflowId: "mm:remediation-created",
+            redirectPath: "/workflows/mm:remediation-created?source=temporal",
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    window.sessionStorage.clear();
+  });
+
+  it("consumes remediation drafts and submits task.remediation through normal create", async () => {
+    const draft = buildRemediationCreateDraft(
+      {
+        workflowId: "mm:target-workflow",
+        runId: "run-target-1",
+        title: "Target workflow",
+        state: "failed",
+        repository: "MoonLadderStudios/MoonMind",
+        targetRuntime: "codex_cli",
+        model: "gpt-5",
+        effort: "high",
+        profileId: "profile-codex",
+      },
+      { instructions: "Fix the failed workflow with bounded evidence." },
+    );
+    const draftId = storeRemediationCreateDraft(draft);
+    window.history.pushState(
+      {},
+      "Task Create",
+      `/workflows/new?intent=remediate&draftId=${encodeURIComponent(draftId)}`,
+    );
+
+    renderWorkflowStartPage(mockPayload);
+
+    expect(await screen.findByRole("heading", { name: "Remediation Draft" })).toBeTruthy();
+    expect(screen.getByText("mm:target-workflow")).toBeTruthy();
+    expect(screen.getByText("run-target-1")).toBeTruthy();
+    expect(window.sessionStorage.getItem(`moonmind.remediationDraft.${draftId}`)).toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions")).toBe(true);
+    });
+    const createCall = fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions");
+    const requestBody = JSON.parse(String(createCall?.[1]?.body));
+    expect(requestBody.payload.task.remediation).toMatchObject({
+      target: {
+        workflowId: "mm:target-workflow",
+        runId: "run-target-1",
+      },
+      mode: "snapshot_then_follow",
+      authorityMode: "approval_gated",
+      actionPolicyRef: "admin_healer_default",
+      trigger: { type: "manual" },
+    });
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url).includes("/remediation") && init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("WorkflowStart CSS Layout", () => {

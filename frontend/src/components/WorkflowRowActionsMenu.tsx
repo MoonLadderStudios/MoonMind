@@ -11,12 +11,14 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
+import { navigateTo } from '../lib/navigation';
 import {
-  buildRemediationRuntimeRequestFields,
+  buildRemediationCreateDraft,
+  remediationCreateDraftUrl,
+  storeRemediationCreateDraft,
+} from '../lib/remediationCreateDraft';
+import {
   buildWorkflowActionMenuItems,
-  DEFAULT_REMEDIATION_ACTION_POLICY,
-  DEFAULT_REMEDIATION_AUTHORITY,
-  DEFAULT_REMEDIATION_MODE,
   ExecutionActionsSchema,
   isRemediationEligibleTarget,
   type WorkflowActionMenuItem,
@@ -289,45 +291,32 @@ export function WorkflowRowActionsMenu({
     onError: onMutationError,
   });
 
-  const createRemediationMutation = useMutation({
-    mutationFn: async () => {
-      const response = await fetch(`${apiBase}/executions/${encodeURIComponent(workflowId)}/remediation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          repository: execution?.repository ?? null,
-          ...buildRemediationRuntimeRequestFields(execution),
-          instructions: `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
-          remediation: {
-            mode: DEFAULT_REMEDIATION_MODE,
-            authorityMode: DEFAULT_REMEDIATION_AUTHORITY,
-            target: { runId: runId || undefined },
-            actionPolicyRef: DEFAULT_REMEDIATION_ACTION_POLICY,
-            evidencePolicy: {
-              includeStepLedger: true,
-              includeDiagnostics: true,
-              tailLines: 2000,
-            },
-            trigger: { type: 'manual' },
-          },
-        }),
+  const openRemediationCreateDraft = useCallback(() => {
+    if (!execution) {
+      onMutationError(new Error('Workflow detail is required before remediation can start.'));
+      return;
+    }
+    try {
+      const draft = buildRemediationCreateDraft(execution, {
+        instructions: `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
+        evidencePolicy: {
+          includeStepLedger: true,
+          includeDiagnostics: true,
+          tailLines: 2000,
+        },
       });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
-      }
-      return response.json();
-    },
-    onSuccess: invalidate,
-    onError: onMutationError,
-  });
+      const draftId = storeRemediationCreateDraft(draft);
+      navigateTo(remediationCreateDraftUrl(draftId));
+    } catch (error) {
+      onMutationError(error);
+    }
+  }, [execution, onMutationError, workflowId]);
 
   const busy =
     updateMutation.isPending ||
     signalMutation.isPending ||
     cancelMutation.isPending ||
-    failedStepResumeMutation.isPending ||
-    createRemediationMutation.isPending;
+    failedStepResumeMutation.isPending;
 
   const editHref = workflowId
     ? actions?.canEditForRerun
@@ -464,7 +453,7 @@ export function WorkflowRowActionsMenu({
         },
         onCreateRemediation: () => {
           setActionError(null);
-          createRemediationMutation.mutate();
+          openRemediationCreateDraft();
         },
       },
     });
@@ -477,13 +466,13 @@ export function WorkflowRowActionsMenu({
     canShowEditWorkflow,
     cancelMutation,
     compareHref,
-    createRemediationMutation,
     disabledReason,
     detailHref,
     editHref,
     editTaskUnavailableReason,
     execution,
     failedStepResumeMutation,
+    openRemediationCreateDraft,
     rerunUnavailableReason,
     signalMutation,
     taskEditingEnabled,

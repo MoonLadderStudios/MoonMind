@@ -124,6 +124,64 @@ describe('WorkflowRowActionsMenu', () => {
     expect(detailUrls.every((url) => url === '/api/executions/wf-123?source=temporal')).toBe(true);
   });
 
+  it('opens Create with a remediation draft instead of posting the direct remediation endpoint', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...detailResponse,
+            state: 'failed',
+            targetRuntime: 'codex_cli',
+            model: 'gpt-5',
+            effort: 'high',
+            profileId: 'profile-codex',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    await screen.findByRole('menuitem', { name: 'Remediate' });
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.filter(
+          ([url]) => String(url) === '/api/executions/wf-123?source=temporal',
+        ),
+      ).not.toHaveLength(0);
+      expect(screen.queryByText('Checking availability…')).toBeNull();
+    });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Remediate' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/new');
+      expect(window.location.search).toContain('intent=remediate');
+      expect(window.location.search).toContain('draftId=');
+    });
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === '/api/executions/wf-123/remediation' && init?.method === 'POST',
+      ),
+    ).toBe(false);
+
+    const draftId = new URLSearchParams(window.location.search).get('draftId') || '';
+    const rawDraft = window.sessionStorage.getItem(`moonmind.remediationDraft.${draftId}`);
+    expect(rawDraft).toBeTruthy();
+    expect(JSON.parse(String(rawDraft))).toMatchObject({
+      source: 'remediation',
+      target: { workflowId: 'wf-123', runId: 'run-1' },
+      remediation: {
+        target: { workflowId: 'wf-123', runId: 'run-1' },
+        mode: 'snapshot_then_follow',
+        authorityMode: 'approval_gated',
+      },
+    });
+  });
+
   it('invokes the signal endpoint when a lifecycle action is selected', async () => {
     renderMenu();
     fireEvent.click(screen.getByRole('button', { name: 'Actions' }));

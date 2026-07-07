@@ -6106,33 +6106,39 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remediate' }));
 
     await waitFor(() => {
-      const remediationCreateCall = fetchSpy.mock.calls.find(
-        ([url, init]) => String(url) === '/api/executions/test-123/remediation' && init?.method === 'POST',
+      expect(navigateTo).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/workflows\/new\?intent=remediate&draftId=.+/),
       );
-      expect(remediationCreateCall).toBeTruthy();
-      const remediationBody = JSON.parse(String(remediationCreateCall?.[1]?.body));
-      expect(remediationBody).not.toHaveProperty('targetRuntime');
-      expect(remediationBody).not.toHaveProperty('profileId');
-      expect(remediationBody).toMatchObject({
-        repository: 'MoonLadderStudios/MoonMind',
-        runtime: {
-          mode: 'claude_code',
-          model: 'claude-opus-4-1-20250805',
-          effort: 'high',
-          profileId: 'claude_anthropic',
+    });
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) => String(url) === '/api/executions/test-123/remediation' && init?.method === 'POST',
+      ),
+    ).toBe(false);
+    const draftUrl = String(vi.mocked(navigateTo).mock.calls.at(-1)?.[0] || '');
+    const draftId = new URL(draftUrl, window.location.origin).searchParams.get('draftId') || '';
+    const rawDraft = window.sessionStorage.getItem(`moonmind.remediationDraft.${draftId}`);
+    expect(rawDraft).toBeTruthy();
+    expect(JSON.parse(String(rawDraft))).toMatchObject({
+      repository: 'MoonLadderStudios/MoonMind',
+      target: { workflowId: 'test-123', runId: '01-run' },
+      runtime: {
+        mode: 'claude_code',
+        model: 'claude-opus-4-1-20250805',
+        effort: 'high',
+        profileId: 'claude_anthropic',
+      },
+      remediation: {
+        mode: 'snapshot_then_follow',
+        authorityMode: 'approval_gated',
+        target: { workflowId: 'test-123', runId: '01-run' },
+        evidencePolicy: {
+          includeStepLedger: true,
+          includeDiagnostics: true,
+          tailLines: 2000,
         },
-        remediation: {
-          mode: 'snapshot_then_follow',
-          authorityMode: 'approval_gated',
-          target: { runId: '01-run' },
-          evidencePolicy: {
-            includeStepLedger: true,
-            includeDiagnostics: true,
-            tailLines: 2000,
-          },
-          trigger: { type: 'manual' },
-        },
-      });
+        trigger: { type: 'manual' },
+      },
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve remediation action' }));
@@ -6211,25 +6217,33 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remediate' }));
 
     await waitFor(() => {
-      const remediationCreateCall = fetchSpy.mock.calls.find(
+      expect(navigateTo).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/workflows\/new\?intent=remediate&draftId=.+/),
+      );
+    });
+    expect(
+      fetchSpy.mock.calls.some(
         ([url, init]) =>
           String(url) === '/api/executions/test-remediation-create-choices/remediation' &&
           init?.method === 'POST',
-      );
-      expect(remediationCreateCall).toBeTruthy();
-      expect(JSON.parse(String(remediationCreateCall?.[1]?.body))).toMatchObject({
-        remediation: {
-          mode: 'snapshot',
-          authorityMode: 'observe_only',
-          actionPolicyRef: 'troubleshooting_only',
-          target: { runId: '01-run' },
-          evidencePolicy: {
-            includeStepLedger: true,
-            includeDiagnostics: true,
-            tailLines: 2000,
-          },
+      ),
+    ).toBe(false);
+    const draftUrl = String(vi.mocked(navigateTo).mock.calls.at(-1)?.[0] || '');
+    const draftId = new URL(draftUrl, window.location.origin).searchParams.get('draftId') || '';
+    const rawDraft = window.sessionStorage.getItem(`moonmind.remediationDraft.${draftId}`);
+    expect(rawDraft).toBeTruthy();
+    expect(JSON.parse(String(rawDraft))).toMatchObject({
+      remediation: {
+        mode: 'snapshot',
+        authorityMode: 'observe_only',
+        actionPolicyRef: 'troubleshooting_only',
+        target: { workflowId: 'test-remediation-create-choices', runId: '01-run' },
+        evidencePolicy: {
+          includeStepLedger: true,
+          includeDiagnostics: true,
+          tailLines: 2000,
         },
-      });
+      },
     });
   });
 
