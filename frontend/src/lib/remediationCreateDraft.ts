@@ -4,6 +4,7 @@ import {
   DEFAULT_REMEDIATION_AUTHORITY,
   DEFAULT_REMEDIATION_MODE,
 } from './workflowActions';
+import { navigateTo } from './navigation';
 
 const DRAFT_STORAGE_PREFIX = 'moonmind.remediation-create-draft.';
 const DEFAULT_REMEDIATION_REPOSITORY = 'MoonLadderStudios/MoonMind';
@@ -45,33 +46,59 @@ export type RemediationCreateDraft = {
 };
 
 type RemediationDraftExecution = {
-  workflowId?: string | null;
-  runId?: string | null;
-  temporalRunId?: string | null;
-  title?: string | null;
-  repository?: string | null;
-  state?: string | null;
-  rawState?: string | null;
-  status?: string | null;
+  workflowId?: string | null | undefined;
+  runId?: string | null | undefined;
+  temporalRunId?: string | null | undefined;
+  title?: string | null | undefined;
+  repository?: string | null | undefined;
+  state?: string | null | undefined;
+  rawState?: string | null | undefined;
+  status?: string | null | undefined;
   resume?: {
-    checkpointRef?: string | null;
-    sourceRunId?: string | null;
-  } | null;
-  steps?: Array<Record<string, unknown>> | null;
-  stepLedger?: Array<Record<string, unknown>> | null;
-  latestCheckpointRef?: string | null;
-  checkpointRef?: string | null;
-  checkpoints?: Array<Record<string, unknown>> | null;
-  targetRuntime?: string | null;
-  profileId?: string | null;
-  model?: string | null;
-  resolvedModel?: string | null;
-  requestedModel?: string | null;
-  effort?: string | null;
+    checkpointRef?: string | null | undefined;
+    sourceRunId?: string | null | undefined;
+  } | null | undefined;
+  steps?: Array<Record<string, unknown>> | null | undefined;
+  stepLedger?: Array<Record<string, unknown>> | null | undefined;
+  latestCheckpointRef?: string | null | undefined;
+  checkpointRef?: string | null | undefined;
+  checkpoints?: Array<Record<string, unknown>> | null | undefined;
+  targetRuntime?: string | null | undefined;
+  profileId?: string | null | undefined;
+  model?: string | null | undefined;
+  resolvedModel?: string | null | undefined;
+  requestedModel?: string | null | undefined;
+  effort?: string | null | undefined;
 };
 
 function cleanText(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function remediationMode(value: unknown): RemediationCreateDraft['remediation']['mode'] {
+  const normalized = cleanText(value);
+  if (
+    normalized === 'snapshot' ||
+    normalized === 'live_follow' ||
+    normalized === 'snapshot_then_follow'
+  ) {
+    return normalized;
+  }
+  return DEFAULT_REMEDIATION_MODE;
+}
+
+function remediationAuthorityMode(
+  value: unknown,
+): RemediationCreateDraft['remediation']['authorityMode'] {
+  const normalized = cleanText(value);
+  if (
+    normalized === 'observe_only' ||
+    normalized === 'approval_gated' ||
+    normalized === 'admin_auto'
+  ) {
+    return normalized;
+  }
+  return DEFAULT_REMEDIATION_AUTHORITY;
 }
 
 function storageKey(draftId: string): string {
@@ -131,8 +158,8 @@ function checkpointSelectors(execution: RemediationDraftExecution): Array<Record
 export function buildRemediationCreateDraft(
   execution: RemediationDraftExecution,
   options: {
-    mode?: RemediationCreateDraft['remediation']['mode'];
-    authorityMode?: RemediationCreateDraft['remediation']['authorityMode'];
+    mode?: RemediationCreateDraft['remediation']['mode'] | string;
+    authorityMode?: RemediationCreateDraft['remediation']['authorityMode'] | string;
     actionPolicyRef?: string;
     runId?: string;
     instructions?: string;
@@ -181,8 +208,8 @@ export function buildRemediationCreateDraft(
       `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
     remediation: {
       target: remediationTarget,
-      mode: options.mode || DEFAULT_REMEDIATION_MODE,
-      authorityMode: options.authorityMode || DEFAULT_REMEDIATION_AUTHORITY,
+      mode: remediationMode(options.mode),
+      authorityMode: remediationAuthorityMode(options.authorityMode),
       actionPolicyRef: cleanText(options.actionPolicyRef || DEFAULT_REMEDIATION_ACTION_POLICY),
       evidencePolicy: {
         includeStepLedger: true,
@@ -236,7 +263,6 @@ export function remediationCreateDraftHref(draftId: string): string {
 export function navigateToRemediationCreateDraft(draft: RemediationCreateDraft): string {
   const draftId = storeRemediationCreateDraft(draft);
   const href = remediationCreateDraftHref(draftId);
-  window.history.pushState({ moonmindDashboard: true }, '', href);
-  window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+  navigateTo(href);
   return draftId;
 }

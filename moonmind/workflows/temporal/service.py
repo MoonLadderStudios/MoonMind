@@ -26,6 +26,7 @@ from api_service.db.models import (
     MoonMindWorkflowState,
     SettingsOverride,
     TemporalArtifact,
+    TemporalArtifactLink,
     TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
@@ -772,7 +773,11 @@ class TemporalExecutionService:
             runtime_policy = str(
                 checkpoint_branch_policy.get("runtimeContextPolicy") or ""
             ).strip()
-            if runtime_policy and runtime_policy != "fresh_agent_run":
+            if action_kind and not runtime_policy:
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.checkpointBranchPolicy.runtimeContextPolicy must be fresh_agent_run."
+                )
+            if runtime_policy != "fresh_agent_run":
                 raise TemporalExecutionValidationError(
                     "workflow.remediation.checkpointBranchPolicy.runtimeContextPolicy must be fresh_agent_run."
                 )
@@ -1447,6 +1452,17 @@ class TemporalExecutionService:
             return await self._sync_projection_best_effort(existing)
         await self._session.refresh(record)
 
+        if remediation_link is not None:
+            try:
+                await self._remediation_context_builder().build_context(
+                    remediation_workflow_id=record.workflow_id
+                )
+                await self._session.refresh(record)
+            except Exception as exc:
+                raise TemporalExecutionValidationError(
+                    "Failed to create remediation context artifact."
+                ) from exc
+
         try:
             input_args: dict[str, Any] = {}
             if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
@@ -1493,18 +1509,30 @@ class TemporalExecutionService:
                 record.run_id = start_run_id
                 if remediation_link is not None:
                     remediation_link.remediation_run_id = start_run_id
+                    if remediation_link.context_artifact_ref:
+                        context_link = (
+                            await self._session.execute(
+                                select(TemporalArtifactLink).where(
+                                    TemporalArtifactLink.workflow_id
+                                    == record.workflow_id,
+                                    TemporalArtifactLink.artifact_id
+                                    == remediation_link.context_artifact_ref,
+                                    TemporalArtifactLink.link_type
+                                    == "remediation.context",
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if context_link is not None:
+                            context_link.run_id = start_run_id
                 await self._session.commit()
-                await self._session.refresh(record)
-            if remediation_link is not None:
-                await self._remediation_context_builder().build_context(
-                    remediation_workflow_id=record.workflow_id
-                )
                 await self._session.refresh(record)
         except Exception as exc:
             if remediation_link is not None:
-                raise TemporalExecutionValidationError(
-                    "Failed to create remediation context artifact."
-                ) from exc
+                logger.exception(
+                    "Failed to start Temporal remediation workflow for execution %s",
+                    record.workflow_id,
+                )
+                raise
             logger.exception(
                 "Failed to start Temporal workflow for execution %s", record.workflow_id
             )

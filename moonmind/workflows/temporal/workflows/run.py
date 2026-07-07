@@ -3843,9 +3843,8 @@ class MoonMindRunWorkflow:
                     source[source_key] = value
                     break
 
-        explicit_checkpoint_ref = source.get("checkpointRef") is not None
-        source.setdefault("checkpointBoundary", "after_execution")
         workspace = context_workspace if isinstance(context_workspace, Mapping) else {}
+        explicit_checkpoint_ref = source.get("checkpointRef") is not None
         if source.get("checkpointRef") is None:
             checkpoint_ref = (
                 workspace.get("checkpointAfterRef")
@@ -3855,6 +3854,14 @@ class MoonMindRunWorkflow:
             )
             if checkpoint_ref is not None:
                 source["checkpointRef"] = checkpoint_ref
+                if source.get("checkpointBoundary") is None:
+                    source["checkpointBoundary"] = (
+                        "before_execution"
+                        if checkpoint_ref == workspace.get("checkpointBeforeRef")
+                        else "after_execution"
+                    )
+        elif source.get("checkpointBoundary") is None:
+            source["checkpointBoundary"] = "after_execution"
         if source.get("checkpointDigest") is None:
             checkpoint_digest = (
                 workspace.get("checkpointAfterDigest")

@@ -6262,6 +6262,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     const params = new URLSearchParams(window.location.search);
     if (params.get("intent") !== "remediate") {
+      setRemediationDraft(null);
+      remediationDraftAppliedRef.current = null;
+      remediationDraftIdRef.current = null;
       return;
     }
     const draftId = String(params.get("draftId") || "").trim();
@@ -6316,6 +6319,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       "workflow-start",
       "remediation-target-freshness",
       remediationDraft?.target.workflowId || "",
+      remediationDraft?.target.runId || "",
       temporalDetailEndpoint,
     ],
     enabled: Boolean(remediationDraft?.target.workflowId),

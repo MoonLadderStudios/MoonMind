@@ -1439,6 +1439,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/remediation/checkpoint-branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Remediation Checkpoint Branch */
+        post: operations["create_remediation_checkpoint_branch_api_executions__workflow_id__remediation_checkpoint_branches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/remediation/approvals/{request_id}": {
         parameters: {
             query?: never;
@@ -8493,6 +8510,51 @@ export interface components {
             /** Auditref */
             auditRef?: string | null;
         };
+        /** RemediationCheckpointBranchLinkModel */
+        RemediationCheckpointBranchLinkModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Branchid */
+            branchId: string;
+            /** Branchturnid */
+            branchTurnId?: string | null;
+            /** Operation */
+            operation?: string | null;
+            /** Idempotencykey */
+            idempotencyKey?: string | null;
+            /** Checkpointref */
+            checkpointRef?: string | null;
+            /** Contextartifactref */
+            contextArtifactRef?: string | null;
+            /** Createdat */
+            createdAt?: string | null;
+        };
+        /** RemediationCheckpointBranchRepairRequest */
+        RemediationCheckpointBranchRepairRequest: {
+            /** Checkpointref */
+            checkpointRef: string;
+            instructions: components["schemas"]["CheckpointBranchInstructionsModel"];
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Label */
+            label?: string | null;
+            /**
+             * Workspacepolicy
+             * @default apply_previous_execution_diff_to_clean_baseline
+             * @enum {string}
+             */
+            workspacePolicy: "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source";
+            /**
+             * Runtimecontextpolicy
+             * @default fresh_agent_run
+             * @constant
+             */
+            runtimeContextPolicy: "fresh_agent_run";
+            /** Gitworkbranch */
+            gitWorkBranch?: string | null;
+            /** Maxbudgetusd */
+            maxBudgetUsd?: number | null;
+        };
         /** RemediationLinkSummaryModel */
         RemediationLinkSummaryModel: {
             /** Remediationworkflowid */
@@ -8532,6 +8594,8 @@ export interface components {
             liveObservation?: components["schemas"]["RemediationLiveObservationModel"] | null;
             lockOutcome?: components["schemas"]["RemediationLockOutcomeModel"] | null;
             approvalState?: components["schemas"]["RemediationApprovalStateModel"] | null;
+            /** Checkpointbranches */
+            checkpointBranches?: components["schemas"]["RemediationCheckpointBranchLinkModel"][];
             /**
              * Createdat
              * Format: date-time
@@ -13120,6 +13184,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RemediationLinksResponseModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_remediation_checkpoint_branch_api_executions__workflow_id__remediation_checkpoint_branches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemediationCheckpointBranchRepairRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchModel"];
                 };
             };
             /** @description Validation Error */

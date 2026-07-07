@@ -1100,6 +1100,25 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "turn-1",
         )
 
+    def test_checkpoint_branch_turn_source_preserves_before_execution_boundary(self) -> None:
+        wf = MoonMindRunWorkflow()
+
+        source = wf._checkpoint_branch_turn_source_checkpoint(
+            {
+                "sourceWorkflowId": "source-wf",
+                "sourceRunId": "source-run",
+                "sourceLogicalStepId": "source-step",
+            },
+            context_workspace={
+                "checkpointBeforeRef": "artifact://checkpoint/before",
+                "checkpointBeforeDigest": "sha256:" + "a" * 64,
+            },
+            node_id="repair",
+        )
+
+        self.assertEqual(source["checkpointRef"], "artifact://checkpoint/before")
+        self.assertEqual(source["checkpointBoundary"], "before_execution")
+
     def test_build_agent_execution_request_routes_omnigent_branch_instruction_ref(
         self,
     ) -> None:

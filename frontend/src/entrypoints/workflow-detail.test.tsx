@@ -372,6 +372,9 @@ describe('Workflow Detail Entrypoint', () => {
     fetchSpy = vi.spyOn(window, 'fetch');
     fetchSpy.mockClear();
     vi.mocked(navigateTo).mockReset();
+    vi.mocked(navigateTo).mockImplementation((path: string) => {
+      window.history.pushState({ moonmindDashboard: true }, '', path);
+    });
   });
 
   async function openWorkflowActionsMenu(expectedItemName?: string) {
