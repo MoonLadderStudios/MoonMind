@@ -334,15 +334,20 @@ def run_orchestration(
                 grace_remaining -= 1
             effective_base_sleep_seconds = (
                 max(base_sleep_seconds, 60)
-                if normalized_reason == "ci_running"
+                if normalized_reason in {"ci_running", "codex_review_grace_wait"}
                 else base_sleep_seconds
+            )
+            effective_max_sleep_seconds = (
+                max(60, min(max_sleep_seconds, 60))
+                if normalized_reason == "codex_review_grace_wait"
+                else max_sleep_seconds
             )
             sleep_seconds = compute_backoff_seconds(
                 finalize_only_retry_index,
                 base_sleep_seconds=effective_base_sleep_seconds,
-                max_sleep_seconds=max_sleep_seconds,
+                max_sleep_seconds=effective_max_sleep_seconds,
             )
-            if normalized_reason == "ci_running":
+            if normalized_reason in {"ci_running", "codex_review_grace_wait"}:
                 sleep_seconds = max(sleep_seconds, 60)
             finalize_only_retry_index += 1
             history.append(

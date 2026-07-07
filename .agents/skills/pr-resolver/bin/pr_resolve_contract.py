@@ -16,6 +16,7 @@ FULL_REMEDIATION_REASONS = {
 
 FINALIZE_ONLY_RETRY_REASONS = {
     "ci_running",
+    "codex_review_grace_wait",
     "comments_unavailable",
     "ci_signal_degraded",
     "snapshot_refresh_failed",
@@ -94,6 +95,8 @@ def remediation_next_step(reason: str) -> str:
         return "retry_finalize_after_backoff"
     if normalized == "ci_running":
         return "wait_for_ci_and_retry_finalize"
+    if normalized == "codex_review_grace_wait":
+        return "wait_for_codex_review_and_retry_finalize"
     if normalized == "comment_policy_not_enforced":
         return "inspect_comment_policy"
     if normalized == "merge_not_ready":
@@ -118,6 +121,7 @@ def merge_automation_disposition_for_result(
     if normalized_next_step in {
         "retry_finalize_after_backoff",
         "wait_for_ci_and_retry_finalize",
+        "wait_for_codex_review_and_retry_finalize",
     }:
         return MERGE_AUTOMATION_DISPOSITION_REENTER_GATE
     if normalized_status == "merged" and normalized_outcome == "merged":

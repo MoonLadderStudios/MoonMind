@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -442,6 +443,102 @@ def test_normal_human_issue_comment_stays_actionable(
     assert summary["actionableCommentCount"] == 1
     assert summary["actionableCommentIds"] == [1]
 
+def test_gemini_only_review_activates_codex_review_grace(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+    apply_codex_review_grace = pr_resolve_snapshot_module["apply_codex_review_grace"]
+
+    comments = [
+        {
+            "type": "review",
+            "id": 4649647799,
+            "user": "gemini-code-assist[bot]",
+            "body": "There are no review comments, so I have no feedback to provide.",
+            "created_at": "2026-07-07T23:21:05Z",
+        }
+    ]
+
+    summary = summarize_comments(comments, include_bot_review_comments=True)
+    summary = apply_codex_review_grace(
+        summary,
+        comments,
+        head_commit_sha="0f3c29855026f4da35cbead50bfa2d6f0bde641c",
+        now=datetime(2026, 7, 7, 23, 26, 44, tzinfo=UTC),
+    )
+
+    grace = summary["codexReviewGrace"]
+    assert grace["active"] is True
+    assert grace["reason"] == "gemini_only_review"
+    assert grace["timeoutSeconds"] == 600
+    assert grace["pollSeconds"] == 60
+
+def test_gemini_grace_expires_after_ten_minutes_without_restart(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+    apply_codex_review_grace = pr_resolve_snapshot_module["apply_codex_review_grace"]
+
+    comments = [
+        {
+            "type": "review",
+            "id": 4649647799,
+            "user": "gemini-code-assist",
+            "body": "There are no review comments.",
+            "created_at": "2026-07-07T23:21:05Z",
+        }
+    ]
+    first_now = datetime(2026, 7, 7, 23, 26, 44, tzinfo=UTC)
+    first_summary = apply_codex_review_grace(
+        summarize_comments(comments, include_bot_review_comments=True),
+        comments,
+        head_commit_sha="0f3c29855026f4da35cbead50bfa2d6f0bde641c",
+        now=first_now,
+    )
+
+    later_summary = apply_codex_review_grace(
+        summarize_comments(comments, include_bot_review_comments=True),
+        comments,
+        head_commit_sha="0f3c29855026f4da35cbead50bfa2d6f0bde641c",
+        previous_grace=first_summary["codexReviewGrace"],
+        now=first_now + timedelta(seconds=601),
+    )
+
+    assert later_summary["codexReviewGrace"]["active"] is False
+    assert later_summary["codexReviewGrace"]["expired"] is True
+    assert later_summary["codexReviewGrace"]["remainingSeconds"] == 0
+
+def test_second_visible_comment_disables_gemini_grace(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+    apply_codex_review_grace = pr_resolve_snapshot_module["apply_codex_review_grace"]
+
+    comments = [
+        {
+            "type": "review",
+            "id": 4649647799,
+            "user": "gemini-code-assist[bot]",
+            "body": "There are no review comments.",
+        },
+        {
+            "type": "review_comment",
+            "id": 3540280148,
+            "user": "chatgpt-codex-connector",
+            "body": "Please derive attack targets from TargetUnitId.",
+        },
+    ]
+
+    summary = apply_codex_review_grace(
+        summarize_comments(comments, include_bot_review_comments=True),
+        comments,
+        head_commit_sha="0f3c29855026f4da35cbead50bfa2d6f0bde641c",
+        now=datetime(2026, 7, 7, 23, 30, 34, tzinfo=UTC),
+    )
+
+    assert summary["codexReviewGrace"]["active"] is False
+    assert summary["codexReviewGrace"]["reason"] == "not_gemini_only"
+
 def test_resolved_review_threads_are_not_actionable(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -537,6 +634,46 @@ def test_finalize_blocks_when_actionable_comments_exist(
     )
 
     assert decision == {"action": "blocked", "reason": "actionable_comments"}
+
+def test_finalize_blocks_during_codex_review_grace(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"},
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+                "codexReviewGrace": {"active": True},
+            },
+        }
+    )
+
+    assert decision == {"action": "blocked", "reason": "codex_review_grace_wait"}
+
+def test_finalize_merges_after_codex_review_grace_expires(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"},
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+                "codexReviewGrace": {"active": False, "expired": True},
+            },
+        }
+    )
+
+    assert decision == {"action": "merge_now", "reason": "ci_complete"}
 
 def test_finalize_prioritizes_merge_conflicts_before_comments_and_ci(
     pr_resolve_finalize_module: dict[str, Any],
@@ -814,6 +951,48 @@ def test_orchestrate_ci_running_uses_finalize_only_retry_path(
     assert sleeps == [60]
 
 
+def test_orchestrate_codex_review_grace_waits_then_merges(
+    pr_resolve_orchestrate_module: dict[str, Any],
+) -> None:
+    run_orchestration = pr_resolve_orchestrate_module["run_orchestration"]
+
+    finalize_results = iter(
+        [
+            {
+                "status": "blocked",
+                "merge_outcome": "blocked",
+                "reason": "codex_review_grace_wait",
+            },
+            {"status": "merged", "merge_outcome": "merged", "reason": "ci_complete"},
+        ]
+    )
+    sleeps: list[int] = []
+    full_invocations = 0
+
+    def full_runner(_attempt: int, _escalation: int, _reason: str) -> dict[str, Any]:
+        nonlocal full_invocations
+        full_invocations += 1
+        return {"status": "failed", "merge_outcome": "failed", "reason": "unexpected"}
+
+    result, exit_code = run_orchestration(
+        finalize_runner=lambda _attempt: next(finalize_results),
+        full_runner=full_runner,
+        sleep_fn=lambda seconds: sleeps.append(seconds),
+        monotonic_fn=lambda: 0.0,
+        finalize_max_retries=2,
+        fix_max_iterations=3,
+        base_sleep_seconds=15,
+        max_sleep_seconds=120,
+        max_elapsed_seconds=900,
+        merge_not_ready_grace_retries=1,
+    )
+
+    assert exit_code == 0
+    assert result["status"] == "merged"
+    assert full_invocations == 0
+    assert sleeps == [60]
+
+
 def test_orchestrate_ci_running_sleep_floor_overrides_low_max_sleep(
     pr_resolve_orchestrate_module: dict[str, Any],
 ) -> None:
@@ -1086,6 +1265,23 @@ def test_contract_snapshot_refresh_failed_is_finalize_only_retry(
         merge_not_ready_grace_remaining=1,
     )
     assert action == "finalize_only_retry"
+
+def test_contract_codex_review_grace_wait_is_finalize_only_retry(
+    pr_resolve_contract_module: dict[str, Any],
+) -> None:
+    classify_retry_action = pr_resolve_contract_module["classify_retry_action"]
+    remediation_next_step = pr_resolve_contract_module["remediation_next_step"]
+
+    action = classify_retry_action(
+        "codex_review_grace_wait",
+        merge_not_ready_grace_remaining=0,
+    )
+
+    assert action == "finalize_only_retry"
+    assert (
+        remediation_next_step("codex_review_grace_wait")
+        == "wait_for_codex_review_and_retry_finalize"
+    )
 
 def test_contract_run_fix_next_step_returns_reenter_gate(
     pr_resolve_contract_module: dict[str, Any],

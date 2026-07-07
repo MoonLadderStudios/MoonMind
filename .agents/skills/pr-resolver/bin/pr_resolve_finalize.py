@@ -119,6 +119,9 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
         return {"action": "blocked", "reason": "comment_policy_not_enforced"}
     if bool(comments_summary.get("hasActionableComments")):
         return {"action": "blocked", "reason": "actionable_comments"}
+    codex_review_grace = comments_summary.get("codexReviewGrace")
+    if isinstance(codex_review_grace, dict) and codex_review_grace.get("active") is True:
+        return {"action": "blocked", "reason": "codex_review_grace_wait"}
     if normalize_text(ci.get("signalQuality")).lower() not in {"", "ok"}:
         return {"action": "blocked", "reason": "ci_signal_degraded"}
     if bool(ci.get("hasFailures")):
