@@ -8,20 +8,20 @@ describe('ExecutionStatusPill', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps step statuses visible when they are not workflow lifecycle states', () => {
+  it('keeps step ledger statuses visible when they are not workflow lifecycle states', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     render(
       <>
         <ExecutionStatusPill status="ready" />
-        <ExecutionStatusPill status="checking" />
-        <ExecutionStatusPill status="succeeded" />
+        <ExecutionStatusPill status="reviewing" />
+        <ExecutionStatusPill status="completed" />
       </>,
     );
 
     expect(screen.getByText('Ready').className).toContain('status-scheduled');
-    expect(screen.getByText('Checking').className).toContain('status-awaiting-external');
-    expect(screen.getByText('Succeeded').className).toContain('status-succeeded');
+    expect(screen.getByText('Reviewing').className).toContain('status-awaiting-external');
+    expect(screen.getByText('Completed').className).toContain('status-completed');
     expect(warn).not.toHaveBeenCalled();
   });
 

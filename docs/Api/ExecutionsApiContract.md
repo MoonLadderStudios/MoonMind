@@ -243,10 +243,10 @@ Representative fields:
 | `total` | integer | yes | Total planned steps for the current/latest run |
 | `pending` | integer | yes | Steps not yet ready |
 | `ready` | integer | no | Ready-to-run steps when the executor distinguishes this state |
-| `running` | integer | yes | Active steps |
+| `executing` | integer | yes | Active steps |
 | `awaitingExternal` | integer | no | Steps waiting on external progress |
 | `reviewing` | integer | no | Steps currently under structured review/check processing |
-| `succeeded` | integer | yes | Successfully completed steps |
+| `completed` | integer | yes | Successfully completed steps |
 | `failed` | integer | yes | Failed steps |
 | `skipped` | integer | no | Intentionally skipped steps |
 | `canceled` | integer | no | Canceled steps |
@@ -393,8 +393,8 @@ Example:
  "progress": {
  "total": 0,
  "pending": 0,
- "running": 0,
- "succeeded": 0,
+ "executing": 0,
+ "completed": 0,
  "failed": 0,
  "currentStepTitle": null
  },
@@ -586,7 +586,7 @@ Representative response:
  "title": "Run test suite",
  "tool": { "type": "skill", "name": "repo.run_tests", "version": "1" },
  "dependsOn": ["apply-patch"],
- "status": "running",
+ "status": "executing",
  "waitingReason": null,
  "attentionRequired": false,
  "attempt": 1,
