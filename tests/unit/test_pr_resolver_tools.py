@@ -538,6 +538,29 @@ def test_finalize_blocks_when_actionable_comments_exist(
 
     assert decision == {"action": "blocked", "reason": "actionable_comments"}
 
+def test_finalize_prioritizes_merge_conflicts_before_comments_and_ci(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"},
+            "ci": {
+                "isRunning": False,
+                "hasFailures": True,
+                "signalQuality": "degraded",
+            },
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": True,
+                "includeBotReviewComments": True,
+            },
+        }
+    )
+
+    assert decision == {"action": "blocked", "reason": "merge_conflicts"}
+
 def test_finalize_blocks_when_ci_running_and_comments_addressed(
     pr_resolve_finalize_module: dict[str, Any],
 ) -> None:

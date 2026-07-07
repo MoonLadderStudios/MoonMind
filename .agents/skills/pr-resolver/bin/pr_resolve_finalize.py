@@ -111,14 +111,14 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
     if normalize_text(pr.get("state")).upper() == "MERGED":
         return {"action": "already_merged", "reason": "already_merged"}
 
+    if _is_conflicting(pr):
+        return {"action": "blocked", "reason": "merge_conflicts"}
     if not bool(comments_fetch.get("succeeded")):
         return {"action": "blocked", "reason": "comments_unavailable"}
     if comments_summary.get("includeBotReviewComments") is not True:
         return {"action": "blocked", "reason": "comment_policy_not_enforced"}
     if bool(comments_summary.get("hasActionableComments")):
         return {"action": "blocked", "reason": "actionable_comments"}
-    if _is_conflicting(pr):
-        return {"action": "blocked", "reason": "merge_conflicts"}
     if normalize_text(ci.get("signalQuality")).lower() not in {"", "ok"}:
         return {"action": "blocked", "reason": "ci_signal_degraded"}
     if bool(ci.get("hasFailures")):

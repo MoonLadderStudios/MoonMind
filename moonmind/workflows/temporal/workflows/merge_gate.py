@@ -51,6 +51,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_attempts=5,
 )
 MERGE_AUTOMATION_RESOLVER_PRIORITY = 10
+DEFAULT_RESOLVER_TIMEOUT_SECONDS = 9000
 _TOKEN_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(token|password|authorization|cookie)=\S+"
 )
@@ -360,6 +361,16 @@ def build_resolver_run_request(
     }
     if required_capabilities:
         initial_parameters["requiredCapabilities"] = required_capabilities
+    timeout_policy = template.get("timeoutPolicy")
+    initial_parameters["timeoutPolicy"] = (
+        dict(timeout_policy)
+        if isinstance(timeout_policy, Mapping)
+        else {"timeout_seconds": DEFAULT_RESOLVER_TIMEOUT_SECONDS}
+    )
+    initial_parameters["timeoutPolicy"].setdefault(
+        "timeout_seconds",
+        DEFAULT_RESOLVER_TIMEOUT_SECONDS,
+    )
     return {
         "workflow_type": "MoonMind.UserWorkflow",
         "title": title,

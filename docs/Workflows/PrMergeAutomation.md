@@ -495,6 +495,9 @@ This is required because `pr-resolver` itself owns git push and merge behavior.
     "targetRuntime": "codex",
     "requiredCapabilities": ["git", "gh"],
     "publishMode": "none",
+    "timeoutPolicy": {
+      "timeout_seconds": 9000
+    },
     "task": {
       "instructions": "Resolve and merge PR #123 for parent workflow mm:parent.",
       "tool": {
@@ -510,6 +513,11 @@ This is required because `pr-resolver` itself owns git push and merge behavior.
   }
 }
 ```
+
+The resolver child timeout MUST cover the resolver's own orchestration budget
+plus setup and artifact-publication time. The default resolver launch uses a
+9000-second `timeoutPolicy.timeout_seconds`, which is intentionally larger than
+the `pr-resolver` tool's 7200-second default `finalizeMaxElapsedSeconds`.
 
 ### 13.3 Resolver child result contract extension
 
@@ -593,6 +601,14 @@ The recommended pattern is:
 3. resolver returns `mergeAutomationDisposition = "reenter_gate"`,
 4. `MoonMind.MergeAutomation` re-enters `awaiting_external`,
 5. once signal is re-established, it launches the next resolver child attempt.
+
+If a resolver child exits unsuccessfully or without a valid disposition, merge
+automation MUST refresh PR readiness before failing the parent. If that refresh
+shows the PR already merged, merge automation completes as `already_merged`. If
+the PR is still open but the head SHA advanced, merge automation treats that as
+durable resolver progress, updates the tracked head SHA, and re-enters the gate
+instead of failing immediately. If neither merge nor head advancement is
+observed, the resolver issue remains a terminal merge-automation failure.
 
 ---
 

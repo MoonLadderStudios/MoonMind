@@ -4,6 +4,7 @@ from moonmind.workflows.temporal.activity_catalog import build_default_activity_
 from moonmind.workflows.temporal.activity_runtime import _ACTIVITY_HANDLER_ATTRS
 from moonmind.workflows.temporal.workflows import merge_gate
 from moonmind.workflows.temporal.workflows.merge_gate import (
+    DEFAULT_RESOLVER_TIMEOUT_SECONDS,
     build_resolver_run_request,
     classify_readiness,
     deterministic_resolver_idempotency_key,
@@ -257,6 +258,9 @@ def test_build_resolver_run_request_uses_pr_resolver_and_publish_auto() -> None:
     assert "version" not in request["initial_parameters"]["task"]["tool"]
     assert request["initial_parameters"]["publishMode"] == "auto"
     assert request["initial_parameters"]["task"]["skill"]["args"]["pr"] == "341"
+    assert request["initial_parameters"]["timeoutPolicy"] == {
+        "timeout_seconds": DEFAULT_RESOLVER_TIMEOUT_SECONDS
+    }
 
 def test_build_resolver_run_request_pins_parent_provider_profile() -> None:
     request = build_resolver_run_request(
@@ -283,6 +287,25 @@ def test_build_resolver_run_request_pins_parent_provider_profile() -> None:
     assert runtime["effort"] == "high"
     assert "profileId" not in runtime
     assert "providerProfile" not in runtime
+
+def test_build_resolver_run_request_preserves_explicit_timeout_policy() -> None:
+    request = build_resolver_run_request(
+        parent_workflow_id="mm:parent",
+        pull_request=_pull_request(),
+        jira_issue_key=None,
+        merge_method="squash",
+        resolver_template={
+            "timeoutPolicy": {
+                "timeout_seconds": 12000,
+                "heartbeat_seconds": 30,
+            },
+        },
+    )
+
+    assert request["initial_parameters"]["timeoutPolicy"] == {
+        "timeout_seconds": 12000,
+        "heartbeat_seconds": 30,
+    }
 
 def test_build_continue_as_new_input_preserves_compact_wait_state() -> None:
     payload = build_continue_as_new_input(
