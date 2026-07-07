@@ -2713,7 +2713,7 @@ async def test_launch_privilege_drop_chowns_repo_and_artifacts_for_external_work
     chown_calls: list[tuple[object, ...]] = []
 
     async def _fake_run_checked_command(self, *cmd, **kw):
-        if cmd and cmd[0] == "chown":
+        if cmd[:2] == ("chown", "-R"):
             chown_calls.append(cmd)
         return None
 
