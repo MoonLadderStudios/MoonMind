@@ -8524,6 +8524,12 @@ class TemporalAgentRuntimeActivities:
             '- For `FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"; '
             "do not encode pull request creation or any other workflow-specific "
             "destination in this field.\n"
+            "- Treat integration, e2e, smoke, quickstart, map-entry, UI/browser, "
+            "deployment, and external-service checks as advisory when they depend "
+            "on unavailable non-repo assets, services, credentials, or tooling; "
+            "missing map assets or environment-only failures must be reported as "
+            "non-blocking limitations, not used as the sole reason for a blocking "
+            "verdict.\n"
             "- Still return the Markdown MoonSpec Verification Report in the assistant response."
         )
         return instructions.rstrip() + "\n\n" + block
