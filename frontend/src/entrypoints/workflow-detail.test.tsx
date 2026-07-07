@@ -2421,39 +2421,6 @@ describe('Workflow Detail Entrypoint', () => {
       updatedAt: '2026-04-09T00:00:04Z',
       actions: {},
     };
-    const stepsSnapshot = {
-      workflowId: 'test-123',
-      runId: '02-run',
-      runScope: 'latest',
-      steps: [
-        {
-          logicalStepId: 'apply',
-          order: 1,
-          title: 'Apply patch',
-          tool: { type: 'agent_runtime', name: 'codex_cli', version: '1' },
-          dependsOn: [],
-          status: 'completed',
-          waitingReason: null,
-          attentionRequired: false,
-          executionOrdinal: 2,
-          startedAt: '2026-04-09T00:00:03Z',
-          updatedAt: '2026-04-09T00:00:04Z',
-          summary: 'Applied repository changes',
-          checks: [],
-          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
-          artifacts: {
-            outputSummary: null,
-            outputPrimary: 'art-apply-output',
-            runtimeStdout: null,
-            runtimeStderr: null,
-            runtimeMergedLogs: null,
-            runtimeDiagnostics: null,
-            providerSnapshot: null,
-          },
-          lastError: null,
-        },
-      ],
-    };
     const stepExecutionsResponse = {
       workflowId: 'test-123',
       runId: '02-run',
