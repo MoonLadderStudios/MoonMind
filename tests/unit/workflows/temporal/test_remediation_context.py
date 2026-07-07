@@ -20,6 +20,7 @@ from api_service.db.models import (
     TemporalExecutionCanonicalRecord,
     TemporalExecutionRemediationLink,
 )
+from moonmind.config.settings import settings
 from moonmind.workflows.temporal import (
     ExecutionRef,
     LocalTemporalArtifactStore,
@@ -140,6 +141,7 @@ def _admin_profile(**overrides):
     return RemediationSecurityProfile(**data)
 
 CANONICAL_REMEDIATION_ACTIONS = {
+    "checkpoint_branch.create_from_remediation_context",
     "execution.pause",
     "execution.resume",
     "execution.request_rerun_same_workflow",
@@ -275,6 +277,10 @@ def mock_client_adapter():
 
 @asynccontextmanager
 async def temporal_db(tmp_path):
+    original_artifact_backend = settings.workflow.temporal_artifact_backend
+    original_artifact_root = settings.workflow.temporal_artifact_root
+    settings.workflow.temporal_artifact_backend = "local_fs"
+    settings.workflow.temporal_artifact_root = str(tmp_path / "artifacts")
     db_url = f"sqlite+aiosqlite:///{tmp_path}/remediation_context.db"
     engine = create_async_engine(db_url, future=True)
     session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -287,6 +293,8 @@ async def temporal_db(tmp_path):
             yield session
     finally:
         await engine.dispose()
+        settings.workflow.temporal_artifact_backend = original_artifact_backend
+        settings.workflow.temporal_artifact_root = original_artifact_root
 
 @pytest.mark.asyncio
 async def test_remediation_context_builder_creates_bounded_linked_artifact(
@@ -350,6 +358,9 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
                                     "logicalStepId": "run-tests",
                                     "attempt": "1",
                                     "agentRunId": "tr_selected",
+                                    "checkpointRef": "artifact://checkpoints/run-tests",
+                                    "checkpointDigest": "sha256:runtests",
+                                    "checkpointBoundary": "after_execution",
                                     "ignored": "not copied",
                                 }
                             ],
@@ -441,6 +452,9 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
                 "logicalStepId": "run-tests",
                 "attempt": 1,
                 "agentRunId": "tr_selected",
+                "checkpointRef": "artifact://checkpoints/run-tests",
+                "checkpointDigest": "sha256:runtests",
+                "checkpointBoundary": "after_execution",
             }
         ]
         assert len(payload["evidence"]["agentRuns"]) == 20

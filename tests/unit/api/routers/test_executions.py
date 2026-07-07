@@ -5007,6 +5007,7 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
                     "canDecide": True,
                     "auditRef": None,
                 },
+                "checkpointBranches": [],
                 "createdAt": now.isoformat().replace("+00:00", "Z"),
                 "updatedAt": now.isoformat().replace("+00:00", "Z"),
             }
@@ -5070,6 +5071,7 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
         "liveObservation": None,
         "lockOutcome": None,
         "approvalState": None,
+        "checkpointBranches": [],
         "createdAt": now.isoformat().replace("+00:00", "Z"),
         "updatedAt": now.isoformat().replace("+00:00", "Z"),
     }
@@ -5127,6 +5129,15 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
                 "canDecide": True,
                 "auditRef": "audit-rich",
             },
+            checkpoint_branch_links=[
+                {
+                    "workflowId": "mm:target-rich",
+                    "branchId": "cbr-rich",
+                    "branchTurnId": "cbt-rich",
+                    "checkpointRef": "artifact://checkpoints/rich",
+                    "contextArtifactRef": "art_context_rich",
+                }
+            ],
             created_at=now,
             updated_at=now,
         )
@@ -5172,6 +5183,18 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
         "canDecide": True,
         "auditRef": "audit-rich",
     }
+    assert item["checkpointBranches"] == [
+        {
+            "workflowId": "mm:target-rich",
+            "branchId": "cbr-rich",
+            "branchTurnId": "cbt-rich",
+            "operation": None,
+            "idempotencyKey": None,
+            "checkpointRef": "artifact://checkpoints/rich",
+            "contextArtifactRef": "art_context_rich",
+            "createdAt": None,
+        }
+    ]
     assert "/var/lib/moonmind/raw-context.json" not in json.dumps(item)
     service.list_remediation_targets.assert_awaited_once_with("mm:remediation-rich")
     service.list_remediations_for_target.assert_not_called()

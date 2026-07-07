@@ -32,6 +32,7 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
+import { navigateTo as navigateToDashboardRoute } from '../lib/navigation';
 import {
   readWorkflowListDisplayMode,
   type WorkflowListDisplayMode,
@@ -44,7 +45,6 @@ import {
 import { workflowWorkspaceRowFromDetail } from '../lib/workflowWorkspaceList';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
-  buildRemediationRuntimeRequestFields,
   buildWorkflowActionMenuItems,
   DEFAULT_REMEDIATION_ACTION_POLICY,
   DEFAULT_REMEDIATION_AUTHORITY,
@@ -53,6 +53,11 @@ import {
   isRemediationEligibleTarget,
   type WorkflowActionMenuItem,
 } from '../lib/workflowActions';
+import {
+  buildRemediationCreateDraft,
+  remediationCreateDraftHref,
+  storeRemediationCreateDraft,
+} from '../lib/remediationCreateDraft';
 import {
   projectChatSessionBlocks,
   type ChatBlock as ProjectedChatBlock,
@@ -969,6 +974,22 @@ const RemediationLinkSchema = z
     liveObservation: RemediationLiveObservationSchema.nullable().optional(),
     lockOutcome: RemediationLockOutcomeSchema.nullable().optional(),
     approvalState: RemediationApprovalStateSchema.nullable().optional(),
+    checkpointBranches: z
+      .array(
+        z
+          .object({
+            workflowId: z.string(),
+            branchId: z.string(),
+            branchTurnId: z.string().nullable().optional(),
+            checkpointRef: z.string().nullable().optional(),
+            contextArtifactRef: z.string().nullable().optional(),
+            operation: z.string().nullable().optional(),
+            idempotencyKey: z.string().nullable().optional(),
+            createdAt: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .default([]),
     createdAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
   })
@@ -6080,6 +6101,34 @@ function remediationListValue(items: string[] | null | undefined): string {
   return items && items.length > 0 ? items.join(', ') : '—';
 }
 
+function RemediationCheckpointBranches({
+  branches,
+}: {
+  branches: z.infer<typeof RemediationLinkSchema>['checkpointBranches'];
+}) {
+  if (!branches || branches.length === 0) return null;
+  return (
+    <div className="td-remediation-live">
+      <strong>Checkpoint branches</strong>
+      <ul className="td-remediation-list">
+        {branches.map((branch) => (
+          <li key={`${branch.workflowId}:${branch.branchId}`} className="card">
+            <a href={dependencyHref(branch.workflowId)}>
+              <code className="text-xs break-all">{branch.branchId}</code>
+            </a>
+            <div className="grid-2">
+              <Card label="Target Workflow"><code className="text-xs break-all">{branch.workflowId}</code></Card>
+              <Card label="Turn">{branch.branchTurnId || '—'}</Card>
+              <Card label="Checkpoint">{branch.checkpointRef || '—'}</Card>
+              <Card label="Context">{branch.contextArtifactRef || '—'}</Card>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function RemediationApprovalSummary({
   approval,
 }: {
@@ -6167,6 +6216,7 @@ function RemediationRelationshipsPanel({
                   ) : null}
                   <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
                 </div>
+                <RemediationCheckpointBranches branches={item.checkpointBranches} />
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
                   <div className="actions">
@@ -6240,6 +6290,7 @@ function RemediationRelationshipsPanel({
                 {!item.contextArtifactRef ? (
                   <p className="notice subtle">Evidence bundle is missing.</p>
                 ) : null}
+                <RemediationCheckpointBranches branches={item.checkpointBranches} />
                 {item.mode?.includes('follow') && !item.contextArtifactRef ? (
                   <p className="notice subtle">
                     Live follow is unavailable; durable remediation artifacts remain authoritative.
@@ -7241,38 +7292,21 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const createRemediationMutation = useMutation({
     mutationFn: async () => {
-      const response = await fetch(`${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          repository: execution?.repository ?? null,
-          ...buildRemediationRuntimeRequestFields(execution),
-          instructions: `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
-          remediation: {
-            mode: remediationMode,
-            authorityMode: remediationAuthority,
-            target: {
-              runId: latestRunId || runId || undefined,
-            },
-            actionPolicyRef: remediationActionPolicy.trim() || undefined,
-            evidencePolicy: {
-              includeStepLedger: true,
-              includeDiagnostics: true,
-              tailLines: 2000,
-            },
-            trigger: { type: 'manual' },
-          },
-        }),
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+      if (!execution) {
+        throw new Error('Workflow detail is required before remediation can be drafted.');
       }
-      return response.json();
+      const draft = buildRemediationCreateDraft(execution, {
+        mode: remediationMode,
+        authorityMode: remediationAuthority,
+        actionPolicyRef: remediationActionPolicy,
+        runId: latestRunId || runId,
+      });
+      const draftId = storeRemediationCreateDraft(draft);
+      navigateToDashboardRoute(remediationCreateDraftHref(draftId));
+      return { draft };
     },
     onSuccess: () => {
-      setActionNotice('Remediation workflow creation submitted.');
-      invalidate();
+      setActionNotice('Remediation draft opened in Create.');
     },
     onError: (error: Error) => setActionError(error.message),
   });

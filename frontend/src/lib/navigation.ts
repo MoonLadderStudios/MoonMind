@@ -1,8 +1,10 @@
-import { isDashboardInternalUrl } from './dashboardRoutes';
+import { isDashboardInternalUrl, resolveDashboardRoute } from './dashboardRoutes';
 
 export function navigateTo(path: string): void {
   const url = new URL(path, window.location.origin);
-  if (!isDashboardInternalUrl(url)) {
+  const isRelativeDashboardPath =
+    path.startsWith('/') && resolveDashboardRoute(url.pathname) !== null;
+  if (!isRelativeDashboardPath && !isDashboardInternalUrl(url)) {
     window.location.assign(path);
     return;
   }

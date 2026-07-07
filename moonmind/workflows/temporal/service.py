@@ -26,6 +26,7 @@ from api_service.db.models import (
     MoonMindWorkflowState,
     SettingsOverride,
     TemporalArtifact,
+    TemporalArtifactLink,
     TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
@@ -37,6 +38,7 @@ from api_service.db.models import (
     TemporalExecutionRemediationLink,
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
+    WorkflowCheckpointBranchOperation,
 )
 from moonmind.config.settings import settings
 from moonmind.security import scan_outbound_text
@@ -66,6 +68,10 @@ from moonmind.schemas.temporal_models import (
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
@@ -99,6 +105,7 @@ from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
 )
+from moonmind.workflows.temporal.remediation_context import RemediationContextBuilder
 
 TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
 SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
@@ -408,6 +415,14 @@ class TemporalExecutionService:
         )
         self._client_adapter = client_adapter or TemporalClientAdapter()
 
+    def _remediation_context_builder(self) -> RemediationContextBuilder:
+        return RemediationContextBuilder(
+            session=self._session,
+            artifact_service=TemporalArtifactService(
+                TemporalArtifactRepository(self._session)
+            ),
+        )
+
     async def check_system_paused(self) -> bool:
         """Return True if the system-wide worker pause singleton is active.
 
@@ -550,6 +565,63 @@ class TemporalExecutionService:
             and authority_mode == "observe_only"
         )
 
+    @classmethod
+    def _validate_remediation_evidence_policy(cls, value: Any) -> None:
+        if value is None:
+            return
+        if not isinstance(value, Mapping):
+            raise TemporalExecutionValidationError(
+                "workflow.remediation.evidencePolicy must be an object."
+            )
+        cls._validate_remediation_evidence_policy_refs(
+            value,
+            path="workflow.remediation.evidencePolicy",
+            ref_sensitive=False,
+        )
+
+    @classmethod
+    def _validate_remediation_evidence_policy_refs(
+        cls,
+        value: Any,
+        *,
+        path: str,
+        ref_sensitive: bool,
+    ) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                key_text = str(key)
+                normalized_key = key_text.lower()
+                child_ref_sensitive = ref_sensitive or any(
+                    token in normalized_key
+                    for token in ("ref", "refs", "url", "uri", "resource")
+                )
+                cls._validate_remediation_evidence_policy_refs(
+                    item,
+                    path=f"{path}.{key_text}",
+                    ref_sensitive=child_ref_sensitive,
+                )
+            return
+        if isinstance(value, list):
+            if len(value) > 100:
+                raise TemporalExecutionValidationError(f"{path} must be bounded.")
+            for index, item in enumerate(value):
+                cls._validate_remediation_evidence_policy_refs(
+                    item,
+                    path=f"{path}[{index}]",
+                    ref_sensitive=ref_sensitive,
+                )
+            return
+        if not ref_sensitive or value is None or isinstance(value, bool | int | float):
+            return
+        ref_value = str(value).strip()
+        if not ref_value:
+            return
+        if ref_value.startswith("artifact://"):
+            return
+        raise TemporalExecutionValidationError(
+            f"{path} must use a MoonMind artifact ref."
+        )
+
     async def _validate_remediation_link(
         self,
         *,
@@ -661,6 +733,54 @@ class TemporalExecutionService:
                     raise TemporalExecutionValidationError(
                         "workflow.remediation.target.agentRunIds must belong to the target execution."
                     )
+        step_selectors = (
+            target.get("stepSelectors")
+            if "stepSelectors" in target
+            else target.get("step_selectors")
+        )
+        if step_selectors is not None:
+            if not isinstance(step_selectors, list) or any(
+                not isinstance(item, Mapping) for item in step_selectors
+            ):
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.target.stepSelectors must be a list of objects."
+                )
+            for item in step_selectors:
+                checkpoint_ref = str(
+                    item.get("checkpointRef") or item.get("checkpoint_ref") or ""
+                ).strip()
+                if checkpoint_ref and not checkpoint_ref.startswith("artifact://"):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors checkpointRef must be an artifact ref."
+                    )
+
+        evidence_policy = remediation.get("evidencePolicy")
+        self._validate_remediation_evidence_policy(evidence_policy)
+        checkpoint_branch_policy = remediation.get("checkpointBranchPolicy")
+        if checkpoint_branch_policy is not None:
+            if not isinstance(checkpoint_branch_policy, Mapping):
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.checkpointBranchPolicy must be an object."
+                )
+            action_kind = str(checkpoint_branch_policy.get("actionKind") or "").strip()
+            if (
+                action_kind
+                and action_kind != "checkpoint_branch.create_from_remediation_context"
+            ):
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.checkpointBranchPolicy.actionKind must be checkpoint_branch.create_from_remediation_context."
+                )
+            runtime_policy = str(
+                checkpoint_branch_policy.get("runtimeContextPolicy") or ""
+            ).strip()
+            if action_kind and not runtime_policy:
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.checkpointBranchPolicy.runtimeContextPolicy must be fresh_agent_run."
+                )
+            if runtime_policy != "fresh_agent_run":
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.checkpointBranchPolicy.runtimeContextPolicy must be fresh_agent_run."
+                )
 
         trigger = remediation.get("trigger")
         trigger_type = None
@@ -744,7 +864,9 @@ class TemporalExecutionService:
             )
             .order_by(TemporalExecutionRemediationLink.created_at.asc())
         )
-        return await self._scalars_all(stmt)
+        links = await self._scalars_all(stmt)
+        await self._attach_remediation_checkpoint_branch_links(links)
+        return links
 
     async def list_remediations_for_target(
         self, target_workflow_id: str
@@ -759,7 +881,70 @@ class TemporalExecutionService:
                 TemporalExecutionRemediationLink.remediation_workflow_id.asc(),
             )
         )
-        return await self._scalars_all(stmt)
+        links = await self._scalars_all(stmt)
+        await self._attach_remediation_checkpoint_branch_links(links)
+        return links
+
+    async def _attach_remediation_checkpoint_branch_links(
+        self, links: list[TemporalExecutionRemediationLink]
+    ) -> None:
+        if not links:
+            return
+        remediation_ids = {
+            str(link.remediation_workflow_id or "").strip()
+            for link in links
+            if str(link.remediation_workflow_id or "").strip()
+        }
+        target_ids = {
+            str(link.target_workflow_id or "").strip()
+            for link in links
+            if str(link.target_workflow_id or "").strip()
+        }
+        if not remediation_ids or not target_ids:
+            return
+        result = await self._session.execute(
+            select(WorkflowCheckpointBranchOperation).where(
+                WorkflowCheckpointBranchOperation.workflow_id.in_(target_ids),
+                WorkflowCheckpointBranchOperation.operation == "checkpoint_branch.create",
+            )
+        )
+        branch_links_by_remediation: dict[str, list[dict[str, Any]]] = {
+            remediation_id: [] for remediation_id in remediation_ids
+        }
+        for operation in result.scalars():
+            payload = operation.response_payload
+            if not isinstance(payload, Mapping):
+                continue
+            remediation = payload.get("remediation")
+            if not isinstance(remediation, Mapping):
+                continue
+            remediation_workflow_id = str(
+                remediation.get("workflowId") or remediation.get("remediationWorkflowId") or ""
+            ).strip()
+            if remediation_workflow_id not in branch_links_by_remediation:
+                continue
+            branch_link = {
+                "workflowId": operation.workflow_id,
+                "branchId": operation.branch_id,
+                "branchTurnId": operation.branch_turn_id,
+                "operation": operation.operation,
+                "idempotencyKey": operation.idempotency_key,
+                "createdAt": operation.created_at.isoformat()
+                if operation.created_at
+                else None,
+                "checkpointRef": payload.get("checkpointRef")
+                or remediation.get("checkpointRef"),
+                "contextArtifactRef": remediation.get("contextArtifactRef"),
+            }
+            branch_links_by_remediation[remediation_workflow_id].append(
+                {key: value for key, value in branch_link.items() if value is not None}
+            )
+        for link in links:
+            setattr(
+                link,
+                "checkpoint_branch_links",
+                branch_links_by_remediation.get(link.remediation_workflow_id, []),
+            )
 
     async def record_remediation_approval_decision(
         self,
@@ -1267,6 +1452,17 @@ class TemporalExecutionService:
             return await self._sync_projection_best_effort(existing)
         await self._session.refresh(record)
 
+        if remediation_link is not None:
+            try:
+                await self._remediation_context_builder().build_context(
+                    remediation_workflow_id=record.workflow_id
+                )
+                await self._session.refresh(record)
+            except Exception as exc:
+                raise TemporalExecutionValidationError(
+                    "Failed to create remediation context artifact."
+                ) from exc
+
         try:
             input_args: dict[str, Any] = {}
             if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
@@ -1313,9 +1509,30 @@ class TemporalExecutionService:
                 record.run_id = start_run_id
                 if remediation_link is not None:
                     remediation_link.remediation_run_id = start_run_id
+                    if remediation_link.context_artifact_ref:
+                        context_link = (
+                            await self._session.execute(
+                                select(TemporalArtifactLink).where(
+                                    TemporalArtifactLink.workflow_id
+                                    == record.workflow_id,
+                                    TemporalArtifactLink.artifact_id
+                                    == remediation_link.context_artifact_ref,
+                                    TemporalArtifactLink.link_type
+                                    == "remediation.context",
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if context_link is not None:
+                            context_link.run_id = start_run_id
                 await self._session.commit()
                 await self._session.refresh(record)
         except Exception as exc:
+            if remediation_link is not None:
+                logger.exception(
+                    "Failed to start Temporal remediation workflow for execution %s",
+                    record.workflow_id,
+                )
+                raise
             logger.exception(
                 "Failed to start Temporal workflow for execution %s", record.workflow_id
             )

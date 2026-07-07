@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 from functools import lru_cache
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.api.enums.v1 import IndexedValueType
@@ -124,10 +124,12 @@ from moonmind.schemas.temporal_models import (
 )
 from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchArchiveRequest,
+    CheckpointBranchApiSourceModel,
     CheckpointBranchCompareResponse,
     CheckpointBranchContinueRequest,
     CheckpointBranchCreateRequest,
     CheckpointBranchForkRequest,
+    CheckpointBranchInstructionsModel,
     CheckpointBranchListResponse,
     CheckpointBranchModel,
     CheckpointBranchPromoteRequest,
@@ -481,6 +483,16 @@ class RemediationLockOutcomeModel(BaseModel):
     holder: str | None = None
     releasedAt: datetime | str | None = None
 
+class RemediationCheckpointBranchLinkModel(BaseModel):
+    workflowId: str
+    branchId: str
+    branchTurnId: str | None = None
+    operation: str | None = None
+    idempotencyKey: str | None = None
+    checkpointRef: str | None = None
+    contextArtifactRef: str | None = None
+    createdAt: datetime | str | None = None
+
 class RemediationLinkSummaryModel(BaseModel):
     remediationWorkflowId: str
     remediationRunId: str
@@ -502,6 +514,9 @@ class RemediationLinkSummaryModel(BaseModel):
     liveObservation: RemediationLiveObservationModel | None = None
     lockOutcome: RemediationLockOutcomeModel | None = None
     approvalState: RemediationApprovalStateModel | None = None
+    checkpointBranches: list[RemediationCheckpointBranchLinkModel] = Field(
+        default_factory=list
+    )
     createdAt: datetime
     updatedAt: datetime
 
@@ -518,6 +533,20 @@ class RemediationApprovalDecisionResponse(BaseModel):
     workflowId: str
     requestId: str
     decision: str
+
+class RemediationCheckpointBranchRepairRequest(BaseModel):
+    checkpointRef: str
+    instructions: CheckpointBranchInstructionsModel
+    idempotencyKey: str = Field(..., min_length=1, max_length=512)
+    label: str | None = None
+    workspacePolicy: Literal[
+        "apply_previous_execution_diff_to_clean_baseline",
+        "start_from_last_passed_commit",
+        "fresh_branch_from_source",
+    ] = "apply_previous_execution_diff_to_clean_baseline"
+    runtimeContextPolicy: Literal["fresh_agent_run"] = "fresh_agent_run"
+    gitWorkBranch: str | None = None
+    maxBudgetUsd: float | None = None
 _PROTECTED_BRANCH_REFS = {"head", "main", "master", "develop", "trunk", "prod", "production"}
 _SAFE_PROMOTION_SIDE_EFFECT_STATES = {
     "none",
@@ -8535,6 +8564,9 @@ def _derive_task_title(
     normalized_tool: Mapping[str, Any] | None = None,
     normalized_steps: Sequence[Mapping[str, Any]] = (),
 ) -> str | None:
+    current_title = str(task_payload.get("title") or "").strip()
+    if current_title and not is_generic_title(current_title):
+        return current_title[:_MAX_TASK_TITLE_LENGTH]
     raw_steps = task_payload.get("steps")
     if isinstance(raw_steps, list):
         for item in raw_steps:
@@ -8554,7 +8586,7 @@ def _derive_task_title(
             return normalized[:_MAX_TASK_TITLE_LENGTH]
 
     synthesized = synthesize_workflow_title(
-        current_title=task_payload.get("title"),
+        current_title=current_title,
         task_payload=task_payload,
         normalized_tool=normalized_tool,
         normalized_steps=normalized_steps,
@@ -10561,6 +10593,21 @@ def _bounded_lock_outcome(value: Any) -> RemediationLockOutcomeModel | None:
     bounded = {key: value.get(key) for key in allowed if key in value}
     return RemediationLockOutcomeModel.model_validate(bounded) if bounded else None
 
+def _bounded_checkpoint_branch_links(
+    value: Any,
+) -> list[RemediationCheckpointBranchLinkModel]:
+    if not isinstance(value, list | tuple):
+        return []
+    links: list[RemediationCheckpointBranchLinkModel] = []
+    for item in value[:10]:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            links.append(RemediationCheckpointBranchLinkModel.model_validate(item))
+        except ValidationError:
+            continue
+    return links
+
 def _remediation_approval_state_from_link(
     link: Any,
     *,
@@ -10620,12 +10667,112 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         ),
         lockOutcome=_bounded_lock_outcome(getattr(link, "lock_outcome", None)),
         approvalState=approval_state,
+        checkpointBranches=_bounded_checkpoint_branch_links(
+            getattr(link, "checkpoint_branch_links", None)
+        ),
         createdAt=getattr(link, "created_at", None),
         updatedAt=getattr(link, "updated_at", None),
     )
 
 def _remediation_approval_request_id(remediation_workflow_id: str) -> str:
     return f"{remediation_workflow_id}:approval"
+
+def _context_selected_checkpoint(
+    context_payload: Mapping[str, Any],
+    checkpoint_ref: str,
+) -> Mapping[str, Any] | None:
+    def _artifact_ref_value(value: Any) -> str:
+        if isinstance(value, Mapping):
+            value = value.get("ref") or value.get("artifactRef") or value
+        return str(value or "").strip()
+
+    selected_steps = context_payload.get("selectedSteps")
+    if not isinstance(selected_steps, list):
+        return None
+    for item in selected_steps:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("checkpointRef") or "").strip() == checkpoint_ref:
+            return item
+        artifact_refs = item.get("artifactRefs")
+        if isinstance(artifact_refs, list) and checkpoint_ref in {
+            _artifact_ref_value(ref) for ref in artifact_refs
+        }:
+            return item
+    return None
+
+def _checkpoint_summary_for_ref(
+    record: Any,
+    checkpoint_ref: str,
+) -> CheckpointSummaryModel | None:
+    for checkpoint in _checkpoint_summaries_from_record(record):
+        if checkpoint.checkpoint_ref == checkpoint_ref:
+            return checkpoint
+    return None
+
+
+async def _read_remediation_context_payload(
+    *,
+    session: AsyncSession,
+    context_artifact_ref: str,
+    target_workflow_id: str,
+    target_run_id: str,
+    principal: str,
+) -> dict[str, Any]:
+    artifact_service = get_temporal_artifact_service(session)
+    artifact, body = await artifact_service.read(
+        artifact_id=context_artifact_ref,
+        principal=principal,
+    )
+    metadata = artifact.metadata_json if isinstance(artifact.metadata_json, Mapping) else {}
+    if metadata.get("artifact_type") != "remediation.context":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "invalid_remediation_context",
+                "reason": "artifact_type_mismatch",
+            },
+        )
+    if body is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "invalid_remediation_context",
+                "reason": "empty_body",
+            },
+        )
+    try:
+        decoded = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "invalid_remediation_context",
+                "reason": "invalid_json",
+            },
+        ) from exc
+    if not isinstance(decoded, dict):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "invalid_remediation_context",
+                "reason": "payload_not_object",
+            },
+        )
+    target = decoded.get("target")
+    target_mapping = target if isinstance(target, Mapping) else {}
+    if (
+        target_mapping.get("workflowId") != target_workflow_id
+        or target_mapping.get("runId") != target_run_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "invalid_remediation_context",
+                "reason": "target_mismatch",
+            },
+        )
+    return decoded
 
 @router.get(
     "/{workflow_id}/remediations",
@@ -10656,6 +10803,210 @@ async def list_execution_remediations(
         direction=direction,
         items=[_serialize_remediation_link_summary(link) for link in links],
     )
+
+@router.post(
+    "/{workflow_id}/remediation/checkpoint-branches",
+    response_model=CheckpointBranchModel,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_remediation_checkpoint_branch(
+    workflow_id: str,
+    payload: RemediationCheckpointBranchRepairRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    links = await service.list_remediation_targets(workflow_id)
+    link = links[0] if links else None
+    if link is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "remediation_link_not_found"},
+        )
+    if not link.context_artifact_ref:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "remediation_context_missing"},
+        )
+    target_record = await _get_owned_execution(
+        service=service, workflow_id=link.target_workflow_id, user=user
+    )
+    if target_record.run_id != link.target_run_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "stale_remediation_target",
+                "message": "Remediation target run no longer matches the pinned run.",
+            },
+        )
+    checkpoint_ref = str(payload.checkpointRef or "").strip()
+    if not checkpoint_ref.startswith("artifact://"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_checkpoint_ref",
+                "message": "checkpointRef must be an artifact ref.",
+            },
+        )
+    context_payload = await _read_remediation_context_payload(
+        session=session,
+        context_artifact_ref=link.context_artifact_ref,
+        target_workflow_id=link.target_workflow_id,
+        target_run_id=link.target_run_id,
+        principal=_owner_id(user),
+    )
+    selected_checkpoint = _context_selected_checkpoint(context_payload, checkpoint_ref)
+    if selected_checkpoint is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "checkpoint_invalidity",
+                "reason": "checkpoint_not_selected_in_remediation_context",
+            },
+        )
+    target_checkpoint = _checkpoint_summary_for_ref(target_record, checkpoint_ref)
+    workspace_policy = payload.workspacePolicy
+    runtime_context_policy = payload.runtimeContextPolicy
+    _validate_branch_policy(
+        workspace_policy=workspace_policy,
+        runtime_context_policy=runtime_context_policy,
+        publish_mode="none",
+        git_work_branch=payload.gitWorkBranch,
+        max_budget_usd=payload.maxBudgetUsd,
+    )
+    source = CheckpointBranchApiSourceModel.model_validate(
+        {
+            "workflowId": link.target_workflow_id,
+            "runId": link.target_run_id,
+            "logicalStepId": selected_checkpoint.get("logicalStepId"),
+            "executionOrdinal": selected_checkpoint.get("executionOrdinal"),
+            "checkpointBoundary": selected_checkpoint.get("checkpointBoundary")
+            or (
+                target_checkpoint.checkpoint_boundary
+                if target_checkpoint is not None
+                else None
+            )
+            or "after_execution",
+            "checkpointRef": checkpoint_ref,
+            "checkpointDigest": selected_checkpoint.get("checkpointDigest")
+            or (
+                target_checkpoint.checkpoint_digest
+                if target_checkpoint is not None
+                else None
+            ),
+        }
+    )
+    _validate_branch_source(
+        workflow_id=link.target_workflow_id,
+        record=target_record,
+        source=source,
+    )
+    request_digest = _operation_digest(
+        {
+            "remediationWorkflowId": workflow_id,
+            "contextArtifactRef": link.context_artifact_ref,
+            "checkpointRef": checkpoint_ref,
+            "instructions": payload.instructions.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+            "workspacePolicy": workspace_policy,
+            "runtimeContextPolicy": runtime_context_policy,
+            "gitWorkBranch": payload.gitWorkBranch,
+            "maxBudgetUsd": payload.maxBudgetUsd,
+        }
+    )
+    existing_op = await session.execute(
+        select(WorkflowCheckpointBranchOperation).where(
+            WorkflowCheckpointBranchOperation.workflow_id == link.target_workflow_id,
+            WorkflowCheckpointBranchOperation.idempotency_key == payload.idempotencyKey,
+        )
+    )
+    operation = existing_op.scalar_one_or_none()
+    if operation is not None:
+        if (
+            operation.operation != "checkpoint_branch.create"
+            or operation.request_digest != request_digest
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "idempotency_key_conflict"},
+            )
+        branch = await _load_checkpoint_branch(
+            session,
+            workflow_id=link.target_workflow_id,
+            branch_id=str(operation.branch_id),
+        )
+        return _branch_to_model(branch)
+
+    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
+    branch_id = _new_checkpoint_branch_id()
+    branch_turn_id = _new_checkpoint_branch_turn_id()
+    await _prepare_checkpoint_branch_launch(
+        session=session,
+        record=target_record,
+        workflow_id=link.target_workflow_id,
+        branch_id=branch_id,
+        branch_turn_id=branch_turn_id,
+        source_checkpoint_ref=checkpoint_ref,
+        source_checkpoint_digest=source.checkpoint_digest,
+        logical_step_id=source.logical_step_id,
+        label=payload.label or "Remediation checkpoint branch",
+        workspace_policy=workspace_policy,
+        runtime_context_policy=runtime_context_policy,
+        idempotency_key=payload.idempotencyKey,
+        instruction_ref=instruction_ref,
+        instruction_digest=instruction_digest,
+        requested_work_branch=payload.gitWorkBranch,
+        source_run_id=link.target_run_id,
+        source_execution_ordinal=source.execution_ordinal,
+        source_checkpoint_boundary=source.checkpoint_boundary,
+    )
+    branch = await session.get(WorkflowCheckpointBranch, branch_id)
+    if branch is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_binding", "reason": "branch_prepare_failed"},
+        )
+    branch.state = "created"
+    branch.branch_kind = "root"
+    branch.current_head_checkpoint_ref = checkpoint_ref
+    branch.publish_status = "unpublished"
+    branch.idempotency_key = payload.idempotencyKey
+    branch.created_by = getattr(user, "email", None) or _owner_id(user)
+    branch.diagnostics = {
+        **(branch.diagnostics or {}),
+        "remediationWorkflowId": workflow_id,
+        "remediationContextRef": link.context_artifact_ref,
+        "repairActionKind": "checkpoint_branch.create_from_remediation_context",
+    }
+    session.add(
+        WorkflowCheckpointBranchOperation(
+            workflow_id=link.target_workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            operation="checkpoint_branch.create",
+            idempotency_key=payload.idempotencyKey,
+            request_digest=request_digest,
+            response_payload={
+                "branchId": branch_id,
+                "branchTurnId": branch_turn_id,
+                "checkpointRef": checkpoint_ref,
+                "remediation": {
+                    "workflowId": workflow_id,
+                    "runId": link.remediation_run_id,
+                    "contextArtifactRef": link.context_artifact_ref,
+                    "checkpointRef": checkpoint_ref,
+                    "actionKind": "checkpoint_branch.create_from_remediation_context",
+                    "runtimeContextPolicy": runtime_context_policy,
+                },
+            },
+        )
+    )
+    link.latest_action_summary = f"Created checkpoint branch {branch_id}."
+    await session.commit()
+    await session.refresh(branch)
+    return _branch_to_model(branch)
 
 @router.post(
     "/{workflow_id}/remediation/approvals/{request_id}",

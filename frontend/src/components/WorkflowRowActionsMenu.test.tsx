@@ -141,6 +141,42 @@ describe('WorkflowRowActionsMenu', () => {
     });
   });
 
+  it('opens Create with a remediation draft instead of posting to direct remediation', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...detailResponse,
+            workflowId: 'wf-123',
+            runId: 'run-1',
+            state: 'failed',
+            repository: 'MoonLadderStudios/MoonMind',
+            actions: { canCancel: true },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    const remediateItem = await screen.findByRole('menuitem', { name: 'Remediate' });
+    await waitFor(() => expect(remediateItem.getAttribute('aria-disabled')).toBeNull());
+    fireEvent.mouseDown(remediateItem);
+    fireEvent.click(remediateItem);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/new');
+      expect(window.location.search).toContain('intent=remediate');
+      expect(window.location.search).toContain('draftId=');
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).endsWith('/remediation')),
+    ).toBe(false);
+  });
+
   it('bypasses dependencies directly without opening a dialog', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
