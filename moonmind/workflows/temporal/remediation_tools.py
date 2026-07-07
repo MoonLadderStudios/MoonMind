@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,10 +18,15 @@ from typing import Any, Literal, Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
+from api_service.services.checkpoint_branch_service import (
+    CheckpointBranchService,
+    build_branch_turn_launch_idempotency_key,
+)
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 from moonmind.workflows.temporal.remediation_context import (
     REMEDIATION_CONTEXT_LINK_TYPE,
     RemediationLifecyclePublisher,
+    build_corrected_instruction_retry_provenance,
     build_remediation_audit_event,
     build_remediation_decision_log,
     build_remediation_final_summary,
@@ -638,6 +644,266 @@ class RemediationEvidenceToolService:
             "lockRelease": final_summary.get("lockRelease"),
         }
 
+    async def create_checkpoint_branch_from_remediation_context(
+        self,
+        *,
+        remediation_workflow_id: str,
+        request: Mapping[str, Any],
+        checkpoint_branch_service: CheckpointBranchService | None = None,
+        principal: str = "service:remediation-tools",
+    ) -> dict[str, Any]:
+        """Create and launch a fresh-session checkpoint branch repair turn."""
+
+        if not isinstance(request, Mapping):
+            raise RemediationEvidenceToolError("checkpoint branch request must be an object.")
+        link = await self._load_link(remediation_workflow_id)
+        context = await self._read_context_payload(link=link, principal=principal)
+        source = request.get("source")
+        source_mapping = source if isinstance(source, Mapping) else {}
+        checkpoint_ref = _required_artifact_ref(
+            source_mapping.get("checkpointRef") or source_mapping.get("checkpoint_ref"),
+            "source.checkpointRef",
+        )
+        checkpoint_boundary = _required_string(
+            source_mapping.get("checkpointBoundary")
+            or source_mapping.get("checkpoint_boundary")
+            or "after_execution",
+            "source.checkpointBoundary",
+        )
+        if checkpoint_boundary not in {
+            "before_execution",
+            "after_execution",
+            "before_recovery_restoration",
+        }:
+            raise RemediationEvidenceToolError(
+                "source.checkpointBoundary is not supported."
+            )
+        target = context.get("target") if isinstance(context.get("target"), Mapping) else {}
+        target_run_id = _required_string(target.get("runId"), "context.target.runId")
+        requested_run_id = str(
+            source_mapping.get("runId") or source_mapping.get("run_id") or target_run_id
+        ).strip()
+        if requested_run_id != target_run_id or target_run_id != link.target_run_id:
+            raise RemediationEvidenceToolError(
+                "source.runId must match the pinned remediation target run."
+            )
+        evidence = context.get("evidence")
+        evidence_mapping = evidence if isinstance(evidence, Mapping) else {}
+        allowed_refs = set(_artifact_ref_list(evidence_mapping.get("targetArtifactRefs")))
+        if checkpoint_ref not in allowed_refs:
+            raise RemediationEvidenceToolError(
+                "source.checkpointRef is not listed in remediation context evidence."
+            )
+
+        branch_payload = request.get("branch")
+        branch_mapping = branch_payload if isinstance(branch_payload, Mapping) else {}
+        workspace_policy = _required_string(
+            branch_mapping.get("workspacePolicy")
+            or branch_mapping.get("workspace_policy")
+            or "apply_previous_execution_diff_to_clean_baseline",
+            "branch.workspacePolicy",
+        )
+        runtime_context_policy = _required_string(
+            branch_mapping.get("runtimeContextPolicy")
+            or branch_mapping.get("runtime_context_policy")
+            or "fresh_agent_run",
+            "branch.runtimeContextPolicy",
+        )
+        if runtime_context_policy != "fresh_agent_run":
+            raise RemediationEvidenceToolError(
+                "Omnigent v1 remediation checkpoint branches require fresh_agent_run."
+            )
+
+        instruction_ref, instruction_digest, instruction_artifact_ref = (
+            await self._checkpoint_branch_instruction(
+                link=link,
+                request=request,
+                principal=principal,
+            )
+        )
+        stable_material = json.dumps(
+            {
+                "remediationWorkflowId": link.remediation_workflow_id,
+                "contextArtifactRef": link.context_artifact_ref,
+                "checkpointRef": checkpoint_ref,
+                "instructionDigest": instruction_digest,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        stable_digest = hashlib.sha256(stable_material).hexdigest()[:20]
+        branch_id = str(branch_mapping.get("branchId") or f"cbr-rem-{stable_digest}").strip()
+        branch_turn_id = str(
+            branch_mapping.get("branchTurnId") or f"{branch_id}:turn:1"
+        ).strip()
+        idempotency_key = str(
+            request.get("idempotencyKey")
+            or f"{link.remediation_workflow_id}:checkpoint_branch:{stable_digest}"
+        ).strip()
+
+        service = checkpoint_branch_service or CheckpointBranchService(self._session)
+        graph = await service.create_branch_graph(
+            {
+                "branchId": branch_id,
+                "branchTurnId": branch_turn_id,
+                "source": {
+                    "workflowId": link.target_workflow_id,
+                    "runId": link.target_run_id,
+                    "logicalStepId": _string_or_none(
+                        source_mapping.get("logicalStepId")
+                        or source_mapping.get("logical_step_id")
+                    ),
+                    "sourceExecutionOrdinal": _positive_int_or_none(
+                        source_mapping.get("executionOrdinal")
+                        or source_mapping.get("execution_ordinal")
+                    ),
+                    "checkpointBoundary": checkpoint_boundary,
+                    "checkpointRef": checkpoint_ref,
+                    "checkpointDigest": _string_or_none(
+                        source_mapping.get("checkpointDigest")
+                        or source_mapping.get("checkpoint_digest")
+                    ),
+                },
+                "label": _string_or_none(branch_mapping.get("label"))
+                or "Remediation checkpoint repair",
+                "workspacePolicy": workspace_policy,
+                "runtimeContextPolicy": runtime_context_policy,
+                "instructionRef": instruction_ref,
+                "instructionDigest": instruction_digest,
+                "contextBundleRef": link.context_artifact_ref,
+                "idempotencyKey": idempotency_key,
+                "gitRepository": _string_or_none(branch_mapping.get("gitRepository")),
+                "gitBaseBranch": _string_or_none(branch_mapping.get("gitBaseBranch")),
+                "gitBaseCommit": _string_or_none(branch_mapping.get("gitBaseCommit")),
+                "gitWorkBranch": _string_or_none(branch_mapping.get("gitWorkBranch")),
+                "createdBy": principal,
+            }
+        )
+
+        launch = request.get("launch")
+        launch_mapping = launch if isinstance(launch, Mapping) else {}
+        launch_idempotency_key = build_branch_turn_launch_idempotency_key(
+            workflow_id=link.target_workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+        )
+        turn = await service.launch_turn(
+            workflow_id=link.target_workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            context_bundle_ref=_required_artifact_ref(
+                launch_mapping.get("contextBundleRef") or link.context_artifact_ref,
+                "launch.contextBundleRef",
+            ),
+            step_execution_manifest_ref=_required_artifact_ref(
+                launch_mapping.get("stepExecutionManifestRef"),
+                "launch.stepExecutionManifestRef",
+            ),
+            checkpoint_ref=checkpoint_ref,
+            diagnostics_ref=_required_artifact_ref(
+                launch_mapping.get("diagnosticsRef"),
+                "launch.diagnosticsRef",
+            ),
+            idempotency_key=launch_idempotency_key,
+            created_step_execution_id=_required_string(
+                launch_mapping.get("createdStepExecutionId"),
+                "launch.createdStepExecutionId",
+            ),
+            runtime_agent_run_id=_string_or_none(
+                launch_mapping.get("runtimeAgentRunId")
+            ),
+            provider_session_id=_string_or_none(
+                launch_mapping.get("providerSessionId")
+            ),
+            agent_request_ref=_string_or_none(launch_mapping.get("runtimeRequestRef")),
+            agent_result_ref=_string_or_none(launch_mapping.get("runtimeResultRef")),
+        )
+        provenance = build_corrected_instruction_retry_provenance(
+            original_input_ref=checkpoint_ref,
+            remediation_context_ref=link.context_artifact_ref,
+            corrected_instructions_ref=instruction_ref,
+            retry_action_kind="checkpoint_branch.create_from_remediation_context",
+            reason=_string_or_none(request.get("reason"))
+            or "Remediation requested a fresh-session checkpoint branch repair.",
+            metadata={
+                "branchId": branch_id,
+                "branchTurnId": branch_turn_id,
+                "launchIdempotencyKey": launch_idempotency_key,
+                "instructionArtifactRef": instruction_artifact_ref,
+            },
+        )
+        provenance_artifact = await self._lifecycle_publisher.publish_json_artifact(
+            remediation_workflow_id=link.remediation_workflow_id,
+            artifact_type="remediation.checkpoint_branch_provenance",
+            name=f"reports/remediation_checkpoint_branch-{branch_id}.json",
+            payload=provenance,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal=principal,
+        )
+        link.latest_action_summary = "checkpoint_branch.create_from_remediation_context"
+        link.outcome = "applied"
+        await self._session.commit()
+        return {
+            "schemaVersion": "v1",
+            "actionKind": "checkpoint_branch.create_from_remediation_context",
+            "status": "applied",
+            "targetWorkflowId": link.target_workflow_id,
+            "branchId": branch_id,
+            "branchTurnId": turn.branch_turn_id,
+            "launchIdempotencyKey": launch_idempotency_key,
+            "artifactRefs": {
+                "remediationContext": link.context_artifact_ref,
+                "correctedInstructions": instruction_ref,
+                "instructionArtifact": instruction_artifact_ref,
+                "provenance": provenance_artifact.artifact_id,
+            },
+            "graph": graph.model_dump(by_alias=True),
+        }
+
+    async def _checkpoint_branch_instruction(
+        self,
+        *,
+        link: db_models.TemporalExecutionRemediationLink,
+        request: Mapping[str, Any],
+        principal: str,
+    ) -> tuple[str, str, str | None]:
+        instructions = request.get("instructions")
+        instruction_mapping = instructions if isinstance(instructions, Mapping) else {}
+        instruction_ref = _string_or_none(
+            instruction_mapping.get("instructionRef")
+            or instruction_mapping.get("instruction_ref")
+        )
+        instruction_digest = _string_or_none(
+            instruction_mapping.get("instructionDigest")
+            or instruction_mapping.get("instruction_digest")
+        )
+        if instruction_ref:
+            _required_artifact_ref(instruction_ref, "instructions.instructionRef")
+            if not instruction_digest or not instruction_digest.startswith("sha256:"):
+                raise RemediationEvidenceToolError(
+                    "instructions.instructionDigest is required with instructionRef."
+                )
+            return instruction_ref, instruction_digest, None
+        text = _required_string(instruction_mapping.get("text"), "instructions.text")
+        payload_bytes = text.encode("utf-8")
+        digest = "sha256:" + hashlib.sha256(payload_bytes).hexdigest()
+        artifact = await self._lifecycle_publisher.publish_json_artifact(
+            remediation_workflow_id=link.remediation_workflow_id,
+            artifact_type="remediation.corrected_instructions",
+            name="reports/remediation_corrected_instructions.json",
+            payload={
+                "schemaVersion": "v1",
+                "text": text,
+                "digest": digest,
+                "immutable": True,
+            },
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal=principal,
+        )
+        return artifact.artifact_id, digest, artifact.artifact_id
+
     async def _load_link(
         self, remediation_workflow_id: str
     ) -> db_models.TemporalExecutionRemediationLink:
@@ -895,11 +1161,56 @@ def _required_string(value: Any, field_name: str) -> str:
         raise RemediationEvidenceToolError(f"{field_name} is required.")
     return normalized
 
+def _required_artifact_ref(value: Any, field_name: str) -> str:
+    normalized = _required_string(value, field_name)
+    if normalized.startswith(("omnigent://", "http://", "https://", "file://", "/")):
+        raise RemediationEvidenceToolError(
+            f"{field_name} must be a MoonMind artifact ref, not a raw provider resource."
+        )
+    if not (
+        normalized.startswith("art_")
+        or normalized.startswith("artifact://")
+        or normalized.startswith("artifact:v1:")
+    ):
+        raise RemediationEvidenceToolError(
+            f"{field_name} must be a MoonMind artifact ref."
+        )
+    return normalized
+
 def _string_or_none(value: Any) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+def _positive_int_or_none(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RemediationEvidenceToolError(
+            "source.executionOrdinal must be a positive integer."
+        ) from exc
+    if parsed < 1:
+        raise RemediationEvidenceToolError(
+            "source.executionOrdinal must be a positive integer."
+        )
+    return parsed
+
+def _artifact_ref_list(value: Any) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    refs: list[str] = []
+    for item in value:
+        if isinstance(item, Mapping):
+            raw = item.get("artifact_id") or item.get("artifactId") or item.get("ref")
+        else:
+            raw = item
+        ref = str(raw or "").strip()
+        if ref:
+            refs.append(ref)
+    return refs
 
 def _safe_sequence(value: Any) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):

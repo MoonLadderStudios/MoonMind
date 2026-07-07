@@ -111,6 +111,24 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "idempotency": "same target/action/reason key returns the prior decision",
         "verification_hint": "verify a fresh execution is created and linked to the target",
     },
+    "checkpoint_branch.create_from_remediation_context": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "checkpoint_branch",
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "checkpointRef": {"type": "string", "required": True},
+            "instructionRef": {"type": "string", "required": False},
+        },
+        "preconditions": (
+            "target_visible",
+            "remediation_context_available",
+            "source_checkpoint_valid",
+            "fresh_agent_run",
+        ),
+        "idempotency": "same remediation/context/checkpoint/instruction key returns the prior branch turn",
+        "verification_hint": "verify checkpoint branch turn launches with remediation provenance",
+    },
     "execution.cancel": {
         "risk": "medium",
         "enabled": True,

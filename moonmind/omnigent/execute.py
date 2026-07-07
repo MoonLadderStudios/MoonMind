@@ -656,6 +656,62 @@ def _assert_no_provider_native_refs(refs: list[str]) -> None:
         )
 
 
+def _validate_omnigent_remediation_request(request: AgentExecutionRequest) -> None:
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    omnigent = parameters.get("omnigent") if isinstance(parameters, dict) else {}
+    omnigent_mapping = omnigent if isinstance(omnigent, dict) else {}
+    remediation = parameters.get("remediation") or omnigent_mapping.get("remediation")
+    if remediation is None:
+        return
+    if not isinstance(remediation, dict):
+        raise OmnigentContractError("Omnigent remediation must be an object")
+    action_kind = str(remediation.get("actionKind") or "").strip()
+    if action_kind and action_kind != "checkpoint_branch.create_from_remediation_context":
+        raise OmnigentContractError(
+            "Omnigent v1 remediation only supports checkpoint_branch.create_from_remediation_context"
+        )
+    runtime_policy = str(
+        remediation.get("runtimeContextPolicy")
+        or remediation.get("runtime_context_policy")
+        or remediation.get("continuationMode")
+        or remediation.get("continuation_mode")
+        or "fresh_agent_run"
+    ).strip()
+    if runtime_policy in {
+        "reuse_session_same_epoch",
+        "reuse_session_new_epoch",
+        "external_provider_continuation",
+        "same_session",
+    }:
+        raise OmnigentContractError(
+            "Omnigent v1 remediation does not support same-session continuation"
+        )
+    if runtime_policy != "fresh_agent_run":
+        raise OmnigentContractError(
+            "Omnigent v1 remediation requires fresh_agent_run checkpoint branch repair"
+        )
+    if remediation.get("sameSessionContinuation") is True:
+        raise OmnigentContractError(
+            "Omnigent v1 remediation does not support same-session continuation"
+        )
+
+    def visit(value: Any, path: str) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                visit(item, f"{path}.{key}" if path else str(key))
+            return
+        if isinstance(value, list):
+            for index, item in enumerate(value):
+                visit(item, f"{path}[{index}]")
+            return
+        if isinstance(value, str) and value.strip().startswith("omnigent://"):
+            raise OmnigentContractError(
+                f"Omnigent remediation requires MoonMind artifact refs: {path}"
+            )
+
+    visit(remediation, "remediation")
+
+
 async def _cancel_omnigent_session(
     client: OmnigentHttpClient,
     session_id: str,
@@ -1469,6 +1525,7 @@ async def run_omnigent_execution(
         raise RuntimeError(
             f"{OMNIGENT_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
         )
+    _validate_omnigent_remediation_request(request)
 
     client: OmnigentHttpClient | None = None
     session_id = ""

@@ -11,7 +11,7 @@ import base64
 import binascii
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -67,6 +67,7 @@ from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
+from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
@@ -82,6 +83,7 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
     TERMINAL_MANAGED_SESSION_STATUSES,
 )
+from moonmind.workflows.temporal.remediation_context import RemediationContextBuilder
 from moonmind.schemas.managed_session_models import canonical_managed_session_runtime_id
 from moonmind.statuses.integration import (
     INTEGRATION_STATUS_VALUES,
@@ -263,7 +265,34 @@ def _recovery_plan_digest_from_record(record: TemporalExecutionRecord) -> str | 
         resume_block.get("sourcePlanDigest"),
         resume_block.get("source_plan_digest"),
     )
-ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset({"admin_healer_default"})
+ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset(
+    {"admin_healer_default", "checkpoint_branch_repair"}
+)
+ALLOWED_REMEDIATION_CHECKPOINT_BRANCH_WORKSPACE_POLICIES = frozenset(
+    {
+        "apply_previous_execution_diff_to_clean_baseline",
+        "fresh_branch_from_source",
+        "restore_pre_execution",
+        "start_from_last_passed_commit",
+    }
+)
+ALLOWED_REMEDIATION_CHECKPOINT_BRANCH_RUNTIME_POLICIES = frozenset(
+    {"fresh_agent_run"}
+)
+ALLOWED_REMEDIATION_CHECKPOINT_BOUNDARIES = frozenset(
+    {"before_execution", "after_execution", "before_recovery_restoration"}
+)
+REMEDIATION_EVIDENCE_REF_KEYS = frozenset(
+    {
+        "recoveryEvidenceRefs",
+        "incidentEvidenceRefs",
+        "branchEvidenceRefs",
+        "adapterEvidenceRefs",
+        "observabilityEvidenceRefs",
+        "artifactEvidenceRefs",
+        "checkpointRefs",
+    }
+)
 PENDING_REMEDIATION_APPROVAL_STATUSES = frozenset(
     {"awaiting_approval", "approval_required"}
 )
@@ -383,6 +412,8 @@ class TemporalExecutionService:
         run_continue_as_new_step_threshold: int = 500,
         run_continue_as_new_wait_cycle_threshold: int = 200,
         manifest_continue_as_new_phase_threshold: int = 5,
+        artifact_service: TemporalArtifactService | None = None,
+        artifact_service_factory: Callable[[], TemporalArtifactService] | None = None,
     ) -> None:
         self._session = session
         self._namespace = namespace
@@ -407,6 +438,8 @@ class TemporalExecutionService:
             manifest_continue_as_new_phase_threshold
         )
         self._client_adapter = client_adapter or TemporalClientAdapter()
+        self._artifact_service = artifact_service
+        self._artifact_service_factory = artifact_service_factory
 
     async def check_system_paused(self) -> bool:
         """Return True if the system-wide worker pause singleton is active.
@@ -550,6 +583,149 @@ class TemporalExecutionService:
             and authority_mode == "observe_only"
         )
 
+    @staticmethod
+    def _is_moonmind_artifact_ref(value: Any) -> bool:
+        candidate = str(value or "").strip()
+        return bool(
+            candidate.startswith("art_")
+            or candidate.startswith("artifact://")
+            or candidate.startswith("artifact:v1:")
+        )
+
+    @classmethod
+    def _validate_moonmind_artifact_ref(cls, value: Any, field_name: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            raise TemporalExecutionValidationError(f"{field_name} is required.")
+        if candidate.startswith(("omnigent://", "http://", "https://", "file://", "/")):
+            raise TemporalExecutionValidationError(
+                f"{field_name} must be a MoonMind artifact ref, not a raw provider resource."
+            )
+        if not cls._is_moonmind_artifact_ref(candidate):
+            raise TemporalExecutionValidationError(
+                f"{field_name} must be a MoonMind artifact ref."
+            )
+        return candidate
+
+    @classmethod
+    def _validate_remediation_step_selectors(cls, target: Mapping[str, Any]) -> None:
+        selectors = target.get("stepSelectors") or target.get("step_selectors")
+        if selectors is None:
+            return
+        if not isinstance(selectors, list):
+            raise TemporalExecutionValidationError(
+                "workflow.remediation.target.stepSelectors must be a list."
+            )
+        for index, selector in enumerate(selectors):
+            field = f"workflow.remediation.target.stepSelectors[{index}]"
+            if not isinstance(selector, Mapping):
+                raise TemporalExecutionValidationError(f"{field} must be an object.")
+            logical_step_id = str(
+                selector.get("logicalStepId") or selector.get("logical_step_id") or ""
+            ).strip()
+            execution_ordinal = selector.get("executionOrdinal") or selector.get(
+                "execution_ordinal"
+            )
+            if execution_ordinal is not None and not logical_step_id:
+                raise TemporalExecutionValidationError(
+                    f"{field}.logicalStepId is required with executionOrdinal."
+                )
+            if execution_ordinal is not None:
+                try:
+                    ordinal = int(execution_ordinal)
+                except (TypeError, ValueError) as exc:
+                    raise TemporalExecutionValidationError(
+                        f"{field}.executionOrdinal must be a positive integer."
+                    ) from exc
+                if ordinal < 1:
+                    raise TemporalExecutionValidationError(
+                        f"{field}.executionOrdinal must be a positive integer."
+                    )
+            checkpoint_ref = selector.get("checkpointRef") or selector.get(
+                "checkpoint_ref"
+            )
+            if checkpoint_ref is not None:
+                cls._validate_moonmind_artifact_ref(
+                    checkpoint_ref, f"{field}.checkpointRef"
+                )
+                boundary = str(
+                    selector.get("checkpointBoundary")
+                    or selector.get("checkpoint_boundary")
+                    or ""
+                ).strip()
+                if boundary not in ALLOWED_REMEDIATION_CHECKPOINT_BOUNDARIES:
+                    supported = ", ".join(
+                        sorted(ALLOWED_REMEDIATION_CHECKPOINT_BOUNDARIES)
+                    )
+                    raise TemporalExecutionValidationError(
+                        f"{field}.checkpointBoundary must be one of: {supported}."
+                    )
+
+    @classmethod
+    def _validate_remediation_evidence_refs(cls, remediation: Mapping[str, Any]) -> None:
+        def visit(value: Any, path: str) -> None:
+            if isinstance(value, Mapping):
+                for key, item in value.items():
+                    next_path = f"{path}.{key}" if path else str(key)
+                    if key in REMEDIATION_EVIDENCE_REF_KEYS:
+                        if not isinstance(item, list):
+                            raise TemporalExecutionValidationError(
+                                f"workflow.remediation.{next_path} must be a list."
+                            )
+                        for index, ref in enumerate(item):
+                            cls._validate_moonmind_artifact_ref(
+                                ref,
+                                f"workflow.remediation.{next_path}[{index}]",
+                            )
+                    elif key in {"artifactRef", "artifact_ref", "checkpointRef", "checkpoint_ref"}:
+                        cls._validate_moonmind_artifact_ref(
+                            item, f"workflow.remediation.{next_path}"
+                        )
+                    else:
+                        visit(item, next_path)
+                return
+            if isinstance(value, list | tuple):
+                for index, item in enumerate(value):
+                    visit(item, f"{path}[{index}]")
+
+        visit(remediation, "")
+
+    @staticmethod
+    def _validate_remediation_checkpoint_branch_policy(
+        remediation: Mapping[str, Any],
+    ) -> None:
+        policy = remediation.get("checkpointBranchPolicy") or remediation.get(
+            "checkpoint_branch_policy"
+        )
+        if policy is None:
+            return
+        if not isinstance(policy, Mapping):
+            raise TemporalExecutionValidationError(
+                "workflow.remediation.checkpointBranchPolicy must be an object."
+            )
+        workspace_policy = str(policy.get("workspacePolicy") or "").strip()
+        if workspace_policy and workspace_policy not in (
+            ALLOWED_REMEDIATION_CHECKPOINT_BRANCH_WORKSPACE_POLICIES
+        ):
+            supported = ", ".join(
+                sorted(ALLOWED_REMEDIATION_CHECKPOINT_BRANCH_WORKSPACE_POLICIES)
+            )
+            raise TemporalExecutionValidationError(
+                "Unsupported workflow.remediation.checkpointBranchPolicy.workspacePolicy "
+                f"'{workspace_policy}'. Supported values: {supported}."
+            )
+        runtime_policy = str(
+            policy.get("runtimeContextPolicy") or "fresh_agent_run"
+        ).strip()
+        if runtime_policy not in ALLOWED_REMEDIATION_CHECKPOINT_BRANCH_RUNTIME_POLICIES:
+            supported = ", ".join(
+                sorted(ALLOWED_REMEDIATION_CHECKPOINT_BRANCH_RUNTIME_POLICIES)
+            )
+            raise TemporalExecutionValidationError(
+                "Unsupported workflow.remediation.checkpointBranchPolicy.runtimeContextPolicy "
+                f"'{runtime_policy}'. Supported values: {supported}."
+            )
+
     async def _validate_remediation_link(
         self,
         *,
@@ -661,6 +837,10 @@ class TemporalExecutionService:
                     raise TemporalExecutionValidationError(
                         "workflow.remediation.target.agentRunIds must belong to the target execution."
                     )
+
+        self._validate_remediation_step_selectors(target)
+        self._validate_remediation_evidence_refs(remediation)
+        self._validate_remediation_checkpoint_branch_policy(remediation)
 
         trigger = remediation.get("trigger")
         trigger_type = None
@@ -1319,6 +1499,31 @@ class TemporalExecutionService:
             logger.exception(
                 "Failed to start Temporal workflow for execution %s", record.workflow_id
             )
+
+        if remediation_link is not None:
+            artifact_service = self._artifact_service
+            if artifact_service is None and self._artifact_service_factory is not None:
+                artifact_service = self._artifact_service_factory()
+            if artifact_service is None:
+                artifact_service = None
+        else:
+            artifact_service = None
+        if remediation_link is not None and artifact_service is not None:
+            try:
+                await RemediationContextBuilder(
+                    session=self._session,
+                    artifact_service=artifact_service,
+                ).build_context(remediation_workflow_id=record.workflow_id)
+                await self._session.refresh(record)
+                await self._session.refresh(remediation_link)
+            except Exception as exc:
+                logger.exception(
+                    "Failed to build remediation context for execution %s",
+                    record.workflow_id,
+                )
+                raise TemporalExecutionValidationError(
+                    "Failed to build remediation context artifact for workflow.remediation."
+                ) from exc
 
         synced_record = await self._sync_projection_best_effort(record)
         if scheduled_for is not None and isinstance(

@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import select
 
-from api_service.db.models import TemporalArtifactLink
+from api_service.db.models import (
+    TemporalArtifactLink,
+    TemporalExecutionCanonicalRecord,
+    WorkflowCheckpointBranchTurn,
+)
+from api_service.services.checkpoint_branch_service import CheckpointBranchService
 from moonmind.workflows.temporal import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -25,7 +30,10 @@ from moonmind.workflows.temporal.remediation_context import (
     build_remediation_repair_decision,
     build_remediation_summary_block,
 )
-from moonmind.workflows.temporal.remediation_tools import RemediationEvidenceToolService
+from moonmind.workflows.temporal.remediation_tools import (
+    RemediationEvidenceToolError,
+    RemediationEvidenceToolService,
+)
 from tests.unit.workflows.temporal.test_remediation_context import (
     RecordingActionExecutor,
     _admin_permissions,
@@ -153,6 +161,117 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
         ).scalars().all()
         assert len(audit_links) == 1
         assert len(target_annotation_links) == 1
+
+
+async def test_remediation_checkpoint_branch_action_creates_fresh_session_turn(
+    tmp_path, mock_client_adapter
+) -> None:
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+            action_policy_ref="checkpoint_branch_repair",
+        )
+        target_source = await session.get(
+            TemporalExecutionCanonicalRecord, target.workflow_id
+        )
+        assert target_source is not None
+        target_source.artifact_refs = [
+            "art_checkpoint_after_implement",
+            "art_step_execution_manifest",
+            "art_diagnostics_branch_launch",
+        ]
+        await session.commit()
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+        )
+
+        result = await tools.create_checkpoint_branch_from_remediation_context(
+            remediation_workflow_id=remediation.workflow_id,
+            checkpoint_branch_service=CheckpointBranchService(session),
+            principal="service:test",
+            request={
+                "reason": "Try corrected test command",
+                "source": {
+                    "runId": target.run_id,
+                    "logicalStepId": "implement",
+                    "executionOrdinal": 2,
+                    "checkpointBoundary": "after_execution",
+                    "checkpointRef": "art_checkpoint_after_implement",
+                    "checkpointDigest": "sha256:checkpoint",
+                },
+                "instructions": {"text": "Run the corrected focused backend tests."},
+                "branch": {
+                    "branchId": "cbr-remediation-focused",
+                    "branchTurnId": "cbr-remediation-focused:turn:1",
+                    "label": "Focused remediation repair",
+                    "workspacePolicy": (
+                        "apply_previous_execution_diff_to_clean_baseline"
+                    ),
+                    "runtimeContextPolicy": "fresh_agent_run",
+                },
+                "launch": {
+                    "createdStepExecutionId": "step-exec-remediation-1",
+                    "stepExecutionManifestRef": "art_step_execution_manifest",
+                    "diagnosticsRef": "art_diagnostics_branch_launch",
+                },
+            },
+        )
+
+        assert result["status"] == "applied"
+        assert result["actionKind"] == "checkpoint_branch.create_from_remediation_context"
+        assert result["branchId"] == "cbr-remediation-focused"
+        turn = (
+            await session.execute(
+                select(WorkflowCheckpointBranchTurn).where(
+                    WorkflowCheckpointBranchTurn.branch_turn_id
+                    == "cbr-remediation-focused:turn:1"
+                )
+            )
+        ).scalar_one()
+        assert turn.status == "running"
+        assert turn.created_step_execution_id == "step-exec-remediation-1"
+        assert turn.runtime_context_policy == "fresh_agent_run"
+        instruction_payload = await _read_artifact_json(
+            artifact_service, result["artifactRefs"]["instructionArtifact"]
+        )
+        provenance_payload = await _read_artifact_json(
+            artifact_service, result["artifactRefs"]["provenance"]
+        )
+        assert instruction_payload["immutable"] is True
+        assert provenance_payload["retryActionKind"] == (
+            "checkpoint_branch.create_from_remediation_context"
+        )
+        assert provenance_payload["metadata"]["branchId"] == "cbr-remediation-focused"
+
+        with pytest.raises(RemediationEvidenceToolError, match="raw provider"):
+            await tools.create_checkpoint_branch_from_remediation_context(
+                remediation_workflow_id=remediation.workflow_id,
+                checkpoint_branch_service=CheckpointBranchService(session),
+                request={
+                    "source": {
+                        "runId": target.run_id,
+                        "checkpointBoundary": "after_execution",
+                        "checkpointRef": "omnigent://native/checkpoint",
+                    },
+                    "instructions": {"text": "Unsafe"},
+                    "launch": {
+                        "createdStepExecutionId": "step-exec-remediation-unsafe",
+                        "stepExecutionManifestRef": "art_step_execution_manifest",
+                        "diagnosticsRef": "art_diagnostics_branch_launch",
+                    },
+                },
+            )
 
 
 async def test_remediation_raw_action_rejection_does_not_publish_side_effect_artifacts(

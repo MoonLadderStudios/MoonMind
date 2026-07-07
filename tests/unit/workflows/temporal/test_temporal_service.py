@@ -46,6 +46,11 @@ from moonmind.workflows.temporal.service import (
     _visibility_runtime_from_parameters,
     _visibility_skill_from_parameters,
 )
+from moonmind.workflows.temporal.artifacts import (
+    LocalTemporalArtifactStore,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
 from moonmind.schemas.temporal_models import (
     CreateExecutionRequest,
@@ -788,7 +793,15 @@ async def test_create_execution_rejects_dependency_run_id_identifier(
 ):
     async with temporal_db(tmp_path) as session:
         owner_id = uuid4()
-        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+            artifact_service=artifact_service,
+        )
 
         existing = await service.create_execution(
             workflow_type="MoonMind.UserWorkflow",
@@ -1035,7 +1048,15 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
             SimpleNamespace(run_id="target-temporal-run"),
             SimpleNamespace(run_id="remediation-temporal-run"),
         ]
-        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+            artifact_service=artifact_service,
+        )
 
         target = await service.create_execution(
             workflow_type="MoonMind.UserWorkflow",
@@ -1078,6 +1099,23 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
         assert link.remediation_run_id == remediation.run_id
         assert link.target_workflow_id == target.workflow_id
         assert link.target_run_id == target.run_id
+        assert link.context_artifact_ref
+        context_artifact = await session.get(TemporalArtifact, link.context_artifact_ref)
+        assert context_artifact is not None
+        assert context_artifact.status is TemporalArtifactStatus.COMPLETE
+        assert context_artifact.metadata_json["artifact_type"] == "remediation.context"
+        _artifact, context_body = await artifact_service.read(
+            artifact_id=link.context_artifact_ref,
+            principal="service:remediation-context",
+        )
+        context = json.loads(context_body.decode("utf-8"))
+        assert context["remediationWorkflowId"] == remediation.workflow_id
+        assert context["target"]["workflowId"] == target.workflow_id
+        assert link.context_artifact_ref in (
+            await session.get(
+                TemporalExecutionCanonicalRecord, remediation.workflow_id
+            )
+        ).artifact_refs
         assert link.mode == "snapshot"
         assert link.authority_mode == "approval_gated"
         assert link.status == "created"
@@ -1113,6 +1151,91 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
 
         prerequisites = await service.list_prerequisites(remediation.workflow_id)
         assert prerequisites == []
+
+
+@pytest.mark.asyncio
+async def test_create_execution_remediation_rejects_raw_provider_evidence_and_same_session_branch_policy(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        mock_client_adapter.start_workflow.return_value = SimpleNamespace(run_id="target-run")
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+            artifact_service=artifact_service,
+        )
+
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="raw provider resource",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Unsafe remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "evidenceRefs": {
+                                "adapterEvidenceRefs": ["omnigent://session/native"]
+                            },
+                            "authorityMode": "approval_gated",
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="runtimeContextPolicy",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Same session remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "authorityMode": "approval_gated",
+                            "checkpointBranchPolicy": {
+                                "workspacePolicy": (
+                                    "apply_previous_execution_diff_to_clean_baseline"
+                                ),
+                                "runtimeContextPolicy": "reuse_session_same_epoch",
+                            },
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
 
 @pytest.mark.asyncio
 async def test_record_remediation_approval_decision_appends_bounded_audit(

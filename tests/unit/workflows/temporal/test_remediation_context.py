@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -79,8 +80,15 @@ async def _create_target_and_remediation(
         SimpleNamespace(run_id="target-run"),
         SimpleNamespace(run_id="remediation-run"),
     ]
+    db_path = Path(str(session.bind.url.database))
+    artifact_service = TemporalArtifactService(
+        TemporalArtifactRepository(session),
+        store=LocalTemporalArtifactStore(db_path.parent / "artifacts"),
+    )
     execution_service = TemporalExecutionService(
-        session, client_adapter=mock_client_adapter
+        session,
+        client_adapter=mock_client_adapter,
+        artifact_service=artifact_service,
     )
     target = await execution_service.create_execution(
         workflow_type="MoonMind.UserWorkflow",
@@ -144,6 +152,7 @@ CANONICAL_REMEDIATION_ACTIONS = {
     "execution.resume",
     "execution.request_rerun_same_workflow",
     "execution.start_fresh_rerun",
+    "checkpoint_branch.create_from_remediation_context",
     "execution.cancel",
     "execution.force_terminate",
     "session.interrupt_turn",

@@ -3031,6 +3031,7 @@ async def _get_service(
     return TemporalExecutionService(
         session,
         namespace=settings.temporal.namespace,
+        artifact_service_factory=lambda: get_temporal_artifact_service(session),
         integration_task_queue=settings.temporal.activity_integrations_task_queue,
         integration_poll_initial_seconds=(
             settings.temporal.integration_poll_initial_seconds

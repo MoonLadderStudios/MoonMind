@@ -36,6 +36,8 @@ REMEDIATION_ARTIFACT_TYPES = frozenset(
         "remediation.target_annotation",
         "remediation.verification",
         "remediation.summary",
+        "remediation.corrected_instructions",
+        "remediation.checkpoint_branch_provenance",
     }
 )
 REMEDIATION_PHASES = frozenset(

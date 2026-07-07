@@ -357,6 +357,62 @@ async def test_run_omnigent_execution_reports_httpx_transport_errors(
 
 
 @pytest.mark.asyncio
+async def test_run_omnigent_execution_rejects_same_session_remediation_before_provider(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+
+    with pytest.raises(OmnigentContractError, match="same-session continuation"):
+        await run_omnigent_execution(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="corr-1",
+                idempotencyKey="idem-1",
+                parameters={
+                    "omnigent": {
+                        "endpointRef": "omnigent:endpoint:test",
+                        "remediation": {
+                            "actionKind": (
+                                "checkpoint_branch.create_from_remediation_context"
+                            ),
+                            "runtimeContextPolicy": "reuse_session_same_epoch",
+                        },
+                    }
+                },
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_rejects_provider_native_remediation_refs(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+
+    with pytest.raises(OmnigentContractError, match="MoonMind artifact refs"):
+        await run_omnigent_execution(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="corr-1",
+                idempotencyKey="idem-1",
+                parameters={
+                    "remediation": {
+                        "actionKind": (
+                            "checkpoint_branch.create_from_remediation_context"
+                        ),
+                        "runtimeContextPolicy": "fresh_agent_run",
+                        "evidenceRefs": ["omnigent://session/native-log"],
+                    }
+                },
+            )
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_omnigent_execution_uses_nested_session_parameters(
     monkeypatch,
 ) -> None:
