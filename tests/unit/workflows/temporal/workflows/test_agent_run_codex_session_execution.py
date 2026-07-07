@@ -300,6 +300,31 @@ async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_he
     assert activity_input.target_branch == "main"
     assert activity_input.head_branch is None
 
+
+async def test_managed_fetch_result_input_uses_publish_base_for_pr_target_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={"publishMode": "pr", "publishBaseBranch": "main"},
+        workspace_spec={
+            "branch": "use-this-preselected-single-story-reques-e5921fb9",
+            "startingBranch": "use-this-preselected-single-story-reques-e5921fb9",
+            "targetBranch": "complete-create-first-remediation-backen-dc3ddf43",
+        },
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert isinstance(activity_input, AgentRuntimeFetchResultInput)
+    assert activity_input.target_branch == "main"
+    assert (
+        activity_input.head_branch
+        == "complete-create-first-remediation-backen-dc3ddf43"
+    )
+
+
 async def test_managed_fetch_result_marks_pr_resolver_from_task_tool_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

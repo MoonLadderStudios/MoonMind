@@ -3530,6 +3530,38 @@ def test_runtime_planner_publish_pr_treats_authored_branch_as_base():
     assert node_inputs["targetBranch"].startswith("fix-create-branch-publish-")
     assert re.fullmatch(r"[a-z0-9-]+-[0-9a-f]{8}", node_inputs["targetBranch"])
 
+
+def test_runtime_planner_publish_pr_flattens_publish_base_for_managed_fetch():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Continue the follow-up work",
+                "title": "Complete create-first remediation backend",
+                "git": {"branch": "use-this-preselected-single-story-reques-e5921fb9"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr", "baseBranch": "main"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][-1]["inputs"]
+    assert node_inputs["branch"] == "use-this-preselected-single-story-reques-e5921fb9"
+    assert (
+        node_inputs["startingBranch"]
+        == "use-this-preselected-single-story-reques-e5921fb9"
+    )
+    assert node_inputs["publishBaseBranch"] == "main"
+    assert node_inputs["targetBranch"] != node_inputs["startingBranch"]
+    assert node_inputs["targetBranch"].startswith(
+        "complete-create-first-remediation-backen-"
+    )
+
+
 @pytest.mark.parametrize(
     ("inputs", "parameters", "expected_branch"),
     [

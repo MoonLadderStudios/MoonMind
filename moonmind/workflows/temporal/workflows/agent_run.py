@@ -348,6 +348,9 @@ AGENT_RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = (
 MANAGED_SESSION_TURN_DEADLINE_PATCH_ID = (
     "agent-run-managed-session-turn-deadline-v1"
 )
+MANAGED_SESSION_PR_PUBLISH_BASE_BRANCH_PATCH_ID = (
+    "agent-run-managed-session-pr-publish-base-branch-v1"
+)
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.UserWorkflow (run.py:50).
@@ -1755,11 +1758,31 @@ class MoonMindAgentRun:
         if isinstance(raw_commit_message, str) and raw_commit_message.strip():
             activity_input["commitMessage"] = raw_commit_message.strip()
 
-        target_branch = str(
-            params.get("publishBaseBranch")
-            or self._request_workspace_starting_branch(request)
-            or ""
-        ).strip()
+        if workflow.patched(MANAGED_SESSION_PR_PUBLISH_BASE_BRANCH_PATCH_ID):
+            publish_payload = (
+                params.get("publish")
+                if isinstance(params.get("publish"), Mapping)
+                else {}
+            )
+            publish_base_branch = str(
+                params.get("publishBaseBranch")
+                or params.get("prBaseBranch")
+                or params.get("baseBranch")
+                or publish_payload.get("prBaseBranch")
+                or publish_payload.get("baseBranch")
+                or ""
+            ).strip()
+            target_branch = str(
+                publish_base_branch
+                or self._request_workspace_starting_branch(request)
+                or ""
+            ).strip()
+        else:
+            target_branch = str(
+                params.get("publishBaseBranch")
+                or self._request_workspace_starting_branch(request)
+                or ""
+            ).strip()
         if target_branch:
             activity_input["targetBranch"] = target_branch
 
