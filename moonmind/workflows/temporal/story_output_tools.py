@@ -4516,13 +4516,18 @@ def _assessment_verdict_from_text(value: Any) -> str:
     text = _string(value)
     if not text:
         return ""
+    verdict_pattern = (
+        r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)"
+    )
+    verdict_prefix = r"[\s:`*_\"']*"
+    verdict_suffix = r"(?:\b|_+(?!\w))"
     patterns = (
         r"(?is)\bassessment\s+complete\b[^.\n:]*[:\s`]+"
-        r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)\b",
+        rf"{verdict_prefix}{verdict_pattern}{verdict_suffix}",
         r"(?is)\brecorded\s+verdict\b[^.\n:]*[:\s`]+"
-        r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)\b",
+        rf"{verdict_prefix}{verdict_pattern}{verdict_suffix}",
         r"(?is)['\"]verdict['\"]\s*:\s*['\"]"
-        r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)['\"]",
+        rf"{verdict_pattern}['\"]",
     )
     for pattern in patterns:
         match = re.search(pattern, text)
