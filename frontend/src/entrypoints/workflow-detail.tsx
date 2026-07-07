@@ -1761,18 +1761,18 @@ function SegmentedNav<T extends string>({
   onNavigate,
 }: {
   items: Array<SegmentedNavItem<T>>;
-  active: T;
+  active: T | null;
   ariaLabel: string;
   onNavigate: (value: T, href: string) => void;
 }) {
-  const activeIndex = Math.max(0, items.findIndex((item) => item.value === active));
+  const activeIndex = items.findIndex((item) => item.value === active);
   return (
     <nav
-      className="segmented-nav"
+      className={['segmented-nav', activeIndex < 0 ? 'segmented-nav-no-active' : ''].filter(Boolean).join(' ')}
       aria-label={ariaLabel}
       style={{
         '--segmented-nav-count': items.length,
-        '--segmented-nav-active-index': activeIndex,
+        '--segmented-nav-active-index': Math.max(0, activeIndex),
       } as CSSProperties}
     >
       {items.map((item) => (
@@ -6560,32 +6560,40 @@ function WorkflowDetailSubrouteNav({
     { value: 'chat', label: 'Chat', href: workflowDetailSubrouteHref(workflowId, 'chat', search) },
     { value: 'overview', label: 'Overview', href: workflowDetailSubrouteHref(workflowId, 'overview', search) },
     {
-      value: 'steps',
-      label: 'Steps',
-      href: workflowDetailSubrouteHref(workflowId, 'steps', search),
-      badge: stepCount ?? null,
+      value: 'execution',
+      label: 'Execution',
+      href: workflowDetailSubrouteHref(workflowId, 'execution', search),
+      badge: (stepCount ?? null) || (runCount ?? null),
     },
     {
-      value: 'artifacts',
-      label: 'Artifacts',
-      href: workflowDetailSubrouteHref(workflowId, 'artifacts', search),
+      value: 'evidence',
+      label: 'Evidence',
+      href: workflowDetailSubrouteHref(workflowId, 'evidence', search),
       badge: artifactCount ?? null,
     },
-    {
-      value: 'runs',
-      label: 'Runs',
-      href: workflowDetailSubrouteHref(workflowId, 'runs', search),
-      badge: runCount ?? null,
-    },
-    { value: 'debug', label: 'Debug', href: workflowDetailSubrouteHref(workflowId, 'debug', search) },
   ];
+  const debugHref = workflowDetailSubrouteHref(workflowId, 'debug', search);
   return (
-    <SegmentedNav
-      items={items}
-      active={current}
-      ariaLabel="Workflow detail sections"
-      onNavigate={onNavigate}
-    />
+    <>
+      <SegmentedNav
+        items={items}
+        active={current === 'debug' ? null : current}
+        ariaLabel="Workflow detail sections"
+        onNavigate={onNavigate}
+      />
+      <WorkflowActionsMenu
+        items={[
+          {
+            id: 'workflow-detail-debug',
+            label: 'Debug',
+            onSelect: () => onNavigate('debug', debugHref),
+          },
+        ]}
+        triggerContent="More"
+        triggerClassName="secondary td-subroute-more-trigger"
+        menuAriaLabel="More workflow detail sections"
+      />
+    </>
   );
 }
 
@@ -6833,10 +6841,12 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const missingAgentRunState = execution && !resolvedAgentRunId ? inferMissingAgentRunState(execution) : null;
 
   const chatTabActive = detailSubroute === 'chat';
-  const stepsTabActive = detailSubroute === 'steps';
-  const artifactsTabActive = detailSubroute === 'artifacts';
+  const executionTabActive = detailSubroute === 'execution';
+  const evidenceTabActive = detailSubroute === 'evidence';
+  const stepsTabActive = executionTabActive;
+  const artifactsTabActive = evidenceTabActive;
   const overviewTabActive = detailSubroute === 'overview';
-  const runsTabActive = detailSubroute === 'runs';
+  const runsTabActive = executionTabActive;
   const debugTabActive = detailSubroute === 'debug';
   const shouldFetchStepLedger = (stepsTabActive || artifactsTabActive) && Boolean(execution?.stepsHref);
 

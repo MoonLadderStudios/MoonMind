@@ -1,15 +1,25 @@
 export const WORKFLOW_DETAIL_SUBROUTES = [
   'chat',
   'overview',
-  'steps',
-  'artifacts',
-  'runs',
+  'execution',
+  'evidence',
   'debug',
 ] as const;
 
 export type WorkflowDetailSubroute = (typeof WORKFLOW_DETAIL_SUBROUTES)[number];
 
-const WORKFLOW_DETAIL_SUBROUTE_PATTERN = WORKFLOW_DETAIL_SUBROUTES.join('|');
+const WORKFLOW_DETAIL_SUBROUTE_ALIASES = {
+  steps: 'execution',
+  runs: 'execution',
+  artifacts: 'evidence',
+} as const satisfies Record<string, WorkflowDetailSubroute>;
+
+const WORKFLOW_DETAIL_SUPPORTED_SUBROUTES = [
+  ...WORKFLOW_DETAIL_SUBROUTES,
+  ...Object.keys(WORKFLOW_DETAIL_SUBROUTE_ALIASES),
+] as const;
+
+const WORKFLOW_DETAIL_SUBROUTE_PATTERN = WORKFLOW_DETAIL_SUPPORTED_SUBROUTES.join('|');
 const WORKFLOW_DETAIL_PATH_PATTERN = new RegExp(
   `^/workflows/([^/]+)(?:/(${WORKFLOW_DETAIL_SUBROUTE_PATTERN}))?/?$`,
 );
@@ -29,7 +39,14 @@ export function decodeWorkflowIdFromPath(pathname: string): string | null {
 
 export function workflowDetailSubrouteFromPath(pathname: string): WorkflowDetailSubroute {
   const match = pathname.match(WORKFLOW_DETAIL_PATH_PATTERN);
-  return (match?.[2] as WorkflowDetailSubroute | undefined) || 'chat';
+  const subroute = match?.[2] || '';
+  return (
+    WORKFLOW_DETAIL_SUBROUTE_ALIASES[
+      subroute as keyof typeof WORKFLOW_DETAIL_SUBROUTE_ALIASES
+    ] ||
+    (subroute as WorkflowDetailSubroute | undefined) ||
+    'chat'
+  );
 }
 
 export function workflowDetailSubrouteHref(

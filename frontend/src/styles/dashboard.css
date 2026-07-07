@@ -7678,7 +7678,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .td-subroute-nav-row {
-  display: block;
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
 }
 
 .segmented-nav {
@@ -7715,6 +7717,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transition: transform 180ms ease;
   pointer-events: none;
   z-index: 0;
+}
+
+.segmented-nav-no-active::before {
+  opacity: 0;
 }
 
 .segmented-nav-item {
@@ -7758,6 +7764,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-size: 0.72rem;
   font-weight: 700;
   line-height: 1.25;
+}
+
+.td-subroute-more-trigger {
+  min-height: 2.65rem;
+  padding-inline: 0.9rem;
+  border-radius: 10px;
+  white-space: nowrap;
 }
 
 .td-facts-region {
