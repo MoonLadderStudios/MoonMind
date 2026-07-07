@@ -86,6 +86,19 @@ describe("deriveExplicitWorkflowTitle", () => {
       "Implement this Jira issue: MM-1129 titles should include description text.",
     );
   });
+
+  it("MM-1129 bounds normalization for large instruction sources", () => {
+    const title = deriveExplicitWorkflowTitle(
+      `Implement this Jira issue ${Array.from(
+        { length: 1000 },
+        (_, index) => `token-${index}`,
+      ).join(" ")}`,
+    );
+
+    expect(title).toBeDefined();
+    expect(title).toHaveLength(151);
+    expect(title).not.toContain("token-999");
+  });
 });
 
 function renderWorkflowStartPage(payload: BootPayload) {

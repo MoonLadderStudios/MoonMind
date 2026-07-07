@@ -159,7 +159,11 @@ export function deriveExplicitWorkflowTitle(sourceValue: string): string | undef
   if (!source) {
     return undefined;
   }
-  const normalized = source.split(/\s+/).join(" ").trim();
+  const normalized = source
+    .slice(0, MAX_EXPLICIT_TITLE_LENGTH * 2)
+    .split(/\s+/)
+    .join(" ")
+    .trim();
   if (!normalized) {
     return undefined;
   }

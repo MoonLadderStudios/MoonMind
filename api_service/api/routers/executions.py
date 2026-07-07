@@ -8554,7 +8554,7 @@ def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     instructions = str(task_payload.get("instructions") or "").strip()
     if not instructions:
         return None
-    normalized = " ".join(instructions.split())
+    normalized = " ".join(instructions[: _MAX_TASK_TITLE_LENGTH * 2].split())
     if not normalized:
         return None
     return normalized[:_MAX_TASK_TITLE_LENGTH]

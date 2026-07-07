@@ -221,6 +221,21 @@ def test_mm_1129_derive_task_title_uses_remaining_budget_after_line_break() -> N
     )
 
 
+def test_mm_1129_derive_task_title_bounds_instruction_normalization() -> None:
+    title = _derive_task_title(
+        {
+            "instructions": (
+                "Implement this Jira issue "
+                + " ".join(f"token-{index}" for index in range(1000))
+            )
+        }
+    )
+
+    assert title is not None
+    assert len(title) == 150
+    assert "token-999" not in title
+
+
 def test_step_execution_detail_payload_exposes_phase_11_ref_only_evidence_summary() -> None:
     payload = _step_execution_detail_payload(
         _phase_11_manifest(),
