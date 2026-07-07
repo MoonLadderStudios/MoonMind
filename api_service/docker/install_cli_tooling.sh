@@ -31,7 +31,6 @@ stub_claude() {
 if [ "${INSTALL_CODEX_CLI}" != "true" ]; then
     echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex install and using stubs" >&2
     stub_codex
-    npm cache clean --force || true
 else
     if ! npm install -g @openai/codex@"${CODEX_CLI_VERSION}"; then
         echo "Warning: Failed to install @openai/codex; installing stub" >&2
@@ -65,4 +64,6 @@ if [ ! -f /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE ]; then
     touch /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE
 fi
 
-npm cache clean --force || true
+if [ "${CLEAN_NPM_CACHE:-false}" = "true" ]; then
+    npm cache clean --force || true
+fi

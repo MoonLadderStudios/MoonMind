@@ -1,63 +1,63 @@
 {
   "issue_provider": "jira",
-  "issue_ref": "MM-1058",
-  "issue_url": "https://moonladder.atlassian.net/browse/MM-1058",
+  "issue_ref": "MM-1130",
+  "issue_url": "https://moonladder.atlassian.net/browse/MM-1130",
   "verdict": "PARTIALLY_IMPLEMENTED",
-  "branch": "run-jira-implement-for-mm-1058-finish-dr-7d859fd2",
+  "branch": "fetch-jira-issue-mm-1130-through-the-det-471b2258",
   "base_ref": "origin/main",
-  "mode": "main/trunk",
-  "summary": "HEAD equals origin/main with no commits ahead, and recent history has no MM-1058 commit reference. Current repository state includes shared Skill/Preset input contract parsing, contractDigest exposure, frontend schema rendering/validation for Skill fields, legacy args/input normalization, and schema-less/equivalence coverage. Core MM-1058 draft lifecycle work is not implemented: no inputContractDigest is stored in draft Skill steps, no saved-vs-current or pinned digest comparison exists on reload/submit, no digest mismatch notice/backend validation result is present, pinned Skill snapshot validation is not present for drafts, and no dedicated metrics/traces for parser/renderer/validation/fallback/digest/strict-policy outcomes were found.",
+  "mode": "branch",
+  "summary": "Branch mode selected because HEAD is one commit ahead of origin/main, but the branch diff only adds a RAG context artifact and contains no Docker/workflow implementation changes. Current repository state preserves some existing image behavior, but the requested build-speed changes are not implemented: docker-publish still runs frontend:ci, frontend:ci still includes ui:build:check, pip install --no-deps . still runs after broad runtime asset copies, package-manager steps lack BuildKit cache mounts, and install_cli_tooling.sh still clears npm cache unconditionally.",
   "requirements": [
     {
-      "description": "Drafts preserve entered values when a Skill input contract changes and revalidate against the current or pinned contract.",
+      "description": "Docker publish workflow no longer runs npm run frontend:ci when that script includes the production Vite build. Not met: .github/workflows/docker-publish.yml lines 83-88 still run npm run frontend:ci, and package.json line 27 shows frontend:ci still includes ui:build:check.",
       "status": "not_met"
     },
     {
-      "description": "A digest mismatch produces a user-visible notice and backend validation result without losing values.",
-      "status": "not_met"
-    },
-    {
-      "description": "Legacy Skill-step payload readers accept older argument fields and normalize to inputs; updated authoring surfaces emit inputs.",
+      "description": "Docker publish workflow still runs frontend typecheck, lint, UI tests, and generated contract checks before image build. Partially met: the workflow still runs frontend:ci and contracts:check, so coverage exists, but it is still coupled to the duplicate production build.",
       "status": "partially_met"
     },
     {
-      "description": "Diagnostics have code, severity, path, message, and recoverable fields across parser, validation, renderer, and policy outcomes.",
-      "status": "partially_met"
-    },
-    {
-      "description": "Metrics and traces cover parse success/failure, schema omitted, generated fields by widget, fallback usage, unsupported widgets, validation failures, digest mismatches, and strict-policy rejections without raw user values.",
-      "status": "not_met"
-    },
-    {
-      "description": "Preset rendering remains API-compatible and equivalent Skill/Preset schemas generate equivalent fields.",
+      "description": "Dockerfile builds frontend production assets in frontend-builder and runs tools/verify_vite_manifest.py. Met: api_service/Dockerfile lines 56-78 keep frontend-builder, npm run ui:build, and verify_vite_manifest.py.",
       "status": "met"
     },
     {
-      "description": "Store inputContractDigest in draft Skill steps.",
+      "description": "No new frontend build artifact upload/download step is introduced. Met in current state: docker-publish only uploads/downloads digest artifacts, not frontend assets.",
+      "status": "met"
+    },
+    {
+      "description": "pip install --disable-pip-version-check --no-deps . runs immediately after copying moonmind/ and before broad non-package runtime assets. Not met: api_service/Dockerfile lines 202-213 copy moonmind plus api_service, config, docs/ReleaseNotes, .agents, and moonspec before running pip install --no-deps .",
       "status": "not_met"
     },
     {
-      "description": "Compare saved and current/pinned Skill input contract digests on draft reload and submit.",
+      "description": "MoonSpec projection checks still run after .agents and moonspec are copied. Met: api_service/Dockerfile lines 206-212 copy .agents and moonspec before the projection checks.",
+      "status": "met"
+    },
+    {
+      "description": "npm install steps use BuildKit cache mounts. Not met: api_service/Dockerfile lines 46 and 66 run CLI npm installs and npm ci without --mount=type=cache,target=/root/.npm.",
       "status": "not_met"
     },
     {
-      "description": "Preserve entered values and revalidate safely when contracts change.",
+      "description": "pip install steps use BuildKit cache mounts. Not met: api_service/Dockerfile lines 85-87, 191-198, 213, and 225-226 run pip installs without --mount=type=cache,target=/root/.cache/pip.",
       "status": "not_met"
     },
     {
-      "description": "Validate pinned workflow snapshots against their pinned contract rather than latest catalog version.",
+      "description": "apt install steps use BuildKit cache mounts with locked sharing. Not met: api_service/Dockerfile lines 25-29, 60, and 136-161 run apt-get installs without locked /var/cache/apt and /var/lib/apt cache mounts.",
       "status": "not_met"
     },
     {
-      "description": "Expose user-safe diagnostics in Create page surfaces and richer diagnostics in admin/developer surfaces.",
-      "status": "partially_met"
-    },
-    {
-      "description": "Add observability for parser, renderer, validation, fallback, digest mismatch, and strict-policy outcomes without raw user values.",
+      "description": "install_cli_tooling.sh no longer clears npm cache during normal Docker builds, or clearing is opt-in. Not met: api_service/docker/install_cli_tooling.sh lines 34 and 68 still run npm cache clean --force unconditionally in normal paths.",
       "status": "not_met"
     },
     {
-      "description": "Add end-to-end or integration-style conformance coverage for Skill/Preset rendering equivalence and schema-less Skill selection.",
+      "description": "A clean Docker build of target api-runtime succeeds. Unverifiable in this read-only assessment step because long Docker verification suites/builds were explicitly out of scope.",
+      "status": "unverifiable"
+    },
+    {
+      "description": "A repeated Docker build of target api-runtime shows improved cache reuse in --progress=plain output for npm, pip, and apt-related steps. Unverifiable in this read-only assessment step because long repeated Docker builds were explicitly out of scope, and the cache mount implementation is absent.",
+      "status": "unverifiable"
+    },
+    {
+      "description": "Runtime image starts with /app/api_service/entrypoint.sh, exposes port 8000, includes workflow console static assets in both expected locations, and passes CLI verification for codex, claude, npm, and rg. Partially met by Dockerfile evidence: lines 216-217 copy static assets to both locations, lines 178-181 run CLI verification, lines 230-244 expose 8000 and set CMD, but no Docker build was run in this step.",
       "status": "partially_met"
     }
   ]

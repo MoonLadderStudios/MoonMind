@@ -22,11 +22,14 @@ ARG CLAUDE_CLI_VERSION
 ARG INSTALL_CLAUDE_CLI
 # Install build prerequisites required for global npm CLI installs so future
 # stages can compile any optional native extensions.
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 \
-        build-essential && \
-    rm -rf /var/lib/apt/lists/*
+        build-essential
 
 # Keep npm non-interactive inside Docker builds to avoid analytics prompts.
 RUN npm config set fund false \
@@ -35,6 +38,7 @@ RUN npm config set fund false \
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 ARG CLAUDE_CLI_VERSION
 ARG INSTALL_CLAUDE_CLI
+ARG CLEAN_NPM_CACHE=false
 ARG GITHUB_TOKEN
 ARG NPM_TOKEN
 
@@ -43,7 +47,8 @@ ARG NPM_TOKEN
 # installer in a normal script file instead of a Dockerfile heredoc so legacy
 # Docker builders without buildx execute it consistently.
 COPY api_service/docker/install_cli_tooling.sh /tmp/install_cli_tooling.sh
-RUN /bin/bash /tmp/install_cli_tooling.sh && rm -f /tmp/install_cli_tooling.sh
+RUN --mount=type=cache,target=/root/.npm \
+    /bin/bash /tmp/install_cli_tooling.sh && rm -f /tmp/install_cli_tooling.sh
 
 # Fail the build early if the bundled CLIs are missing or broken.
 RUN codex --version \
@@ -57,13 +62,18 @@ FROM node:22-bookworm AS frontend-builder
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /build
 
-RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
+    apt-get update && apt-get install -y --no-install-recommends python3
 RUN npm config set fund false \
     && npm config set audit false \
     && npm config set update-notifier false
 
 COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs /build/
-RUN npm ci --no-fund --no-audit
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-fund --no-audit
 
 # Copy only the source files needed for the frontend build after dependencies
 # are installed so source-only edits do not invalidate npm ci.
@@ -82,7 +92,8 @@ FROM python:3.12-slim-bookworm AS python-requirements
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /deps
 
-RUN pip install --disable-pip-version-check \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --disable-pip-version-check \
         poetry==2.4.1 \
         poetry-plugin-export==1.10.0
 
@@ -133,7 +144,11 @@ COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-cod
 
 # Install system packages required by the Python service along with the
 # Node.js runtime libraries that the bundled CLIs rely on.
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         bubblewrap \
         libffi-dev \
@@ -157,8 +172,7 @@ RUN apt-get update && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         docker-ce-cli \
-        docker-compose-plugin && \
-    rm -rf /var/lib/apt/lists/*
+        docker-compose-plugin
 
 RUN install -d -m 0755 /usr/libexec/moonmind && \
     mv /usr/bin/docker /usr/libexec/moonmind/docker-real
@@ -188,18 +202,22 @@ COPY api_service/config.template.toml /etc/codex/config.toml
 RUN chown root:app /etc/codex/config.toml && chmod 0640 /etc/codex/config.toml
 
 COPY --from=python-requirements /deps/requirements-main.txt /tmp/requirements-main.txt
-RUN pip install --disable-pip-version-check -r /tmp/requirements-main.txt \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --disable-pip-version-check -r /tmp/requirements-main.txt \
     && rm -f /tmp/requirements-main.txt
 
 COPY pyproject.toml /app/pyproject.toml
 COPY poetry.lock /app/poetry.lock
 COPY README.md /app/README.md
 
-RUN pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps
 
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --disable-pip-version-check --no-deps .
 COPY api_service /app/api_service/
 COPY config /app/config/
 COPY docs/ReleaseNotes /app/docs/ReleaseNotes/
@@ -210,7 +228,6 @@ COPY moonspec /app/moonspec/
 RUN test -f /app/moonspec/bundle/moonspec.bundle.yaml \
     && test -f /app/moonspec/bundle/skills/moonspec-verify/SKILL.md \
     && test -f /app/.agents/skills/moonspec-verify/SKILL.md
-RUN pip install --disable-pip-version-check --no-deps .
 
 # Copy pre-built frontend assets from the frontend-builder stage
 COPY --from=frontend-builder /build/api_service/static/workflow_console/ /app/api_service/static/workflow_console/
@@ -222,7 +239,8 @@ RUN chmod +x /app/api_service/entrypoint.sh && \
 FROM runtime-base AS test-runtime
 ARG INSTALL_TEST_DEPS=true
 COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
-RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
         pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \
     fi && \
     rm -f /tmp/requirements-tests.txt
