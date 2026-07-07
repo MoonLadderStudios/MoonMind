@@ -4521,7 +4521,7 @@ def _assessment_verdict_from_text(value: Any) -> str:
     )
     verdict_prefix = r"[\s:`*_\"']*"
     verdict_suffix = r"(?:_+(?!\w)|(?![-\w]))"
-    assessment_separator = r"[\s:`*_\"'\[\]\(\)]*"
+    assessment_separator = r"[\s:.,;\-`*_\"'\[\]\(\)]*"
     issue_ref_pattern = r"`?[A-Z][A-Z0-9]+-\d+`?"
     patterns = (
         r"(?im)^\s*verdict\s*[:\-]\s*"
