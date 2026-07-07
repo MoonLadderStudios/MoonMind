@@ -8566,7 +8566,21 @@ def _derive_task_title(
 ) -> str | None:
     current_title = str(task_payload.get("title") or "").strip()
     if current_title and not is_generic_title(current_title):
-        return current_title[:_MAX_TASK_TITLE_LENGTH]
+        synthesized = synthesize_workflow_title(
+            current_title=current_title,
+            task_payload=task_payload,
+            normalized_tool=normalized_tool,
+            normalized_steps=normalized_steps,
+        )
+        return (synthesized or current_title)[:_MAX_TASK_TITLE_LENGTH]
+    synthesized = synthesize_workflow_title(
+        current_title=current_title,
+        task_payload=task_payload,
+        normalized_tool=normalized_tool,
+        normalized_steps=normalized_steps,
+    )
+    if synthesized:
+        return synthesized
     raw_steps = task_payload.get("steps")
     if isinstance(raw_steps, list):
         for item in raw_steps:
@@ -8584,15 +8598,6 @@ def _derive_task_title(
         normalized = " ".join(instructions[: _MAX_TASK_TITLE_LENGTH * 2].split())
         if normalized:
             return normalized[:_MAX_TASK_TITLE_LENGTH]
-
-    synthesized = synthesize_workflow_title(
-        current_title=current_title,
-        task_payload=task_payload,
-        normalized_tool=normalized_tool,
-        normalized_steps=normalized_steps,
-    )
-    if synthesized:
-        return synthesized
     if not instructions:
         return None
     normalized = " ".join(instructions[: _MAX_TASK_TITLE_LENGTH * 2].split())

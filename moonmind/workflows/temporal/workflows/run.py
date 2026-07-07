@@ -79,6 +79,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.executions.execution_contract import (
         build_effective_workflow_skill_selectors,
     )
+    from moonmind.workflows.executions.title_derivation import enrich_jira_implement_title
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
     )
@@ -951,6 +952,8 @@ class MoonMindRunWorkflow:
         self._target_skill: Optional[str] = None
         self._close_status: Optional[str] = None
         self._title: Optional[str] = None
+        self._title_source: Optional[str] = None
+        self._title_confidence: Optional[str] = None
         self._summary: str = "Execution initialized."
         self._correlation_id: Optional[str] = None
         self._pull_request_url: Optional[str] = None
@@ -5771,6 +5774,27 @@ class MoonMindRunWorkflow:
         if context:
             self._trusted_issue_context = context
 
+    def _enrich_jira_implement_title(self, outputs: Mapping[str, Any]) -> None:
+        if self._title_source not in {"preset_template", "integration_target"}:
+            return
+        if str(outputs.get("trustedSource") or "").strip() != "moonmind.jira.get_issue":
+            return
+        issue = outputs.get("jiraIssue")
+        if not isinstance(issue, Mapping):
+            return
+        title_result = enrich_jira_implement_title(
+            current_title=self._title,
+            title_source=self._title_source,
+            issue=issue,
+        )
+        if title_result is None:
+            return
+        self._title = title_result.display_title
+        self._title_source = title_result.source
+        self._title_confidence = title_result.confidence
+        self._update_memo()
+        self._update_search_attributes()
+
     def _merge_trusted_issue_context(
         self,
         previous_outputs: Mapping[str, Any],
@@ -6887,12 +6911,17 @@ class MoonMindRunWorkflow:
             raise ValueError(f"workflowType must be {expected_workflow_name}")
 
         self._workflow_type = workflow_type
+        memo = workflow.memo()
         self._entry = "user_workflow"
-        self._title = workflow.memo().get("title") or self._optional_string(
+        self._title = memo.get("title") or self._optional_string(
             input_payload,
             "title",
         )
-        self._summary = workflow.memo().get("summary") or "Execution initialized."
+        self._title_source = self._optional_string(memo, "titleSource", "title_source")
+        self._title_confidence = self._optional_string(
+            memo, "titleConfidence", "title_confidence"
+        )
+        self._summary = memo.get("summary") or "Execution initialized."
         self._owner_type, self._owner_id = self._trusted_owner_metadata()
 
         parameters = self._mapping_value(
@@ -8742,6 +8771,7 @@ class MoonMindRunWorkflow:
             )
             if isinstance(outputs_for_story_output, Mapping):
                 self._record_trusted_issue_context(outputs_for_story_output)
+                self._enrich_jira_implement_title(outputs_for_story_output)
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
                 if isinstance(story_output_result, Mapping):
@@ -16234,6 +16264,10 @@ class MoonMindRunWorkflow:
             "title": self._title or "Run",
             "summary": self._summary,
         }
+        if self._title_source:
+            memo_dict["titleSource"] = self._title_source
+        if self._title_confidence:
+            memo_dict["titleConfidence"] = self._title_confidence
         if isinstance(self._step_count, int) and self._step_count > 0:
             memo_dict["mm_current_step_order"] = self._step_count
         if workflow.patched("run-memo-runtime-skill-visibility"):

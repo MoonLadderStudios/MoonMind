@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 from moonmind.workflows.executions.title_derivation import (
+    enrich_jira_implement_title,
     is_generic_title,
+    synthesize_execution_title,
     synthesize_workflow_title,
 )
 
@@ -389,6 +391,127 @@ def test_preserves_meaningful_explicit_title() -> None:
             normalized_steps=[],
         )
         == "Verify auth redirect fix"
+    )
+
+
+def test_jira_implement_ignores_load_brief_step_title() -> None:
+    result = synthesize_execution_title(
+        requested_title="Load Jira preset brief",
+        parameters={
+            "workflow": {
+                "title": "Load Jira preset brief",
+                "taskTemplate": {"slug": "jira-implement"},
+                "inputs": {"jira_issue_key": "MM-123"},
+                "steps": [
+                    {"title": "Load Jira preset brief"},
+                    {"title": "Check Jira blockers before implementation"},
+                ],
+            }
+        },
+    )
+
+    assert result.display_title == "Jira Implement: MM-123"
+    assert result.source == "integration_target"
+    assert result.confidence == "high"
+    assert result.search_tokens == ("jira", "implement", "mm", "123")
+
+
+def test_jira_implement_uses_issue_summary_in_title_and_tokens() -> None:
+    result = synthesize_execution_title(
+        requested_title="Load Jira preset brief",
+        parameters={
+            "workflow": {
+                "taskTemplate": {"slug": "jira-implement"},
+                "inputs": {
+                    "jira_issue": {
+                        "key": "MM-123",
+                        "summary": "Fix OAuth redirect handling",
+                        "url": "https://example.atlassian.net/browse/MM-123",
+                    }
+                },
+            }
+        },
+    )
+
+    assert result.display_title == "Jira Implement: MM-123 — Fix OAuth redirect handling"
+    assert result.summary == "Fix OAuth redirect handling"
+    assert result.targets[0].key == "MM-123"
+    assert result.targets[0].summary == "Fix OAuth redirect handling"
+    assert set(result.search_tokens) >= {
+        "jira",
+        "implement",
+        "mm",
+        "123",
+        "fix",
+        "oauth",
+        "redirect",
+        "handling",
+    }
+
+
+def test_jira_implement_without_key_falls_back_to_preset_label() -> None:
+    result = synthesize_execution_title(
+        requested_title="Load Jira preset brief",
+        parameters={
+            "workflow": {
+                "taskTemplate": {"slug": "jira-implement"},
+                "steps": [
+                    {"title": "Load Jira preset brief"},
+                    {"title": "Check Jira blockers before implementation"},
+                ],
+            }
+        },
+    )
+
+    assert result.display_title == "Jira Implement"
+    assert result.source == "preset_template"
+    assert "Load Jira preset brief" not in result.display_title
+
+
+def test_jira_implement_explicit_user_title_survives() -> None:
+    result = synthesize_execution_title(
+        requested_title="Investigate Jira import failures",
+        parameters={
+            "workflow": {
+                "taskTemplate": {"slug": "jira-implement"},
+                "inputs": {"jira_issue_key": "MM-123"},
+            }
+        },
+    )
+
+    assert result.display_title == "Investigate Jira import failures"
+    assert result.source == "user_explicit"
+
+
+def test_enriches_key_only_jira_implement_title_from_loaded_issue_summary() -> None:
+    result = enrich_jira_implement_title(
+        current_title="Jira Implement: MM-123",
+        title_source="integration_target",
+        issue={"key": "MM-123", "summary": "Fix OAuth redirect handling"},
+    )
+
+    assert result is not None
+    assert result.display_title == "Jira Implement: MM-123 — Fix OAuth redirect handling"
+    assert result.search_tokens == (
+        "jira",
+        "implement",
+        "mm",
+        "123",
+        "fix",
+        "oauth",
+        "redirect",
+        "handling",
+    )
+
+
+def test_jira_title_enrichment_does_not_overwrite_explicit_titles() -> None:
+    assert (
+        enrich_jira_implement_title(
+            current_title="Investigate Jira import failures",
+            title_source="user_explicit",
+            issue={"key": "MM-123", "summary": "Fix OAuth redirect handling"},
+        )
+        is None
     )
 
 

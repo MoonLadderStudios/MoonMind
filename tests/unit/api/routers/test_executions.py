@@ -237,6 +237,22 @@ def test_mm_1129_derive_task_title_bounds_instruction_fallback() -> None:
     assert "token-999" not in title
 
 
+def test_mm_1137_derive_task_title_rejects_jira_implement_step_title() -> None:
+    title = _derive_task_title(
+        {
+            "title": "Load Jira preset brief",
+            "taskTemplate": {"slug": "jira-implement"},
+            "inputs": {"jira_issue_key": "MM-1137"},
+            "steps": [
+                {"title": "Load Jira preset brief"},
+                {"title": "Check Jira blockers before implementation"},
+            ],
+        }
+    )
+
+    assert title == "Jira Implement: MM-1137"
+
+
 def test_step_execution_detail_payload_exposes_phase_11_ref_only_evidence_summary() -> None:
     payload = _step_execution_detail_payload(
         _phase_11_manifest(),

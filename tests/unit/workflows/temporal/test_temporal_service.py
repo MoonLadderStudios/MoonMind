@@ -359,6 +359,58 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_create_execution_synthesizes_jira_implement_title_metadata(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Load Jira preset brief",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "taskTemplate": {"slug": "jira-implement"},
+                    "inputs": {
+                        "jira_issue": {
+                            "key": "MM-123",
+                            "summary": "Fix OAuth redirect handling",
+                        }
+                    },
+                    "steps": [
+                        {
+                            "title": "Load Jira preset brief",
+                            "instructions": "Load trusted Jira issue context.",
+                        }
+                    ],
+                }
+            },
+            idempotency_key="jira-title-mm-1137",
+        )
+
+        assert (
+            record.memo["title"]
+            == "Jira Implement: MM-123 — Fix OAuth redirect handling"
+        )
+        assert record.memo["summary"] == "Fix OAuth redirect handling"
+        assert record.memo["titleSource"] == "integration_target"
+        assert record.memo["titleConfidence"] == "high"
+        assert set(record.search_attributes["mm_title"]) >= {
+            "jira",
+            "implement",
+            "mm",
+            "123",
+            "fix",
+            "oauth",
+            "redirect",
+            "handling",
+        }
+
+
+@pytest.mark.asyncio
 async def test_create_execution_snapshots_moonspec_environment_publish_action(
     tmp_path,
     mock_client_adapter,

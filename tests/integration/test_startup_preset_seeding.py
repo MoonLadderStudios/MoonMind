@@ -339,6 +339,14 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert (
             implement_annotations.get("postMergeJiraCompletion") == "done_category"
         )
+        assert implement_annotations["titleSynthesis"] == {
+            "label": "Jira Implement",
+            "targetPriority": ["jira_issue"],
+            "template": (
+                "{{ label }}: {{ issue.key }}{% if issue.summary %} — "
+                "{{ issue.summary }}{% endif %}"
+            ),
+        }
         raw_jira_implement_steps = jira_implement_template.steps
         assert raw_jira_implement_steps[1]["kind"] == "include"
         assert raw_jira_implement_steps[1]["slug"] == "issue-implement-assessment"

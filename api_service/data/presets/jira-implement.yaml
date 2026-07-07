@@ -70,6 +70,11 @@ annotations:
     refInput: jira_issue_key
     refPath:
     - key
+  titleSynthesis:
+    label: Jira Implement
+    targetPriority:
+    - jira_issue
+    template: '{{ label }}: {{ issue.key }}{% if issue.summary %} — {{ issue.summary }}{% endif %}'
 inputs:
 - name: jira_issue_key
   label: Jira Issue Key
