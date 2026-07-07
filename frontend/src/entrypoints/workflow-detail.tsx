@@ -59,6 +59,12 @@ import {
   type OptimisticUserMessage,
   type RunObservabilityEventRow,
 } from '../lib/chatSession';
+import {
+  type WorkflowDetailSubroute,
+  decodeWorkflowIdFromPath,
+  workflowDetailSubrouteFromPath,
+  workflowDetailSubrouteHref,
+} from '../lib/workflowDetailRoutes';
 
 export {
   WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
@@ -167,7 +173,6 @@ function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolea
   return config?.features?.liveLogsStructuredHistoryEnabled !== false;
 }
 
-type WorkflowDetailSubroute = 'chat' | 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
 type SegmentedNavItem<T extends string> = {
   value: T;
   label: string;
@@ -177,21 +182,6 @@ type SegmentedNavItem<T extends string> = {
 type WorkflowDialogKind =
   | 'rename'
   | 'send-message';
-
-function workflowDetailSubrouteFromPath(pathname: string): WorkflowDetailSubroute {
-  const match = pathname.match(/^\/workflows\/[^/]+(?:\/(chat|overview|steps|artifacts|runs|debug))?$/);
-  return (match?.[1] as WorkflowDetailSubroute) || 'chat';
-}
-
-function workflowDetailSubrouteHref(
-  workflowId: string,
-  subroute: WorkflowDetailSubroute,
-  search: URLSearchParams,
-): string {
-  const suffix = subroute === 'chat' ? '' : `/${subroute}`;
-  const query = search.toString();
-  return `/workflows/${encodeURIComponent(workflowId)}${suffix}${query ? `?${query}` : ''}`;
-}
 
 function useWorkflowDetailSubroute(
   pathname: string,
@@ -237,24 +227,15 @@ export function WorkflowWorkspaceShell({
     readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
   );
   const sourceTemporal = search.get('source') === 'temporal';
-  const encodedWorkflowId = encodeURIComponent(workflowId);
-  const selectedWorkflowQuery = useQuery({
-    queryKey: ['workflow-detail', encodedWorkflowId, sourceTemporal],
-    queryFn: async () => {
-      const suffix = sourceTemporal ? '?source=temporal' : '';
-      const response = await fetch(`${payload.apiBase}/executions/${encodedWorkflowId}${suffix}`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch workflow: ${response.statusText}`);
-      }
-      return ExecutionDetailSchema.parse(await response.json());
-    },
-    enabled: Boolean(workflowId),
-    refetchInterval: (query) => (
-      !isExecutionTerminal(query.state.data)
-        ? (cfg?.pollIntervalsMs?.detail ?? 2000)
-        : false
-    ),
-  });
+  const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
+  const selectedWorkflowQuery = useQuery(
+    workflowDetailQueryOptions({
+      apiBase: payload.apiBase,
+      workflowId,
+      sourceTemporal,
+      detailPoll,
+    }),
+  );
   const pinnedCurrentRow = selectedWorkflowQuery.data
     ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
     : null;
@@ -1551,15 +1532,6 @@ function readDashboardConfig(payload: BootPayload): DashboardConfig | undefined 
   return raw?.dashboardConfig;
 }
 
-function decodeTaskPathSegment(segment: string | null | undefined): string | null {
-  if (!segment) return null;
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
-  }
-}
-
 export function expandRouteTemplate(
   template: string | null | undefined,
   params: Record<string, string | null | undefined>,
@@ -2376,6 +2348,48 @@ function isExecutionTerminal(
       TERMINAL_RUN_STATUSES.has(lifecycleState) ||
       TERMINAL_RUN_STATUSES.has(temporalStatus),
   );
+}
+
+export function workflowEvidenceStaleTime({
+  detailPoll,
+}: {
+  isTerminal: boolean;
+  detailPoll: number;
+}): number {
+  return Math.max(detailPoll, 5000);
+}
+
+export function workflowDetailQueryOptions({
+  apiBase,
+  workflowId,
+  sourceTemporal,
+  detailPoll,
+}: {
+  apiBase: string;
+  workflowId: string | null | undefined;
+  sourceTemporal: boolean;
+  detailPoll: number;
+}) {
+  const encodedWorkflowId = workflowId ? encodeURIComponent(workflowId) : null;
+  return {
+    queryKey: ['workflow-detail', encodedWorkflowId, sourceTemporal] as const,
+    enabled: Boolean(encodedWorkflowId),
+    queryFn: async () => {
+      if (!encodedWorkflowId) {
+        throw new Error('Workflow ID is required.');
+      }
+      const suffix = sourceTemporal ? '?source=temporal' : '';
+      const response = await fetch(`${apiBase}/executions/${encodedWorkflowId}${suffix}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch workflow: ${response.statusText}`);
+      }
+      return ExecutionDetailSchema.parse(await response.json());
+    },
+    refetchInterval: (query: { state: { data: z.infer<typeof ExecutionDetailSchema> | undefined } }) => (
+      !isExecutionTerminal(query.state.data) ? detailPoll : false
+    ),
+    staleTime: detailPoll,
+  };
 }
 
 function usePageVisibility() {
@@ -4597,6 +4611,7 @@ function StepExecutionHistory({
   sourceTemporal,
   enabled,
   pollInterval,
+  staleTime,
 }: {
   apiBase: string;
   workflowId: string;
@@ -4604,6 +4619,7 @@ function StepExecutionHistory({
   sourceTemporal: boolean;
   enabled: boolean;
   pollInterval: number | false;
+  staleTime: number;
 }) {
   const historyQuery = useQuery({
     queryKey: ['workflow-detail-step-executions', workflowId, logicalStepId, sourceTemporal],
@@ -4624,6 +4640,7 @@ function StepExecutionHistory({
     },
     enabled: enabled && Boolean(workflowId) && Boolean(logicalStepId),
     refetchInterval: enabled ? pollInterval : false,
+    staleTime,
   });
 
   if (!enabled) return null;
@@ -4671,6 +4688,7 @@ function StepLedgerRowCard({
   runId,
   sourceTemporal,
   historyPollInterval,
+  evidenceStaleTime,
   expanded,
   onToggle,
   isLast,
@@ -4686,6 +4704,7 @@ function StepLedgerRowCard({
   runId: string;
   sourceTemporal: boolean;
   historyPollInterval: number | false;
+  evidenceStaleTime: number;
   expanded: boolean;
   onToggle: () => void;
   isLast: boolean;
@@ -4787,6 +4806,7 @@ function StepLedgerRowCard({
               sourceTemporal={sourceTemporal}
               enabled={expanded}
               pollInterval={historyPollInterval}
+              staleTime={evidenceStaleTime}
             />
             <StepWorkloadDetails workload={row.workload} />
             <section className="step-tl-detail-section">
@@ -6710,10 +6730,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
   const currentPathname = window.location.pathname;
   const currentSearch = window.location.search;
-  const workflowIdMatch = currentPathname.match(
-    /^\/workflows\/([^/]+)(?:\/(?:chat|overview|steps|artifacts|runs|debug))?$/,
-  );
-  const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
+  const taskId = decodeWorkflowIdFromPath(currentPathname);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
   const search = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
   const [detailSubroute, setDetailSubroute] = useWorkflowDetailSubroute(currentPathname);
@@ -6746,27 +6763,21 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const [selectedBranchId, setSelectedBranchId] = useState('');
   const [latestBranchCompare, setLatestBranchCompare] = useState<z.infer<typeof CheckpointBranchCompareSchema> | null>(null);
 
-  const detailQuery = useQuery({
-    queryKey: ['workflow-detail', encodedTaskId, sourceTemporal],
-    queryFn: async () => {
-      if (!encodedTaskId) throw new Error('Workflow ID is required.');
-      const suffix = sourceTemporal ? '?source=temporal' : '';
-      const response = await fetch(`${payload.apiBase}/executions/${encodedTaskId}${suffix}`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch workflow: ${response.statusText}`);
-      }
-      return ExecutionDetailSchema.parse(await response.json());
-    },
-    enabled: Boolean(encodedTaskId),
-    refetchInterval: (query) => (
-      !isExecutionTerminal(query.state.data)
-        ? detailPoll
-        : false
-    ),
-  });
+  const detailQuery = useQuery(
+    workflowDetailQueryOptions({
+      apiBase: payload.apiBase,
+      workflowId: taskId,
+      sourceTemporal,
+      detailPoll,
+    }),
+  );
 
   const execution = detailQuery.data;
   const isTerminalExecution = isExecutionTerminal(execution);
+  const evidenceStaleTime = workflowEvidenceStaleTime({
+    isTerminal: isTerminalExecution,
+    detailPoll,
+  });
   const workflowId = execution?.workflowId || execution?.taskId || taskId || '';
   const runId = execution?.temporalRunId || execution?.runId || '';
   const namespace = execution?.namespace || '';
@@ -6834,12 +6845,14 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     queryFn: () => fetchStepLedger(String(execution?.stepsHref || '')),
     enabled: shouldFetchStepLedger,
     refetchInterval: shouldFetchStepLedger && !isTerminalExecution ? detailPoll : false,
+    staleTime: evidenceStaleTime,
   });
   const branchesQuery = useQuery({
     queryKey: ['workflow-detail-checkpoint-branches', workflowId],
     queryFn: () => fetchCheckpointBranches(payload.apiBase, workflowId),
     enabled: stepsTabActive && Boolean(execution && workflowId),
     refetchInterval: stepsTabActive && !isTerminalExecution ? detailPoll : false,
+    staleTime: evidenceStaleTime,
   });
   const branches = branchesQuery.data?.items ?? [];
   const selectedBranch = branches.find((branch) => branch.branchId === selectedBranchId) || branches[0] || null;
@@ -6859,6 +6872,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     queryFn: () => fetchCheckpointBranchTurns(payload.apiBase, workflowId, String(selectedBranch?.branchId || '')),
     enabled: stepsTabActive && Boolean(workflowId && selectedBranch?.branchId),
     refetchInterval: stepsTabActive && !isTerminalExecution ? detailPoll : false,
+    staleTime: evidenceStaleTime,
   });
   const latestRunId = stepsQuery.data?.runId || runId;
   const artifactRunId = execution?.stepsHref ? stepsQuery.data?.runId : runId;
@@ -6935,6 +6949,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         selectedRecoveryStep.executionOrdinal > 0,
     ),
     refetchInterval: stepsTabActive && !isTerminalExecution ? detailPoll : false,
+    staleTime: evidenceStaleTime,
   });
   const recoveryEligibility =
     execution?.recoveryEligibility ?? stepRecoveryQuery.data?.recoveryEligibility ?? null;
@@ -6955,6 +6970,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     refetchInterval: namespace && workflowId && artifactRunId && !isTerminalExecution
       ? detailPoll
       : false,
+    staleTime: evidenceStaleTime,
   });
 
   const latestReportQuery = useQuery({
@@ -6973,6 +6989,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     refetchInterval: namespace && workflowId && artifactRunId && !isTerminalExecution
       ? detailPoll
       : false,
+    staleTime: evidenceStaleTime,
   });
 
   const runSummaryQuery = useQuery({
@@ -6980,6 +6997,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     queryFn: () => fetchRunSummaryArtifact(payload.apiBase, summaryArtifactRef),
     enabled: overviewTabActive && Boolean(summaryArtifactRef),
     refetchInterval: overviewTabActive && summaryArtifactRef && !isTerminalExecution ? detailPoll : false,
+    staleTime: evidenceStaleTime,
   });
   const inboundRemediationsQuery = useQuery({
     queryKey: ['workflow-detail-remediations', workflowId, 'inbound'],
@@ -6991,6 +7009,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       return RemediationLinksSchema.parse(await response.json());
     },
     enabled: artifactsTabActive && shouldFetchRemediationLinks,
+    staleTime: evidenceStaleTime,
   });
   const outboundRemediationsQuery = useQuery({
     queryKey: ['workflow-detail-remediations', workflowId, 'outbound'],
@@ -7002,6 +7021,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       return RemediationLinksSchema.parse(await response.json());
     },
     enabled: artifactsTabActive && shouldFetchRemediationLinks,
+    staleTime: evidenceStaleTime,
   });
   const runSummary = runSummaryQuery.data;
   const displayedMergeAutomation =
@@ -8148,6 +8168,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                         runId={latestRunId}
                         sourceTemporal={sourceTemporal}
                         historyPollInterval={!isTerminalExecution ? detailPoll : false}
+                        evidenceStaleTime={evidenceStaleTime}
                         expanded={Boolean(expandedSteps[row.logicalStepId])}
                         onToggle={() => toggleStep(row.logicalStepId)}
                         isLast={idx === stepsQuery.data.steps.length - 1}
@@ -8541,10 +8562,9 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 export function WorkflowDetailEntrypoint({ payload }: { payload: BootPayload }) {
   const cfg = readDashboardConfig(payload);
   const isDesktop = useWorkflowWorkspaceDesktop();
-  const workflowIdMatch = typeof window !== 'undefined'
-    ? window.location.pathname.match(/^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?$/)
+  const workflowId = typeof window !== 'undefined'
+    ? decodeWorkflowIdFromPath(window.location.pathname)
     : null;
-  const workflowId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const search = useMemo(() => new URLSearchParams(typeof window !== 'undefined' ? window.location.search : ''), []);
   const workspaceShellEnabled = cfg?.features?.temporalDashboard?.workspaceShellEnabled !== false;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;

@@ -12,6 +12,8 @@ import {
   WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
   WorkflowDetailEntrypoint,
   WorkflowDetailPage,
+  workflowDetailQueryOptions,
+  workflowEvidenceStaleTime,
 } from './workflow-detail';
 import {
   taskCompareHref,
@@ -26,6 +28,7 @@ import {
   readDashboardPreferences,
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
+import { WorkflowListPage } from './workflow-list';
 
 declare const __dirname: string;
 
@@ -283,6 +286,31 @@ describe('Workflow Detail Entrypoint', () => {
       },
     ],
   };
+
+  it('MM-1133 gives workflow detail query consumers one canonical query identity', () => {
+    const shellOptions = workflowDetailQueryOptions({
+      apiBase: '/api',
+      workflowId: 'mm:detail',
+      sourceTemporal: true,
+      detailPoll: 2000,
+    });
+    const pageOptions = workflowDetailQueryOptions({
+      apiBase: '/api',
+      workflowId: 'mm:detail',
+      sourceTemporal: true,
+      detailPoll: 2000,
+    });
+
+    expect(shellOptions.queryKey).toEqual(pageOptions.queryKey);
+    expect(shellOptions.queryKey).toEqual(['workflow-detail', 'mm%3Adetail', true]);
+    expect(shellOptions.staleTime).toBe(2000);
+  });
+
+  it('MM-1133 applies explicit stale windows to workflow evidence queries', () => {
+    expect(workflowEvidenceStaleTime({ isTerminal: false, detailPoll: 2000 })).toBe(5000);
+    expect(workflowEvidenceStaleTime({ isTerminal: false, detailPoll: 8000 })).toBe(8000);
+    expect(workflowEvidenceStaleTime({ isTerminal: true, detailPoll: 2000 })).toBe(5000);
+  });
 
   function richOutboundRemediationLink(overrides: Record<string, unknown> = {}) {
     return {
@@ -710,6 +738,55 @@ describe('Workflow Detail Entrypoint', () => {
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
   });
 
+  it('MM-1133 keeps the workspace sidebar list cache isolated from the workflow table cache', async () => {
+    window.history.pushState({}, 'Workspace Cache Test', '/workflows?limit=25&source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    const payload: BootPayload = {
+      page: 'workflow-list',
+      apiBase: '/api',
+      initialData: {
+        dashboardConfig: {
+          pollIntervalsMs: { detail: 60000, list: 60000 },
+          features: {
+            temporalDashboard: {
+              listEnabled: true,
+              workspaceShellEnabled: true,
+            },
+          },
+        },
+      },
+    };
+    const view = renderWithClient(<WorkflowListPage payload={payload} />);
+
+    expect(await screen.findByRole('row', { name: /MM-997 selected workflow/i })).toBeTruthy();
+    const matchingListCalls = () => fetchSpy.mock.calls.filter(
+      ([input]) => String(input) === '/api/executions?source=temporal&pageSize=25',
+    );
+    expect(matchingListCalls()).toHaveLength(1);
+
+    window.history.pushState({}, 'Workspace Cache Test', '/workflows/test-123?limit=25&source=temporal');
+    view.rerender(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            ...(stepsPayload.initialData as Record<string, unknown>),
+            dashboardConfig: {
+              ...((stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig),
+              pollIntervalsMs: { detail: 60000, list: 60000 },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(matchingListCalls()).toHaveLength(2);
+  });
+
 
   it('MM-1116 renders the sidebar workflow list as a table slice with a filterable header', async () => {
     window.history.pushState({}, 'Workspace Table Slice Test', '/workflows/test-123?source=temporal');
@@ -978,7 +1055,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(pinned.getAttribute('data-pinned')).toBe('true');
     expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
-    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&stateIn=failed&pageSize=25');
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25&stateIn=failed');
   });
 
   it('MM-999 keeps detail visible and retries only sidebar data after a recoverable sidebar error', async () => {
@@ -1049,7 +1126,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
-      '/api/executions?source=temporal&nextPageToken=page-2&pageSize=10',
+      '/api/executions?source=temporal&pageSize=10&nextPageToken=page-2',
     );
   });
 
@@ -1066,7 +1143,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
-      '/api/executions?source=temporal&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira&pageSize=10',
+      '/api/executions?source=temporal&pageSize=10&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira',
     );
     const anotherWorkflow = await within(sidebar).findByRole('link', { name: /Another workflow/i });
     expect(anotherWorkflow.getAttribute('href')).toBe(
@@ -1091,7 +1168,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
-      '/api/executions?source=temporal&nextPageToken=page-2&pageSize=100',
+      '/api/executions?source=temporal&pageSize=100&nextPageToken=page-2',
     );
   });
 
@@ -1875,6 +1952,44 @@ describe('Workflow Detail Entrypoint', () => {
     expect(stepsLink.getAttribute('aria-current')).toBe('page');
     expect(stepsLink.textContent).toContain('3');
     expect(fetchSpy.mock.calls.filter(([input]) => String(input).includes('/executions/test-123/steps')).length).toBeGreaterThan(0);
+  });
+
+  it('MM-1133 reuses cached detail tab evidence when returning to Steps inside the stale window', async () => {
+    window.history.pushState({}, 'Detail Tab Cache Test', '/workflows/test-123/overview?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(
+      <WorkflowDetailPage
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            ...(stepsPayload.initialData as Record<string, unknown>),
+            dashboardConfig: {
+              ...((stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig),
+              pollIntervalsMs: { detail: 60000 },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Summary' })).toBeTruthy();
+    const stepLedgerCalls = () => fetchSpy.mock.calls.filter(
+      ([input]) => String(input) === '/api/executions/test-123/steps',
+    );
+    expect(stepLedgerCalls()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('link', { name: 'Steps' }));
+    expect(await screen.findByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+    await waitFor(() => expect(stepLedgerCalls()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole('link', { name: 'Artifacts' }));
+    expect(await screen.findByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
+    expect(stepLedgerCalls()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('link', { name: 'Steps' }));
+    expect(await screen.findByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+    expect(stepLedgerCalls()).toHaveLength(1);
   });
 
   it('keeps the standalone detail toolbar free of full-list navigation while preserving tab context (MM-998, MM-975)', async () => {

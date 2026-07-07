@@ -9,6 +9,7 @@ import WorkflowStartPage from './workflow-start';
 import {
   readWorkflowListDisplayMode,
 } from '../lib/workflowListDisplayMode';
+import { decodeWorkflowIdFromPath } from '../lib/workflowDetailRoutes';
 
 const DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
 
@@ -32,19 +33,6 @@ function useIsDesktop(): boolean {
   }, []);
 
   return isDesktop;
-}
-
-function decodeWorkflowIdFromPath(pathname: string): string | null {
-  const match = pathname.match(/^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?\/?$/);
-  if (!match?.[1]) {
-    return null;
-  }
-  try {
-    const decoded = decodeURIComponent(match[1]);
-    return decoded.includes('/') ? null : decoded;
-  } catch {
-    return null;
-  }
 }
 
 function isCreatePath(pathname: string): boolean {

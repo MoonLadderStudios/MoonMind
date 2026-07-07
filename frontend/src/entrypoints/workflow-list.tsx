@@ -1181,7 +1181,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const listQueryKey = useMemo(() => buildWorkflowListQueryKey(listQueryParams), [listQueryParams]);
   const listQuery = useMemo(() => workflowListQueryString(listQueryParams), [listQueryParams]);
 
-  const { data, isLoading, isError, error, refetch } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: listQueryKey,
     enabled: listEnabled && filterValidationErrors.length === 0,
     queryFn: async () => {
@@ -1201,24 +1201,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     refetchOnWindowFocus: liveUpdatesPref,
     staleTime: listPollMs,
   });
-
-  useEffect(() => {
-    if (!listEnabled || !liveUpdatesPref || drawerOpen || desktopFilterField !== null) {
-      return undefined;
-    }
-    const refetchVisibleList = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-        return;
-      }
-      void refetch();
-    };
-    window.addEventListener('visibilitychange', refetchVisibleList);
-    window.addEventListener('focus', refetchVisibleList);
-    return () => {
-      window.removeEventListener('visibilitychange', refetchVisibleList);
-      window.removeEventListener('focus', refetchVisibleList);
-    };
-  }, [desktopFilterField, drawerOpen, listEnabled, liveUpdatesPref, refetch]);
 
   // Facets enrich the include/exclude dropdowns. The mobile drawer can show
   // every value field at once; desktop column popovers request the active field.
