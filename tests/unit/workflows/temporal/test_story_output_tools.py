@@ -705,6 +705,7 @@ async def test_update_jira_issue_status_accepts_bold_previous_assessment_verdict
         "Assessment complete. Verdict: `PARTIALLY_IMPLEMENTED`.",
         "Assessment complete! Verdict: `PARTIALLY_IMPLEMENTED`.",
         "Assessment complete? Verdict: `PARTIALLY_IMPLEMENTED`.",
+        "Assessment complete \u2014 verdict: **PARTIALLY_IMPLEMENTED**.",
     ],
 )
 async def test_update_jira_issue_status_accepts_sentence_previous_assessment_verdict(
@@ -741,6 +742,33 @@ async def test_update_jira_issue_status_accepts_sentence_previous_assessment_ver
     assert result.status == "COMPLETED"
     assert result.outputs["decision"] == "transitioned"
     assert service.transition_requests[0].transition_id == "31"
+
+
+@pytest.mark.asyncio
+async def test_check_jira_blockers_preserves_em_dash_previous_assessment_verdict() -> None:
+    service = _FakeJiraService()
+    service.issue_responses["MM-1137"] = {
+        "key": "MM-1137",
+        "fields": {"status": {"id": "1", "name": "Backlog"}, "issuelinks": []},
+    }
+
+    result = await check_jira_blockers(
+        {
+            "targetIssueKey": "MM-1137",
+            "assessmentArtifactPath": "artifacts/missing-assessment.json",
+            "previousOutputs": {
+                "operator_summary": (
+                    "## Assessment complete \u2014 verdict: "
+                    "**PARTIALLY_IMPLEMENTED**"
+                ),
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["assessmentVerdict"] == "PARTIALLY_IMPLEMENTED"
 
 
 @pytest.mark.asyncio
