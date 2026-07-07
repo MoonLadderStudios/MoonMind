@@ -362,6 +362,10 @@ _MOONSPEC_GATE_VERDICT_TEXT_PATTERN = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_MOONSPEC_REMEDIATION_TITLE_ATTEMPT_PATTERN = re.compile(
+    r"\b(?P<attempt>\d+)\s+of\s+(?P<max_attempts>\d+)\b",
+    re.IGNORECASE,
+)
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.UserWorkflow workflow."""
 
@@ -538,6 +542,9 @@ RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = (
     "run-moonspec-verify-remediation-index-v1"
 )
 RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH = "run-moonspec-remediation-step-skip-v1"
+RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH = (
+    "run-moonspec-title-remediation-detection-v1"
+)
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_PATCH = "run-moonspec-gate-contract-repair-v1"
 RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-gate-environment-draft-publish-v1"
@@ -4641,13 +4648,36 @@ class MoonMindRunWorkflow:
         annotations = node_inputs.get("annotations") or node.get("annotations")
         return annotations if isinstance(annotations, Mapping) else {}
 
+    @staticmethod
+    def _moonspec_title_remediation_detection_enabled() -> bool:
+        try:
+            workflow.info()
+        except Exception:
+            return True
+        return workflow.patched(RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH)
+
+    def _moonspec_remediation_title_role(self, node: Mapping[str, Any]) -> str:
+        if not self._moonspec_title_remediation_detection_enabled():
+            return ""
+        node_inputs = self._node_inputs_mapping(node)
+        title = (
+            str(node_inputs.get("title") or node.get("title") or "")
+            .strip()
+            .lower()
+        )
+        if title.startswith("remediate verification gaps"):
+            return "moonspec-remediation"
+        if title.startswith("verify remediation"):
+            return "moonspec-verification-gate"
+        return ""
+
     def _moonspec_step_role(self, node: Mapping[str, Any]) -> str:
         annotations = self._node_annotations_mapping(node)
         for key in ("jiraOrchestrateRole", "issueImplementRole"):
             role = str(annotations.get(key) or "").strip().lower()
             if role:
                 return role
-        return ""
+        return self._moonspec_remediation_title_role(node)
 
     @staticmethod
     def _coerce_positive_int(value: Any) -> int | None:
@@ -4670,6 +4700,22 @@ class MoonMindRunWorkflow:
         max_attempts = self._coerce_positive_int(
             annotations.get("moonSpecRemediationMaxAttempts")
         )
+        if attempt is None or max_attempts is None:
+            node_inputs = self._node_inputs_mapping(node)
+            title = str(node_inputs.get("title") or node.get("title") or "").strip()
+            if self._moonspec_remediation_title_role(node):
+                match = _MOONSPEC_REMEDIATION_TITLE_ATTEMPT_PATTERN.search(title)
+                if match:
+                    title_attempt = self._coerce_positive_int(
+                        match.group("attempt")
+                    )
+                    title_max_attempts = self._coerce_positive_int(
+                        match.group("max_attempts")
+                    )
+                    if attempt is None:
+                        attempt = title_attempt
+                    if max_attempts is None:
+                        max_attempts = title_max_attempts
         return attempt, max_attempts
 
     def _moonspec_remediation_attempt_within_budget(

@@ -265,6 +265,54 @@ def test_parent_loop_continues_to_scheduled_remediation_without_remaining_work_r
     assert decision["hasRemainingRemediationStep"] is True
     assert decision["gate"]["remainingWorkRef"] is None
 
+
+def test_parent_loop_continues_to_unannotated_issue_implement_remediation_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        workflow,
+        "_moonspec_title_remediation_detection_enabled",
+        lambda: True,
+    )
+    workflow._step_ledger_rows = [
+        {"logicalStepId": "verify-implementation", "attempt": 1, "artifacts": {}}
+    ]
+    workflow._step_terminal_dispositions["verify-implementation"] = "accepted"
+
+    decision = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-implementation",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="high",
+            recommended_next_action="reattempt_current_step",
+            target_logical_step_id="remediate-1",
+        ),
+        gate_result_ref="artifact://gate/implementation",
+        ordered_nodes=[
+            {
+                "id": "verify-implementation",
+                "inputs": {"selectedSkill": "moonspec-verify"},
+            },
+            {
+                "id": "remediate-1",
+                "skill": {"id": "auto"},
+                "inputs": {"title": "Remediate verification gaps 1 of 6"},
+            },
+            {
+                "id": "verify-remediation-1",
+                "skill": {"id": "moonspec-verify"},
+                "inputs": {"title": "Verify remediation 1 of 6"},
+            },
+        ],
+        current_index=0,
+    )
+
+    assert decision["continueLoop"] is True
+    assert decision["nextAttemptKind"] == "remediation"
+    assert decision["hasRemainingRemediationStep"] is True
+
+
 def test_parent_loop_stops_on_structured_gate_when_remediation_budget_exhausted() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._step_ledger_rows = [
