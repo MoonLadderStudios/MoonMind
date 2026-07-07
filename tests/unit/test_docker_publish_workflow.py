@@ -163,6 +163,11 @@ def test_dockerfile_uses_buildkit_package_cache_mounts() -> None:
     assert "RUN --mount=type=cache,target=/root/.cache/pip" in dockerfile
     assert "--mount=type=cache,target=/var/cache/apt,sharing=locked" in dockerfile
     assert "--mount=type=cache,target=/var/lib/apt/lists,sharing=locked" in dockerfile
+    assert 'Binary::apt::APT::Keep-Downloaded-Packages "true";' in dockerfile
+    assert (
+        dockerfile.count('Binary::apt::APT::Keep-Downloaded-Packages "true";')
+        == 3
+    )
 
 
 def test_runtime_project_install_precedes_non_package_asset_copies() -> None:

@@ -25,6 +25,7 @@ ARG INSTALL_CLAUDE_CLI
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 \
@@ -64,6 +65,7 @@ WORKDIR /build
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt-get update && apt-get install -y --no-install-recommends python3
 RUN npm config set fund false \
     && npm config set audit false \
@@ -145,6 +147,7 @@ COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-cod
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         bubblewrap \
