@@ -4522,8 +4522,8 @@ def _assessment_verdict_from_text(value: Any) -> str:
     verdict_prefix = r"[\s:`*_\"']*"
     verdict_suffix = r"(?:\b|_+(?!\w))"
     patterns = (
-        r"(?is)\bassessment\s+complete\b[^.\n:]*[:\s`]+"
-        rf"{verdict_prefix}{verdict_pattern}{verdict_suffix}",
+        r"(?is)\bassessment\s+complete\b[^.\n]*?"
+        rf"{verdict_pattern}{verdict_suffix}",
         r"(?is)\brecorded\s+verdict\b[^.\n:]*[:\s`]+"
         rf"{verdict_prefix}{verdict_pattern}{verdict_suffix}",
         r"(?is)['\"]verdict['\"]\s*:\s*['\"]"

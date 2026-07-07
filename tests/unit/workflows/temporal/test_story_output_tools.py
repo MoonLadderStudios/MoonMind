@@ -607,6 +607,45 @@ async def test_update_jira_issue_status_accepts_bold_previous_assessment_verdict
 
 
 @pytest.mark.asyncio
+async def test_update_jira_issue_status_accepts_issue_key_before_bold_verdict(
+    tmp_path,
+) -> None:
+    service = _FakeJiraService()
+    service.issue_responses["MM-1133"] = {
+        "key": "MM-1133",
+        "fields": {"status": {"id": "1", "name": "Backlog"}},
+    }
+    service.transition_responses["MM-1133"] = {
+        "key": "MM-1133",
+        "fields": {"status": {"id": "3", "name": "In Progress"}},
+    }
+    service.transitions_response = {
+        "transitions": [
+            {"id": "31", "name": "In Progress", "to": {"name": "In Progress"}}
+        ]
+    }
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1133",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": str(tmp_path / "missing-assessment.json"),
+            "previousOutputs": {
+                "lastAssistantText": (
+                    "Assessment complete: `MM-1133` is "
+                    "**PARTIALLY_IMPLEMENTED**."
+                ),
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "transitioned"
+    assert service.transition_requests[0].transition_id == "31"
+
+
+@pytest.mark.asyncio
 async def test_update_jira_issue_status_accepts_underscore_wrapped_assessment_verdict(
     tmp_path,
 ) -> None:
@@ -3090,6 +3129,33 @@ async def test_check_jira_blockers_preserves_bold_previous_assessment_verdict():
             "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
             "previousOutputs": {
                 "lastAssistantText": "Assessment complete: **PARTIALLY_IMPLEMENTED**.",
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["assessmentVerdict"] == "PARTIALLY_IMPLEMENTED"
+
+
+@pytest.mark.asyncio
+async def test_check_jira_blockers_preserves_issue_key_before_bold_verdict():
+    service = _FakeJiraService()
+    service.issue_responses["MM-1133"] = {
+        "key": "MM-1133",
+        "fields": {"issuelinks": []},
+    }
+
+    result = await check_jira_blockers(
+        {
+            "targetIssueKey": "MM-1133",
+            "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
+            "previousOutputs": {
+                "lastAssistantText": (
+                    "Assessment complete: `MM-1133` is "
+                    "**PARTIALLY_IMPLEMENTED**."
+                ),
             },
         },
         jira_service_factory=lambda: service,
