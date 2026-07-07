@@ -4725,7 +4725,17 @@ def _github_status_pull_request_url(
 def _github_status_requires_verification(inputs: Mapping[str, Any]) -> bool:
     if "requireVerification" not in inputs:
         return True
-    return _truthy(inputs.get("requireVerification"))
+    value = inputs.get("requireVerification")
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return True
+    if isinstance(value, (int, float)):
+        return value != 0
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return True
+    return normalized not in {"0", "false", "no", "off"}
 
 
 async def update_github_issue_status(

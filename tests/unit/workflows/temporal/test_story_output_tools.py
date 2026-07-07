@@ -392,6 +392,38 @@ async def test_update_github_issue_status_allows_code_review_without_verificatio
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("require_verification", [None, "", "   "])
+async def test_update_github_issue_status_requires_verification_for_blank_values(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    require_verification,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "requireVerification": require_verification,
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert "verification artifact path" in result.outputs["summary"]
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
 async def test_update_github_issue_status_uses_previous_verification_payload(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

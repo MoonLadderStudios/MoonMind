@@ -197,6 +197,7 @@ steps:
     --run-ref "{{ inputs.run_ref }}" \
     --publish-mode "{{ inputs.publish_mode }}" \
     --max-workflows "{{ inputs.max_workflows }}" \
+    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
     --constraints "{{ inputs.constraints }}"
     The helper stamps runtimeInheritance="caller" plus a fallback copy of the parent
     runtime on each child and assigns a stable idempotency key per target kind,

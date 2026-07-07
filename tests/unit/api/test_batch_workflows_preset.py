@@ -246,6 +246,8 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             # Parent records a summary artifact that links child workflows.
             assert "artifacts/batch-workflows-result.json" in step["instructions"]
             assert "runtimeInheritance" in step["instructions"]
+            assert "--no-run-verify" in step["instructions"]
+            assert " --run-verify" not in step["instructions"]
 
             assert "git" in expanded["capabilities"]
             assert "gh" in expanded["capabilities"]
