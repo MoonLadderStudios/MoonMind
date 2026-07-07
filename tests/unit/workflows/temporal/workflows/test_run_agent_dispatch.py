@@ -1602,6 +1602,35 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         self.assertEqual(request.agent_id, "codex")
         self.assertEqual(request.resolved_skillset_ref, "skills:snap:12345")
 
+    def test_build_agent_execution_request_propagates_publish_base_branch(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "codex",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "startingBranch": "codex/fix-pr-publish-base-branch",
+                    "targetBranch": "codex/fix-pr-publish-base-branch",
+                    "publishMode": "pr",
+                    "publishBaseBranch": "main",
+                },
+                node_id="node-publish",
+                tool_name="auto",
+            )
+
+        self.assertEqual(request.parameters["publishBaseBranch"], "main")
+        self.assertEqual(request.workspace_spec["publishBaseBranch"], "main")
+
     def test_build_agent_execution_request_passes_compact_skill_payload(self) -> None:
         from unittest.mock import patch
 
