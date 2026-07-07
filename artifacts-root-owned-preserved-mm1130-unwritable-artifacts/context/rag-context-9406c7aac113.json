@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/integration/test_interventions.py (score: 1.000, trust: canonical)\n    line 76: assert response.status_code == 202, response.text\n2. moonmind/omnigent/execute.py (score: 1.000, trust: canonical)\n    line 171: payload=payload.encode(\"utf-8\"),\n3. moonmind/indexers/google_drive_indexer.py (score: 1.000, trust: canonical)\n    line 50: status_code=500,\n4. docs/ReleaseNotes/MM-730-hard-switch-cutover.md (score: 1.000, trust: canonical)\n    line 5: This is a breaking release. Compatibility redirects and task-shaped aliases are not kept after the cutover boundary. Operators must keep the previous worker build draining on the legacy Task Queue for in-flight `MoonMind.Run` histories, or record an explicit pause/resume or terminate/restart decision before enabling `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=renamed_contract`.\n5. docs/ManagedAgents/DockerSidecarRuntime.md (score: 1.000, trust: canonical)\n    line 10: - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)\n6. docs/Workflows/RequiredCapabilities.md (score: 1.000, trust: canonical)\n    line 15: Required Capabilities are the normalized execution contract that says what the platform must be able to provide before a workflow, task, step, Tool, Skill, preset-derived step, or managed runtime session may start.\n7. docs/Workflows/PrMergeAutomation.md (score: 1.000, trust: canonical)\n    line 18: 3. waits for external merge-readiness signals such as GitHub review/check completion and optional Jira state,\n8. docs/Workflows/SkillAndPlanContracts.md (score: 1.000, trust: canonical)\n    line 112: 1. **Workflow code orchestrates only.**",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/integration/test_interventions.py",
+      "text": "line 76: assert response.status_code == 202, response.text",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 76,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/omnigent/execute.py",
+      "text": "line 171: payload=payload.encode(\"utf-8\"),",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 171,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/google_drive_indexer.py",
+      "text": "line 50: status_code=500,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 50,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ReleaseNotes/MM-730-hard-switch-cutover.md",
+      "text": "line 5: This is a breaking release. Compatibility redirects and task-shaped aliases are not kept after the cutover boundary. Operators must keep the previous worker build draining on the legacy Task Queue for in-flight `MoonMind.Run` histories, or record an explicit pause/resume or terminate/restart decision before enabling `TEMPORAL_USER_WORKFLOW_CONTRACT_MODE=renamed_contract`.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/DockerSidecarRuntime.md",
+      "text": "line 10: - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 10,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/RequiredCapabilities.md",
+      "text": "line 15: Required Capabilities are the normalized execution contract that says what the platform must be able to provide before a workflow, task, step, Tool, Skill, preset-derived step, or managed runtime session may start.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 15,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/PrMergeAutomation.md",
+      "text": "line 18: 3. waits for external merge-readiness signals such as GitHub review/check completion and optional Jira state,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 18,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/SkillAndPlanContracts.md",
+      "text": "line 112: 1. **Workflow code orchestrates only.**",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 112,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-07-07T03:21:52Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
