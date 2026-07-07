@@ -43,7 +43,7 @@ def _args(**overrides: Any) -> Any:
         "repo": "MoonLadderStudios/MoonMind",
         "state": "open",
         "merge_method": "squash",
-        "max_iterations": 3,
+        "max_iterations": 5,
         "max_attempts": 3,
         "priority": 0,
         "package_managers": [],
@@ -488,6 +488,7 @@ def test_parse_args_flattens_package_managers() -> None:
         ["--repo", "o/r", "--package-managers", "pip,npm", "--package-managers", "github-actions"]
     )
     assert args.package_managers == ["pip", "npm", "github-actions"]
+    assert args.max_iterations == 5
     assert args.include_security_updates is True
     assert args.dry_run is False
 

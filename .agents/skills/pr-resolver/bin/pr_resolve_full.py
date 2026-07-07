@@ -141,7 +141,7 @@ def main() -> None:
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=3,
+        default=5,
         help="Maximum full remediation iterations (metadata/guardrail).",
     )
     parser.add_argument(

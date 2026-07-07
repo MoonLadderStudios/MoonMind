@@ -25,11 +25,14 @@ The task is not complete until the target PR is merged or is proven already merg
 - inputs.pr (optional)
 - inputs.branch (optional)
 - inputs.mergeMethod (merge|squash|rebase)
-- inputs.maxIterations (default 3, full remediation cap per cycle)
+- inputs.maxIterations (default 5, full remediation cap per cycle)
 - inputs.finalizeMaxRetries (default 60)
 - inputs.finalizeBackoffSeconds (default 30)
 - inputs.finalizeMaxSleepSeconds (default 120)
 - inputs.finalizeMaxElapsedSeconds (default 7200)
+- Retryable/no-progress blockers use at least 5 finalize attempts before
+  returning `attempts_exhausted`, unless a hard timeout, hard failure, or
+  non-retryable blocker is reached first.
 - `ci_running` finalize waits use at least 60 seconds before the next check,
   even when `finalizeBackoffSeconds` is lower.
 

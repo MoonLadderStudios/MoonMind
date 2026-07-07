@@ -41,6 +41,7 @@
     "escalations": { "type": "integer" },
     "finalize_max_retries": { "type": "integer" },
     "fix_max_iterations": { "type": "integer" },
+    "min_attempts_before_exhausted": { "type": "integer" },
     "max_iterations": { "type": "integer" },
     "merge_method": { "type": "string" },
     "decisions": {

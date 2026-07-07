@@ -687,7 +687,7 @@ def test_orchestrate_actionable_comments_escalates_once_then_merges(
         sleep_fn=lambda seconds: sleeps.append(seconds),
         monotonic_fn=lambda: 0.0,
         finalize_max_retries=2,
-        fix_max_iterations=3,
+        fix_max_iterations=5,
         base_sleep_seconds=15,
         max_sleep_seconds=60,
         max_elapsed_seconds=900,
@@ -701,26 +701,40 @@ def test_orchestrate_actionable_comments_escalates_once_then_merges(
     assert full_calls[0][2] == "actionable_comments"
     assert sleeps == []
 
-def test_orchestrate_caps_retries_with_attempts_exhausted(
+def test_orchestrate_no_progress_after_ci_wait_uses_min_attempt_floor(
     pr_resolve_orchestrate_module: dict[str, Any],
 ) -> None:
     run_orchestration = pr_resolve_orchestrate_module["run_orchestration"]
+    full_calls: list[tuple[int, int, str]] = []
+    sleeps: list[int] = []
 
-    result, exit_code = run_orchestration(
-        finalize_runner=lambda _attempt: {
+    def finalize_runner(attempt: int) -> dict[str, str]:
+        if attempt == 1:
+            return {
+                "status": "blocked",
+                "merge_outcome": "blocked",
+                "reason": "ci_running",
+            }
+        return {
             "status": "blocked",
             "merge_outcome": "blocked",
             "reason": "actionable_comments",
-        },
-        full_runner=lambda _attempt, _escalation, reason: {
-            "status": "needs_remediation",
-            "merge_outcome": "blocked",
-            "reason": reason,
-        },
-        sleep_fn=lambda _seconds: None,
+        }
+
+    result, exit_code = run_orchestration(
+        finalize_runner=finalize_runner,
+        full_runner=lambda attempt, escalation, reason: (
+            full_calls.append((attempt, escalation, reason))
+            or {
+                "status": "needs_remediation",
+                "merge_outcome": "blocked",
+                "reason": reason,
+            }
+        ),
+        sleep_fn=lambda seconds: sleeps.append(seconds),
         monotonic_fn=lambda: 0.0,
         finalize_max_retries=2,
-        fix_max_iterations=3,
+        fix_max_iterations=5,
         base_sleep_seconds=15,
         max_sleep_seconds=60,
         max_elapsed_seconds=900,
@@ -732,6 +746,11 @@ def test_orchestrate_caps_retries_with_attempts_exhausted(
     assert result["merge_outcome"] == "attempts_exhausted"
     assert result["mergeAutomationDisposition"] == "reenter_gate"
     assert result["final_reason"] == "actionable_comments"
+    assert result["attempt_count"] == 5
+    assert result["max_attempts"] == 5
+    assert result["min_attempts_before_exhausted"] == 5
+    assert sleeps == [60]
+    assert [call[0] for call in full_calls] == [2, 3, 4]
 
 def test_orchestrate_ci_running_uses_finalize_only_retry_path(
     pr_resolve_orchestrate_module: dict[str, Any],
@@ -1028,6 +1047,8 @@ def test_orchestrate_main_uses_extended_finalize_wait_defaults(
 
     assert int(raised.value.code) == 0
     assert captured["finalize_max_retries"] == 60
+    assert captured["fix_max_iterations"] == 5
+    assert captured["min_attempts_before_exhausted"] == 5
     assert captured["base_sleep_seconds"] == 30
     assert captured["max_sleep_seconds"] == 120
     assert captured["max_elapsed_seconds"] == 7200
