@@ -253,8 +253,12 @@ def _terminate_children(
         print(f"[workflow-worker-group] terminating {role.name}", flush=True)
         try:
             process.terminate()
-        except OSError:
-            pass
+        except OSError as exc:
+            print(
+                f"[workflow-worker-group] ignored terminate failure for "
+                f"{role.name}: {exc}",
+                flush=True,
+            )
 
     deadline = time.monotonic() + timeout_seconds
     for role, process in live_children:
@@ -265,14 +269,25 @@ def _terminate_children(
             print(f"[workflow-worker-group] killing {role.name}", flush=True)
             try:
                 process.kill()
-            except OSError:
-                pass
+            except OSError as exc:
+                print(
+                    f"[workflow-worker-group] ignored kill failure for "
+                    f"{role.name}: {exc}",
+                    flush=True,
+                )
             try:
                 process.wait(timeout=5.0)
-            except OSError:
-                pass
-        except OSError:
-            pass
+            except OSError as exc:
+                print(
+                    f"[workflow-worker-group] ignored post-kill wait failure for "
+                    f"{role.name}: {exc}",
+                    flush=True,
+                )
+        except OSError as exc:
+            print(
+                f"[workflow-worker-group] ignored wait failure for {role.name}: {exc}",
+                flush=True,
+            )
 
 
 def supervise_workers(
