@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -439,9 +440,19 @@ class ManagedRuntimeLauncher:
         if os.geteuid() != 0 or resolved_workspace_path is None:
             return
         artifacts_dir = Path(resolved_workspace_path).resolve() / "artifacts"
-        if not artifacts_dir.exists():
+        try:
+            artifacts_stat = artifacts_dir.lstat()
+        except FileNotFoundError:
             return
-        await self._run_checked_command("chown", "-R", "app:app", str(artifacts_dir))
+        if stat.S_ISLNK(artifacts_stat.st_mode):
+            raise RuntimeError(
+                f"repo-local artifacts path must not be a symlink: {artifacts_dir}"
+            )
+        if not stat.S_ISDIR(artifacts_stat.st_mode):
+            raise RuntimeError(
+                f"repo-local artifacts path must be a directory: {artifacts_dir}"
+            )
+        await self._run_checked_command("chown", "-R", "-h", "app:app", str(artifacts_dir))
 
     def _resolve_workspace_ownership_root(
         self,

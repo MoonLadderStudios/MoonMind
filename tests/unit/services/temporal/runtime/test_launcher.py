@@ -2713,7 +2713,7 @@ async def test_launch_privilege_drop_chowns_repo_and_artifacts_for_external_work
     chown_calls: list[tuple[object, ...]] = []
 
     async def _fake_run_checked_command(self, *cmd, **kw):
-        if cmd[:2] == ("chown", "-R"):
+        if cmd and cmd[0] == "chown":
             chown_calls.append(cmd)
         return None
 
@@ -3672,7 +3672,39 @@ async def test_ensure_repo_artifacts_writable_chowns_context_artifacts_when_root
         resolved_workspace_path=str(workspace)
     )
 
-    assert chown_calls == [("chown", "-R", "app:app", str(artifacts_dir.resolve()))]
+    assert chown_calls == [("chown", "-R", "-h", "app:app", str(artifacts_dir.resolve()))]
+
+
+@pytest.mark.asyncio
+async def test_ensure_repo_artifacts_writable_rejects_artifacts_symlink_when_root(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    workspace = tmp_path / "run-1" / "repo"
+    workspace.mkdir(parents=True)
+    target = tmp_path / "sensitive"
+    target.mkdir()
+    (workspace / "artifacts").symlink_to(target, target_is_directory=True)
+
+    chown_calls: list[tuple[object, ...]] = []
+
+    async def _fake_run_checked_command(self, *cmd, **kw):
+        chown_calls.append(cmd)
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._run_checked_command",
+        _fake_run_checked_command,
+    )
+
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+
+    with pytest.raises(RuntimeError, match="must not be a symlink"):
+        await launcher._ensure_repo_artifacts_writable_by_runtime_user(
+            resolved_workspace_path=str(workspace)
+        )
+
+    assert chown_calls == []
 
 
 def test_sanitize_artifacts_step_segment_blocks_traversal():
