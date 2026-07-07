@@ -2400,6 +2400,134 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('art-plan-checkpoint')).toBeTruthy();
   });
 
+  it('MM-1122 renders remediation attempt cadence separately from gap progress', async () => {
+    window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Remediation task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    const remediationSnapshot = {
+      workflowId: 'test-123',
+      runId: '02-run',
+      runScope: 'latest',
+      steps: [
+        {
+          logicalStepId: 'remediate-1',
+          order: 1,
+          title: 'Remediate verification gaps — attempt 1 of 6',
+          tool: { type: 'skill', name: 'moonspec-implement', version: '1' },
+          dependsOn: [],
+          status: 'completed',
+          annotations: {
+            jiraOrchestrateRole: 'moonspec-remediation',
+            moonSpecRemediationAttempt: 1,
+            moonSpecRemediationMaxAttempts: 6,
+          },
+          executionOrdinal: 1,
+          startedAt: '2026-04-09T00:00:01Z',
+          updatedAt: '2026-04-09T00:00:02Z',
+          summary: 'Addressed two known gaps',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {
+            outputSummary: 'artifact://reports/remediation_attempt-1.json',
+            outputPrimary: null,
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+          },
+          lastError: null,
+        },
+        {
+          logicalStepId: 'verify-1',
+          order: 2,
+          title: 'Verify remediation attempt 1 of 6',
+          tool: { type: 'skill', name: 'moonspec-verify', version: '1' },
+          dependsOn: ['remediate-1'],
+          status: 'completed',
+          annotations: {
+            jiraOrchestrateRole: 'moonspec-verification-gate',
+            moonSpecRemediationAttempt: 1,
+            moonSpecRemediationMaxAttempts: 6,
+          },
+          executionOrdinal: 1,
+          startedAt: '2026-04-09T00:00:03Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          summary: 'Verified the whole target state',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {
+            outputSummary: 'artifact://reports/remediation_verification-1.json',
+            outputPrimary: null,
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+          },
+          lastError: null,
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/step-executions')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            workflowId: 'test-123',
+            runId: '02-run',
+            runScope: 'latest',
+            logicalStepId: 'remediate-1',
+            stepExecutions: [],
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => remediationSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Remediate verification gaps — attempt 1 of 6')).toBeTruthy();
+      expect(screen.getByText('Verify remediation attempt 1 of 6')).toBeTruthy();
+      expect(screen.getByText('Remediation · Attempt 1 of 6')).toBeTruthy();
+      expect(screen.getByText('Full verification · Attempt 1 of 6')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Show details for Remediate verification gaps/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Remediation cadence')).toBeTruthy();
+      expect(screen.getByText('Recorded inside the remediation attempt artifact.')).toBeTruthy();
+      expect(screen.getByText('Recorded inside the remediation attempt, not as sibling full-verifier steps.')).toBeTruthy();
+    });
+  });
+
   it('MM-831 renders expanded Step Execution history from the step-executions list endpoint', async () => {
     window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
     const mockExecution = {

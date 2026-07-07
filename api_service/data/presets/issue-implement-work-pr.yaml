@@ -182,7 +182,7 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 1 of {{ inputs.remediation_max_attempts }}
+- title: Remediate verification gaps — attempt 1 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
@@ -201,7 +201,10 @@ steps:
     gaps and remaining work as the authoritative bounded implementation backlog.
     Fix only those reported implementation or verification gaps, update or add the
     required tests, and run the focused checks named by the verification report when
-    feasible.
+    feasible. Record changed files, every known gap status, and targeted local checks
+    inside the current reports/remediation_attempt-<attempt>.json artifact with artifact_type
+    remediation.attempt; keep targeted checks inside that attempt artifact rather than
+    creating sibling full-verifier steps.
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
@@ -223,7 +226,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 1 of {{ inputs.remediation_max_attempts }}
+- title: Verify remediation attempt 1 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
@@ -267,7 +270,7 @@ steps:
     do not create a pull request.
 
 
-    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }} and to the current reports/remediation_verification-<attempt>.json remediation.verification artifact. The remediation verification artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
     If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
     to "advance". The workflow runtime owns pull request creation; do not encode
     pull request creation or any step-specific destination in recommendedNextAction.'
@@ -282,7 +285,7 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 2 of {{ inputs.remediation_max_attempts }}
+- title: Remediate remaining gaps — attempt 2 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
@@ -301,7 +304,10 @@ steps:
     gaps and remaining work as the authoritative bounded implementation backlog.
     Fix only those reported implementation or verification gaps, update or add the
     required tests, and run the focused checks named by the verification report when
-    feasible.
+    feasible. Record changed files, every known gap status, and targeted local checks
+    inside the current reports/remediation_attempt-<attempt>.json artifact with artifact_type
+    remediation.attempt; keep targeted checks inside that attempt artifact rather than
+    creating sibling full-verifier steps.
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
@@ -323,7 +329,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 2 of {{ inputs.remediation_max_attempts }}
+- title: Verify remediation attempt 2 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
@@ -367,7 +373,7 @@ steps:
     do not create a pull request.
 
 
-    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }} and to the current reports/remediation_verification-<attempt>.json remediation.verification artifact. The remediation verification artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
     If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
     to "advance". The workflow runtime owns pull request creation; do not encode
     pull request creation or any step-specific destination in recommendedNextAction.'
@@ -382,7 +388,7 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 3 of {{ inputs.remediation_max_attempts }}
+- title: Remediate remaining gaps — attempt 3 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
@@ -401,7 +407,10 @@ steps:
     gaps and remaining work as the authoritative bounded implementation backlog.
     Fix only those reported implementation or verification gaps, update or add the
     required tests, and run the focused checks named by the verification report when
-    feasible.
+    feasible. Record changed files, every known gap status, and targeted local checks
+    inside the current reports/remediation_attempt-<attempt>.json artifact with artifact_type
+    remediation.attempt; keep targeted checks inside that attempt artifact rather than
+    creating sibling full-verifier steps.
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
@@ -423,7 +432,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 3 of {{ inputs.remediation_max_attempts }}
+- title: Verify remediation attempt 3 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
@@ -467,7 +476,7 @@ steps:
     do not create a pull request.
 
 
-    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }} and to the current reports/remediation_verification-<attempt>.json remediation.verification artifact. The remediation verification artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
     If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
     to "advance". The workflow runtime owns pull request creation; do not encode
     pull request creation or any step-specific destination in recommendedNextAction.'
@@ -482,7 +491,7 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 4 of {{ inputs.remediation_max_attempts }}
+- title: Remediate remaining gaps — attempt 4 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
@@ -501,7 +510,10 @@ steps:
     gaps and remaining work as the authoritative bounded implementation backlog.
     Fix only those reported implementation or verification gaps, update or add the
     required tests, and run the focused checks named by the verification report when
-    feasible.
+    feasible. Record changed files, every known gap status, and targeted local checks
+    inside the current reports/remediation_attempt-<attempt>.json artifact with artifact_type
+    remediation.attempt; keep targeted checks inside that attempt artifact rather than
+    creating sibling full-verifier steps.
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
@@ -523,7 +535,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 4 of {{ inputs.remediation_max_attempts }}
+- title: Verify remediation attempt 4 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
@@ -567,7 +579,7 @@ steps:
     do not create a pull request.
 
 
-    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }} and to the current reports/remediation_verification-<attempt>.json remediation.verification artifact. The remediation verification artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
     If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
     to "advance". The workflow runtime owns pull request creation; do not encode
     pull request creation or any step-specific destination in recommendedNextAction.'
@@ -582,7 +594,7 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 5 of {{ inputs.remediation_max_attempts }}
+- title: Remediate remaining gaps — attempt 5 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
@@ -601,7 +613,10 @@ steps:
     gaps and remaining work as the authoritative bounded implementation backlog.
     Fix only those reported implementation or verification gaps, update or add the
     required tests, and run the focused checks named by the verification report when
-    feasible.
+    feasible. Record changed files, every known gap status, and targeted local checks
+    inside the current reports/remediation_attempt-<attempt>.json artifact with artifact_type
+    remediation.attempt; keep targeted checks inside that attempt artifact rather than
+    creating sibling full-verifier steps.
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
@@ -623,7 +638,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 5 of {{ inputs.remediation_max_attempts }}
+- title: Verify remediation attempt 5 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
@@ -667,7 +682,7 @@ steps:
     do not create a pull request.
 
 
-    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }} and to the current reports/remediation_verification-<attempt>.json remediation.verification artifact. The remediation verification artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
     If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
     to "advance". The workflow runtime owns pull request creation; do not encode
     pull request creation or any step-specific destination in recommendedNextAction.'
@@ -682,7 +697,7 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-- title: Remediate verification gaps 6 of {{ inputs.remediation_max_attempts }}
+- title: Remediate remaining gaps — attempt 6 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-remediation
@@ -701,7 +716,10 @@ steps:
     gaps and remaining work as the authoritative bounded implementation backlog.
     Fix only those reported implementation or verification gaps, update or add the
     required tests, and run the focused checks named by the verification report when
-    feasible.
+    feasible. Record changed files, every known gap status, and targeted local checks
+    inside the current reports/remediation_attempt-<attempt>.json artifact with artifact_type
+    remediation.attempt; keep targeted checks inside that attempt artifact rather than
+    creating sibling full-verifier steps.
 
 
     If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence
@@ -723,7 +741,7 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-- title: Verify remediation 6 of {{ inputs.remediation_max_attempts }}
+- title: Verify remediation attempt 6 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
     issueImplementRole: moonspec-verification-gate
@@ -767,7 +785,7 @@ steps:
     causes as environment failure, stop immediately, and do not create a pull request.
 
 
-    Write the complete structured verifier result to {{ inputs.verify_artifact_path }}.
+    Write the complete structured verifier result to {{ inputs.verify_artifact_path }} and to the current reports/remediation_verification-<attempt>.json remediation.verification artifact. The remediation verification artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
     If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
     to "advance". The workflow runtime owns pull request creation; do not encode
     pull request creation or any step-specific destination in recommendedNextAction.'

@@ -2101,9 +2101,9 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
     assert task["steps"][9]["skill"]["args"]["verify_artifact_path"] == (
         "var/artifacts/moonspec-verify/jira-orchestrate.json"
     )
-    assert task["steps"][10]["title"] == "Remediate verification gaps 1 of 6"
+    assert task["steps"][10]["title"] == "Remediate verification gaps — attempt 1 of 6"
     assert task["steps"][10]["skill"]["id"] == "moonspec-implement"
-    assert task["steps"][21]["title"] == "Verify remediation 6 of 6"
+    assert task["steps"][21]["title"] == "Verify remediation attempt 6 of 6"
     assert task["steps"][21]["skill"]["id"] == "moonspec-verify"
     assert task["steps"][21]["skill"]["args"]["verify_artifact_path"] == (
         "var/artifacts/moonspec-verify/jira-orchestrate.json"

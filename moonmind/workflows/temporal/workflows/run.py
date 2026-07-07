@@ -4665,7 +4665,9 @@ class MoonMindRunWorkflow:
             .strip()
             .lower()
         )
-        if title.startswith("remediate verification gaps"):
+        if title.startswith("remediate verification gaps") or title.startswith(
+            "remediate remaining gaps"
+        ):
             return "moonspec-remediation"
         if title.startswith("verify remediation"):
             return "moonspec-verification-gate"
@@ -4751,7 +4753,9 @@ class MoonMindRunWorkflow:
             .strip()
             .lower()
         )
-        return title.startswith("remediate verification gaps")
+        return title.startswith("remediate verification gaps") or title.startswith(
+            "remediate remaining gaps"
+        )
 
     def _has_remaining_moonspec_remediation_step(
         self,

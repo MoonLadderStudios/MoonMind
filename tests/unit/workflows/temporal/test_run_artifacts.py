@@ -4914,7 +4914,7 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
                             "inputs": {
                                 "runtime": {"mode": "codex"},
                                 "selectedSkill": "moonspec-verify",
-                                "instructions": "Verify remediation 5.",
+                                "instructions": "Verify remediation attempt 5.",
                             },
                             "options": {},
                         },
@@ -4927,11 +4927,11 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
                             "inputs": {
                                 "runtime": {"mode": "codex"},
                                 "selectedSkill": "moonspec-implement",
-                                "title": "Remediate verification gaps 6 of 6",
+                                "title": "Remediate remaining gaps — attempt 6 of 6",
                                 "annotations": {
                                     "jiraOrchestrateRole": "moonspec-remediation",
                                 },
-                                "instructions": "Remediate verification gaps 6.",
+                                "instructions": "Remediate remaining gaps attempt 6.",
                             },
                             "options": {},
                         },
@@ -4944,7 +4944,7 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
                             "inputs": {
                                 "runtime": {"mode": "codex"},
                                 "selectedSkill": "moonspec-verify",
-                                "instructions": "Verify remediation 6.",
+                                "instructions": "Verify remediation attempt 6.",
                             },
                             "options": {},
                         },
