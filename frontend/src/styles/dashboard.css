@@ -4240,22 +4240,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   -webkit-box-orient: vertical;
 }
 
-.step-duration-bar {
-  position: relative;
-  overflow: hidden;
-  height: 0.22rem;
-  margin-top: 0.35rem;
-  border-radius: 999px;
-  background: rgb(var(--mm-border) / 0.38);
-}
-
-.step-duration-bar span {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: inherit;
-  background: rgb(var(--mm-accent-2) / 0.62);
-}
-
 .step-execution-pill {
   display: inline-flex;
   align-items: center;
@@ -4305,23 +4289,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   white-space: nowrap;
 }
 
-.step-duration-bar {
-  position: relative;
-  height: 0.25rem;
-  width: 100%;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgb(var(--mm-border) / 0.35);
-  margin-top: 0.35rem;
-}
-
-.step-duration-bar-fill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: rgb(var(--mm-accent-2));
-}
-
 .step-timing-overview {
   display: flex;
   flex-wrap: wrap;
@@ -4335,85 +4302,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .step-timing-overview strong {
   color: rgb(var(--mm-ink));
   font-variant-numeric: tabular-nums;
-}
-
-.step-duration-timeline-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: fit-content;
-  min-height: 2rem;
-  margin: 0 0 0.55rem;
-  padding: 0.25rem 0.65rem;
-  border: 1px solid rgb(var(--mm-border) / 0.72);
-  border-radius: 0.45rem;
-  background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-ink));
-  font-size: 0.78rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.step-duration-timeline-toggle:hover,
-.step-duration-timeline-toggle:focus-visible {
-  border-color: rgb(var(--mm-accent-2) / 0.8);
-  background: rgb(var(--mm-accent-2) / 0.08);
-}
-
-.step-duration-timeline {
-  margin: 0 0 0.8rem;
-  padding: 0.65rem 0;
-  border-top: 1px solid rgb(var(--mm-border) / 0.45);
-  border-bottom: 1px solid rgb(var(--mm-border) / 0.45);
-}
-
-.step-duration-timeline-list {
-  display: grid;
-  gap: 0.45rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.step-duration-timeline-row {
-  display: grid;
-  grid-template-columns: minmax(8rem, 0.9fr) minmax(9rem, 2fr) minmax(7rem, auto);
-  gap: 0.65rem;
-  align-items: center;
-  min-height: 1.75rem;
-  font-size: 0.78rem;
-}
-
-.step-duration-timeline-title {
-  min-width: 0;
-  overflow: hidden;
-  color: rgb(var(--mm-ink));
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.step-duration-timeline-track {
-  position: relative;
-  display: block;
-  height: 0.55rem;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgb(var(--mm-border) / 0.32);
-}
-
-.step-duration-timeline-bar {
-  position: absolute;
-  inset-block: 0;
-  border-radius: inherit;
-  background: rgb(var(--mm-accent-2));
-}
-
-.step-duration-timeline-label {
-  color: rgb(var(--mm-muted));
-  font-family: var(--mm-font-mono);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 /* MM-815: latest evidence refs surfaced (ref-only) in the default step row */
