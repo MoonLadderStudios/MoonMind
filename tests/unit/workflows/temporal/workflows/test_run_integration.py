@@ -2925,6 +2925,67 @@ def test_moonspec_verify_gate_detects_issue_implement_remediation_role(
     )
 
 
+def test_moonspec_verify_gate_detects_unannotated_issue_implement_remediation_title(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mock_run_workflow,
+        "_moonspec_title_remediation_detection_enabled",
+        lambda: True,
+    )
+    ordered_nodes = [
+        {
+            "id": "verify-implementation",
+            "inputs": {
+                "title": "Verify implementation",
+                "selectedSkill": "moonspec-verify",
+            },
+        },
+        {
+            "id": "remediate-1",
+            "skill": {"id": "auto"},
+            "inputs": {"title": "Remediate verification gaps 1 of 6"},
+        },
+    ]
+
+    assert mock_run_workflow._has_remaining_moonspec_remediation_step(
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    assert mock_run_workflow._moonspec_remediation_attempt_metadata(
+        ordered_nodes[1]
+    ) == (1, 6)
+
+
+def test_moonspec_verify_gate_skips_unannotated_remediation_gate_after_pass(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mock_run_workflow,
+        "_moonspec_title_remediation_detection_enabled",
+        lambda: True,
+    )
+    verify_node = {
+        "id": "verify-remediation-1",
+        "skill": {"id": "moonspec-verify"},
+        "inputs": {"title": "Verify remediation 1 of 6"},
+    }
+    mock_run_workflow._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+
+    reason = mock_run_workflow._moonspec_remediation_loop_skip_reason(
+        verify_node,
+        tool_name="moonspec-verify",
+        node_inputs=verify_node["inputs"],
+    )
+
+    assert reason == (
+        "Skipped MoonSpec remediation loop step because verification already "
+        "passed with verdict FULLY_IMPLEMENTED."
+    )
+
+
 def test_moonspec_verify_text_verdict_parser_is_not_a_branch_boundary(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
