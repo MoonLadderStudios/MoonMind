@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
@@ -553,6 +554,47 @@ async def test_file_desired_state_store_writes_compose_env_and_audit_json(
     assert audit["stack"] == "moonmind"
     assert audit["operator"] == "admin@example.com"
     assert audit["reason"] == "Operator requested stable"
+
+
+@pytest.mark.asyncio
+async def test_file_desired_state_store_normalizes_replaced_file_permissions(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    env_file = tmp_path / "state" / ".env.deploy"
+    json_file = tmp_path / "state" / "desired-state.json"
+    json_file.parent.mkdir(parents=True)
+    parent_stat = json_file.parent.stat()
+    chown_calls: list[tuple[str, int, int]] = []
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.deployment_execution.os.geteuid",
+        lambda: 0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.deployment_execution.os.chown",
+        lambda path, uid, gid: chown_calls.append((str(path), uid, gid)),
+        raising=False,
+    )
+    store = FileDesiredStateStore(
+        env_file_path=str(env_file),
+        json_file_path=str(json_file),
+    )
+
+    await store.persist(
+        {
+            "stack": "moonmind",
+            "imageRepository": "ghcr.io/moonladderstudios/moonmind",
+            "requestedReference": "stable",
+            "sourceRunId": "depupd_123",
+        }
+    )
+
+    assert stat.S_IMODE(json_file.stat().st_mode) == 0o664
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o664
+    assert (str(json_file), parent_stat.st_uid, parent_stat.st_gid) in chown_calls
+    assert (str(env_file), parent_stat.st_uid, parent_stat.st_gid) in chown_calls
 
 
 @pytest.mark.asyncio

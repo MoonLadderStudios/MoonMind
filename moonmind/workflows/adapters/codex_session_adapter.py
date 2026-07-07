@@ -969,6 +969,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         instruction_ref=original_instruction_ref,
                         resolved_skillset_ref=original_skillset_ref,
                     ),
+                    "workspacePath": workspace_path,
                     "sessionSummary": _compact_session_summary_metadata(summary),
                     "sessionArtifacts": _compact_session_artifacts_metadata(
                         publication
@@ -2031,6 +2032,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             instruction_ref=instruction_ref,
             resolved_skillset_ref=resolved_skillset_ref,
         )
+        if workspace_path:
+            metadata["workspacePath"] = workspace_path
         if profile_id:
             metadata["profileId"] = profile_id
         if turn_id:
