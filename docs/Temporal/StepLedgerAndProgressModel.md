@@ -286,7 +286,7 @@ Rules:
 
 ## 10. Attempts and retries
 
-The step ledger must preserve retry semantics without rerunning successful earlier work.
+The step ledger must preserve retry semantics without rerunning completed earlier work.
 
 Rules:
 
@@ -488,7 +488,7 @@ For resumed executions, the Steps section should show preserved rows distinctly,
 
 ```text
 Step 1: Apply patch - Completed, reused from original run
-Step 2: Run tests - Running, resumed here
+Step 2: Run tests - Executing, resumed here
 ```
 
 OpenTelemetry remains supplemental:

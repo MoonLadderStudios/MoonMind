@@ -13,7 +13,7 @@ describe('dashboard route resolution', () => {
     });
   });
 
-  it.each(['chat', 'overview', 'steps', 'artifacts', 'runs', 'debug'])(
+  it.each(['chat', 'overview', 'execution', 'evidence', 'steps', 'artifacts', 'runs', 'debug'])(
     'resolves encoded workflow IDs with the %s detail tab',
     (tab) => {
       const path = `/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95/${tab}`;

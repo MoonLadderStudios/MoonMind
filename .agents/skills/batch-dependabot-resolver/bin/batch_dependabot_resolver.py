@@ -896,7 +896,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--repo", default=None, help="Target repo in owner/repo format.")
     parser.add_argument("--state", default="open", help="PR state filter (default: open).")
     parser.add_argument("--merge-method", default="squash")
-    parser.add_argument("--max-iterations", type=int, default=3)
+    parser.add_argument("--max-iterations", type=int, default=5)
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--priority", type=int, default=0)
     parser.add_argument(

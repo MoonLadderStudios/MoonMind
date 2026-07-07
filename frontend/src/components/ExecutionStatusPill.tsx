@@ -1,6 +1,12 @@
 import { useMemo, type CSSProperties } from 'react';
 
-import { formatStepStatusLabel, isStepLedgerStatus, stepStatusPillProps } from '../status/stepStatus';
+import {
+  formatStepExecutionStatusLabel,
+  formatStepStatusLabel,
+  isStepLedgerStatus,
+  stepExecutionStatusPillProps,
+  stepStatusPillProps,
+} from '../status/stepStatus';
 import {
   formatWorkflowStatusLabel,
   isWorkflowLifecycleStatus,
@@ -134,6 +140,15 @@ export function WorkflowLifecycleStatusPill({ status, enableMotion = true }: Dom
 
 export function StepLedgerStatusPill({ status }: DomainStatusPillProps) {
   return <StatusPill label={formatStepStatusLabel(status, '-')} pillProps={stepStatusPillProps(status)} />;
+}
+
+export function StepExecutionStatusPill({ status }: DomainStatusPillProps) {
+  return (
+    <StatusPill
+      label={formatStepExecutionStatusLabel(status, '-')}
+      pillProps={stepExecutionStatusPillProps(status)}
+    />
+  );
 }
 
 export function IntegrationProviderStatusPill({ status }: DomainStatusPillProps) {

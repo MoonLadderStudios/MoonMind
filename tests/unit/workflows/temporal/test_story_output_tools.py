@@ -359,6 +359,71 @@ async def test_update_github_issue_status_blocks_code_review_without_verificatio
 
 
 @pytest.mark.asyncio
+async def test_update_github_issue_status_allows_code_review_without_verification_when_disabled(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "requireVerification": False,
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert "mode code_review" in result.outputs["summary"]
+    assert service.token_requests == [
+        "MoonLadderStudios/MoonMind",
+        "MoonLadderStudios/MoonMind",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("require_verification", [None, "", "   "])
+async def test_update_github_issue_status_requires_verification_for_blank_values(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    require_verification,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/2913"}',
+        encoding="utf-8",
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "requireVerification": require_verification,
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert "verification artifact path" in result.outputs["summary"]
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
 async def test_update_github_issue_status_uses_previous_verification_payload(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -533,6 +598,33 @@ async def test_update_jira_issue_status_skips_start_for_fully_implemented_assess
 
 
 @pytest.mark.asyncio
+async def test_update_jira_issue_status_reads_relative_assessment_from_previous_workspace(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "repo"
+    assessment = workspace / "artifacts" / "jira-implement-assessment.json"
+    assessment.parent.mkdir(parents=True)
+    assessment.write_text('{"verdict": "FULLY_IMPLEMENTED"}', encoding="utf-8")
+    service = _FakeJiraService()
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1125",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
+            "previousOutputs": {"workspacePath": str(workspace)},
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "skipped"
+    assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+    assert service.get_issue_requests == []
+    assert service.transition_requests == []
+
+
+@pytest.mark.asyncio
 async def test_update_jira_issue_status_uses_previous_assessment_text_when_artifact_missing(
     tmp_path,
 ) -> None:
@@ -596,6 +688,51 @@ async def test_update_jira_issue_status_accepts_bold_previous_assessment_verdict
             "assessmentArtifactPath": str(tmp_path / "missing-assessment.json"),
             "previousOutputs": {
                 "lastAssistantText": "Assessment complete: **PARTIALLY_IMPLEMENTED**.",
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "transitioned"
+    assert service.transition_requests[0].transition_id == "31"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "assistant_text",
+    [
+        "Assessment complete. Verdict: `PARTIALLY_IMPLEMENTED`.",
+        "Assessment complete! Verdict: `PARTIALLY_IMPLEMENTED`.",
+        "Assessment complete? Verdict: `PARTIALLY_IMPLEMENTED`.",
+    ],
+)
+async def test_update_jira_issue_status_accepts_sentence_previous_assessment_verdict(
+    tmp_path,
+    assistant_text,
+) -> None:
+    service = _FakeJiraService()
+    service.issue_responses["MM-1125"] = {
+        "key": "MM-1125",
+        "fields": {"status": {"id": "1", "name": "Backlog"}},
+    }
+    service.transition_responses["MM-1125"] = {
+        "key": "MM-1125",
+        "fields": {"status": {"id": "3", "name": "In Progress"}},
+    }
+    service.transitions_response = {
+        "transitions": [
+            {"id": "31", "name": "In Progress", "to": {"name": "In Progress"}}
+        ]
+    }
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1125",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": str(tmp_path / "missing-assessment.json"),
+            "previousOutputs": {
+                "lastAssistantText": assistant_text,
             },
         },
         jira_service_factory=lambda: service,
@@ -1383,6 +1520,7 @@ async def test_create_github_issue_workflows_from_issue_mappings():
                 },
                 "task": {
                     "runtime": {"mode": "codex"},
+                    "inputs": {"run_verify": False},
                     "publish": {"mode": "pr"},
                 },
             },
@@ -1411,6 +1549,7 @@ async def test_create_github_issue_workflows_from_issue_mappings():
         "number": 11,
         "title": "First story",
     }
+    assert workflow["inputs"]["run_verify"] is False
     assert workflow["inputs"]["github_issue_ref"] == "MoonLadderStudios/MoonMind#11"
     assert "Source issue: MM-1063." in workflow["instructions"]
     assert "Source canonical claim IDs: DESIGN-REQ-007." in workflow["instructions"]
@@ -3239,6 +3378,32 @@ async def test_check_jira_blockers_preserves_bold_previous_assessment_verdict():
 
 
 @pytest.mark.asyncio
+async def test_check_jira_blockers_preserves_sentence_previous_assessment_verdict():
+    service = _FakeJiraService()
+    service.issue_responses["MM-2"] = {
+        "key": "MM-2",
+        "fields": {"issuelinks": []},
+    }
+
+    result = await check_jira_blockers(
+        {
+            "targetIssueKey": "MM-2",
+            "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
+            "previousOutputs": {
+                "lastAssistantText": (
+                    "Assessment complete! Verdict: `PARTIALLY_IMPLEMENTED`."
+                ),
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["assessmentVerdict"] == "PARTIALLY_IMPLEMENTED"
+
+
+@pytest.mark.asyncio
 async def test_check_jira_blockers_preserves_issue_key_before_bold_verdict():
     service = _FakeJiraService()
     service.issue_responses["MM-1133"] = {
@@ -3343,7 +3508,9 @@ async def test_jira_implement_status_update_uses_blocker_preserved_assessment_ve
             "targetIssueKey": "MM-2",
             "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
             "previousOutputs": {
-                "lastAssistantText": "Assessment complete: **PARTIALLY_IMPLEMENTED**.",
+                "lastAssistantText": (
+                    "Assessment complete? Verdict: `PARTIALLY_IMPLEMENTED`."
+                ),
             },
         },
         jira_service_factory=lambda: service,
@@ -3569,6 +3736,7 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
             "task": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
+                "inputs": {"run_verify": False},
                 "publish": {
                     "mode": "pr",
                     "mergeAutomation": {"enabled": True},
@@ -3619,6 +3787,7 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
         "key": "MM-501",
         "summary": "First",
     }
+    assert first_parameters["workflow"]["inputs"]["run_verify"] is False
     assert "jira_issue_key" not in first_parameters["workflow"]["inputs"]
     assert "merge_automation" not in first_parameters["workflow"]["publish"]
     assert "MM-404" in first_parameters["workflow"]["instructions"]

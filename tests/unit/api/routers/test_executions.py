@@ -204,7 +204,7 @@ def _completed_attachment_artifact(
     )
 
 
-def test_mm_1129_derive_task_title_uses_remaining_budget_after_line_break() -> None:
+def test_mm_1129_derive_task_title_synthesizes_issue_title_from_instructions() -> None:
     title = _derive_task_title(
         {
             "instructions": (
@@ -215,18 +215,19 @@ def test_mm_1129_derive_task_title_uses_remaining_budget_after_line_break() -> N
         }
     )
 
-    assert title == (
-        "Implement this Jira issue: MM-1129 titles should include description "
+    assert (
+        title
+        == "Implement this Jira issue: MM-1129 titles should include description "
         "text while title length remains available."
     )
 
 
-def test_mm_1129_derive_task_title_bounds_instruction_normalization() -> None:
+def test_mm_1129_derive_task_title_bounds_instruction_fallback() -> None:
     title = _derive_task_title(
         {
             "instructions": (
                 "Implement this Jira issue "
-                + " ".join(f"token-{index}" for index in range(1000))
+                + " ".join(f"token {index}" for index in range(1000))
             )
         }
     )

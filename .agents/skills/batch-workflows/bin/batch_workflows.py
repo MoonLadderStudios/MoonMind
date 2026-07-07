@@ -69,6 +69,7 @@ class TargetConfig:
     target_slug: str
     publish_mode: str = "pr"
     constraints: str = ""
+    run_verify: bool = True
     required_capabilities: list[str] = field(default_factory=list)
 
 
@@ -198,6 +199,7 @@ def bind_child_inputs(
     target_slug: str,
     constraints: str,
     fallback_repository: str | None = None,
+    run_verify: bool = True,
 ) -> dict[str, Any] | None:
     """Apply the default issue bindings for the selected child target.
 
@@ -245,6 +247,7 @@ def bind_child_inputs(
             "jira_issue": dict(issue) if issue else {"key": key},
             "jira_issue_key": key,
             "constraints": shared or "",
+            "run_verify": bool(run_verify),
         }
         return inputs
     if (
@@ -273,6 +276,7 @@ def bind_child_inputs(
             "github_issue": resolved_issue,
             "github_issue_ref": f"{repository}#{number}",
             "constraints": shared or "",
+            "run_verify": bool(run_verify),
         }
         return inputs
     return None
@@ -338,6 +342,7 @@ def build_child_request(
         config.target_slug,
         config.constraints,
         fallback_repository=repository,
+        run_verify=config.run_verify,
     )
     if goal is None or inputs is None:
         return None
@@ -771,6 +776,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--publish-mode", default="pr")
     parser.add_argument("--constraints", default=None)
     parser.add_argument("--constraints-file", default=None)
+    parser.add_argument(
+        "--run-verify",
+        dest="run_verify",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--max-workflows", type=int, default=25)
     parser.add_argument("--task-context-path", default=None)
     parser.add_argument("--artifacts-dir", default="artifacts")
@@ -795,6 +806,7 @@ async def main(argv: list[str] | None = None) -> int:
         target_slug=target_slug,
         publish_mode=_normalize_publish_mode(args.publish_mode),
         constraints=constraints,
+        run_verify=bool(args.run_verify),
     )
 
     submissions, skipped = build_child_requests(

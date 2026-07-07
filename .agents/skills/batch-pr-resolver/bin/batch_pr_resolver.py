@@ -608,7 +608,7 @@ def _parse_args() -> argparse.Namespace:
         help="Explicit runtime provider profile for queued pr-resolver tasks.",
     )
     parser.add_argument("--merge-method", default="squash")
-    parser.add_argument("--max-iterations", type=int, default=3)
+    parser.add_argument("--max-iterations", type=int, default=5)
     parser.add_argument(
         "--artifacts-dir",
         default="artifacts",

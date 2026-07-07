@@ -13448,6 +13448,8 @@ class MoonMindRunWorkflow:
             "repo",
             "startingBranch",
             "targetBranch",
+            "baseBranch",
+            "publishBaseBranch",
             "branch",
         ):
             ws_val = node_inputs.get(ws_key)
@@ -13460,6 +13462,7 @@ class MoonMindRunWorkflow:
             "effort",
             "publishMode",
             "commitMessage",
+            "publishBaseBranch",
             "allowed_tools",
             "priority",
             "stepCount",

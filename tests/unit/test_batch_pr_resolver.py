@@ -77,6 +77,14 @@ def test_is_local_head_rejects_fork_owner_mismatch():
 
     assert is_local_head(pr, "MoonLadderStudios/MoonMind") is False
 
+def test_parse_args_defaults_pr_resolver_max_iterations_to_five():
+    module = _load_module()
+
+    with patch("sys.argv", ["batch_pr_resolver.py", "--repo", "o/r"]):
+        args = module["_parse_args"]()
+
+    assert args.max_iterations == 5
+
 def test_build_queue_request_sets_none_publish_with_matching_branches():
     module = _load_module()
     build_queue_request = module["_build_queue_request"]

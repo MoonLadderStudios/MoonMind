@@ -81,6 +81,13 @@ async def test_github_issue_orchestrate_seed_exposes_issue_picker_and_tools(tmp_
     assert annotations["inputSchema"]["required"] == ["github_issue"]
     github_issue = annotations["inputSchema"]["properties"]["github_issue"]
     assert github_issue["required"] == ["repository", "number"]
+    assert annotations["inputSchema"]["properties"]["run_verify"] == {
+        "type": "boolean",
+        "title": "Run verification",
+        "description": "Run the MoonSpec verification and remediation gate before pull request creation and GitHub issue handoff.",
+        "default": True,
+    }
+    assert annotations["defaults"]["run_verify"] is True
     assert annotations["uiSchema"]["github_issue"] == {
         "widget": "github.issue-picker",
         "dataSource": "github.issues",
@@ -243,6 +250,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
             "mode": "finalize_after_pr_or_done",
             "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
             "verificationArtifactPath": "var/artifacts/moonspec-verify/github-issue-orchestrate.json",
+            "requireVerification": True,
         },
     }
     assert "apply the configured Done strategy" in steps[25]["instructions"]

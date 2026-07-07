@@ -1,5 +1,5 @@
 import { workflowListContextParams } from './workflowListContext';
-import { WORKFLOW_DETAIL_SUBROUTES } from './workflowDetailRoutes';
+import { WORKFLOW_DETAIL_SUPPORTED_SUBROUTES } from './workflowDetailRoutes';
 
 export type WorkflowListDisplayMode = 'hidden' | 'sidebar' | 'table';
 
@@ -56,7 +56,7 @@ export type ResolveWorkflowListDisplayInput = {
   firstVisibleWorkflowId?: string | null;
 };
 
-const DETAIL_TABS = new Set<string>(WORKFLOW_DETAIL_SUBROUTES);
+const DETAIL_TABS = new Set<string>(WORKFLOW_DETAIL_SUPPORTED_SUBROUTES);
 
 export const WORKFLOW_LIST_DISPLAY_MODES = [
   {

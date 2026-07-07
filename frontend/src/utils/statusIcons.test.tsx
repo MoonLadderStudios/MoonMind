@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   CANONICAL_STEP_STATUSES,
+  StatusIcon,
   statusIconKey,
 } from './statusIcons';
 
@@ -28,5 +30,25 @@ describe('statusIcons', () => {
     expect(statusIconKey('succeeded', 'step')).toBe('completed');
     expect(statusIconKey('running', 'workflow')).toBe('executing');
     expect(statusIconKey('succeeded', 'workflow')).toBe('completed');
+  });
+
+  it('uses step-domain styling for step icons', () => {
+    render(<StatusIcon status="ready" domain="step" data-testid="ready-step-icon" />);
+
+    const className = screen.getByTestId('ready-step-icon').className;
+    expect(className).toContain('status');
+    expect(className).toContain('status-scheduled');
+  });
+
+  it('does not style artifact-only statuses as canonical step icons', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    render(<StatusIcon status="succeeded" domain="step" data-testid="succeeded-step-icon" />);
+
+    const className = screen.getByTestId('succeeded-step-icon').className;
+    expect(className).toContain('status');
+    expect(className).toContain('status-neutral');
+    expect(warn).toHaveBeenCalledWith('Unknown step ledger status: succeeded');
+    warn.mockRestore();
   });
 });

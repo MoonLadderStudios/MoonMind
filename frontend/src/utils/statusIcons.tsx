@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { executionStatusPillProps } from './executionStatusPillClasses';
 import { formatStatusLabel } from './formatters';
+import { stepStatusPillProps } from '../status/stepStatus';
 
 export const WORKFLOW_STATUS_ICONS = {
   scheduled: CalendarClock,
@@ -137,7 +138,9 @@ export function StatusIcon({
 }) {
   const label = title ?? defaultStatusIconLabel(status);
   const Icon = WORKFLOW_STATUS_ICONS[statusIconKey(status, domain)];
-  const pillProps = executionStatusPillProps(status, { enableMotion: false });
+  const pillProps = domain === 'step'
+    ? stepStatusPillProps(status)
+    : executionStatusPillProps(status, { enableMotion: false });
 
   return (
     <span

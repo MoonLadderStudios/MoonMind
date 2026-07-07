@@ -90,7 +90,7 @@ describe('resolveWorkflowListDisplay', () => {
     });
   });
 
-  it.each(['chat', 'overview', 'steps', 'artifacts', 'runs', 'debug'])(
+  it.each(['chat', 'overview', 'execution', 'evidence', 'steps', 'artifacts', 'runs', 'debug'])(
     'preserves the %s detail subroute when switching only between hidden and sidebar',
     (subroute) => {
       const pathname = subroute === 'chat' ? '/workflows/mm%3A123/chat' : `/workflows/mm%3A123/${subroute}`;

@@ -46,9 +46,7 @@ agent_jobs/
 /omnigent_workspaces/
 
 # Runtime / ephemeral artifact output directories
-/artifacts/
-/artifacts.*/
-/artifacts-root-owned-context-*/
+artifacts*/
 /specs/
 /deploy/state/.env.deploy
 /deploy/state/desired-state.json

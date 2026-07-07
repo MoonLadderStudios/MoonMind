@@ -14,7 +14,7 @@ import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
-import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
+import { ExecutionStatusPill, StepExecutionStatusPill, StepLedgerStatusPill } from '../components/ExecutionStatusPill';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { CANONICAL_STEP_STATUSES, StatusIcon } from '../utils/statusIcons';
@@ -1782,18 +1782,18 @@ function SegmentedNav<T extends string>({
   onNavigate,
 }: {
   items: Array<SegmentedNavItem<T>>;
-  active: T;
+  active: T | null;
   ariaLabel: string;
   onNavigate: (value: T, href: string) => void;
 }) {
-  const activeIndex = Math.max(0, items.findIndex((item) => item.value === active));
+  const activeIndex = items.findIndex((item) => item.value === active);
   return (
     <nav
-      className="segmented-nav"
+      className={['segmented-nav', activeIndex < 0 ? 'segmented-nav-no-active' : ''].filter(Boolean).join(' ')}
       aria-label={ariaLabel}
       style={{
         '--segmented-nav-count': items.length,
-        '--segmented-nav-active-index': activeIndex,
+        '--segmented-nav-active-index': Math.max(0, activeIndex),
       } as CSSProperties}
     >
       {items.map((item) => (
@@ -1808,7 +1808,9 @@ function SegmentedNav<T extends string>({
           }}
         >
           <span>{item.label}</span>
-          {item.badge ? <span className="segmented-nav-badge" aria-hidden="true">{item.badge}</span> : null}
+          {item.badge !== null && item.badge !== undefined ? (
+            <span className="segmented-nav-badge" aria-hidden="true">{item.badge}</span>
+          ) : null}
         </a>
       ))}
     </nav>
@@ -4515,7 +4517,7 @@ function StepExecutionHistoryRow({
     <li className="step-execution-history-item">
       <div className="step-execution-history-head">
         <span className="step-execution-pill">Execution {execution.executionOrdinal}</span>
-        <ExecutionStatusPill status={execution.status} />
+        <StepExecutionStatusPill status={execution.status} />
         <span className="step-timing-chip">{executionTimingLabel(execution)}</span>
         <span className="step-execution-reason">{formatStatusLabel(execution.reason)}</span>
         {downstreamInvalidated ? (
@@ -4752,7 +4754,7 @@ function StepLedgerRowCard({
             <span className="step-tl-title">{row.title}</span>
             <span className="step-tl-right">
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
-              <ExecutionStatusPill status={row.status} />
+              <StepLedgerStatusPill status={row.status} />
               <StepTimingChip row={row} />
               <BranchStatusAffordance branches={branches} />
               <span className="sr-only">{formatStatusLabel(row.status)}</span>
@@ -6611,32 +6613,40 @@ function WorkflowDetailSubrouteNav({
     { value: 'chat', label: 'Chat', href: workflowDetailSubrouteHref(workflowId, 'chat', search) },
     { value: 'overview', label: 'Overview', href: workflowDetailSubrouteHref(workflowId, 'overview', search) },
     {
-      value: 'steps',
-      label: 'Steps',
-      href: workflowDetailSubrouteHref(workflowId, 'steps', search),
-      badge: stepCount ?? null,
+      value: 'execution',
+      label: 'Execution',
+      href: workflowDetailSubrouteHref(workflowId, 'execution', search),
+      badge: stepCount ?? runCount ?? null,
     },
     {
-      value: 'artifacts',
-      label: 'Artifacts',
-      href: workflowDetailSubrouteHref(workflowId, 'artifacts', search),
+      value: 'evidence',
+      label: 'Evidence',
+      href: workflowDetailSubrouteHref(workflowId, 'evidence', search),
       badge: artifactCount ?? null,
     },
-    {
-      value: 'runs',
-      label: 'Runs',
-      href: workflowDetailSubrouteHref(workflowId, 'runs', search),
-      badge: runCount ?? null,
-    },
-    { value: 'debug', label: 'Debug', href: workflowDetailSubrouteHref(workflowId, 'debug', search) },
   ];
+  const debugHref = workflowDetailSubrouteHref(workflowId, 'debug', search);
   return (
-    <SegmentedNav
-      items={items}
-      active={current}
-      ariaLabel="Workflow detail sections"
-      onNavigate={onNavigate}
-    />
+    <>
+      <SegmentedNav
+        items={items}
+        active={current === 'debug' ? null : current}
+        ariaLabel="Workflow detail sections"
+        onNavigate={onNavigate}
+      />
+      <WorkflowActionsMenu
+        items={[
+          {
+            id: 'workflow-detail-debug',
+            label: 'Debug',
+            onSelect: () => onNavigate('debug', debugHref),
+          },
+        ]}
+        triggerContent="More"
+        triggerClassName={`secondary td-subroute-more-trigger${current === 'debug' ? ' active' : ''}`}
+        menuAriaLabel="More workflow detail sections"
+      />
+    </>
   );
 }
 
@@ -6884,10 +6894,12 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const missingAgentRunState = execution && !resolvedAgentRunId ? inferMissingAgentRunState(execution) : null;
 
   const chatTabActive = detailSubroute === 'chat';
-  const stepsTabActive = detailSubroute === 'steps';
-  const artifactsTabActive = detailSubroute === 'artifacts';
+  const executionTabActive = detailSubroute === 'execution';
+  const evidenceTabActive = detailSubroute === 'evidence';
+  const stepsTabActive = executionTabActive;
+  const artifactsTabActive = evidenceTabActive;
   const overviewTabActive = detailSubroute === 'overview';
-  const runsTabActive = detailSubroute === 'runs';
+  const runsTabActive = executionTabActive;
   const debugTabActive = detailSubroute === 'debug';
   const shouldFetchStepLedger = (stepsTabActive || artifactsTabActive) && Boolean(execution?.stepsHref);
 

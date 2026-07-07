@@ -39,6 +39,8 @@ Progress" with a single batch run.
   `preset:github-issue-implement` for non-default GitHub target files.
 - `max_workflows` (number, optional): hard cap on queued children. Default `25`.
 - `constraints` (string, optional): shared input copied to every child.
+- `run_verify` (boolean, optional): shared verification toggle copied to child
+  implement presets. Default `true`.
 - `additional_jql` (string, optional): advanced JQL AND-clause appended to the
   project/status query.
 - `repository` (string, optional): repository override when workflow context
@@ -79,6 +81,7 @@ Progress" with a single batch run.
      --run-ref <skill:jira-verify|preset:jira-implement> \
      --publish-mode <none|branch|pr|pr_with_merge_automation> \
      --constraints-file <optional path to shared constraints> \
+     --run-verify | --no-run-verify \
      --max-workflows <cap>
    ```
 
@@ -87,9 +90,9 @@ Progress" with a single batch run.
      `jira_issue_key`, `repository`, `verification_mode`, `update_status`, and
      `constraints`).
    - Auto-binds Jira issues into `preset:jira-implement` inputs
-     (`jira_issue`, `jira_issue_key`, and `constraints`).
+     (`jira_issue`, `jira_issue_key`, `constraints`, and `run_verify`).
    - Auto-binds GitHub issue targets into `preset:github-issue-implement` inputs
-     when a non-default GitHub target file is provided.
+     when a non-default GitHub target file is provided, including `run_verify`.
    - Stamps `runtimeInheritance="caller"` plus a fallback copy of the parent's
      effective runtime (mode/model/effort/provider profile) so children reuse the
      caller runtime even on deployments that do not honour the inheritance

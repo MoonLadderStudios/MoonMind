@@ -29,7 +29,7 @@ each queued `pr-resolver` child owns its repository publishing outcome.
 - `maxAttempts` (number, optional): Queue job `maxAttempts` for each created task. Default `3`.
 - `priority` (number, optional): Queue job priority. Default `0`.
 - `mergeMethod` (string, optional): Merge method passed to `pr-resolver`. Default `squash`.
-- `maxIterations` (number, optional): `pr-resolver` loop cap. Default `3`.
+- `maxIterations` (number, optional): `pr-resolver` loop cap. Default `5`.
 - `runtimeMode` (string, optional): Runtime to stamp onto each queued `pr-resolver` task. When omitted, the helper falls back to inherited task context or deployment defaults.
 - `runtimeModel` (string, optional): Explicit model override to stamp onto each queued `pr-resolver` task.
 - `runtimeEffort` (string, optional): Explicit effort override to stamp onto each queued `pr-resolver` task.
