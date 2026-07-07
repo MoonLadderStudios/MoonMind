@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   STEP_EXECUTION_STATUS_KEYS,
   STEP_LEDGER_STATUS_KEYS,
+  formatStepExecutionStatusLabel,
   formatStepStatusLabel,
+  stepExecutionStatusPillProps,
   stepStatusPillProps,
 } from './stepStatus';
 
@@ -31,7 +33,7 @@ describe('step status helpers', () => {
     }
   });
 
-  it('covers every step execution artifact status accepted by step helpers', () => {
+  it('keeps step execution artifact-only statuses visible through execution helpers', () => {
     expect(STEP_EXECUTION_STATUS_KEYS).toEqual([
       'pending',
       'preparing',
@@ -47,36 +49,55 @@ describe('step status helpers', () => {
     ]);
 
     for (const status of STEP_EXECUTION_STATUS_KEYS) {
-      expect(formatStepStatusLabel(status, 'Unknown')).not.toBe('Unknown');
-      expect(stepStatusPillProps(status).className).toContain('status');
+      expect(formatStepExecutionStatusLabel(status, 'Unknown')).not.toBe('Unknown');
+      expect(stepExecutionStatusPillProps(status).className).toContain('status');
+      if ((STEP_LEDGER_STATUS_KEYS as readonly string[]).includes(status)) {
+        expect(formatStepStatusLabel(status, 'Unknown')).not.toBe('Unknown');
+        expect(stepStatusPillProps(status).className).toContain('status');
+      } else {
+        expect(formatStepStatusLabel(status, 'Unknown')).toBe('Unknown');
+        expect(stepStatusPillProps(status)).toEqual({ className: 'status status-neutral' });
+      }
     }
   });
 
-  it('formats step ledger and execution statuses with visible labels', () => {
+  it('formats canonical step ledger statuses with visible labels', () => {
     expect(formatStepStatusLabel('pending')).toBe('Pending');
     expect(formatStepStatusLabel('ready')).toBe('Ready');
-    expect(formatStepStatusLabel('running')).toBe('Running');
+    expect(formatStepStatusLabel('executing')).toBe('Executing');
     expect(formatStepStatusLabel('awaiting_external')).toBe('Awaiting external');
     expect(formatStepStatusLabel('reviewing')).toBe('Reviewing');
-    expect(formatStepStatusLabel('succeeded')).toBe('Succeeded');
+    expect(formatStepStatusLabel('completed')).toBe('Completed');
     expect(formatStepStatusLabel('failed')).toBe('Failed');
     expect(formatStepStatusLabel('skipped')).toBe('Skipped');
-    expect(formatStepStatusLabel('preparing')).toBe('Preparing');
-    expect(formatStepStatusLabel('checking')).toBe('Checking');
 
     expect(stepStatusPillProps('pending')).toEqual({ className: 'status status-scheduled' });
     expect(stepStatusPillProps('ready')).toEqual({ className: 'status status-scheduled' });
-    expect(stepStatusPillProps('running')).toEqual({ className: 'status status-running' });
+    expect(stepStatusPillProps('executing')).toEqual({ className: 'status status-running' });
     expect(stepStatusPillProps('awaiting_external')).toEqual({ className: 'status status-awaiting-external' });
     expect(stepStatusPillProps('reviewing')).toEqual({ className: 'status status-awaiting-external' });
-    expect(stepStatusPillProps('succeeded')).toEqual({ className: 'status status-succeeded' });
+    expect(stepStatusPillProps('completed')).toEqual({ className: 'status status-completed' });
     expect(stepStatusPillProps('failed')).toEqual({ className: 'status status-failed' });
     expect(stepStatusPillProps('skipped')).toEqual({ className: 'status status-neutral' });
-    expect(stepStatusPillProps('preparing')).toEqual({ className: 'status status-running' });
-    expect(stepStatusPillProps('checking')).toEqual({ className: 'status status-awaiting-external' });
   });
 
-  it('rejects workflow-only states and prototype keys with neutral diagnostics', () => {
+  it('formats step execution artifact statuses with visible labels', () => {
+    expect(formatStepExecutionStatusLabel('preparing')).toBe('Preparing');
+    expect(formatStepExecutionStatusLabel('running')).toBe('Running');
+    expect(formatStepExecutionStatusLabel('checking')).toBe('Checking');
+    expect(formatStepExecutionStatusLabel('succeeded')).toBe('Succeeded');
+    expect(formatStepExecutionStatusLabel('blocked')).toBe('Blocked');
+    expect(formatStepExecutionStatusLabel('superseded')).toBe('Superseded');
+
+    expect(stepExecutionStatusPillProps('preparing')).toEqual({ className: 'status status-scheduled' });
+    expect(stepExecutionStatusPillProps('running')).toEqual({ className: 'status status-running' });
+    expect(stepExecutionStatusPillProps('checking')).toEqual({ className: 'status status-running' });
+    expect(stepExecutionStatusPillProps('succeeded')).toEqual({ className: 'status status-completed' });
+    expect(stepExecutionStatusPillProps('blocked')).toEqual({ className: 'status status-failed' });
+    expect(stepExecutionStatusPillProps('superseded')).toEqual({ className: 'status status-neutral' });
+  });
+
+  it('rejects workflow-only, artifact-only, and prototype keys with neutral diagnostics', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     for (const status of [
@@ -88,6 +109,12 @@ describe('step status helpers', () => {
       'proposals',
       'finalizing',
       'no_commit',
+      'preparing',
+      'running',
+      'checking',
+      'succeeded',
+      'blocked',
+      'superseded',
     ]) {
       expect(stepStatusPillProps(status)).toEqual({ className: 'status status-neutral' });
       expect(formatStepStatusLabel(status, 'Unknown')).toBe('Unknown');
@@ -97,5 +124,7 @@ describe('step status helpers', () => {
 
     expect(warn).toHaveBeenCalledWith('Unknown step ledger status: scheduled');
     expect(warn).toHaveBeenCalledWith('Unknown step ledger status: no_commit');
+    expect(warn).toHaveBeenCalledWith('Unknown step ledger status: running');
+    expect(warn).toHaveBeenCalledWith('Unknown step ledger status: succeeded');
   });
 });
