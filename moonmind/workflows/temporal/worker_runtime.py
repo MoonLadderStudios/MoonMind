@@ -1558,6 +1558,19 @@ def _build_runtime_planner():
         )
         if isinstance(commit_message, str) and commit_message.strip():
             node_inputs["commitMessage"] = commit_message.strip()
+        publish_base_branch = _first_non_empty_text(
+            publish_payload.get("prBaseBranch"),
+            publish_payload.get("baseBranch"),
+            parameter_payload.get("publishBaseBranch"),
+            parameter_payload.get("prBaseBranch"),
+            parameter_payload.get("baseBranch"),
+        )
+        if (
+            isinstance(publish_mode, str)
+            and publish_mode.strip().lower() == "pr"
+            and publish_base_branch
+        ):
+            node_inputs["publishBaseBranch"] = publish_base_branch
 
         repository = (
             task_payload.get("repository")
