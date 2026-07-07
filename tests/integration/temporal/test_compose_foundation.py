@@ -169,7 +169,6 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
 
     runtime_service_names = [
         "temporal-worker-workflow",
-        "temporal-worker-workflow-merge-automation",
         "temporal-worker-agent-runtime",
     ]
     for service_name in runtime_service_names:
@@ -241,19 +240,37 @@ def test_omnigent_trusted_origins_render_local_and_public_defaults():
         "https://omnigent.example.test,https://admin.example.test"
     )
 
-def test_merge_automation_workflow_worker_polls_dedicated_user_workflow_queue():
+
+def test_workflow_worker_service_supervises_normal_and_merge_automation_roles():
     compose = _load_compose()
     services = compose["services"]
 
-    merge_worker_env = _env_map(
-        services["temporal-worker-workflow-merge-automation"]["environment"]
-    )
-    assert merge_worker_env["TEMPORAL_WORKFLOW_TASK_QUEUE"] == (
+    assert "temporal-worker-workflow" in services
+    assert "temporal-worker-workflow-merge-automation" not in services
+
+    workflow_worker = services["temporal-worker-workflow"]
+    assert workflow_worker["entrypoint"] == [
+        "python",
+        "/app/services/temporal/scripts/start-workflow-worker-group.py",
+    ]
+
+    workflow_env = _env_map(workflow_worker["environment"])
+    assert workflow_env["TEMPORAL_WORKFLOW_TASK_QUEUE"] == (
         "${TEMPORAL_WORKFLOW_TASK_QUEUE:-mm.workflow}"
     )
-    assert merge_worker_env["TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE"] == (
+    assert workflow_env["TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE"] == (
+        "${TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE:-mm.workflow.user.v2}"
+    )
+    assert workflow_env["TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE"] == (
         "${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE:-mm.workflow.merge_automation}"
     )
+    assert workflow_env["TEMPORAL_WORKFLOW_WORKER_CONCURRENCY"] == (
+        "${TEMPORAL_WORKFLOW_WORKER_CONCURRENCY:-8}"
+    )
+    assert workflow_env["TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY"] == (
+        "${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY:-2}"
+    )
+
 
 def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
     compose = _load_compose()
