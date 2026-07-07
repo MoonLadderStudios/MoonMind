@@ -7499,6 +7499,16 @@ class TemporalAgentRuntimeActivities:
             remaining_gaps = gate_payload.get("remainingGaps")
             if not isinstance(remaining_gaps, list):
                 remaining_gaps = gate_payload.get("remainingWork")
+            verdict = _first_non_empty_text(
+                gate_payload,
+                "verdict",
+                "gateVerdict",
+                "gate_verdict",
+                "moonSpecVerdict",
+                "moonspecVerdict",
+                "verificationVerdict",
+                "verification_verdict",
+            )
             payload = {
                 "schemaVersion": "v1",
                 "artifactType": "remediation.verification",
@@ -7507,7 +7517,7 @@ class TemporalAgentRuntimeActivities:
                     "artifact_type": "remediation.attempt",
                     "name": attempt_name,
                 },
-                "verdict": gate_payload.get("verdict"),
+                "verdict": verdict,
                 "remainingGaps": remaining_gaps if isinstance(remaining_gaps, list) else [],
                 "verifierEvidenceRefs": {
                     "moonSpecVerifyArtifactRef": source_verify_ref,

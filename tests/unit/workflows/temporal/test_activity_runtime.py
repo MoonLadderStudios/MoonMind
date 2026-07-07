@@ -5214,7 +5214,7 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
                 json.dumps(
                     {
                         "schemaVersion": "moonspec-verify.issue_brief.v1",
-                        "verdict": "ADDITIONAL_WORK_NEEDED",
+                        "moonSpecVerdict": "ADDITIONAL_WORK_NEEDED",
                         "recommendedNextAction": "reattempt_current_step",
                         "recoverableInCurrentRuntime": True,
                         "remainingWork": [
@@ -5306,6 +5306,7 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             assert artifact.metadata_json["artifact_type"] == "remediation.verification"
             assert artifact.metadata_json["verifiesAttempt"] == 1
             assert persisted_payload["verifiesAttempt"] == 1
+            assert persisted_payload["verdict"] == "ADDITIONAL_WORK_NEEDED"
             assert persisted_payload["inputRemediationAttemptRef"] == {
                 "artifact_type": "remediation.attempt",
                 "name": "reports/remediation_attempt-1.json",

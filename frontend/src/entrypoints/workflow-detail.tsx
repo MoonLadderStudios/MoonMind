@@ -1439,7 +1439,7 @@ const StepLedgerRowSchema = z
   .object({
     logicalStepId: z.string(),
     order: z.number(),
-    title: z.string(),
+    title: z.string().nullable().optional().transform((value) => value ?? ''),
     tool: StepLedgerToolSchema.default({}),
     dependsOn: z.array(z.string()).default([]),
     status: z.enum(CANONICAL_STEP_STATUSES),
@@ -3619,15 +3619,17 @@ function remediationCadenceInfo(row: z.infer<typeof StepLedgerRowSchema>): Remed
   const role = String(
     annotations.jiraOrchestrateRole ?? annotations.issueImplementRole ?? '',
   ).toLowerCase();
-  const title = row.title.toLowerCase();
+  const rowTitle = row.title ?? '';
+  const title = rowTitle.toLowerCase();
   const isRemediation = role === 'moonspec-remediation'
     || title.startsWith('remediate verification gaps')
     || title.startsWith('remediate remaining gaps');
   const isVerification = role === 'moonspec-verification-gate'
     || title.startsWith('verify remediation');
   if (!isRemediation && !isVerification) return null;
-  const titleMatch = row.title.match(/\battempt\s+(\d+)\s+of\s+(\d+)\b/i)
-    ?? row.title.match(/\b(\d+)\s+of\s+(\d+)\b/i);
+  const titleMatch = rowTitle
+    ? (rowTitle.match(/\battempt\s+(\d+)\s+of\s+(\d+)\b/i) ?? rowTitle.match(/\b(\d+)\s+of\s+(\d+)\b/i))
+    : null;
   return {
     role: isRemediation ? 'remediation' : 'verification',
     attempt: positiveInt(annotations.moonSpecRemediationAttempt) ?? positiveInt(titleMatch?.[1]),

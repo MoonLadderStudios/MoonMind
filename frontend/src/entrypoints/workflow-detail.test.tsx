@@ -2484,6 +2484,35 @@ describe('Workflow Detail Entrypoint', () => {
           },
           lastError: null,
         },
+        {
+          logicalStepId: 'remediate-null-title',
+          order: 3,
+          title: null,
+          tool: { type: 'skill', name: 'moonspec-implement', version: '1' },
+          dependsOn: ['verify-1'],
+          status: 'executing',
+          annotations: {
+            jiraOrchestrateRole: 'moonspec-remediation',
+            moonSpecRemediationAttempt: 2,
+            moonSpecRemediationMaxAttempts: 6,
+          },
+          executionOrdinal: 1,
+          startedAt: '2026-04-09T00:00:05Z',
+          updatedAt: '2026-04-09T00:00:06Z',
+          summary: 'Remediating the next attempt',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {
+            outputSummary: null,
+            outputPrimary: null,
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+          },
+          lastError: null,
+        },
       ],
     };
 
@@ -2517,6 +2546,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Verify remediation attempt 1 of 6')).toBeTruthy();
       expect(screen.getByText('Remediation · Attempt 1 of 6')).toBeTruthy();
       expect(screen.getByText('Full verification · Attempt 1 of 6')).toBeTruthy();
+      expect(screen.getByText('Remediation · Attempt 2 of 6')).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Show details for Remediate verification gaps/ }));
