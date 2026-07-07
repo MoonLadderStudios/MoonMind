@@ -946,6 +946,8 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       <Route path="/workflows/:workflowId" element={routedDashboardPage} />
       <Route path="/workflows/:workflowId/chat" element={routedDashboardPage} />
       <Route path="/workflows/:workflowId/overview" element={routedDashboardPage} />
+      <Route path="/workflows/:workflowId/execution" element={routedDashboardPage} />
+      <Route path="/workflows/:workflowId/evidence" element={routedDashboardPage} />
       <Route path="/workflows/:workflowId/steps" element={routedDashboardPage} />
       <Route path="/workflows/:workflowId/artifacts" element={routedDashboardPage} />
       <Route path="/workflows/:workflowId/runs" element={routedDashboardPage} />
