@@ -11,23 +11,37 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from typing import Callable, Iterable, Mapping, Protocol, Sequence
 
 START_WORKER_SCRIPT = "/app/services/temporal/scripts/start-worker.sh"
 DEFAULT_HEALTHCHECK_PORT = 8080
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 20.0
+CHILD_HEALTHCHECK_PORTS = {
+    "normal-workflow-worker": 8081,
+    "merge-automation-workflow-worker": 8082,
+}
+CHILD_PROMETHEUS_BIND_ADDRESSES = {
+    "normal-workflow-worker": "127.0.0.1:9090",
+    "merge-automation-workflow-worker": "127.0.0.1:9091",
+}
 
 
 class WorkerProcess(Protocol):
     stdout: object
 
-    def poll(self) -> int | None: ...
+    def poll(self) -> int | None:
+        pass
 
-    def terminate(self) -> None: ...
+    def terminate(self) -> None:
+        pass
 
-    def kill(self) -> None: ...
+    def kill(self) -> None:
+        pass
 
-    def wait(self, timeout: float | None = None) -> int: ...
+    def wait(self, timeout: float | None = None) -> int:
+        pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +58,13 @@ WORKER_ROLES = (
 @dataclass(slots=True)
 class GroupHealthState:
     children: Sequence[WorkerProcess]
+    child_health_urls: Sequence[str] = ()
     shutting_down: bool = False
 
     def is_healthy(self) -> bool:
         return not self.shutting_down and all(
             child.poll() is None for child in self.children
-        )
+        ) and all(_probe_child_health(url) for url in self.child_health_urls)
 
 
 def _env_default(env: Mapping[str, str], name: str, default: str) -> str:
@@ -65,7 +80,12 @@ def build_child_environment(
 ) -> dict[str, str]:
     env = dict(os.environ if base_env is None else base_env)
     env["TEMPORAL_WORKER_FLEET"] = "workflow"
-    env["WORKER_HEALTHCHECK_ENABLED"] = "false"
+    env["WORKER_HEALTHCHECK_ENABLED"] = "true"
+    env["WORKER_HEALTHCHECK_PORT"] = str(_child_healthcheck_port(role))
+    env["MOONMIND_PROMETHEUS_BIND_ADDRESS"] = _child_prometheus_bind_address(
+        role,
+        env.get("MOONMIND_PROMETHEUS_BIND_ADDRESS"),
+    )
 
     if role.name == "normal-workflow-worker":
         env["TEMPORAL_WORKFLOW_WORKER_CONCURRENCY"] = _env_default(
@@ -95,6 +115,32 @@ def _worker_command() -> list[str]:
     return ["/bin/sh", START_WORKER_SCRIPT]
 
 
+def _child_healthcheck_port(role: WorkerRole) -> int:
+    try:
+        return CHILD_HEALTHCHECK_PORTS[role.name]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported worker role: {role.name}") from exc
+
+
+def _child_prometheus_bind_address(
+    role: WorkerRole,
+    inherited_bind_address: str | None,
+) -> str:
+    if role.name == "normal-workflow-worker":
+        return inherited_bind_address or CHILD_PROMETHEUS_BIND_ADDRESSES[role.name]
+    if role.name == "merge-automation-workflow-worker":
+        if inherited_bind_address:
+            host, separator, port = inherited_bind_address.rpartition(":")
+            if separator and port.isdigit():
+                return f"{host}:{int(port) + 1}"
+        return CHILD_PROMETHEUS_BIND_ADDRESSES[role.name]
+    raise ValueError(f"Unsupported worker role: {role.name}")
+
+
+def _child_health_url(role: WorkerRole) -> str:
+    return f"http://127.0.0.1:{_child_healthcheck_port(role)}/healthz"
+
+
 def start_child_process(role: WorkerRole) -> WorkerProcess:
     return subprocess.Popen(
         _worker_command(),
@@ -112,7 +158,7 @@ def _stream_child_output(role_name: str, process: WorkerProcess) -> threading.Th
         if stream is None:
             return
         for line in stream:  # type: ignore[union-attr]
-            print(f"[{role_name}] {line}", end="", flush=True)
+            print(_format_child_log_line(role_name, line), end="", flush=True)
 
     thread = threading.Thread(
         target=_stream,
@@ -121,6 +167,27 @@ def _stream_child_output(role_name: str, process: WorkerProcess) -> threading.Th
     )
     thread.start()
     return thread
+
+
+def _format_child_log_line(role_name: str, line: str) -> str:
+    trailing_newline = "\n" if line.endswith("\n") else ""
+    raw_line = line[:-1] if trailing_newline else line
+    try:
+        payload = json.loads(raw_line)
+    except json.JSONDecodeError:
+        return f"[{role_name}] {line}"
+    if not isinstance(payload, dict):
+        return f"[{role_name}] {line}"
+    payload.setdefault("worker_role", role_name)
+    return json.dumps(payload, separators=(",", ":")) + trailing_newline
+
+
+def _probe_child_health(url: str, *, timeout_seconds: float = 0.5) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
+            return 200 <= response.status < 300
+    except (OSError, urllib.error.URLError, TimeoutError):
+        return False
 
 
 class _HealthHandler(BaseHTTPRequestHandler):
@@ -184,7 +251,10 @@ def _terminate_children(
     ]
     for role, process in live_children:
         print(f"[workflow-worker-group] terminating {role.name}", flush=True)
-        process.terminate()
+        try:
+            process.terminate()
+        except OSError:
+            pass
 
     deadline = time.monotonic() + timeout_seconds
     for role, process in live_children:
@@ -193,8 +263,16 @@ def _terminate_children(
             process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
             print(f"[workflow-worker-group] killing {role.name}", flush=True)
-            process.kill()
-            process.wait(timeout=5.0)
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=5.0)
+            except OSError:
+                pass
+        except OSError:
+            pass
 
 
 def supervise_workers(
@@ -225,6 +303,9 @@ def supervise_workers(
             _stream_child_output(role.name, process)
 
         state.children = [process for _role, process in children]
+        state.child_health_urls = [
+            _child_health_url(role) for role, _process in children
+        ]
         health_server = start_health_server(
             state,
             port=_healthcheck_port() if health_port is None else health_port,
