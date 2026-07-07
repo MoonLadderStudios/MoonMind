@@ -28,6 +28,7 @@ import {
   readDashboardPreferences,
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
+import { WorkflowListPage } from './workflow-list';
 
 declare const __dirname: string;
 
@@ -735,6 +736,55 @@ describe('Workflow Detail Entrypoint', () => {
       '/workflows/test-456?source=temporal',
     );
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
+  });
+
+  it('MM-1133 reuses the workflow list cache when navigating from list to workspace detail', async () => {
+    window.history.pushState({}, 'Workspace Cache Test', '/workflows?limit=25&source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    const payload: BootPayload = {
+      page: 'workflow-list',
+      apiBase: '/api',
+      initialData: {
+        dashboardConfig: {
+          pollIntervalsMs: { detail: 60000, list: 60000 },
+          features: {
+            temporalDashboard: {
+              listEnabled: true,
+              workspaceShellEnabled: true,
+            },
+          },
+        },
+      },
+    };
+    const view = renderWithClient(<WorkflowListPage payload={payload} />);
+
+    expect(await screen.findByRole('row', { name: /MM-997 selected workflow/i })).toBeTruthy();
+    const matchingListCalls = () => fetchSpy.mock.calls.filter(
+      ([input]) => String(input) === '/api/executions?source=temporal&pageSize=25',
+    );
+    expect(matchingListCalls()).toHaveLength(1);
+
+    window.history.pushState({}, 'Workspace Cache Test', '/workflows/test-123?limit=25&source=temporal');
+    view.rerender(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            ...(stepsPayload.initialData as Record<string, unknown>),
+            dashboardConfig: {
+              ...((stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig),
+              pollIntervalsMs: { detail: 60000, list: 60000 },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(matchingListCalls()).toHaveLength(1);
   });
 
 
@@ -1902,6 +1952,44 @@ describe('Workflow Detail Entrypoint', () => {
     expect(stepsLink.getAttribute('aria-current')).toBe('page');
     expect(stepsLink.textContent).toContain('3');
     expect(fetchSpy.mock.calls.filter(([input]) => String(input).includes('/executions/test-123/steps')).length).toBeGreaterThan(0);
+  });
+
+  it('MM-1133 reuses cached detail tab evidence when returning to Steps inside the stale window', async () => {
+    window.history.pushState({}, 'Detail Tab Cache Test', '/workflows/test-123/overview?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(
+      <WorkflowDetailPage
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            ...(stepsPayload.initialData as Record<string, unknown>),
+            dashboardConfig: {
+              ...((stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig),
+              pollIntervalsMs: { detail: 60000 },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Summary' })).toBeTruthy();
+    const stepLedgerCalls = () => fetchSpy.mock.calls.filter(
+      ([input]) => String(input) === '/api/executions/test-123/steps',
+    );
+    expect(stepLedgerCalls()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('link', { name: 'Steps' }));
+    expect(await screen.findByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+    await waitFor(() => expect(stepLedgerCalls()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole('link', { name: 'Artifacts' }));
+    expect(await screen.findByRole('heading', { name: 'Workflow Artifacts' })).toBeTruthy();
+    expect(stepLedgerCalls()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('link', { name: 'Steps' }));
+    expect(await screen.findByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+    expect(stepLedgerCalls()).toHaveLength(1);
   });
 
   it('keeps the standalone detail toolbar free of full-list navigation while preserving tab context (MM-998, MM-975)', async () => {
