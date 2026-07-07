@@ -1,6 +1,6 @@
 # Remediation Verification Cadence
 
-**Status:** Desired-state design refinement and implementation plan
+**Status:** Desired-state design refinement
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Platform + dashboard
 **Last Updated:** 2026-07-06
@@ -239,38 +239,11 @@ Verify remediation attempt 1 of 6
 
 ---
 
-## 10. Implementation review as of 2026-07-06
+## 10. Planner and orchestration contract
 
-The current repository has a useful partial implementation, but it does not yet satisfy this design as a system contract.
+MoonMind should carry a remediation cadence model at the workflow planning/orchestration boundary.
 
-What is already present:
-
-- The orchestrate presets already contain remediation and post-remediation verification pairs for multiple attempts.
-- Those steps already carry attempt-oriented annotations such as `moonSpecRemediationAttempt` and `moonSpecRemediationMaxAttempts`.
-- The remediation instructions already tell the worker to consume the latest verifier report and treat `ADDITIONAL_WORK_NEEDED` as the bounded remediation input.
-- The verifier instructions already preserve `ADDITIONAL_WORK_NEEDED` for the next attempt and stop for hard terminal states.
-
-What remains incomplete:
-
-- The visible preset labels still look like gap ordinals, for example `Remediate verification gaps 1 of 6` and `Verify remediation 1 of 6`.
-- The preset step graph still materializes every remediation pair up front. Later attempts rely on instruction-level skipping rather than a planner/orchestrator decision that creates or activates the next attempt only after `ADDITIONAL_WORK_NEEDED`, budget availability, and safety checks.
-- Attempt artifacts are not first-class. The repository still needs a durable `remediation.attempt` artifact schema, writer, and reader that records known gaps, statuses, changed files, targeted checks, and the input verification artifact.
-- Post-remediation verification artifacts are not attempt-scoped. The verifier should write `remediation.verification` artifacts that identify the remediation attempt they verify instead of only updating a generic verifier output path.
-- The backend state model needs an explicit remediation cadence view so attempt numbering, max-attempt budget, gap IDs, targeted checks, and authoritative verification refs are persisted separately from the plain workflow step title.
-- The dashboard needs a rendering path for attempt progress, nested gap status, targeted checks, action verification, and latest authoritative completion verification.
-- Existing tests still assert the legacy labels and static step expectations, so they protect the incomplete implementation instead of this desired cadence.
-
-A fix that only renames the current preset titles is not enough. Label cleanup is necessary, but the acceptance criteria require durable attempt state, attempt-scoped artifacts, authoritative verification refs, conditional continuation, and dashboard rendering.
-
----
-
-## 11. Remaining-work implementation plan
-
-### 11.1 Planner and orchestration contract
-
-Introduce a small remediation cadence model at the workflow planning/orchestration boundary.
-
-Recommended fields:
+Representative fields:
 
 ```json
 {
@@ -290,11 +263,13 @@ Recommended fields:
 }
 ```
 
-The planner should derive the next remediation attempt from the latest verifier artifact, not from an individual gap. It should create or activate the next remediation pair only when the authoritative verifier returns `ADDITIONAL_WORK_NEEDED`, the attempt budget remains, and remediation policy says the remaining work is safe. If the first implementation uses static preset expansion for compatibility, the runtime still needs an explicit skip/activation state so the UI does not present unneeded future attempts as active work.
+The planner derives the next remediation attempt from the latest verifier artifact, not from an individual gap. It creates or activates the next remediation pair only when the authoritative verifier returns `ADDITIONAL_WORK_NEEDED`, the attempt budget remains, and remediation policy says the remaining work is safe. Future attempts that are not yet activated must be represented as inactive or skipped so the UI does not present them as active work.
 
-### 11.2 Attempt-scoped artifacts
+---
 
-Add schemas and writers for two durable artifact types:
+## 11. Attempt-scoped artifact requirements
+
+Remediation cadence uses two durable artifact types:
 
 1. `remediation.attempt`
    - path: `reports/remediation_attempt-<n>.json`
@@ -305,11 +280,13 @@ Add schemas and writers for two durable artifact types:
    - written by the full verifier step after an attempt
    - includes `verifiesAttempt`, the input remediation attempt artifact ref, the whole-target verdict, remaining gaps, and the verifier evidence refs
 
-The existing generic verifier artifact can remain as a latest-pointer or compatibility artifact, but it must not be the only durable record for post-remediation verification.
+If MoonMind exposes a convenience pointer to the current verifier result, that pointer must reference the latest authoritative attempt-scoped `remediation.verification` artifact. The pointer is not a separate durable verifier record and must not preserve a superseded generic verifier artifact contract.
 
-### 11.3 Preset and skill instruction updates
+---
 
-Update the affected issue orchestration presets so their step titles and instructions use attempt-oriented wording:
+## 12. Preset and skill instruction requirements
+
+Issue orchestration presets should use attempt-oriented step titles and instructions:
 
 ```text
 Remediate verification gaps — attempt N of M
@@ -334,7 +311,9 @@ Each remediation step should explicitly instruct the worker to:
 
 Each post-remediation verifier step should explicitly verify the whole target state and write a `remediation.verification` artifact that references the remediation attempt artifact.
 
-### 11.4 Continuation and terminal handling
+---
+
+## 13. Continuation and terminal handling
 
 Normalize verifier outcomes once at the cadence boundary:
 
@@ -346,7 +325,9 @@ Normalize verifier outcomes once at the cadence boundary:
 
 This logic belongs in the planner/orchestrator layer, not only in natural-language step instructions.
 
-### 11.5 Immediate verification exceptions
+---
+
+## 14. Immediate verification exceptions
 
 Keep support for immediate verification inside a remediation attempt, but model it as targeted action verification unless policy requires a full verifier. The artifact record should distinguish:
 
@@ -356,7 +337,9 @@ Keep support for immediate verification inside a remediation attempt, but model 
 
 Examples include provider-profile slot changes, container/session/liveness operations, destructive actions, migrations, branch promotion, publish actions, and environmental repairs whose result determines the next safe remediation decision.
 
-### 11.6 Dashboard and API projection
+---
+
+## 15. Dashboard and API projection
 
 Extend the workflow detail API projection so the dashboard can render remediation cadence explicitly instead of parsing meaning from labels alone.
 
@@ -385,9 +368,11 @@ Recommended UI projection:
 
 The Workflow detail timeline should render the remediation and full verification steps as peers at the attempt level, while targeted checks and per-gap details appear inside the remediation attempt details.
 
-### 11.7 Test plan
+---
 
-Add or update tests at the same layer where each behavior is enforced.
+## 16. Test expectations
+
+Tests should live at the same layer where each behavior is enforced.
 
 Required coverage:
 
@@ -401,19 +386,5 @@ Required coverage:
 - high-risk action policies can require targeted action verification or policy-required full verification;
 - preset expansion and dashboard rendering use attempt-oriented labels and keep gap progress separate from attempt progress;
 - the latest authoritative verification artifact is visually and API-distinct from local targeted checks.
-
-Affected tests should include the preset expansion assertions that currently expect legacy labels, backend cadence/continuation unit tests, artifact schema tests, and frontend workflow-detail rendering tests.
-
----
-
-## 12. Implementation priority
-
-1. **Backend contract first.** Add the cadence state, artifact schemas, and continuation decision tests before UI polish. This prevents the issue from being solved only as a label change.
-2. **Preset compatibility second.** Update Jira, GitHub issue, and provider-neutral issue implementation presets to use attempt labels and attempt artifact paths while preserving existing inputs.
-3. **Verifier/remediator artifact writing third.** Ensure the remediator writes `remediation.attempt` and the full verifier writes `remediation.verification` with an explicit `verifiesAttempt` link.
-4. **Dashboard projection fourth.** Add API/UI rendering for attempt progress, per-gap status, targeted checks, and latest authoritative verification.
-5. **End-to-end acceptance last.** Exercise a multi-gap report through successful batched remediation, remaining-gap retry, blocked/no-determination stops, and a high-risk action verification exception.
-
-This order is deliberate: the durable state and artifact contract are the source of truth; labels and dashboard rendering should consume that contract rather than becoming the contract themselves.
 
 ---
