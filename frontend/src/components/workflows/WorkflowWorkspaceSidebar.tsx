@@ -30,9 +30,13 @@ import {
   WorkflowWorkspaceListResponseSchema,
   type WorkflowWorkspaceRow,
   workflowSidebarMatchesFilter,
-  workflowWorkspaceListQuery,
   workflowWorkspaceRowId,
 } from '../../lib/workflowWorkspaceList';
+import {
+  buildWorkflowListQueryKey,
+  buildWorkflowListQueryParams,
+  workflowListQueryString,
+} from '../../lib/workflowListQuery';
 import { formatStatusLabel } from '../../utils/formatters';
 import { StatusIcon } from '../../utils/statusIcons';
 import { executionStatusPillProps } from '../../utils/executionStatusPillClasses';
@@ -486,13 +490,18 @@ export function WorkflowWorkspaceSidebarPanel({
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
   const searchKey = search.toString();
-  const listQuery = useMemo(
-    () => workflowWorkspaceListQuery(new URLSearchParams(searchKey), defaultSource),
-    [defaultSource, searchKey],
-  );
+  const listQueryParams = useMemo(() => {
+    const params = new URLSearchParams(searchKey);
+    if (defaultSource && !params.has('source')) {
+      params.set('source', defaultSource);
+    }
+    return buildWorkflowListQueryParams(params);
+  }, [defaultSource, searchKey]);
+  const listQueryKey = useMemo(() => buildWorkflowListQueryKey(listQueryParams), [listQueryParams]);
+  const listQuery = useMemo(() => workflowListQueryString(listQueryParams), [listQueryParams]);
   const [sidebarFilterText, setSidebarFilterText] = useState('');
   const workflowsQuery = useQuery({
-    queryKey: ['workflow-workspace-sidebar', listQuery],
+    queryKey: listQueryKey,
     queryFn: async ({ signal }) => {
       const response = await fetch(`${payload.apiBase}/executions?${listQuery}`, { signal });
       if (!response.ok) {
@@ -502,6 +511,7 @@ export function WorkflowWorkspaceSidebarPanel({
     },
     enabled: listEnabled,
     refetchInterval: listEnabled ? listPoll : false,
+    staleTime: listPoll,
   });
   if (!listEnabled) {
     return null;

@@ -1202,24 +1202,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     staleTime: listPollMs,
   });
 
-  useEffect(() => {
-    if (!listEnabled || !liveUpdatesPref || drawerOpen || desktopFilterField !== null) {
-      return undefined;
-    }
-    const refetchVisibleList = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-        return;
-      }
-      void refetch();
-    };
-    window.addEventListener('visibilitychange', refetchVisibleList);
-    window.addEventListener('focus', refetchVisibleList);
-    return () => {
-      window.removeEventListener('visibilitychange', refetchVisibleList);
-      window.removeEventListener('focus', refetchVisibleList);
-    };
-  }, [desktopFilterField, drawerOpen, listEnabled, liveUpdatesPref, refetch]);
-
   // Facets enrich the include/exclude dropdowns. The mobile drawer can show
   // every value field at once; desktop column popovers request the active field.
   // This reuses the existing single-facet backend contract without API changes.

@@ -5,6 +5,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useInRouterContext, useLocation } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
+import { configQueryDefaults } from "../boot/queryClient";
 import { LoadingPlaceholder } from "../components/dashboard/LoadingPlaceholder";
 import { SkillCombobox } from "../components/SkillCombobox";
 import { DashboardErrorDetails } from "../components/dashboard/DashboardErrorDetails";
@@ -6010,6 +6011,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const providerProfilesQuery = useQuery({
+    ...configQueryDefaults,
     queryKey: ["workflow-start", "provider-profiles", runtime],
     queryFn: async (): Promise<ProviderProfile[]> => {
       const separator = providerProfilesEndpoint.includes("?") ? "&" : "?";
@@ -6223,6 +6225,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   ]);
 
   const dependencyOptionsQuery = useQuery({
+    ...configQueryDefaults,
     queryKey: ["workflow-start", "dependency-options", temporalListEndpoint],
     queryFn: async (): Promise<DependencyPickerExecution[]> => {
       const response = await fetch(
@@ -6254,6 +6257,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const skillsQuery = useQuery({
+    ...configQueryDefaults,
     queryKey: ["workflow-start", "skills"],
     queryFn: async (): Promise<SkillCatalogResult> => {
       const response = await fetch("/api/workflows/skills", {
@@ -6333,6 +6337,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
   const hasToolStep = steps.some((step) => step.stepType === "tool");
   const trustedToolsQuery = useQuery({
+    ...configQueryDefaults,
     queryKey: ["workflow-start", "trusted-tools"],
     enabled: hasToolStep,
     retry: false,
@@ -6375,6 +6380,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const templateOptionsQuery = useQuery({
+    ...configQueryDefaults,
     queryKey: [
       "workflow-start",
       "task-template-catalog",
@@ -6420,6 +6426,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const jiraProjectsQuery = useQuery({
+    ...configQueryDefaults,
     queryKey: ["workflow-start", "jira", "projects", jiraIntegration?.endpoints.projects],
     enabled: Boolean(jiraIntegration?.enabled && jiraBrowserOpen),
     queryFn: async (): Promise<JiraProject[]> => {
@@ -6437,6 +6444,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const jiraBoardsQuery = useQuery({
+    ...configQueryDefaults,
     queryKey: [
       "workflow-start",
       "jira",
@@ -6465,6 +6473,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const jiraColumnsQuery = useQuery({
+    ...configQueryDefaults,
     queryKey: [
       "workflow-start",
       "jira",
@@ -6497,6 +6506,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const jiraIssuesQuery = useQuery({
+    ...configQueryDefaults,
     queryKey: [
       "workflow-start",
       "jira",
@@ -6535,6 +6545,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const jiraIssueDetailQuery = useQuery({
+    ...configQueryDefaults,
     queryKey: [
       "workflow-start",
       "jira",
@@ -7527,6 +7538,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     ? selectedRepositoryForBranchLookup.trim()
     : "";
   const branchOptionsQuery = useQuery({
+    ...configQueryDefaults,
     queryKey: ["workflow-start", "github-branches", branchLookupRepository],
     enabled: Boolean(branchLookupEndpoint && branchLookupRepository),
     queryFn: async () =>

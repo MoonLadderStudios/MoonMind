@@ -13,10 +13,17 @@ describe('dashboard route resolution', () => {
     });
   });
 
-  it('resolves encoded workflow IDs with detail tabs', () => {
-    const path = '/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95/steps';
+  it.each(['chat', 'overview', 'steps', 'artifacts', 'runs', 'debug'])(
+    'resolves encoded workflow IDs with the %s detail tab',
+    (tab) => {
+      const path = `/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95/${tab}`;
 
-    expect(resolveDashboardRoute(path)?.page).toBe('workflows-workspace');
+      expect(resolveDashboardRoute(path)?.page).toBe('workflows-workspace');
+    },
+  );
+
+  it('rejects unknown workflow detail tabs', () => {
+    expect(resolveDashboardRoute('/workflows/mm%3A123/files')).toBeNull();
   });
 
   it('resolves reserved-looking workflow IDs as detail pages', () => {

@@ -12,6 +12,8 @@ import {
   WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
   WorkflowDetailEntrypoint,
   WorkflowDetailPage,
+  workflowDetailQueryOptions,
+  workflowEvidenceStaleTime,
 } from './workflow-detail';
 import {
   taskCompareHref,
@@ -283,6 +285,31 @@ describe('Workflow Detail Entrypoint', () => {
       },
     ],
   };
+
+  it('MM-1133 gives workflow detail query consumers one canonical query identity', () => {
+    const shellOptions = workflowDetailQueryOptions({
+      apiBase: '/api',
+      workflowId: 'mm:detail',
+      sourceTemporal: true,
+      detailPoll: 2000,
+    });
+    const pageOptions = workflowDetailQueryOptions({
+      apiBase: '/api',
+      workflowId: 'mm:detail',
+      sourceTemporal: true,
+      detailPoll: 2000,
+    });
+
+    expect(shellOptions.queryKey).toEqual(pageOptions.queryKey);
+    expect(shellOptions.queryKey).toEqual(['workflow-detail', 'mm%3Adetail', true]);
+    expect(shellOptions.staleTime).toBe(2000);
+  });
+
+  it('MM-1133 applies explicit stale windows to workflow evidence queries', () => {
+    expect(workflowEvidenceStaleTime({ isTerminal: false, detailPoll: 2000 })).toBe(5000);
+    expect(workflowEvidenceStaleTime({ isTerminal: false, detailPoll: 8000 })).toBe(8000);
+    expect(workflowEvidenceStaleTime({ isTerminal: true, detailPoll: 2000 })).toBe(Infinity);
+  });
 
   function richOutboundRemediationLink(overrides: Record<string, unknown> = {}) {
     return {
@@ -978,7 +1005,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(pinned.getAttribute('data-pinned')).toBe('true');
     expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
-    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&stateIn=failed&pageSize=25');
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25&stateIn=failed');
   });
 
   it('MM-999 keeps detail visible and retries only sidebar data after a recoverable sidebar error', async () => {
@@ -1049,7 +1076,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
-      '/api/executions?source=temporal&nextPageToken=page-2&pageSize=10',
+      '/api/executions?source=temporal&pageSize=10&nextPageToken=page-2',
     );
   });
 
@@ -1066,7 +1093,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
-      '/api/executions?source=temporal&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira&pageSize=10',
+      '/api/executions?source=temporal&pageSize=10&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira',
     );
     const anotherWorkflow = await within(sidebar).findByRole('link', { name: /Another workflow/i });
     expect(anotherWorkflow.getAttribute('href')).toBe(
@@ -1091,7 +1118,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
-      '/api/executions?source=temporal&nextPageToken=page-2&pageSize=100',
+      '/api/executions?source=temporal&pageSize=100&nextPageToken=page-2',
     );
   });
 
