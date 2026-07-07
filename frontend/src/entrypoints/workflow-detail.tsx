@@ -1532,15 +1532,6 @@ function readDashboardConfig(payload: BootPayload): DashboardConfig | undefined 
   return raw?.dashboardConfig;
 }
 
-function decodeTaskPathSegment(segment: string | null | undefined): string | null {
-  if (!segment) return null;
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
-  }
-}
-
 export function expandRouteTemplate(
   template: string | null | undefined,
   params: Record<string, string | null | undefined>,

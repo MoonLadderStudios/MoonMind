@@ -1181,7 +1181,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const listQueryKey = useMemo(() => buildWorkflowListQueryKey(listQueryParams), [listQueryParams]);
   const listQuery = useMemo(() => workflowListQueryString(listQueryParams), [listQueryParams]);
 
-  const { data, isLoading, isError, error, refetch } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: listQueryKey,
     enabled: listEnabled && filterValidationErrors.length === 0,
     queryFn: async () => {
