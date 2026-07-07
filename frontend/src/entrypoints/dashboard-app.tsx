@@ -363,15 +363,19 @@ function DashboardLiveUpdateProvider({
         return null;
       }
       try {
-        const payload = JSON.parse(event.data) as Record<string, unknown>;
-        const row = payload.row && typeof payload.row === 'object'
-          ? (payload.row as Record<string, unknown>)
+        const payload = JSON.parse(event.data);
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+          return null;
+        }
+        const payloadRecord = payload as Record<string, unknown>;
+        const row = payloadRecord.row && typeof payloadRecord.row === 'object' && !Array.isArray(payloadRecord.row)
+          ? (payloadRecord.row as Record<string, unknown>)
           : null;
         return String(
-          payload.workflowId ||
-            payload.workflow_id ||
-            payload.taskId ||
-            payload.task_id ||
+          payloadRecord.workflowId ||
+            payloadRecord.workflow_id ||
+            payloadRecord.taskId ||
+            payloadRecord.task_id ||
             row?.workflowId ||
             row?.workflow_id ||
             row?.taskId ||
@@ -388,10 +392,14 @@ function DashboardLiveUpdateProvider({
         return null;
       }
       try {
-        const payload = JSON.parse(event.data) as Record<string, unknown>;
-        const row = payload.row && typeof payload.row === 'object'
-          ? (payload.row as Record<string, unknown>)
-          : payload;
+        const payload = JSON.parse(event.data);
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+          return null;
+        }
+        const payloadRecord = payload as Record<string, unknown>;
+        const row = payloadRecord.row && typeof payloadRecord.row === 'object' && !Array.isArray(payloadRecord.row)
+          ? (payloadRecord.row as Record<string, unknown>)
+          : payloadRecord;
         const workflowId = String(row.workflowId || row.workflow_id || row.taskId || row.task_id || '').trim();
         return workflowId ? row : null;
       } catch {
@@ -415,7 +423,13 @@ function DashboardLiveUpdateProvider({
             return item;
           }
           const itemRecord = item as Record<string, unknown>;
-          const itemWorkflowId = String(itemRecord.workflowId || itemRecord.taskId || '').trim();
+          const itemWorkflowId = String(
+            itemRecord.workflowId ||
+              itemRecord.workflow_id ||
+              itemRecord.taskId ||
+              itemRecord.task_id ||
+              '',
+          ).trim();
           if (itemWorkflowId !== workflowId) {
             return item;
           }
