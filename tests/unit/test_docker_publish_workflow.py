@@ -170,6 +170,56 @@ def test_dockerfile_uses_buildkit_package_cache_mounts() -> None:
     )
 
 
+def test_docker_publish_persists_buildkit_cache_mounts() -> None:
+    workflow = _load_workflow()
+    build_steps = workflow["jobs"]["build"]["steps"]
+
+    setup_buildx = next(
+        (
+            step
+            for step in build_steps
+            if step.get("uses", "").startswith("docker/setup-buildx-action@")
+        ),
+        None,
+    )
+    assert setup_buildx is not None, "Docker Buildx setup step not found"
+    assert setup_buildx["id"] == "setup-buildx"
+
+    cache_step = next(
+        (
+            step
+            for step in build_steps
+            if step.get("name") == "Cache BuildKit mount directories"
+        ),
+        None,
+    )
+    assert cache_step is not None, "BuildKit cache mount cache step not found"
+    assert cache_step["uses"].startswith("actions/cache@")
+    assert cache_step["id"] == "buildkit-cache"
+    cache_with = cache_step["with"]
+    assert cache_with["path"] == "${{ runner.temp }}/buildkit-cache-mounts"
+    assert "api_service/Dockerfile" in cache_with["key"]
+    assert "package-lock.json" in cache_with["key"]
+    assert "poetry.lock" in cache_with["key"]
+    assert "steps.meta.outputs.pair" in cache_with["key"]
+
+    restore_step = next(
+        (
+            step
+            for step in build_steps
+            if step.get("name") == "Restore BuildKit cache mounts"
+        ),
+        None,
+    )
+    assert restore_step is not None, "BuildKit cache mount restore step not found"
+    assert restore_step["uses"] == "reproducible-containers/buildkit-cache-dance@v3"
+    restore_with = restore_step["with"]
+    assert restore_with["builder"] == "${{ steps.setup-buildx.outputs.name }}"
+    assert restore_with["cache-dir"] == "${{ runner.temp }}/buildkit-cache-mounts"
+    assert restore_with["dockerfile"] == "api_service/Dockerfile"
+    assert restore_with["skip-extraction"] == "${{ steps.buildkit-cache.outputs.cache-hit }}"
+
+
 def test_runtime_project_install_precedes_non_package_asset_copies() -> None:
     dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
 
