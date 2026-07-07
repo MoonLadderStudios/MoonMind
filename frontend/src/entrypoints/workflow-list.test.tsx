@@ -1963,7 +1963,7 @@ describe('Workflows Entrypoint', () => {
     const paginationBlock = footer?.querySelector('.workflow-list-footer-pagination');
     const paginationSummary = footer?.querySelector('.workflow-list-footer-page-summary');
     expect(liveBlock?.querySelector('input[type="checkbox"]')).toBeNull();
-    expect(liveBlock?.textContent).toContain('Live updates enabled. Polling every 5s');
+    expect(liveBlock?.textContent).not.toMatch(/Live updates enabled\. Polling every \d+s/);
     expect(paginationBlock?.contains(screen.getByLabelText('Show'))).toBe(true);
     expect(getComputedStyle(paginationBlock as Element).flexWrap).toBe('wrap');
     expect(paginationSummary?.textContent).toContain('1 - 1');
@@ -2035,8 +2035,8 @@ describe('Workflows Entrypoint', () => {
     expect(screen.queryByRole('button', { name: /^Workflow Type\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Entry\./i })).toBeNull();
 
-    expect(dataSlab?.querySelector('.workflow-list-results-footer')?.textContent).toContain(
-      'Live updates enabled. Polling every 5s',
+    expect(dataSlab?.querySelector('.workflow-list-results-footer')?.textContent).not.toMatch(
+      /Live updates enabled\. Polling every \d+s/,
     );
     expect(screen.queryByText('Showing all task executions.')).toBeNull();
     expect(dataSlab).toBeTruthy();
