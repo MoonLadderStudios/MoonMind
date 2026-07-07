@@ -28,6 +28,7 @@ import {
   LIQUID_GL_OPTIONS,
   buildEditParametersPatch,
   preferredTemplate,
+  deriveExplicitWorkflowTitle,
   resolveDefaultProviderProfileId,
   resolveObjectiveInstructions,
   workflowStartFormSnapshot,
@@ -72,6 +73,18 @@ describe("workflowStartFormSnapshot", () => {
     dryRun.checked = false;
     publish.checked = true;
     expect(workflowStartFormSnapshot(form)).not.toBe(initial);
+  });
+});
+
+describe("deriveExplicitWorkflowTitle", () => {
+  it("MM-1129 uses remaining title budget after line breaks", () => {
+    expect(
+      deriveExplicitWorkflowTitle(
+        "Implement this Jira issue:\nMM-1129 titles should include description text.",
+      ),
+    ).toBe(
+      "Implement this Jira issue: MM-1129 titles should include description text.",
+    );
   });
 });
 

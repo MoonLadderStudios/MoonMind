@@ -46,6 +46,7 @@ from api_service.api.routers.executions import (
     _resolve_step_runtime_selections,
     _step_execution_detail_payload,
     _detect_optional_temporal_search_attributes,
+    _derive_task_title,
     _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES_CACHE_TTL_SECONDS,
     _optional_temporal_search_attributes_cache,
     get_temporal_client,
@@ -200,6 +201,23 @@ def _completed_attachment_artifact(
         content_type=content_type,
         size_bytes=size_bytes,
         created_by_principal=created_by_principal,
+    )
+
+
+def test_mm_1129_derive_task_title_uses_remaining_budget_after_line_break() -> None:
+    title = _derive_task_title(
+        {
+            "instructions": (
+                "Implement this Jira issue:\n"
+                "MM-1129 titles should include description text while title "
+                "length remains available."
+            )
+        }
+    )
+
+    assert title == (
+        "Implement this Jira issue: MM-1129 titles should include description "
+        "text while title length remains available."
     )
 
 
