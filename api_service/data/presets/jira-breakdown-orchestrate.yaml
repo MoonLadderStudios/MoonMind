@@ -51,6 +51,11 @@ inputs:
     options:
       - pr
       - pr_with_merge_automation
+  - name: run_verify
+    label: Run Verification
+    type: boolean
+    required: false
+    default: true
   - name: source_issue_key
     label: Source Jira Issue Key
     type: text
@@ -164,6 +169,8 @@ steps:
         repository: "{{ context.repository }}"
         runtime:
           mode: "{{ context.targetRuntime }}"
+        inputs:
+          run_verify: "{{ inputs.run_verify }}"
         publish:
           mode: "pr"
           mergeAutomation:

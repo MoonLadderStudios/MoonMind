@@ -215,7 +215,11 @@ def test_mm_1129_derive_task_title_synthesizes_issue_title_from_instructions() -
         }
     )
 
-    assert title == "Workflow: MM-1129"
+    assert (
+        title
+        == "Implement this Jira issue: MM-1129 titles should include description "
+        "text while title length remains available."
+    )
 
 
 def test_mm_1129_derive_task_title_bounds_instruction_fallback() -> None:
