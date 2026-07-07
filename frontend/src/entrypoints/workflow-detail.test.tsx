@@ -387,7 +387,13 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.click(screen.getByRole('button', { name }));
   }
 
-  function mockWorkflowDetailSubrouteFetch() {
+  function mockWorkflowDetailSubrouteFetch({
+    stepsSnapshot = latestStepsSnapshot,
+    relatedRuns,
+  }: {
+    stepsSnapshot?: typeof latestStepsSnapshot;
+    relatedRuns?: Array<Record<string, unknown>>;
+  } = {}) {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -406,7 +412,7 @@ describe('Workflow Detail Entrypoint', () => {
       createdAt: '2026-04-09T00:00:00Z',
       updatedAt: '2026-04-09T00:00:04Z',
       actions: {},
-      relatedRuns: [
+      relatedRuns: relatedRuns ?? [
         {
           workflowId: 'test-456',
           runId: '03-run',
@@ -422,7 +428,7 @@ describe('Workflow Detail Entrypoint', () => {
       if (url.includes('/executions/test-123/steps')) {
         return Promise.resolve({
           ok: true,
-          json: async () => latestStepsSnapshot,
+          json: async () => stepsSnapshot,
         } as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -1940,6 +1946,23 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('keeps a zero step count badge instead of falling back to run count', async () => {
+    window.history.pushState({}, 'Zero Step Badge Test', '/workflows/test-123/execution?source=temporal');
+    mockWorkflowDetailSubrouteFetch({
+      stepsSnapshot: { ...latestStepsSnapshot, steps: [] },
+      relatedRuns: [],
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+      const executionLink = screen.getByRole('link', { name: 'Execution' });
+      expect(executionLink.textContent).toContain('0');
+      expect(executionLink.textContent).not.toContain('1');
+    });
+  });
+
   it('MM-1020 switches Workflow Detail tabs with pushState without remounting or preloading tab data', async () => {
     window.history.pushState({}, 'Client Tab Test', '/workflows/test-123/overview?source=temporal');
     mockWorkflowDetailSubrouteFetch();
@@ -2553,7 +2576,7 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({ ok: true, json: async () => stepExecutionsResponse } as Response);
       }
       if (url.includes('/executions/test-123/steps')) {
-        return Promise.resolve({ ok: true, json: async () => stepsSnapshot } as Response);
+        return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -2943,6 +2966,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Debug' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'More' }).getAttribute('class')).toContain('active');
       expect(screen.getByRole('heading', { name: 'Temporal' })).toBeTruthy();
     });
 

@@ -1787,7 +1787,9 @@ function SegmentedNav<T extends string>({
           }}
         >
           <span>{item.label}</span>
-          {item.badge ? <span className="segmented-nav-badge" aria-hidden="true">{item.badge}</span> : null}
+          {item.badge !== null && item.badge !== undefined ? (
+            <span className="segmented-nav-badge" aria-hidden="true">{item.badge}</span>
+          ) : null}
         </a>
       ))}
     </nav>
@@ -6563,7 +6565,7 @@ function WorkflowDetailSubrouteNav({
       value: 'execution',
       label: 'Execution',
       href: workflowDetailSubrouteHref(workflowId, 'execution', search),
-      badge: (stepCount ?? null) || (runCount ?? null),
+      badge: stepCount ?? runCount ?? null,
     },
     {
       value: 'evidence',
@@ -6590,7 +6592,7 @@ function WorkflowDetailSubrouteNav({
           },
         ]}
         triggerContent="More"
-        triggerClassName="secondary td-subroute-more-trigger"
+        triggerClassName={`secondary td-subroute-more-trigger${current === 'debug' ? ' active' : ''}`}
         menuAriaLabel="More workflow detail sections"
       />
     </>

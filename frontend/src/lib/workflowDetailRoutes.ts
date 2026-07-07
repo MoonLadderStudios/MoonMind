@@ -8,13 +8,13 @@ export const WORKFLOW_DETAIL_SUBROUTES = [
 
 export type WorkflowDetailSubroute = (typeof WORKFLOW_DETAIL_SUBROUTES)[number];
 
-const WORKFLOW_DETAIL_SUBROUTE_ALIASES = {
+export const WORKFLOW_DETAIL_SUBROUTE_ALIASES = {
   steps: 'execution',
   runs: 'execution',
   artifacts: 'evidence',
 } as const satisfies Record<string, WorkflowDetailSubroute>;
 
-const WORKFLOW_DETAIL_SUPPORTED_SUBROUTES = [
+export const WORKFLOW_DETAIL_SUPPORTED_SUBROUTES = [
   ...WORKFLOW_DETAIL_SUBROUTES,
   ...Object.keys(WORKFLOW_DETAIL_SUBROUTE_ALIASES),
 ] as const;

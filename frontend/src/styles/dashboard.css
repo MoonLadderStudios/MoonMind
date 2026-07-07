@@ -7773,6 +7773,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   white-space: nowrap;
 }
 
+.td-subroute-more-trigger.active {
+  border-color: rgb(var(--mm-accent));
+  background: rgb(var(--mm-accent) / 0.14);
+  color: rgb(var(--mm-ink));
+}
+
 .td-facts-region {
   display: grid;
   gap: 0.2rem;
