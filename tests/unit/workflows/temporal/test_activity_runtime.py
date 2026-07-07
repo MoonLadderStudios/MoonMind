@@ -5089,6 +5089,235 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
             )
 
 
+async def test_agent_runtime_publish_artifacts_publishes_remediation_attempt_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace = tmp_path / "workspace"
+            attempt_path = workspace / "reports/remediation_attempt-1.json"
+            attempt_path.parent.mkdir(parents=True)
+            attempt_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "v1",
+                        "attempt": 1,
+                        "maxAttempts": 6,
+                        "inputVerificationRef": {"artifact_id": "art_verify_0"},
+                        "knownGaps": [
+                            {
+                                "gapId": "gap-1",
+                                "source": "verification_report",
+                                "status": "addressed",
+                                "reason": "covered by focused test",
+                            }
+                        ],
+                        "changedFiles": ["moonmind/workflows/temporal/activity_runtime.py"],
+                        "targetedChecks": [
+                            {
+                                "command": "pytest tests/unit/workflows/temporal/test_activity_runtime.py",
+                                "result": "pass",
+                            }
+                        ],
+                        "nextVerificationRequired": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run_store = ManagedRunStore(tmp_path / "runs")
+            run_store.save(
+                ManagedRunRecord(
+                    runId="remediate-run-1",
+                    agentId="codex_cli",
+                    runtimeId="codex_cli",
+                    status="completed",
+                    startedAt=datetime.now(timezone.utc),
+                    workspacePath=workspace.as_posix(),
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                run_store=run_store,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities,
+                "execution_notify_completion",
+                _skip_notify,
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:remediate",
+                    workflow_run_id="child-run-remediate",
+                ),
+            )
+
+            result = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Completed.",
+                    metadata={
+                        "agentRunId": "remediate-run-1",
+                        "moonmind": {
+                            "stepLedger": {
+                                "logicalStepId": "remediate-1",
+                                "attempt": 1,
+                                "scope": "step",
+                            },
+                            "remediationCadence": {
+                                "cadence": "attempt_scoped_remediation_verification",
+                                "role": "moonspec-remediation",
+                                "attempt": 1,
+                                "maxAttempts": 6,
+                                "attemptArtifactPath": "reports/remediation_attempt-1.json",
+                                "latestVerificationPath": "artifacts/jira-implement-verify.json",
+                            },
+                        },
+                    },
+                )
+            )
+
+            assert isinstance(result, AgentRunResult)
+            attempt_ref = result.metadata["remediationAttemptArtifactRef"]
+            artifact, artifact_path = await service.read_path(
+                artifact_id=attempt_ref,
+                principal="system:agent_runtime",
+            )
+            persisted_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            assert artifact.metadata_json["artifact_type"] == "remediation.attempt"
+            assert artifact.metadata_json["name"] == "reports/remediation_attempt-1.json"
+            assert persisted_payload["knownGaps"][0]["gapId"] == "gap-1"
+            assert persisted_payload["targetedChecks"][0]["result"] == "pass"
+            assert persisted_payload["nextVerificationRequired"] is True
+
+
+async def test_agent_runtime_publish_artifacts_links_remediation_verification_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace = tmp_path / "workspace"
+            verify_path = workspace / "var/artifacts/moonspec-verify/final.json"
+            verify_path.parent.mkdir(parents=True)
+            verify_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "moonspec-verify.issue_brief.v1",
+                        "verdict": "ADDITIONAL_WORK_NEEDED",
+                        "recommendedNextAction": "reattempt_current_step",
+                        "recoverableInCurrentRuntime": True,
+                        "remainingWork": [
+                            {
+                                "requirement": "artifact linkage",
+                                "gapType": "implementation",
+                                "remainingWork": "link verification to attempt",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run_store = ManagedRunStore(tmp_path / "runs")
+            run_store.save(
+                ManagedRunRecord(
+                    runId="verify-run-2",
+                    agentId="codex_cli",
+                    runtimeId="codex_cli",
+                    status="completed",
+                    startedAt=datetime.now(timezone.utc),
+                    workspacePath=workspace.as_posix(),
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                run_store=run_store,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities,
+                "execution_notify_completion",
+                _skip_notify,
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:verify",
+                    workflow_run_id="child-run-verify",
+                ),
+            )
+
+            result = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Completed.",
+                    metadata={
+                        "agentRunId": "verify-run-2",
+                        "verify_artifact_path": (
+                            "var/artifacts/moonspec-verify/final.json"
+                        ),
+                        "moonmind": {
+                            "stepLedger": {
+                                "logicalStepId": "verify-1",
+                                "attempt": 1,
+                                "scope": "step",
+                            },
+                            "remediationCadence": {
+                                "cadence": "attempt_scoped_remediation_verification",
+                                "role": "moonspec-verification-gate",
+                                "attempt": 1,
+                                "maxAttempts": 6,
+                                "attemptArtifactPath": "reports/remediation_attempt-1.json",
+                                "verificationArtifactPath": "reports/remediation_verification-1.json",
+                            },
+                        },
+                    },
+                )
+            )
+
+            assert isinstance(result, AgentRunResult)
+            verification_ref = result.metadata["remediationVerificationArtifactRef"]
+            assert result.metadata["gateResultRef"] == verification_ref
+            assert result.metadata["moonSpecVerifyArtifactRef"] == verification_ref
+            assert result.metadata["sourceMoonSpecVerifyArtifactRef"] != verification_ref
+            artifact, artifact_path = await service.read_path(
+                artifact_id=verification_ref,
+                principal="system:agent_runtime",
+            )
+            persisted_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            assert artifact.metadata_json["artifact_type"] == "remediation.verification"
+            assert artifact.metadata_json["verifiesAttempt"] == 1
+            assert persisted_payload["verifiesAttempt"] == 1
+            assert persisted_payload["inputRemediationAttemptRef"] == {
+                "artifact_type": "remediation.attempt",
+                "name": "reports/remediation_attempt-1.json",
+            }
+            assert persisted_payload["verifierEvidenceRefs"][
+                "moonSpecVerifyArtifactRef"
+            ] == result.metadata["sourceMoonSpecVerifyArtifactRef"]
+            assert persisted_payload["remainingGaps"][0]["requirement"] == (
+                "artifact linkage"
+            )
+
+
 async def test_agent_runtime_publish_artifacts_canonicalizes_moonspec_next_action(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

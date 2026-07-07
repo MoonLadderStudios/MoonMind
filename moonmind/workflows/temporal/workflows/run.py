@@ -13631,6 +13631,53 @@ class MoonMindRunWorkflow:
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
 
+        node_for_remediation_metadata = {"id": node_id, "inputs": node_inputs}
+        remediation_role = self._moonspec_step_role(node_for_remediation_metadata)
+        if remediation_role in {
+            "moonspec-remediation",
+            "moonspec-verification-gate",
+        }:
+            attempt, max_attempts = self._moonspec_remediation_attempt_metadata(
+                node_for_remediation_metadata
+            )
+            metadata_payload = (
+                parameters.get("metadata")
+                if isinstance(parameters.get("metadata"), dict)
+                else {}
+            )
+            moonmind_payload = (
+                metadata_payload.get("moonmind")
+                if isinstance(metadata_payload.get("moonmind"), dict)
+                else {}
+            )
+            cadence_payload: dict[str, Any] = {
+                "cadence": "attempt_scoped_remediation_verification",
+                "role": remediation_role,
+            }
+            if attempt is not None:
+                cadence_payload["attempt"] = attempt
+                cadence_payload["attemptArtifactPath"] = (
+                    f"reports/remediation_attempt-{attempt}.json"
+                )
+                cadence_payload["verificationArtifactPath"] = (
+                    f"reports/remediation_verification-{attempt}.json"
+                )
+            if max_attempts is not None:
+                cadence_payload["maxAttempts"] = max_attempts
+            verify_artifact_path = (
+                parameters.get("verify_artifact_path")
+                or parameters.get("verifyArtifactPath")
+                or node_inputs.get("verify_artifact_path")
+                or node_inputs.get("verifyArtifactPath")
+            )
+            if isinstance(verify_artifact_path, str) and verify_artifact_path.strip():
+                cadence_payload["latestVerificationPath"] = (
+                    verify_artifact_path.strip()
+                )
+            moonmind_payload["remediationCadence"] = cadence_payload
+            metadata_payload["moonmind"] = moonmind_payload
+            parameters["metadata"] = metadata_payload
+
         input_refs = node_inputs.get("inputRefs") or []
         task_payload_for_context: Mapping[str, Any] | None = None
         prepared_context = None

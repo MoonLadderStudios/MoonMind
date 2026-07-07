@@ -6143,6 +6143,7 @@ function remediationArtifactLabel(type: string): string {
   const labels: Record<string, string> = {
     'remediation.context': 'Context',
     'remediation.plan': 'Plan',
+    'remediation.attempt': 'Attempt',
     'remediation.decision_log': 'Decision Log',
     'remediation.action_request': 'Action Request',
     'remediation.action_result': 'Action Result',

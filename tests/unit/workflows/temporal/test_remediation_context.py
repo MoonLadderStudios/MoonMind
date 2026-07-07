@@ -1522,6 +1522,32 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
                 {"steps": ["diagnose", "act"]},
             ),
             (
+                "remediation.attempt",
+                "reports/remediation_attempt-1.json",
+                {
+                    "schemaVersion": "v1",
+                    "attempt": 1,
+                    "maxAttempts": 6,
+                    "inputVerificationRef": {"artifact_id": "art_verify_0"},
+                    "knownGaps": [
+                        {
+                            "gapId": "gap-1",
+                            "source": "verification_report",
+                            "status": "addressed",
+                            "reason": "fixed in this attempt",
+                        }
+                    ],
+                    "changedFiles": ["moonmind/workflows/temporal/remediation_context.py"],
+                    "targetedChecks": [
+                        {
+                            "command": "pytest tests/unit/workflows/temporal/test_remediation_context.py",
+                            "result": "pass",
+                        }
+                    ],
+                    "nextVerificationRequired": True,
+                },
+            ),
+            (
                 "remediation.decision_log",
                 "logs/remediation_decision_log.ndjson",
                 {"decision": "acting"},
@@ -1566,6 +1592,7 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
                     TemporalArtifactLink.link_type.in_(
                         [
                             "remediation.plan",
+                            "remediation.attempt",
                             "remediation.decision_log",
                             "remediation.action_request",
                             "remediation.action_result",
@@ -1578,6 +1605,7 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
         ).scalars().all()
         assert [artifact.metadata_json["artifact_type"] for artifact in artifacts] == [
             "remediation.plan",
+            "remediation.attempt",
             "remediation.decision_log",
             "remediation.action_request",
             "remediation.action_result",
@@ -1586,6 +1614,7 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
         ]
         assert {link.link_type for link in links} == {
             "remediation.plan",
+            "remediation.attempt",
             "remediation.decision_log",
             "remediation.action_request",
             "remediation.action_result",

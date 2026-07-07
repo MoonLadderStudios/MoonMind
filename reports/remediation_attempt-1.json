@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "v1",
+  "artifactType": "remediation.attempt",
+  "attempt": 1,
+  "maxAttempts": 6,
+  "inputVerificationRef": {
+    "artifact_path": "artifacts/jira-implement-verify.json"
+  },
+  "knownGaps": [
+    {
+      "gapId": "remediation-attempt-artifact",
+      "source": "verification_report",
+      "status": "addressed",
+      "reason": "Added remediation.attempt as a supported artifact type and added runtime publication of reports/remediation_attempt-<n>.json with knownGaps, changedFiles, targetedChecks, and nextVerificationRequired."
+    },
+    {
+      "gapId": "remediation-verification-linkage",
+      "source": "verification_report",
+      "status": "addressed",
+      "reason": "Added post-remediation moonspec-verify publication of reports/remediation_verification-<n>.json with verifiesAttempt, input remediation attempt reference, whole-target verdict, remaining gaps, and verifier evidence refs."
+    },
+    {
+      "gapId": "attempt-metadata-persistence",
+      "source": "verification_report",
+      "status": "addressed",
+      "reason": "Workflow agent request metadata now carries remediationCadence with role, attempt, maxAttempts, attempt artifact path, verification artifact path, and latest verification path for annotated remediation steps."
+    },
+    {
+      "gapId": "artifact-backed-tests",
+      "source": "verification_report",
+      "status": "addressed",
+      "reason": "Added focused unit coverage for remediation.attempt publication, remediation.verification verifiesAttempt linkage, lifecycle allowlist support, and workflow request metadata handoff."
+    },
+    {
+      "gapId": "focused-selector-environment",
+      "source": "verification_report",
+      "status": "still_failing",
+      "reason": "Verifier-named preset and startup seeding selectors still fail because api_service/data/presets/moonspec-orchestrate.yaml is absent in this checkout, matching the pre-remediation verifier environment note."
+    }
+  ],
+  "changedFiles": [
+    "frontend/src/entrypoints/workflow-detail.tsx",
+    "moonmind/workflows/temporal/activity_runtime.py",
+    "moonmind/workflows/temporal/remediation_context.py",
+    "moonmind/workflows/temporal/workflows/run.py",
+    "tests/unit/workflows/temporal/test_activity_runtime.py",
+    "tests/unit/workflows/temporal/test_remediation_context.py",
+    "tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py",
+    "reports/remediation_attempt-1.json"
+  ],
+  "targetedChecks": [
+    {
+      "command": "python -m py_compile moonmind/workflows/temporal/activity_runtime.py moonmind/workflows/temporal/workflows/run.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py",
+      "result": "pass"
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_activity_runtime.py::test_agent_runtime_publish_artifacts_publishes_remediation_attempt_json tests/unit/workflows/temporal/test_activity_runtime.py::test_agent_runtime_publish_artifacts_links_remediation_verification_attempt tests/unit/workflows/temporal/test_remediation_context.py::test_remediation_lifecycle_publisher_creates_required_artifacts tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py::TestBuildAgentExecutionRequest::test_build_agent_execution_request_carries_remediation_cadence_metadata",
+      "result": "pass",
+      "notes": "4 Python tests passed; the wrapper also ran 57 UI test files with 889 passed and 238 skipped."
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_presets_service.py tests/unit/api/test_github_issue_orchestrate_preset.py tests/unit/workflows/temporal/workflows/test_run_integration.py tests/unit/workflows/temporal/test_remediation_context.py",
+      "result": "fail",
+      "notes": "241 passed and 24 failed; failures are FileNotFoundError for missing api_service/data/presets/moonspec-orchestrate.yaml."
+    },
+    {
+      "command": "npm run ui:test -- frontend/src/entrypoints/workflow-detail.test.tsx",
+      "result": "pass",
+      "notes": "1 test file passed with 182 tests."
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/integration/test_startup_preset_seeding.py",
+      "result": "fail",
+      "notes": "2 tests failed because preset seed sync could not load missing api_service/data/presets/moonspec-orchestrate.yaml; startup logs also reported blocked live Temporal connections and invalid local provider credentials."
+    },
+    {
+      "command": "python -m black --check moonmind/workflows/temporal/activity_runtime.py moonmind/workflows/temporal/workflows/run.py moonmind/workflows/temporal/remediation_context.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_remediation_context.py",
+      "result": "not_run",
+      "notes": "black is not installed in this runtime."
+    },
+    {
+      "command": "python -m ruff format --check moonmind/workflows/temporal/activity_runtime.py moonmind/workflows/temporal/workflows/run.py moonmind/workflows/temporal/remediation_context.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_remediation_context.py",
+      "result": "not_run",
+      "notes": "ruff is not installed in this runtime."
+    }
+  ],
+  "nextVerificationRequired": true
+}

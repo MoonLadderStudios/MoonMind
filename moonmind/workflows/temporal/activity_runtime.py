@@ -6923,6 +6923,8 @@ class TemporalAgentRuntimeActivities:
         if logical_step_id:
             step_artifact_metadata["step_id"] = logical_step_id
         attempt = step_ledger_metadata.get("attempt")
+        if attempt is None:
+            attempt = step_ledger_metadata.get("executionOrdinal")
         if isinstance(attempt, (int, float)) and not isinstance(attempt, bool):
             step_artifact_metadata["attempt"] = int(attempt)
         scope = str(step_ledger_metadata.get("scope") or "").strip()
@@ -7339,6 +7341,204 @@ class TemporalAgentRuntimeActivities:
             canonical_payload.pop("recommended_next_action", None)
             return canonical_payload
 
+        def _remediation_cadence() -> Mapping[str, Any]:
+            value = moonmind_metadata.get("remediationCadence")
+            return value if isinstance(value, Mapping) else {}
+
+        def _positive_int(value: Any) -> int | None:
+            if isinstance(value, bool):
+                return None
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                return None
+            return parsed if parsed >= 1 else None
+
+        def _cadence_role() -> str:
+            return str(_remediation_cadence().get("role") or "").strip().lower()
+
+        def _cadence_attempt() -> int | None:
+            return _positive_int(_remediation_cadence().get("attempt"))
+
+        def _cadence_max_attempts() -> int | None:
+            return _positive_int(_remediation_cadence().get("maxAttempts"))
+
+        def _workspace_json_path(raw_path: str) -> Path | None:
+            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
+            if not agent_run_id or self._run_store is None:
+                return None
+            record = self._run_store.load(agent_run_id)
+            if record is None:
+                logger.warning(
+                    "Skipping remediation artifact publication: run record not "
+                    "found for %s",
+                    agent_run_id,
+                )
+                return None
+            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
+            if not workspace_path:
+                return None
+            workspace = Path(workspace_path).expanduser().resolve()
+            candidate = Path(raw_path)
+            candidates: list[Path]
+            if candidate.is_absolute():
+                candidates = [candidate]
+            else:
+                candidates = [workspace / candidate]
+                if candidate.parts and candidate.parts[0] == "artifacts":
+                    candidates.append(workspace.parent / candidate)
+            job_artifact_root = (workspace.parent / "artifacts").resolve()
+            for path in candidates:
+                resolved = path.expanduser().resolve()
+                if not (
+                    resolved.is_relative_to(workspace)
+                    or resolved.is_relative_to(job_artifact_root)
+                ):
+                    continue
+                if resolved.exists():
+                    return resolved
+            return None
+
+        def _read_workspace_json(raw_path: str) -> dict[str, Any] | None:
+            path = _workspace_json_path(raw_path)
+            if path is None:
+                return None
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                logger.warning(
+                    "Remediation artifact could not be read as JSON: %s",
+                    raw_path,
+                    exc_info=True,
+                )
+                return None
+            return dict(payload) if isinstance(payload, Mapping) else None
+
+        async def _publish_moonspec_remediation_attempt_artifact() -> dict[str, Any]:
+            if _cadence_role() != "moonspec-remediation":
+                return {}
+            attempt = _cadence_attempt()
+            if attempt is None:
+                return {}
+            cadence = _remediation_cadence()
+            max_attempts = _cadence_max_attempts()
+            name = str(
+                cadence.get("attemptArtifactPath")
+                or f"reports/remediation_attempt-{attempt}.json"
+            ).strip()
+            payload = _read_workspace_json(name) or {}
+            payload.setdefault("schemaVersion", "v1")
+            payload.setdefault("artifactType", "remediation.attempt")
+            payload["attempt"] = attempt
+            if max_attempts is not None:
+                payload["maxAttempts"] = max_attempts
+            input_ref = payload.get("inputVerificationRef")
+            if not isinstance(input_ref, Mapping):
+                latest_path = str(cadence.get("latestVerificationPath") or "").strip()
+                payload["inputVerificationRef"] = (
+                    {"artifact_path": latest_path} if latest_path else {}
+                )
+            for key in ("knownGaps", "changedFiles", "targetedChecks"):
+                if not isinstance(payload.get(key), list):
+                    payload[key] = []
+            payload.setdefault("nextVerificationRequired", True)
+            ref = await _write_json_artifact(
+                self._artifact_service,
+                principal="system:agent_runtime",
+                payload=payload,
+                execution_ref=_execution_ref("remediation.attempt"),
+                metadata_json={
+                    "name": name,
+                    "artifact_type": "remediation.attempt",
+                    "schemaVersion": "v1",
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": [
+                        "agent_runtime",
+                        "remediation.attempt",
+                        "moonspec_remediation",
+                    ],
+                    "moonSpecRemediationAttempt": attempt,
+                    **(
+                        {"moonSpecRemediationMaxAttempts": max_attempts}
+                        if max_attempts is not None
+                        else {}
+                    ),
+                    **step_artifact_metadata,
+                },
+            )
+            return {
+                "remediationAttemptArtifactRef": ref.artifact_id,
+                "remediationAttempt": {
+                    "artifactRef": ref.artifact_id,
+                    "attempt": attempt,
+                    "maxAttempts": max_attempts,
+                    "name": name,
+                },
+            }
+
+        async def _publish_moonspec_remediation_verification_artifact(
+            gate_payload: Mapping[str, Any],
+            *,
+            source_verify_ref: str,
+        ) -> ArtifactRef | None:
+            if _cadence_role() != "moonspec-verification-gate":
+                return None
+            attempt = _cadence_attempt()
+            if attempt is None:
+                return None
+            cadence = _remediation_cadence()
+            max_attempts = _cadence_max_attempts()
+            name = str(
+                cadence.get("verificationArtifactPath")
+                or f"reports/remediation_verification-{attempt}.json"
+            ).strip()
+            attempt_name = str(
+                cadence.get("attemptArtifactPath")
+                or f"reports/remediation_attempt-{attempt}.json"
+            ).strip()
+            remaining_gaps = gate_payload.get("remainingGaps")
+            if not isinstance(remaining_gaps, list):
+                remaining_gaps = gate_payload.get("remainingWork")
+            payload = {
+                "schemaVersion": "v1",
+                "artifactType": "remediation.verification",
+                "verifiesAttempt": attempt,
+                "inputRemediationAttemptRef": {
+                    "artifact_type": "remediation.attempt",
+                    "name": attempt_name,
+                },
+                "verdict": gate_payload.get("verdict"),
+                "remainingGaps": remaining_gaps if isinstance(remaining_gaps, list) else [],
+                "verifierEvidenceRefs": {
+                    "moonSpecVerifyArtifactRef": source_verify_ref,
+                    "gateResultRef": source_verify_ref,
+                },
+                "moonSpecVerify": dict(gate_payload),
+            }
+            if max_attempts is not None:
+                payload["maxAttempts"] = max_attempts
+            ref = await _write_json_artifact(
+                self._artifact_service,
+                principal="system:agent_runtime",
+                payload=payload,
+                execution_ref=_execution_ref("remediation.verification"),
+                metadata_json={
+                    "name": name,
+                    "artifact_type": "remediation.verification",
+                    "schemaVersion": "v1",
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": [
+                        "agent_runtime",
+                        "remediation.verification",
+                        "moonspec_verification",
+                    ],
+                    "verifiesAttempt": attempt,
+                    "inputRemediationAttemptName": attempt_name,
+                    **step_artifact_metadata,
+                },
+            )
+            return ref
+
         async def _publish_moonspec_verify_artifact() -> dict[str, Any]:
             verify_path = _metadata_text(
                 "verify_artifact_path",
@@ -7413,16 +7613,36 @@ class TemporalAgentRuntimeActivities:
                 },
             )
             gate_payload["gateResultRef"] = verify_ref.artifact_id
+            authoritative_ref = verify_ref.artifact_id
+            remediation_verify_ref = (
+                await _publish_moonspec_remediation_verification_artifact(
+                    gate_payload,
+                    source_verify_ref=verify_ref.artifact_id,
+                )
+            )
+            remediation_verify_artifact_ref = None
+            if remediation_verify_ref is not None:
+                remediation_verify_artifact_ref = remediation_verify_ref.artifact_id
+                gate_payload["remediationVerificationRef"] = (
+                    remediation_verify_artifact_ref
+                )
+                authoritative_ref = remediation_verify_artifact_ref
             compact_gate_payload = _compact_moonspec_verify_metadata(
                 gate_payload,
-                gate_result_ref=verify_ref.artifact_id,
+                gate_result_ref=authoritative_ref,
                 contract_violations=contract_violations,
             )
-            return {
+            result_refs = {
                 "moonSpecVerify": compact_gate_payload,
-                "gateResultRef": verify_ref.artifact_id,
-                "moonSpecVerifyArtifactRef": verify_ref.artifact_id,
+                "gateResultRef": authoritative_ref,
+                "moonSpecVerifyArtifactRef": authoritative_ref,
+                "sourceMoonSpecVerifyArtifactRef": verify_ref.artifact_id,
             }
+            if remediation_verify_artifact_ref:
+                result_refs["remediationVerificationArtifactRef"] = (
+                    remediation_verify_artifact_ref
+                )
+            return result_refs
 
         result_summary = result_dict.get("summary") or result_dict.get("raw", "")
         operator_summary = self._sanitize_operator_summary(
@@ -7539,6 +7759,18 @@ class TemporalAgentRuntimeActivities:
                     enriched_metadata_for_result["storyOutput"] = dict(
                         story_output_ref_payload
                     )
+                result_dict["metadata"] = enriched_metadata_for_result
+            remediation_attempt_refs = (
+                await _publish_moonspec_remediation_attempt_artifact()
+            )
+            if remediation_attempt_refs:
+                published_refs.update(remediation_attempt_refs)
+                enriched_metadata_for_result = (
+                    dict(result_dict.get("metadata") or {})
+                    if isinstance(result_dict.get("metadata"), Mapping)
+                    else {}
+                )
+                enriched_metadata_for_result.update(remediation_attempt_refs)
                 result_dict["metadata"] = enriched_metadata_for_result
             moonspec_verify_refs = await _publish_moonspec_verify_artifact()
             if moonspec_verify_refs:
