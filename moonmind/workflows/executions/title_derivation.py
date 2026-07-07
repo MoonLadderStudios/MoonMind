@@ -30,11 +30,15 @@ _ACRONYMS = {
 
 _REPOSITORY_KEYS = {
     "repository",
+    "repositoryref",
+    "repositoryurl",
     "repository_url",
     "reporef",
     "repo",
     "repo_ref",
+    "repourl",
     "repo_url",
+    "giturl",
 }
 _ISSUE_KEYS = {
     "issue",
@@ -117,8 +121,13 @@ def synthesize_workflow_title(
 
     label = _capability_label(task_payload, normalized_tool, normalized_steps)
     targets = _collect_structured_targets(task_payload)
+    fallback_targets = _collect_text_fallback_targets(current_title, task_payload)
     if not targets:
-        targets = _collect_text_fallback_targets(current_title, task_payload)
+        targets = fallback_targets
+    elif fallback_targets and not any(
+        target.kind in {"issue", "pull_request"} for target in targets
+    ):
+        targets = _rank_targets([*targets, *fallback_targets])
     if not targets:
         return None
 
@@ -131,16 +140,32 @@ def _capability_label(
     normalized_tool: Mapping[str, Any] | None,
     normalized_steps: Sequence[Mapping[str, Any]],
 ) -> str:
-    tool_payload = normalized_tool or _mapping(task_payload.get("tool")) or _mapping(
-        task_payload.get("skill")
-    )
+    raw_tool_payloads = [
+        payload
+        for payload in (
+            _mapping(task_payload.get("tool")),
+            _mapping(task_payload.get("skill")),
+        )
+        if payload is not None
+    ]
     workflow_payload = _mapping(task_payload.get("workflow"))
-    if tool_payload is None and workflow_payload is not None:
-        tool_payload = _mapping(workflow_payload.get("tool")) or _mapping(
-            workflow_payload.get("skill")
+    if workflow_payload is not None:
+        raw_tool_payloads.extend(
+            payload
+            for payload in (
+                _mapping(workflow_payload.get("tool")),
+                _mapping(workflow_payload.get("skill")),
+            )
+            if payload is not None
         )
 
-    if tool_payload is not None:
+    tool_payloads = [
+        payload
+        for payload in (normalized_tool, *raw_tool_payloads)
+        if payload is not None
+    ]
+
+    for tool_payload in tool_payloads:
         for key in ("label", "displayName", "display_name"):
             value = _clean_text(tool_payload.get(key))
             if value:
@@ -148,6 +173,8 @@ def _capability_label(
         value = _clean_text(tool_payload.get("title"))
         if value and not is_generic_title(value):
             return value
+
+    for tool_payload in tool_payloads:
         for key in ("name", "id", "slug"):
             value = _clean_text(tool_payload.get(key))
             if value:

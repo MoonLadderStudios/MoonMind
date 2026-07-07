@@ -66,6 +66,27 @@ def test_derives_capability_labels(tool: dict[str, object], expected: str) -> No
     )
 
 
+def test_raw_tool_label_takes_priority_over_normalized_skill_name() -> None:
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={
+                "workflow": {
+                    "tool": {
+                        "type": "skill",
+                        "name": "jira-pr-verify",
+                        "label": "Custom Label",
+                        "inputs": {"issueKey": "KANDY-123"},
+                    }
+                }
+            },
+            normalized_tool={"type": "skill", "name": "jira-pr-verify"},
+            normalized_steps=[],
+        )
+        == "Custom Label: KANDY-123"
+    )
+
+
 def test_uses_workflow_tool_skill_git_steps_and_top_level_targets() -> None:
     payload = {
         "workflow": {
@@ -242,6 +263,23 @@ def test_extracts_branch_ref_check_and_job_targets(
     )
 
 
+def test_instruction_issue_overrides_checkout_branch_target() -> None:
+    assert (
+        synthesize_workflow_title(
+            current_title="Run",
+            task_payload={
+                "workflow": {
+                    "git": {"branch": "main"},
+                    "instructions": "Fix MM-123 before launch.",
+                }
+            },
+            normalized_tool={"name": "future-skill"},
+            normalized_steps=[],
+        )
+        == "Future Skill: MM-123 — main"
+    )
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
@@ -359,8 +397,11 @@ def test_excludes_repository_fields_and_caps_synthesized_title() -> None:
         current_title="Run",
         task_payload={
             "repository": "MoonLadderStudios/MoonMind",
+            "repositoryUrl": "https://github.com/MM-123/service",
             "repo": "other/repo",
+            "repo-url": "https://github.com/MM-456/another",
             "repoRef": "repo-ref",
+            "gitUrl": "https://github.com/MM-789/git",
             "inputs": {"branch": "feature/" + "x" * 180},
         },
         normalized_tool={"name": "fix-merge-conflicts"},
@@ -372,6 +413,9 @@ def test_excludes_repository_fields_and_caps_synthesized_title() -> None:
     assert "MoonMind" not in title
     assert "other/repo" not in title
     assert "repo-ref" not in title
+    assert "MM-123" not in title
+    assert "MM-456" not in title
+    assert "MM-789" not in title
     assert title.startswith("Fix Merge Conflicts: feature/")
 
 
