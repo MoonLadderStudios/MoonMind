@@ -4654,7 +4654,10 @@ class MoonMindRunWorkflow:
             workflow.info()
         except Exception:
             return True
-        return workflow.patched(RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH)
+        try:
+            return workflow.patched(RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH)
+        except Exception:
+            return True
 
     def _moonspec_remediation_title_role(self, node: Mapping[str, Any]) -> str:
         if not self._moonspec_title_remediation_detection_enabled():
