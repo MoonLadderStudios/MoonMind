@@ -4520,9 +4520,16 @@ def _assessment_verdict_from_text(value: Any) -> str:
         r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)"
     )
     verdict_prefix = r"[\s:`*_\"']*"
-    verdict_suffix = r"(?:\b|_+(?!\w))"
+    verdict_suffix = r"(?:_+(?!\w)|(?![-\w]))"
+    assessment_separator = r"[\s:`*_\"'\[\]\(\)]*"
+    issue_ref_pattern = r"`?[A-Z][A-Z0-9]+-\d+`?"
     patterns = (
-        r"(?is)\bassessment\s+complete\b[^.\n]*?"
+        r"(?is)\bassessment\s+complete\b"
+        rf"{assessment_separator}"
+        rf"(?:(?:for|on)\b{assessment_separator}"
+        rf"{issue_ref_pattern}{assessment_separator})?"
+        rf"(?:{issue_ref_pattern}{assessment_separator})?"
+        rf"(?:(?:is|was|has|verdict|status)\b{assessment_separator})?"
         rf"{verdict_pattern}{verdict_suffix}",
         r"(?is)\brecorded\s+verdict\b[^.\n:]*[:\s`]+"
         rf"{verdict_prefix}{verdict_pattern}{verdict_suffix}",
