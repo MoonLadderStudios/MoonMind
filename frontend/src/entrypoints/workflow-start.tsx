@@ -6249,7 +6249,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   ]);
 
   const dependencyOptionsQuery = useQuery({
-    ...configQueryDefaults,
     queryKey: ["workflow-start", "dependency-options", temporalListEndpoint],
     queryFn: async (): Promise<DependencyPickerExecution[]> => {
       const response = await fetch(

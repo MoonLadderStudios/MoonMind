@@ -2351,13 +2351,12 @@ function isExecutionTerminal(
 }
 
 export function workflowEvidenceStaleTime({
-  isTerminal,
   detailPoll,
 }: {
   isTerminal: boolean;
   detailPoll: number;
 }): number {
-  return isTerminal ? Infinity : Math.max(detailPoll, 5000);
+  return Math.max(detailPoll, 5000);
 }
 
 export function workflowDetailQueryOptions({

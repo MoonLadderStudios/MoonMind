@@ -309,7 +309,7 @@ describe('Workflow Detail Entrypoint', () => {
   it('MM-1133 applies explicit stale windows to workflow evidence queries', () => {
     expect(workflowEvidenceStaleTime({ isTerminal: false, detailPoll: 2000 })).toBe(5000);
     expect(workflowEvidenceStaleTime({ isTerminal: false, detailPoll: 8000 })).toBe(8000);
-    expect(workflowEvidenceStaleTime({ isTerminal: true, detailPoll: 2000 })).toBe(Infinity);
+    expect(workflowEvidenceStaleTime({ isTerminal: true, detailPoll: 2000 })).toBe(5000);
   });
 
   function richOutboundRemediationLink(overrides: Record<string, unknown> = {}) {
@@ -738,7 +738,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
   });
 
-  it('MM-1133 reuses the workflow list cache when navigating from list to workspace detail', async () => {
+  it('MM-1133 keeps the workspace sidebar list cache isolated from the workflow table cache', async () => {
     window.history.pushState({}, 'Workspace Cache Test', '/workflows?limit=25&source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -784,7 +784,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
-    expect(matchingListCalls()).toHaveLength(1);
+    expect(matchingListCalls()).toHaveLength(2);
   });
 
 

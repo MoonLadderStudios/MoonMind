@@ -33,7 +33,6 @@ import {
   workflowWorkspaceRowId,
 } from '../../lib/workflowWorkspaceList';
 import {
-  buildWorkflowListQueryKey,
   buildWorkflowListQueryParams,
   workflowListQueryString,
 } from '../../lib/workflowListQuery';
@@ -497,7 +496,7 @@ export function WorkflowWorkspaceSidebarPanel({
     }
     return buildWorkflowListQueryParams(params);
   }, [defaultSource, searchKey]);
-  const listQueryKey = useMemo(() => buildWorkflowListQueryKey(listQueryParams), [listQueryParams]);
+  const listQueryKey = useMemo(() => ['workflow-workspace-sidebar', listQueryParams] as const, [listQueryParams]);
   const listQuery = useMemo(() => workflowListQueryString(listQueryParams), [listQueryParams]);
   const [sidebarFilterText, setSidebarFilterText] = useState('');
   const workflowsQuery = useQuery({
