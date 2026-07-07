@@ -383,6 +383,21 @@ class RemediationContextBuilder:
             agent_run_id = _string_or_none(item.get("agentRunId") or item.get("agent_run_id"))
             if agent_run_id:
                 selector["agentRunId"] = agent_run_id
+            checkpoint_ref = _string_or_none(
+                item.get("checkpointRef") or item.get("checkpoint_ref")
+            )
+            if checkpoint_ref:
+                selector["checkpointRef"] = checkpoint_ref
+            checkpoint_digest = _string_or_none(
+                item.get("checkpointDigest") or item.get("checkpoint_digest")
+            )
+            if checkpoint_digest:
+                selector["checkpointDigest"] = checkpoint_digest
+            checkpoint_boundary = _string_or_none(
+                item.get("checkpointBoundary") or item.get("checkpoint_boundary")
+            )
+            if checkpoint_boundary:
+                selector["checkpointBoundary"] = checkpoint_boundary
             evidence_step = _match_step_evidence(selector, evidence_steps)
             if evidence_step is not None:
                 if status := _safe_optional_string(evidence_step.get("status")):

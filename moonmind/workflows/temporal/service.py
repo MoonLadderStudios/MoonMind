@@ -37,6 +37,7 @@ from api_service.db.models import (
     TemporalExecutionRemediationLink,
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
+    WorkflowCheckpointBranchOperation,
 )
 from moonmind.config.settings import settings
 from moonmind.security import scan_outbound_text
@@ -804,7 +805,9 @@ class TemporalExecutionService:
             )
             .order_by(TemporalExecutionRemediationLink.created_at.asc())
         )
-        return await self._scalars_all(stmt)
+        links = await self._scalars_all(stmt)
+        await self._attach_remediation_checkpoint_branch_links(links)
+        return links
 
     async def list_remediations_for_target(
         self, target_workflow_id: str
@@ -819,7 +822,70 @@ class TemporalExecutionService:
                 TemporalExecutionRemediationLink.remediation_workflow_id.asc(),
             )
         )
-        return await self._scalars_all(stmt)
+        links = await self._scalars_all(stmt)
+        await self._attach_remediation_checkpoint_branch_links(links)
+        return links
+
+    async def _attach_remediation_checkpoint_branch_links(
+        self, links: list[TemporalExecutionRemediationLink]
+    ) -> None:
+        if not links:
+            return
+        remediation_ids = {
+            str(link.remediation_workflow_id or "").strip()
+            for link in links
+            if str(link.remediation_workflow_id or "").strip()
+        }
+        target_ids = {
+            str(link.target_workflow_id or "").strip()
+            for link in links
+            if str(link.target_workflow_id or "").strip()
+        }
+        if not remediation_ids or not target_ids:
+            return
+        result = await self._session.execute(
+            select(WorkflowCheckpointBranchOperation).where(
+                WorkflowCheckpointBranchOperation.workflow_id.in_(target_ids),
+                WorkflowCheckpointBranchOperation.operation == "checkpoint_branch.create",
+            )
+        )
+        branch_links_by_remediation: dict[str, list[dict[str, Any]]] = {
+            remediation_id: [] for remediation_id in remediation_ids
+        }
+        for operation in result.scalars():
+            payload = operation.response_payload
+            if not isinstance(payload, Mapping):
+                continue
+            remediation = payload.get("remediation")
+            if not isinstance(remediation, Mapping):
+                continue
+            remediation_workflow_id = str(
+                remediation.get("workflowId") or remediation.get("remediationWorkflowId") or ""
+            ).strip()
+            if remediation_workflow_id not in branch_links_by_remediation:
+                continue
+            branch_link = {
+                "workflowId": operation.workflow_id,
+                "branchId": operation.branch_id,
+                "branchTurnId": operation.branch_turn_id,
+                "operation": operation.operation,
+                "idempotencyKey": operation.idempotency_key,
+                "createdAt": operation.created_at.isoformat()
+                if operation.created_at
+                else None,
+                "checkpointRef": payload.get("checkpointRef")
+                or remediation.get("checkpointRef"),
+                "contextArtifactRef": remediation.get("contextArtifactRef"),
+            }
+            branch_links_by_remediation[remediation_workflow_id].append(
+                {key: value for key, value in branch_link.items() if value is not None}
+            )
+        for link in links:
+            setattr(
+                link,
+                "checkpoint_branch_links",
+                branch_links_by_remediation.get(link.remediation_workflow_id, []),
+            )
 
     async def record_remediation_approval_decision(
         self,

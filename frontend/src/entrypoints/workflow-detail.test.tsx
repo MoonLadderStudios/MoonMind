@@ -6016,6 +6016,15 @@ describe('Workflow Detail Entrypoint', () => {
                 latestActionSummary: 'Proposed session interrupt',
                 resolution: null,
                 contextArtifactRef: 'art_context',
+                checkpointBranches: [
+                  {
+                    workflowId: 'test-123',
+                    branchId: 'cbr-remediation-inbound',
+                    branchTurnId: 'cbt-remediation-inbound',
+                    checkpointRef: 'artifact://checkpoints/inbound',
+                    contextArtifactRef: 'art_context',
+                  },
+                ],
                 approvalState: { requestId: 'approval-1', decision: 'pending', canDecide: true },
                 createdAt: '2026-04-22T00:00:02Z',
                 updatedAt: '2026-04-22T00:00:03Z',
@@ -6039,6 +6048,14 @@ describe('Workflow Detail Entrypoint', () => {
                 authorityMode: 'observe_only',
                 status: 'created',
                 contextArtifactRef: null,
+                checkpointBranches: [
+                  {
+                    workflowId: 'mm:target-1',
+                    branchId: 'cbr-remediation-outbound',
+                    branchTurnId: 'cbt-remediation-outbound',
+                    checkpointRef: 'artifact://checkpoints/outbound',
+                  },
+                ],
                 approvalState: null,
               },
             ],
@@ -6096,7 +6113,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByRole('heading', { name: 'Remediation Workflows' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Remediation Target' })).toBeTruthy();
     expect(screen.getByText('mm:remediation-1')).toBeTruthy();
-    expect(screen.getByText('mm:target-1')).toBeTruthy();
+    expect(screen.getAllByText('mm:target-1').length).toBeGreaterThan(0);
+    expect(screen.getByText('cbr-remediation-inbound')).toBeTruthy();
+    expect(screen.getByText('cbr-remediation-outbound')).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
     expect(screen.getByText('Context')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Evidence' }).getAttribute('href')).toBe(

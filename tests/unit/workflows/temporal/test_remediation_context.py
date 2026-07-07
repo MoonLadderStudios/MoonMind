@@ -351,6 +351,9 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
                                     "logicalStepId": "run-tests",
                                     "attempt": "1",
                                     "agentRunId": "tr_selected",
+                                    "checkpointRef": "artifact://checkpoints/run-tests",
+                                    "checkpointDigest": "sha256:runtests",
+                                    "checkpointBoundary": "after_execution",
                                     "ignored": "not copied",
                                 }
                             ],
@@ -442,6 +445,9 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
                 "logicalStepId": "run-tests",
                 "attempt": 1,
                 "agentRunId": "tr_selected",
+                "checkpointRef": "artifact://checkpoints/run-tests",
+                "checkpointDigest": "sha256:runtests",
+                "checkpointBoundary": "after_execution",
             }
         ]
         assert len(payload["evidence"]["agentRuns"]) == 20
