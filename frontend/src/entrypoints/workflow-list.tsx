@@ -1536,13 +1536,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const resultsFooter = (
     <div className="queue-results-toolbar workflow-list-results-footer">
       <div className="workflow-list-footer-live">
-        <span className="small">
-          {!listEnabled
-            ? 'Live updates unavailable while the list is disabled.'
-            : liveUpdatesPref
-              ? `Live updates enabled. Polling every ${Math.round(listPollMs / 1000)}s`
-              : 'Live updates paused.'}
-        </span>
+        {!listEnabled ? (
+          <span className="small">Live updates unavailable while the list is disabled.</span>
+        ) : !liveUpdatesPref ? (
+          <span className="small">Live updates paused.</span>
+        ) : null}
         {sortedItems.length > 0 ? (
           <span className="small workflow-list-sort-scope-note">{CURRENT_PAGE_SORT_NOTICE}</span>
         ) : null}
