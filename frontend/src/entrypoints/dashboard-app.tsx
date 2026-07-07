@@ -59,6 +59,7 @@ import {
   workflowListApiQueryFromContext,
 } from '../lib/workflowListContext';
 import { requestWorkflowStartRouteChange } from '../lib/workflowStartRouteGuard';
+import { decodeWorkflowIdFromPath } from '../lib/workflowDetailRoutes';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
 type PageImport = () => Promise<{ default: PageComponent }>;
@@ -199,19 +200,6 @@ function iconForWorkflowListMode(icon: string) {
   return Rows3;
 }
 
-function workflowIdFromPath(pathname: string): string | null {
-  const match = pathname.match(/^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?\/?$/);
-  if (!match?.[1] || match[1] === 'new') {
-    return null;
-  }
-  try {
-    const decoded = decodeURIComponent(match[1]);
-    return decoded.includes('/') ? null : decoded;
-  } catch {
-    return null;
-  }
-}
-
 function workflowRowId(row: unknown): string {
   if (!row || typeof row !== 'object') {
     return '';
@@ -224,7 +212,7 @@ function firstVisibleWorkflowIdFromDocument(): string | null {
   const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href^="/workflows/"]'));
   for (const link of links) {
     const url = new URL(link.href, window.location.origin);
-    const id = workflowIdFromPath(url.pathname);
+    const id = decodeWorkflowIdFromPath(url.pathname);
     if (id) {
       return id;
     }
@@ -370,10 +358,93 @@ function DashboardLiveUpdateProvider({
     let eventSource: EventSource | null = null;
     let intervalId: number | null = null;
 
-    const invalidateWorkflowSnapshots = () => {
+    const workflowIdFromUpdate = (event: MessageEvent | null): string | null => {
+      if (!event?.data || typeof event.data !== 'string') {
+        return null;
+      }
+      try {
+        const payload = JSON.parse(event.data) as Record<string, unknown>;
+        const row = payload.row && typeof payload.row === 'object'
+          ? (payload.row as Record<string, unknown>)
+          : null;
+        return String(
+          payload.workflowId ||
+            payload.workflow_id ||
+            payload.taskId ||
+            payload.task_id ||
+            row?.workflowId ||
+            row?.workflow_id ||
+            row?.taskId ||
+            row?.task_id ||
+            '',
+        ).trim() || null;
+      } catch {
+        return null;
+      }
+    };
+
+    const rowFromUpdate = (event: MessageEvent | null): Record<string, unknown> | null => {
+      if (!event?.data || typeof event.data !== 'string') {
+        return null;
+      }
+      try {
+        const payload = JSON.parse(event.data) as Record<string, unknown>;
+        const row = payload.row && typeof payload.row === 'object'
+          ? (payload.row as Record<string, unknown>)
+          : payload;
+        const workflowId = String(row.workflowId || row.workflow_id || row.taskId || row.task_id || '').trim();
+        return workflowId ? row : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const patchWorkflowListRows = (row: Record<string, unknown>) => {
+      const workflowId = String(row.workflowId || row.workflow_id || row.taskId || row.task_id || '').trim();
+      if (!workflowId) {
+        return;
+      }
+      queryClient.setQueriesData({ queryKey: ['workflow-list'] }, (old: unknown) => {
+        if (!old || typeof old !== 'object' || !Array.isArray((old as { items?: unknown }).items)) {
+          return old;
+        }
+        let changed = false;
+        const current = old as { items: unknown[] };
+        const items = current.items.map((item) => {
+          if (!item || typeof item !== 'object') {
+            return item;
+          }
+          const itemRecord = item as Record<string, unknown>;
+          const itemWorkflowId = String(itemRecord.workflowId || itemRecord.taskId || '').trim();
+          if (itemWorkflowId !== workflowId) {
+            return item;
+          }
+          changed = true;
+          return { ...itemRecord, ...row };
+        });
+        return changed ? { ...current, items } : old;
+      });
+    };
+
+    const invalidateWorkflowSnapshots = (event: MessageEvent | null = null) => {
+      const workflowId = workflowIdFromUpdate(event);
+      const row = rowFromUpdate(event);
+      if (row) {
+        patchWorkflowListRows(row);
+      }
       void queryClient.invalidateQueries({ queryKey: ['tasks'] });
       void queryClient.invalidateQueries({ queryKey: ['workflow-list'] });
-      void queryClient.invalidateQueries({ queryKey: ['workflow-detail'] });
+      if (workflowId) {
+        const encodedWorkflowId = encodeURIComponent(workflowId);
+        void queryClient.invalidateQueries({
+          predicate: (query) => (
+            query.queryKey[0] === 'workflow-detail' &&
+            query.queryKey.includes(encodedWorkflowId)
+          ),
+        });
+      } else {
+        void queryClient.invalidateQueries({ queryKey: ['workflow-detail'] });
+      }
     };
 
     const start = () => {
@@ -655,7 +726,7 @@ function RoutedDashboardPage({
   });
 
   useEffect(() => {
-    const routeWorkflowId = workflowIdFromPath(location.pathname);
+    const routeWorkflowId = decodeWorkflowIdFromPath(location.pathname);
     if (routeWorkflowId) {
       setLastSelectedWorkflowId(routeWorkflowId);
     }
