@@ -7,6 +7,9 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "docker-publish.yml"
 DOCKERFILE_PATH = REPO_ROOT / "api_service" / "Dockerfile"
+CLI_TOOLING_INSTALLER_PATH = (
+    REPO_ROOT / "api_service" / "docker" / "install_cli_tooling.sh"
+)
 
 def _load_workflow() -> dict:
     assert WORKFLOW_PATH.exists(), f"Missing workflow: {WORKFLOW_PATH}"
@@ -126,3 +129,66 @@ def test_docker_publish_no_longer_builds_pentestgpt_runner() -> None:
     assert "pentest_image_name" not in metadata_outputs
     assert "build-pentestgpt" not in jobs
     assert "merge-pentestgpt" not in jobs
+
+
+def test_docker_publish_frontend_checks_do_not_duplicate_production_build() -> None:
+    workflow = _load_workflow()
+    build_steps = workflow["jobs"]["build"]["steps"]
+
+    frontend_step = next(
+        (
+            step
+            for step in build_steps
+            if step.get("name") == "Check frontend and generated contracts"
+        ),
+        None,
+    )
+    assert frontend_step, "Frontend and contracts check step not found"
+
+    run = frontend_step["run"]
+    assert "npm ci" in run
+    assert "npm run ui:typecheck" in run
+    assert "npm run ui:lint" in run
+    assert "npm run ui:test" in run
+    assert "npm run contracts:check" in run
+    assert "npm run frontend:ci" not in run
+    assert "npm run ui:build" not in run
+    assert "npm run ui:build:check" not in run
+
+
+def test_dockerfile_uses_buildkit_package_cache_mounts() -> None:
+    dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+    assert "RUN --mount=type=cache,target=/root/.npm" in dockerfile
+    assert "RUN --mount=type=cache,target=/root/.cache/pip" in dockerfile
+    assert "--mount=type=cache,target=/var/cache/apt,sharing=locked" in dockerfile
+    assert "--mount=type=cache,target=/var/lib/apt/lists,sharing=locked" in dockerfile
+
+
+def test_runtime_project_install_precedes_non_package_asset_copies() -> None:
+    dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+    moonmind_copy_index = dockerfile.index("COPY moonmind /app/moonmind/")
+    project_install_index = dockerfile.index(
+        "pip install --disable-pip-version-check --no-deps ."
+    )
+
+    assert moonmind_copy_index < project_install_index
+    for copied_path in (
+        "COPY api_service /app/api_service/",
+        "COPY config /app/config/",
+        "COPY docs/ReleaseNotes /app/docs/ReleaseNotes/",
+        "COPY .agents /app/.agents/",
+        "COPY moonspec /app/moonspec/",
+    ):
+        assert project_install_index < dockerfile.index(copied_path)
+
+
+def test_cli_tooling_installer_keeps_npm_cache_by_default() -> None:
+    installer = CLI_TOOLING_INSTALLER_PATH.read_text(encoding="utf-8")
+
+    assert "${CLEAN_NPM_CACHE:-false}" in installer
+    assert "npm cache clean --force || true" in installer
+    assert installer.index("${CLEAN_NPM_CACHE:-false}") < installer.index(
+        "npm cache clean --force || true"
+    )
