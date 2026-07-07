@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { DashboardActionDialog } from './DashboardActionDialog';
 import { useDashboardToast } from './dashboard/DashboardToast';
 import { formatStatusLabel } from '../utils/formatters';
+import { navigateTo } from '../lib/navigation';
 import { workflowDetailHref } from '../lib/workflowListContext';
 import {
   taskCompareHref,
@@ -297,7 +298,7 @@ export function WorkflowRowActionsMenu({
       }
       const draft = buildRemediationCreateDraft(execution, { runId });
       const draftId = storeRemediationCreateDraft(draft);
-      window.location.assign(remediationCreateDraftHref(draftId));
+      navigateTo(remediationCreateDraftHref(draftId));
       return { draft };
     },
     onError: onMutationError,

@@ -32,6 +32,7 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
+import { navigateTo as navigateToDashboardRoute } from '../lib/navigation';
 import {
   readWorkflowListDisplayMode,
   type WorkflowListDisplayMode,
@@ -7289,7 +7290,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         runId: latestRunId || runId,
       });
       const draftId = storeRemediationCreateDraft(draft);
-      window.location.assign(remediationCreateDraftHref(draftId));
+      navigateToDashboardRoute(remediationCreateDraftHref(draftId));
       return { draft };
     },
     onSuccess: () => {
