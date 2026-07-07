@@ -537,7 +537,7 @@ class RemediationApprovalDecisionResponse(BaseModel):
 class RemediationCheckpointBranchRepairRequest(BaseModel):
     checkpointRef: str
     instructions: CheckpointBranchInstructionsModel
-    idempotencyKey: str
+    idempotencyKey: str = Field(..., min_length=1, max_length=512)
     label: str | None = None
     workspacePolicy: Literal[
         "apply_previous_execution_diff_to_clean_baseline",
@@ -10688,6 +10688,16 @@ def _context_selected_checkpoint(
             return item
     return None
 
+def _checkpoint_summary_for_ref(
+    record: Any,
+    checkpoint_ref: str,
+) -> CheckpointSummaryModel | None:
+    for checkpoint in _checkpoint_summaries_from_record(record):
+        if checkpoint.checkpoint_ref == checkpoint_ref:
+            return checkpoint
+    return None
+
+
 async def _read_remediation_context_payload(
     *,
     session: AsyncSession,
@@ -10708,6 +10718,14 @@ async def _read_remediation_context_payload(
             detail={
                 "code": "invalid_remediation_context",
                 "reason": "artifact_type_mismatch",
+            },
+        )
+    if body is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "invalid_remediation_context",
+                "reason": "empty_body",
             },
         )
     try:
@@ -10834,6 +10852,7 @@ async def create_remediation_checkpoint_branch(
                 "reason": "checkpoint_not_selected_in_remediation_context",
             },
         )
+    target_checkpoint = _checkpoint_summary_for_ref(target_record, checkpoint_ref)
     workspace_policy = payload.workspacePolicy
     runtime_context_policy = payload.runtimeContextPolicy
     _validate_branch_policy(
@@ -10850,9 +10869,19 @@ async def create_remediation_checkpoint_branch(
             "logicalStepId": selected_checkpoint.get("logicalStepId"),
             "executionOrdinal": selected_checkpoint.get("executionOrdinal"),
             "checkpointBoundary": selected_checkpoint.get("checkpointBoundary")
+            or (
+                target_checkpoint.checkpoint_boundary
+                if target_checkpoint is not None
+                else None
+            )
             or "after_execution",
             "checkpointRef": checkpoint_ref,
-            "checkpointDigest": selected_checkpoint.get("checkpointDigest"),
+            "checkpointDigest": selected_checkpoint.get("checkpointDigest")
+            or (
+                target_checkpoint.checkpoint_digest
+                if target_checkpoint is not None
+                else None
+            ),
         }
     )
     _validate_branch_source(

@@ -54,7 +54,8 @@ import {
 } from '../lib/workflowActions';
 import {
   buildRemediationCreateDraft,
-  navigateToRemediationCreateDraft,
+  remediationCreateDraftHref,
+  storeRemediationCreateDraft,
 } from '../lib/remediationCreateDraft';
 import {
   projectChatSessionBlocks,
@@ -7287,7 +7288,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         actionPolicyRef: remediationActionPolicy,
         runId: latestRunId || runId,
       });
-      navigateToRemediationCreateDraft(draft);
+      const draftId = storeRemediationCreateDraft(draft);
+      window.location.assign(remediationCreateDraftHref(draftId));
       return { draft };
     },
     onSuccess: () => {

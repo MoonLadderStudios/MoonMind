@@ -628,6 +628,151 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
 
 
 @pytest.mark.asyncio
+async def test_remediation_checkpoint_branch_repair_resolves_recovery_boundary(
+    checkpoint_branch_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = SimpleNamespace(
+        id=uuid4(),
+        email="checkpoint-branches@example.com",
+        is_superuser=True,
+        roles=[],
+    )
+    record = _record_like(user)
+    record.memo = {
+        **record.memo,
+        "recoveryCheckpointRef": "artifact://checkpoints/before-recovery",
+    }
+    link = SimpleNamespace(
+        remediation_workflow_id="mm:remediation-recovery",
+        remediation_run_id="run-remediation-1",
+        target_workflow_id="mm:wf-branch",
+        target_run_id="run-branch",
+        context_artifact_ref="ctx-remediation-recovery",
+        latest_action_summary=None,
+    )
+    checkpoint_branch_client.app.dependency_overrides[_get_service] = lambda: SimpleNamespace(
+        describe_execution=AsyncMock(return_value=record),
+        list_remediation_targets=AsyncMock(return_value=[link]),
+    )
+
+    class _ArtifactService:
+        async def read(self, *, artifact_id: str, principal: str):
+            return (
+                SimpleNamespace(
+                    metadata_json={"artifact_type": "remediation.context"}
+                ),
+                json.dumps(
+                    {
+                        "schemaVersion": "v1",
+                        "target": {
+                            "workflowId": "mm:wf-branch",
+                            "runId": "run-branch",
+                        },
+                        "selectedSteps": [
+                            {
+                                "checkpointRef": "artifact://checkpoints/before-recovery",
+                            }
+                        ],
+                    }
+                ).encode(),
+            )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda session: _ArtifactService(),
+    )
+
+    response = await checkpoint_branch_client.post(
+        "/api/executions/mm:remediation-recovery/remediation/checkpoint-branches",
+        json={
+            "checkpointRef": "artifact://checkpoints/before-recovery",
+            "instructions": {"text": "Repair from recovery checkpoint."},
+            "idempotencyKey": "MM-1119:recovery-boundary",
+        },
+    )
+
+    assert response.status_code == 201
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = await session.get(WorkflowCheckpointBranch, response.json()["branchId"])
+
+    assert branch is not None
+    assert branch.source_checkpoint_boundary == "before_recovery_restoration"
+
+
+@pytest.mark.asyncio
+async def test_remediation_checkpoint_branch_repair_rejects_empty_idempotency_key(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    response = await checkpoint_branch_client.post(
+        "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
+        json={
+            "checkpointRef": "artifact://checkpoints/after-implement",
+            "instructions": {"text": "Repair with corrected instructions."},
+            "idempotencyKey": "",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_remediation_checkpoint_branch_repair_rejects_empty_context_body(
+    checkpoint_branch_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = SimpleNamespace(
+        id=uuid4(),
+        email="checkpoint-branches@example.com",
+        is_superuser=True,
+        roles=[],
+    )
+    record = _record_like(user)
+    link = SimpleNamespace(
+        remediation_workflow_id="mm:remediation-empty-context",
+        remediation_run_id="run-remediation-1",
+        target_workflow_id="mm:wf-branch",
+        target_run_id="run-branch",
+        context_artifact_ref="ctx-remediation-empty",
+    )
+    checkpoint_branch_client.app.dependency_overrides[_get_service] = lambda: SimpleNamespace(
+        describe_execution=AsyncMock(return_value=record),
+        list_remediation_targets=AsyncMock(return_value=[link]),
+    )
+
+    class _ArtifactService:
+        async def read(self, *, artifact_id: str, principal: str):
+            return (
+                SimpleNamespace(
+                    metadata_json={"artifact_type": "remediation.context"}
+                ),
+                None,
+            )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda session: _ArtifactService(),
+    )
+
+    response = await checkpoint_branch_client.post(
+        "/api/executions/mm:remediation-empty-context/remediation/checkpoint-branches",
+        json={
+            "checkpointRef": "artifact://checkpoints/after-implement",
+            "instructions": {"text": "Repair with corrected instructions."},
+            "idempotencyKey": "MM-1119:empty-context",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "invalid_remediation_context",
+        "reason": "empty_body",
+    }
+
+
+@pytest.mark.asyncio
 async def test_remediation_checkpoint_branch_repair_fails_closed_for_unselected_checkpoint(
     checkpoint_branch_client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,

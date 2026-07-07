@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   buildRemediationCreateDraft,
   clearRemediationCreateDraft,
-  navigateToRemediationCreateDraft,
+  remediationCreateDraftHref,
   readRemediationCreateDraft,
+  storeRemediationCreateDraft,
 } from './remediationCreateDraft';
 
 describe('remediationCreateDraft', () => {
@@ -62,17 +63,16 @@ describe('remediationCreateDraft', () => {
     });
   });
 
-  it('stores, reads, navigates, and clears a short-lived draft', () => {
+  it('stores, reads, builds a href, and clears a short-lived draft', () => {
     const draft = buildRemediationCreateDraft({
       workflowId: 'mm:target',
       runId: 'run-target',
     });
 
-    const draftId = navigateToRemediationCreateDraft(draft);
+    const draftId = storeRemediationCreateDraft(draft);
+    const href = remediationCreateDraftHref(draftId);
 
-    expect(window.location.pathname).toBe('/workflows/new');
-    expect(window.location.search).toContain('intent=remediate');
-    expect(window.location.search).toContain(`draftId=${encodeURIComponent(draftId)}`);
+    expect(href).toBe(`/workflows/new?intent=remediate&draftId=${encodeURIComponent(draftId)}`);
     expect(readRemediationCreateDraft(draftId)).toEqual(draft);
 
     clearRemediationCreateDraft(draftId);

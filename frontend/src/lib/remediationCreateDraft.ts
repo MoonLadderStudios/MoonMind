@@ -4,7 +4,6 @@ import {
   DEFAULT_REMEDIATION_AUTHORITY,
   DEFAULT_REMEDIATION_MODE,
 } from './workflowActions';
-import { navigateTo } from './navigation';
 
 const DRAFT_STORAGE_PREFIX = 'moonmind.remediation-create-draft.';
 const DEFAULT_REMEDIATION_REPOSITORY = 'MoonLadderStudios/MoonMind';
@@ -258,11 +257,4 @@ export function clearRemediationCreateDraft(draftId: string | null | undefined):
 
 export function remediationCreateDraftHref(draftId: string): string {
   return `/workflows/new?intent=remediate&draftId=${encodeURIComponent(draftId)}`;
-}
-
-export function navigateToRemediationCreateDraft(draft: RemediationCreateDraft): string {
-  const draftId = storeRemediationCreateDraft(draft);
-  const href = remediationCreateDraftHref(draftId);
-  navigateTo(href);
-  return draftId;
 }

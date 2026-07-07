@@ -20,7 +20,8 @@ import {
 import { WorkflowActionsMenu } from './WorkflowActionsMenu';
 import {
   buildRemediationCreateDraft,
-  navigateToRemediationCreateDraft,
+  remediationCreateDraftHref,
+  storeRemediationCreateDraft,
 } from '../lib/remediationCreateDraft';
 
 /**
@@ -295,7 +296,8 @@ export function WorkflowRowActionsMenu({
         throw new Error('Workflow detail is required before remediation can be drafted.');
       }
       const draft = buildRemediationCreateDraft(execution, { runId });
-      navigateToRemediationCreateDraft(draft);
+      const draftId = storeRemediationCreateDraft(draft);
+      window.location.assign(remediationCreateDraftHref(draftId));
       return { draft };
     },
     onError: onMutationError,

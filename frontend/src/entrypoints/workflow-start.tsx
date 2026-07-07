@@ -6273,6 +6273,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     const draft = readRemediationCreateDraft(draftId);
     if (!draft) {
+      setRemediationDraft(null);
+      remediationDraftAppliedRef.current = null;
+      remediationDraftIdRef.current = null;
       setSubmitMessage("The remediation draft is no longer available. Open Remediate from the target workflow again.");
       return;
     }
