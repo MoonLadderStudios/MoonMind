@@ -7180,6 +7180,16 @@ class TemporalAgentRuntimeActivities:
                 )
             return None
 
+        def _first_non_empty_text(
+            payload: Mapping[str, Any],
+            *keys: str,
+        ) -> str | None:
+            for key in keys:
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return None
+
         def _compact_moonspec_verify_metadata(
             gate_payload: Mapping[str, Any],
             *,
