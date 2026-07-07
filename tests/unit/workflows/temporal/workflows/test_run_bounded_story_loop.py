@@ -297,12 +297,12 @@ def test_parent_loop_continues_to_unannotated_issue_implement_remediation_step(
             {
                 "id": "remediate-1",
                 "skill": {"id": "auto"},
-                "inputs": {"title": "Remediate verification gaps 1 of 6"},
+                "inputs": {"title": "Remediate verification gaps — attempt 1 of 6"},
             },
             {
                 "id": "verify-remediation-1",
                 "skill": {"id": "moonspec-verify"},
-                "inputs": {"title": "Verify remediation 1 of 6"},
+                "inputs": {"title": "Verify remediation attempt 1 of 6"},
             },
         ],
         current_index=0,

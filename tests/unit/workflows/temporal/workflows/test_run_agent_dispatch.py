@@ -2068,6 +2068,49 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         moonmind = metadata.get("moonmind") or {}
         self.assertEqual(moonmind.get("selectedSkill"), "pr-resolver")
 
+    def test_build_agent_execution_request_carries_remediation_cadence_metadata(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "codex",
+                    "title": "Verify remediation attempt 2 of 6",
+                    "verify_artifact_path": "artifacts/jira-implement-verify.json",
+                    "annotations": {
+                        "issueImplementRole": "moonspec-verification-gate",
+                        "moonSpecRemediationAttempt": 2,
+                        "moonSpecRemediationMaxAttempts": 6,
+                    },
+                },
+                node_id="verify-remediation-2",
+                tool_name="codex",
+            )
+
+        metadata = request.parameters.get("metadata") or {}
+        moonmind = metadata.get("moonmind") or {}
+        self.assertEqual(
+            moonmind.get("remediationCadence"),
+            {
+                "cadence": "attempt_scoped_remediation_verification",
+                "role": "moonspec-verification-gate",
+                "attempt": 2,
+                "attemptArtifactPath": "reports/remediation_attempt-2.json",
+                "verificationArtifactPath": "reports/remediation_verification-2.json",
+                "maxAttempts": 6,
+                "latestVerificationPath": "artifacts/jira-implement-verify.json",
+            },
+        )
+
     def test_build_agent_execution_request_carries_report_output_contract(self) -> None:
         from unittest.mock import patch
 

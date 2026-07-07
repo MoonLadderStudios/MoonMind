@@ -1460,7 +1460,7 @@ const StepLedgerRowSchema = z
   .object({
     logicalStepId: z.string(),
     order: z.number(),
-    title: z.string(),
+    title: z.string().nullable().optional().transform((value) => value ?? ''),
     tool: StepLedgerToolSchema.default({}),
     dependsOn: z.array(z.string()).default([]),
     status: z.enum(CANONICAL_STEP_STATUSES),
@@ -1470,6 +1470,7 @@ const StepLedgerRowSchema = z
     startedAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
     summary: z.string().nullable().optional(),
+    annotations: z.record(z.string(), z.unknown()).default({}),
     checks: z.array(StepLedgerCheckSchema).default([]),
     refs: StepLedgerRefsSchema,
     artifacts: StepLedgerArtifactsSchema,
@@ -3619,6 +3620,81 @@ function StepMetadataList({
   );
 }
 
+type RemediationCadenceInfo = {
+  role: 'remediation' | 'verification';
+  attempt: number | null;
+  maxAttempts: number | null;
+};
+
+function positiveInt(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    return parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
+function remediationCadenceInfo(row: z.infer<typeof StepLedgerRowSchema>): RemediationCadenceInfo | null {
+  const annotations = row.annotations ?? {};
+  const role = String(
+    annotations.jiraOrchestrateRole ?? annotations.issueImplementRole ?? '',
+  ).toLowerCase();
+  const rowTitle = row.title ?? '';
+  const title = rowTitle.toLowerCase();
+  const isRemediation = role === 'moonspec-remediation'
+    || title.startsWith('remediate verification gaps')
+    || title.startsWith('remediate remaining gaps');
+  const isVerification = role === 'moonspec-verification-gate'
+    || title.startsWith('verify remediation');
+  if (!isRemediation && !isVerification) return null;
+  const titleMatch = rowTitle
+    ? (rowTitle.match(/\battempt\s+(\d+)\s+of\s+(\d+)\b/i) ?? rowTitle.match(/\b(\d+)\s+of\s+(\d+)\b/i))
+    : null;
+  return {
+    role: isRemediation ? 'remediation' : 'verification',
+    attempt: positiveInt(annotations.moonSpecRemediationAttempt) ?? positiveInt(titleMatch?.[1]),
+    maxAttempts: positiveInt(annotations.moonSpecRemediationMaxAttempts) ?? positiveInt(titleMatch?.[2]),
+  };
+}
+
+function RemediationCadenceChip({ row }: { row: z.infer<typeof StepLedgerRowSchema> }) {
+  const cadence = remediationCadenceInfo(row);
+  if (!cadence) return null;
+  const attemptLabel = cadence.attempt && cadence.maxAttempts
+    ? `Attempt ${cadence.attempt} of ${cadence.maxAttempts}`
+    : 'Attempt scoped';
+  return (
+    <span
+      className="step-execution-pill"
+      title={cadence.role === 'verification'
+        ? 'Full verification for the remediation attempt.'
+        : 'Attempt-scoped remediation; gap details and targeted checks belong inside this attempt.'}
+    >
+      {cadence.role === 'verification' ? 'Full verification' : 'Remediation'} · {attemptLabel}
+    </span>
+  );
+}
+
+function RemediationCadenceDetails({ row }: { row: z.infer<typeof StepLedgerRowSchema> }) {
+  const cadence = remediationCadenceInfo(row);
+  if (!cadence) return null;
+  const attemptLabel = cadence.attempt && cadence.maxAttempts
+    ? `Attempt ${cadence.attempt} of ${cadence.maxAttempts}`
+    : 'Attempt scoped';
+  return (
+    <section className="step-tl-detail-section">
+      <h4>Remediation cadence</h4>
+      <ul className="step-detail-list">
+        <li><strong>Attempt progress:</strong> {attemptLabel}</li>
+        <li><strong>Cadence role:</strong> {cadence.role === 'verification' ? 'Full attempt verification' : 'Remediation attempt'}</li>
+        <li><strong>Gap progress:</strong> Recorded inside the remediation attempt artifact.</li>
+        <li><strong>Targeted checks:</strong> Recorded inside the remediation attempt, not as sibling full-verifier steps.</li>
+      </ul>
+    </section>
+  );
+}
+
 function formatOptionalValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—';
   if (typeof value === 'number') return String(value);
@@ -4756,6 +4832,7 @@ function StepLedgerRowCard({
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
               <StepLedgerStatusPill status={row.status} />
               <StepTimingChip row={row} />
+              <RemediationCadenceChip row={row} />
               <BranchStatusAffordance branches={branches} />
               <span className="sr-only">{formatStatusLabel(row.status)}</span>
               {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}
@@ -4806,6 +4883,7 @@ function StepLedgerRowCard({
                 </ul>
               </section>
             ) : null}
+            <RemediationCadenceDetails row={row} />
             <StepTimingDetails row={row} />
             <section className="step-tl-detail-section step-tl-detail-section--logs">
               <h4>Logs & Diagnostics</h4>
@@ -6088,6 +6166,7 @@ function remediationArtifactLabel(type: string): string {
   const labels: Record<string, string> = {
     'remediation.context': 'Context',
     'remediation.plan': 'Plan',
+    'remediation.attempt': 'Attempt',
     'remediation.decision_log': 'Decision Log',
     'remediation.action_request': 'Action Request',
     'remediation.action_result': 'Action Result',

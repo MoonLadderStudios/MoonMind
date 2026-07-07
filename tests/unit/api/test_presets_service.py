@@ -2993,7 +2993,7 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "Split broad designs when needed" not in [
                 step["title"] for step in expanded["steps"]
             ]
-            assert expanded["steps"][10]["title"] == "Remediate verification gaps 1 of 6"
+            assert expanded["steps"][10]["title"] == "Remediate verification gaps — attempt 1 of 6"
             assert expanded["steps"][10]["skill"]["id"] == "moonspec-implement"
             assert "ADDITIONAL_WORK_NEEDED" in expanded["steps"][10]["instructions"]
             assert "verification report's gaps" in expanded["steps"][10]["instructions"]
@@ -3010,7 +3010,7 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "Verification robustness rules" in expanded["steps"][11][
                 "instructions"
             ]
-            assert expanded["steps"][21]["title"] == "Verify remediation 6 of 6"
+            assert expanded["steps"][21]["title"] == "Verify remediation attempt 6 of 6"
             assert expanded["steps"][21]["skill"]["id"] == "moonspec-verify"
             assert "controlling verification gate" in expanded["steps"][21][
                 "instructions"
@@ -3241,18 +3241,18 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "Mark GitHub issue In Progress",
         "Implement the issue",
         "Verify implementation",
-        "Remediate verification gaps 1 of 6",
-        "Verify remediation 1 of 6",
-        "Remediate verification gaps 2 of 6",
-        "Verify remediation 2 of 6",
-        "Remediate verification gaps 3 of 6",
-        "Verify remediation 3 of 6",
-        "Remediate verification gaps 4 of 6",
-        "Verify remediation 4 of 6",
-        "Remediate verification gaps 5 of 6",
-        "Verify remediation 5 of 6",
-        "Remediate verification gaps 6 of 6",
-        "Verify remediation 6 of 6",
+        "Remediate verification gaps — attempt 1 of 6",
+        "Verify remediation attempt 1 of 6",
+        "Remediate remaining gaps — attempt 2 of 6",
+        "Verify remediation attempt 2 of 6",
+        "Remediate remaining gaps — attempt 3 of 6",
+        "Verify remediation attempt 3 of 6",
+        "Remediate remaining gaps — attempt 4 of 6",
+        "Verify remediation attempt 4 of 6",
+        "Remediate remaining gaps — attempt 5 of 6",
+        "Verify remediation attempt 5 of 6",
+        "Remediate remaining gaps — attempt 6 of 6",
+        "Verify remediation attempt 6 of 6",
         "Create pull request",
         "Finalize GitHub issue status",
     ]
@@ -3385,19 +3385,19 @@ async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(t
                 context={},
             )
 
-    assert expanded["steps"][2]["title"] == "Remediate verification gaps 1 of 2"
+    assert expanded["steps"][2]["title"] == "Remediate verification gaps — attempt 1 of 2"
     assert expanded["steps"][2]["annotations"] == {
         "issueImplementRole": "moonspec-remediation",
         "moonSpecRemediationAttempt": 1,
         "moonSpecRemediationMaxAttempts": 2,
     }
-    assert expanded["steps"][5]["title"] == "Verify remediation 2 of 2"
+    assert expanded["steps"][5]["title"] == "Verify remediation attempt 2 of 2"
     assert expanded["steps"][5]["annotations"] == {
         "issueImplementRole": "moonspec-verification-gate",
         "moonSpecRemediationAttempt": 2,
         "moonSpecRemediationMaxAttempts": 2,
     }
-    assert expanded["steps"][6]["title"] == "Remediate verification gaps 3 of 2"
+    assert expanded["steps"][6]["title"] == "Remediate remaining gaps — attempt 3 of 2"
     assert expanded["steps"][6]["annotations"] == {
         "issueImplementRole": "moonspec-remediation",
         "moonSpecRemediationAttempt": 3,
@@ -3480,18 +3480,18 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "Align MoonSpec artifacts",
         "Implement the task breakdown",
         "Verify completion",
-        "Remediate verification gaps 1 of 6",
-        "Verify remediation 1 of 6",
-        "Remediate verification gaps 2 of 6",
-        "Verify remediation 2 of 6",
-        "Remediate verification gaps 3 of 6",
-        "Verify remediation 3 of 6",
-        "Remediate verification gaps 4 of 6",
-        "Verify remediation 4 of 6",
-        "Remediate verification gaps 5 of 6",
-        "Verify remediation 5 of 6",
-        "Remediate verification gaps 6 of 6",
-        "Verify remediation 6 of 6",
+        "Remediate verification gaps — attempt 1 of 6",
+        "Verify remediation attempt 1 of 6",
+        "Remediate remaining gaps — attempt 2 of 6",
+        "Verify remediation attempt 2 of 6",
+        "Remediate remaining gaps — attempt 3 of 6",
+        "Verify remediation attempt 3 of 6",
+        "Remediate remaining gaps — attempt 4 of 6",
+        "Verify remediation attempt 4 of 6",
+        "Remediate remaining gaps — attempt 5 of 6",
+        "Verify remediation attempt 5 of 6",
+        "Remediate remaining gaps — attempt 6 of 6",
+        "Verify remediation attempt 6 of 6",
         "Reconcile declarative docs",
         "Create pull request",
         "Finalize GitHub issue status",

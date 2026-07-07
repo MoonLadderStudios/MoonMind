@@ -2803,7 +2803,7 @@ def test_moonspec_verify_gate_detects_remaining_remediation_budget(
         {
             "id": "verify-1",
             "inputs": {
-                "title": "Verify remediation 1 of 6",
+                "title": "Verify remediation attempt 1 of 6",
                 "selectedSkill": "moonspec-verify",
             },
         },
@@ -2812,7 +2812,7 @@ def test_moonspec_verify_gate_detects_remaining_remediation_budget(
             "annotations": {"jiraOrchestrateRole": "moonspec-remediation"},
             "skill": {"id": "moonspec-implement"},
             "inputs": {
-                "title": "Remediate verification gaps 2 of 6",
+                "title": "Remediate remaining gaps — attempt 2 of 6",
             },
         },
         {
@@ -2841,7 +2841,7 @@ def test_moonspec_verify_gate_ignores_remediation_steps_over_budget(
         {
             "id": "verify-1",
             "inputs": {
-                "title": "Verify remediation 1 of 1",
+                "title": "Verify remediation attempt 1 of 1",
                 "selectedSkill": "moonspec-verify",
             },
         },
@@ -2853,7 +2853,7 @@ def test_moonspec_verify_gate_ignores_remediation_steps_over_budget(
                 "moonSpecRemediationMaxAttempts": 1,
             },
             "skill": {"id": "moonspec-implement"},
-            "inputs": {"title": "Remediate verification gaps 2 of 1"},
+            "inputs": {"title": "Remediate remaining gaps — attempt 2 of 1"},
         },
     ]
 
@@ -2882,7 +2882,7 @@ def test_moonspec_verify_gate_skips_loop_steps_after_passing_verdict(
             "moonSpecRemediationMaxAttempts": 6,
         },
         "inputs": {
-            "title": "Verify remediation 2 of 6",
+            "title": "Verify remediation attempt 2 of 6",
             "selectedSkill": "moonspec-verify",
         },
     }
@@ -2945,7 +2945,7 @@ def test_moonspec_verify_gate_detects_unannotated_issue_implement_remediation_ti
         {
             "id": "remediate-1",
             "skill": {"id": "auto"},
-            "inputs": {"title": "Remediate verification gaps 1 of 6"},
+            "inputs": {"title": "Remediate verification gaps — attempt 1 of 6"},
         },
     ]
 
@@ -2970,7 +2970,7 @@ def test_moonspec_verify_gate_skips_unannotated_remediation_gate_after_pass(
     verify_node = {
         "id": "verify-remediation-1",
         "skill": {"id": "moonspec-verify"},
-        "inputs": {"title": "Verify remediation 1 of 6"},
+        "inputs": {"title": "Verify remediation attempt 1 of 6"},
     }
     mock_run_workflow._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
 
@@ -3142,7 +3142,7 @@ def test_moonspec_verify_blocked_attempt_one_stops_with_remaining_budget(
         {
             "id": "verify-1",
             "inputs": {
-                "title": "Verify remediation 1 of 6",
+                "title": "Verify remediation attempt 1 of 6",
                 "selectedSkill": "moonspec-verify",
             },
         },
@@ -3150,7 +3150,7 @@ def test_moonspec_verify_blocked_attempt_one_stops_with_remaining_budget(
             "id": "remediate-2",
             "annotations": {"jiraOrchestrateRole": "moonspec-remediation"},
             "skill": {"id": "moonspec-implement"},
-            "inputs": {"title": "Remediate verification gaps 2 of 6"},
+            "inputs": {"title": "Remediate remaining gaps — attempt 2 of 6"},
         },
     ]
 

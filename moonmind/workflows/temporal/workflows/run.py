@@ -4661,7 +4661,10 @@ class MoonMindRunWorkflow:
             workflow.info()
         except Exception:
             return True
-        return workflow.patched(RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH)
+        try:
+            return workflow.patched(RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH)
+        except Exception:
+            return True
 
     def _moonspec_remediation_title_role(self, node: Mapping[str, Any]) -> str:
         if not self._moonspec_title_remediation_detection_enabled():
@@ -4672,7 +4675,9 @@ class MoonMindRunWorkflow:
             .strip()
             .lower()
         )
-        if title.startswith("remediate verification gaps"):
+        if title.startswith("remediate verification gaps") or title.startswith(
+            "remediate remaining gaps"
+        ):
             return "moonspec-remediation"
         if title.startswith("verify remediation"):
             return "moonspec-verification-gate"
@@ -4758,7 +4763,9 @@ class MoonMindRunWorkflow:
             .strip()
             .lower()
         )
-        return title.startswith("remediate verification gaps")
+        return title.startswith("remediate verification gaps") or title.startswith(
+            "remediate remaining gaps"
+        )
 
     def _has_remaining_moonspec_remediation_step(
         self,
@@ -13631,6 +13638,53 @@ class MoonMindRunWorkflow:
             else:
                 step_ledger_payload["attempt"] = step_execution
             moonmind_payload["stepLedger"] = step_ledger_payload
+            metadata_payload["moonmind"] = moonmind_payload
+            parameters["metadata"] = metadata_payload
+
+        node_for_remediation_metadata = {"id": node_id, "inputs": node_inputs}
+        remediation_role = self._moonspec_step_role(node_for_remediation_metadata)
+        if remediation_role in {
+            "moonspec-remediation",
+            "moonspec-verification-gate",
+        }:
+            attempt, max_attempts = self._moonspec_remediation_attempt_metadata(
+                node_for_remediation_metadata
+            )
+            metadata_payload = (
+                parameters.get("metadata")
+                if isinstance(parameters.get("metadata"), dict)
+                else {}
+            )
+            moonmind_payload = (
+                metadata_payload.get("moonmind")
+                if isinstance(metadata_payload.get("moonmind"), dict)
+                else {}
+            )
+            cadence_payload: dict[str, Any] = {
+                "cadence": "attempt_scoped_remediation_verification",
+                "role": remediation_role,
+            }
+            if attempt is not None:
+                cadence_payload["attempt"] = attempt
+                cadence_payload["attemptArtifactPath"] = (
+                    f"reports/remediation_attempt-{attempt}.json"
+                )
+                cadence_payload["verificationArtifactPath"] = (
+                    f"reports/remediation_verification-{attempt}.json"
+                )
+            if max_attempts is not None:
+                cadence_payload["maxAttempts"] = max_attempts
+            verify_artifact_path = (
+                parameters.get("verify_artifact_path")
+                or parameters.get("verifyArtifactPath")
+                or node_inputs.get("verify_artifact_path")
+                or node_inputs.get("verifyArtifactPath")
+            )
+            if isinstance(verify_artifact_path, str) and verify_artifact_path.strip():
+                cadence_payload["latestVerificationPath"] = (
+                    verify_artifact_path.strip()
+                )
+            moonmind_payload["remediationCadence"] = cadence_payload
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
 
