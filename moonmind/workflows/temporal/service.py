@@ -564,6 +564,63 @@ class TemporalExecutionService:
             and authority_mode == "observe_only"
         )
 
+    @classmethod
+    def _validate_remediation_evidence_policy(cls, value: Any) -> None:
+        if value is None:
+            return
+        if not isinstance(value, Mapping):
+            raise TemporalExecutionValidationError(
+                "workflow.remediation.evidencePolicy must be an object."
+            )
+        cls._validate_remediation_evidence_policy_refs(
+            value,
+            path="workflow.remediation.evidencePolicy",
+            ref_sensitive=False,
+        )
+
+    @classmethod
+    def _validate_remediation_evidence_policy_refs(
+        cls,
+        value: Any,
+        *,
+        path: str,
+        ref_sensitive: bool,
+    ) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                key_text = str(key)
+                normalized_key = key_text.lower()
+                child_ref_sensitive = ref_sensitive or any(
+                    token in normalized_key
+                    for token in ("ref", "refs", "url", "uri", "resource")
+                )
+                cls._validate_remediation_evidence_policy_refs(
+                    item,
+                    path=f"{path}.{key_text}",
+                    ref_sensitive=child_ref_sensitive,
+                )
+            return
+        if isinstance(value, list):
+            if len(value) > 100:
+                raise TemporalExecutionValidationError(f"{path} must be bounded.")
+            for index, item in enumerate(value):
+                cls._validate_remediation_evidence_policy_refs(
+                    item,
+                    path=f"{path}[{index}]",
+                    ref_sensitive=ref_sensitive,
+                )
+            return
+        if not ref_sensitive or value is None or isinstance(value, bool | int | float):
+            return
+        ref_value = str(value).strip()
+        if not ref_value:
+            return
+        if ref_value.startswith("artifact://"):
+            return
+        raise TemporalExecutionValidationError(
+            f"{path} must use a MoonMind artifact ref."
+        )
+
     async def _validate_remediation_link(
         self,
         *,
@@ -697,10 +754,7 @@ class TemporalExecutionService:
                     )
 
         evidence_policy = remediation.get("evidencePolicy")
-        if evidence_policy is not None and not isinstance(evidence_policy, Mapping):
-            raise TemporalExecutionValidationError(
-                "workflow.remediation.evidencePolicy must be an object."
-            )
+        self._validate_remediation_evidence_policy(evidence_policy)
         checkpoint_branch_policy = remediation.get("checkpointBranchPolicy")
         if checkpoint_branch_policy is not None:
             if not isinstance(checkpoint_branch_policy, Mapping):
@@ -1445,7 +1499,12 @@ class TemporalExecutionService:
                 await self._remediation_context_builder().build_context(
                     remediation_workflow_id=record.workflow_id
                 )
+                await self._session.refresh(record)
         except Exception as exc:
+            if remediation_link is not None:
+                raise TemporalExecutionValidationError(
+                    "Failed to create remediation context artifact."
+                ) from exc
             logger.exception(
                 "Failed to start Temporal workflow for execution %s", record.workflow_id
             )

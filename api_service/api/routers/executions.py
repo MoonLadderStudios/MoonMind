@@ -129,6 +129,7 @@ from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchContinueRequest,
     CheckpointBranchCreateRequest,
     CheckpointBranchForkRequest,
+    CheckpointBranchInstructionsModel,
     CheckpointBranchListResponse,
     CheckpointBranchModel,
     CheckpointBranchPromoteRequest,

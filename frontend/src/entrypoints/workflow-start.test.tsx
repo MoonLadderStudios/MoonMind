@@ -18129,6 +18129,96 @@ describe("Task Create runtime command previews", () => {
     ).toHaveLength(2);
   });
 
+  it("warns when a remediation draft target run changed before submit", async () => {
+    const draft = {
+      source: "remediation",
+      createdAt: "2026-07-07T00:00:00.000Z",
+      target: {
+        workflowId: "mm:remediation-target",
+        runId: "run-original",
+        title: "Failed workflow",
+      },
+      repository: "MoonLadderStudios/MoonMind",
+      branch: "main",
+      publishMode: "branch",
+      instructions: "Repair the failed workflow.",
+      runtime: { mode: "codex" },
+      remediation: {
+        target: {
+          workflowId: "mm:remediation-target",
+          runId: "run-original",
+          source: "remediation",
+        },
+        mode: "snapshot_then_follow",
+        authorityMode: "approval_gated",
+        actionPolicyRef: "admin_healer_default",
+        evidencePolicy: {
+          includeStepLedger: true,
+          includeCheckpointBranches: true,
+          includeAdapterCaptures: true,
+          allowLiveFollow: false,
+        },
+        checkpointBranchPolicy: {
+          actionKind: "checkpoint_branch.create_from_remediation_context",
+          runtimeContextPolicy: "fresh_agent_run",
+        },
+      },
+    };
+    window.sessionStorage.setItem(
+      "moonmind.remediation-create-draft.stale-target",
+      JSON.stringify(draft),
+    );
+    window.history.pushState(
+      {},
+      "Task Create",
+      "/workflows/new?intent=remediate&draftId=stale-target",
+    );
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/executions/mm%3Aremediation-target?source=temporal") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            workflowId: "mm:remediation-target",
+            workflowType: "MoonMind.UserWorkflow",
+            runId: "run-new",
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
+        } as Response);
+      }
+      if (url.startsWith("/api/presets")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [],
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+
+    expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Target workflow changed after this remediation draft was created. Open Remediate again before submitting.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("previews unknown valid slash commands as opaque pass-through", async () => {
     renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 

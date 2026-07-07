@@ -6311,6 +6311,55 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
   }, [pageMode.mode, setSubmitMessage]);
 
+  const remediationTargetFreshnessQuery = useQuery({
+    queryKey: [
+      "workflow-start",
+      "remediation-target-freshness",
+      remediationDraft?.target.workflowId || "",
+      temporalDetailEndpoint,
+    ],
+    enabled: Boolean(remediationDraft?.target.workflowId),
+    queryFn: async (): Promise<TemporalTaskEditingExecutionContract> => {
+      const workflowId = String(remediationDraft?.target.workflowId || "");
+      const response = await fetch(
+        configuredTemporalDetailUrl(temporalDetailEndpoint, workflowId),
+        { headers: { Accept: "application/json" } },
+      );
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(
+            response,
+            "Failed to check remediation target freshness.",
+          ),
+        );
+      }
+      return (await response.json()) as TemporalTaskEditingExecutionContract;
+    },
+  });
+
+  const remediationTargetFreshnessWarning = useMemo(() => {
+    if (!remediationDraft) {
+      return "";
+    }
+    if (remediationTargetFreshnessQuery.isError) {
+      return "Target freshness could not be checked. Review the pinned run before submitting.";
+    }
+    const currentRunId = String(
+      remediationTargetFreshnessQuery.data?.runId ||
+        remediationTargetFreshnessQuery.data?.temporalRunId ||
+        "",
+    ).trim();
+    if (currentRunId && currentRunId !== remediationDraft.target.runId) {
+      return "Target workflow changed after this remediation draft was created. Open Remediate again before submitting.";
+    }
+    return "";
+  }, [
+    remediationDraft,
+    remediationTargetFreshnessQuery.data?.runId,
+    remediationTargetFreshnessQuery.data?.temporalRunId,
+    remediationTargetFreshnessQuery.isError,
+  ]);
+
   const dependencyOptionsQuery = useQuery({
     queryKey: ["workflow-start", "dependency-options", temporalListEndpoint],
     queryFn: async (): Promise<DependencyPickerExecution[]> => {
@@ -11162,6 +11211,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             <p className="small">
               Evidence preview: recovery, incident, step ledger, checkpoint branch, adapter, diagnostics, and linked artifact refs.
             </p>
+            {remediationTargetFreshnessWarning ? (
+              <p className="notice small" role="alert">
+                {remediationTargetFreshnessWarning}
+              </p>
+            ) : null}
           </section>
         ) : null}
         <section
