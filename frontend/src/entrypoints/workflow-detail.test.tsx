@@ -1916,11 +1916,9 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     expect((await screen.findByRole('link', { name: 'Chat' })).getAttribute('aria-current')).toBe('page');
-    for (const label of ['Overview', 'Execution', 'Evidence']) {
+    for (const label of ['Overview', 'Execution', 'Evidence', 'Debug']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
-    fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    expect(screen.getByRole('menuitem', { name: 'Debug' })).toBeTruthy();
     expect(screen.queryByRole('link', { name: /file browser/i })).toBeNull();
     expect(screen.queryByRole('heading', { name: /file browser/i })).toBeNull();
   });
@@ -3094,7 +3092,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Debug' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'More' }).getAttribute('class')).toContain('active');
+      expect(screen.getByRole('link', { name: 'Debug' }).getAttribute('aria-current')).toBe('page');
       expect(screen.getByRole('heading', { name: 'Temporal' })).toBeTruthy();
     });
 
@@ -3112,11 +3110,11 @@ describe('Workflow Detail Entrypoint', () => {
     }
     expect(screen.getAllByText('MoonMind.UserWorkflow').length).toBeGreaterThan(0);
 
-    // Deep-linking to the subroute keeps Debug available behind More without
-    // consuming primary tab space.
-    expect(screen.queryByRole('link', { name: 'Debug' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    expect(screen.getByRole('menuitem', { name: 'Debug' })).toBeTruthy();
+    // Debug is a first-class tab: reachable in one click and marked current on its route.
+    expect(screen.getByRole('link', { name: 'Debug' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Debug' }).getAttribute('href')).toBe(
+      '/workflows/test-123/debug?source=temporal',
+    );
     // Overview is reachable from the Debug subroute (deep links round-trip).
     expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123/overview?source=temporal');
 
@@ -3124,31 +3122,29 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
   });
 
-  it('MM-1020 keeps the Debug affordance stable while the kebab menu toggles debug details', async () => {
+  it('MM-1020 keeps the Debug tab stable while the kebab menu toggles debug details', async () => {
     window.history.pushState({}, 'Debug Pref Test', '/workflows/test-123/overview?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
     const view = renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
-    // Debug is available from More by default.
-    expect(await screen.findByRole('button', { name: 'More' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    expect(screen.getByRole('menuitem', { name: 'Debug' })).toBeTruthy();
+    // Debug is a first-class tab by default.
+    expect(await screen.findByRole('link', { name: 'Debug' })).toBeTruthy();
 
     let menu = await openWorkflowActionsMenu();
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'View: Hide debug details' }));
 
-    // The More affordance remains visible and the preference is persisted.
-    expect(screen.getByRole('button', { name: 'More' })).toBeTruthy();
+    // The Debug tab remains visible and the preference is persisted.
+    expect(screen.getByRole('link', { name: 'Debug' })).toBeTruthy();
     expect(window.localStorage.getItem('moonmind.dashboard.preferences')).toContain(
       '"debugFieldsVisible":false',
     );
 
-    // Simulate a reload: a fresh mount keeps the Debug tab hidden.
+    // Simulate a reload: a fresh mount keeps the Debug tab present.
     view.unmount();
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
     await screen.findByRole('link', { name: 'Overview' });
-    expect(screen.getByRole('button', { name: 'More' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Debug' })).toBeTruthy();
     menu = await openWorkflowActionsMenu();
     expect(within(menu).getByRole('menuitem', { name: 'View: Show debug details' })).toBeTruthy();
   });
@@ -3309,7 +3305,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('test-123').length).toBeGreaterThan(0);
       expect(screen.getByRole('button', { name: 'Show Workflow Inputs' })).toBeTruthy();
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
-      expect(screen.getByRole('button', { name: 'More' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Debug' })).toBeTruthy();
       expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
       expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
