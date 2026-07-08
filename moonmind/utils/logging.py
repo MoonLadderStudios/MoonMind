@@ -18,6 +18,13 @@ _GITHUB_TOKEN_PATTERN = re.compile(
 _CLOUD_TOKEN_PATTERN = re.compile(
     r"\b(?:AIza[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})\b"
 )
+# OpenAI/Anthropic-style provider secret keys (``sk-...``, ``sk-proj-...``,
+# ``sk-ant-...``) carried inside otherwise-safe text fields. The lookbehind
+# keeps the match anchored to a real token boundary so substrings of unrelated
+# words are never scrubbed.
+_PROVIDER_SECRET_KEY_PATTERN = re.compile(
+    r"(?<![\w-])sk-[A-Za-z0-9_-]{16,}"
+)
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b([A-Z0-9_.-]{0,80}(?:token|password|secret|api[_-]?key|credential)"
     r"[A-Z0-9_.-]{0,80})\s*[:=]\s*"
@@ -89,7 +96,8 @@ def scrub_github_tokens(text: str) -> str:
     if not text:
         return ""
     redacted = _GITHUB_TOKEN_PATTERN.sub("[REDACTED]", text)
-    return _CLOUD_TOKEN_PATTERN.sub("[REDACTED]", redacted)
+    redacted = _CLOUD_TOKEN_PATTERN.sub("[REDACTED]", redacted)
+    return _PROVIDER_SECRET_KEY_PATTERN.sub("[REDACTED]", redacted)
 
 def _redact_private_key_blocks(text: str) -> str:
     redacted = text

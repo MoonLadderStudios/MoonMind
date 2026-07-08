@@ -19,6 +19,8 @@ import httpx
 from temporalio import activity
 
 from moonmind.omnigent.bridge_security import (
+    BridgeSessionBinding,
+    OmnigentAuthorizationError,
     assert_bridge_session_binding,
     authorize_bridge_access,
     redact_raw_events,
@@ -1560,10 +1562,6 @@ async def run_omnigent_execution(
             f"{OMNIGENT_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
         )
 
-    # §16 rule 1: authorize the MoonMind principal + workflow + AgentRun +
-    # bridge session before any provider call. Fails closed on missing identity.
-    authorization = authorize_bridge_access(request)
-
     client: OmnigentHttpClient | None = None
     session_id = ""
     stream_task: asyncio.Task[None] | None = None
@@ -1581,8 +1579,12 @@ async def run_omnigent_execution(
     capture_policy: dict[str, Any] | None = None
     external_state: dict[str, Any] | None = None
     try:
-        # §16 rule 1: authorize the durable bridge session before any provider
-        # call; refuse cross-owner reuse of an idempotency key.
+        # §16 rule 1: authorize the MoonMind principal + workflow + AgentRun +
+        # bridge session before any provider call. Fails closed on missing
+        # identity, and refuses cross-owner reuse of an idempotency key. Raised
+        # inside the try so a denial classifies as a terminal user_error result
+        # instead of escaping as a retryable RuntimeError.
+        authorization = authorize_bridge_access(request)
         if run_store is not None:
             assert_bridge_session_binding(
                 authorization,
@@ -1641,6 +1643,19 @@ async def run_omnigent_execution(
                         "hostType": selection.session.host_type,
                         "workspace": selection.session.workspace,
                     },
+                )
+                # §16 rule 1: re-assert ownership against the durable row the
+                # store actually returned. The pre-provider get_binding check
+                # has a TOCTOU gap for concurrent requests that reuse the same
+                # new idempotency key (both observe no binding, then one reuses
+                # the other's freshly created row); revalidating here, before any
+                # session attach/post uses the row, closes it.
+                assert_bridge_session_binding(
+                    authorization,
+                    BridgeSessionBinding(
+                        workflow_id=durable_row.moonmind_workflow_id,
+                        agent_run_id=durable_row.moonmind_agent_run_id,
+                    ),
                 )
 
             retry_state = _heartbeat_state()

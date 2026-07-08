@@ -20,6 +20,7 @@ Source issue traceability: MM-1140 -> MM-1154.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -74,6 +75,7 @@ _SENSITIVE_HEADER_FRAGMENTS: tuple[str, ...] = (
     "credential",
     "password",
     "api-key",
+    "api_key",
     "apikey",
 )
 # Label-key fragments that flag an attempt to smuggle a credential into the
@@ -92,6 +94,10 @@ _SENSITIVE_LABEL_FRAGMENTS: tuple[str, ...] = (
     "cookie",
     "authorization",
 )
+# Standalone credential words that must be rejected as a whole separator-
+# delimited segment (for example ``runner.auth``) but must not fire as a bare
+# substring, so legitimate id labels such as ``moonmind.author`` are preserved.
+_SENSITIVE_LABEL_SEGMENTS: frozenset[str] = frozenset({"auth"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,8 +205,15 @@ def enforce_id_only_labels(labels: Mapping[str, Any]) -> dict[str, Any]:
     sanitized: dict[str, Any] = {}
     for raw_key, raw_value in labels.items():
         key = str(raw_key).strip()
-        normalized = key.lower().replace("-", "_")
-        if any(fragment in normalized for fragment in _SENSITIVE_LABEL_FRAGMENTS):
+        # Collapse every non-alphanumeric separator (``.``, ``-``, spaces, ``/``)
+        # to ``_`` so dotted credential keys such as ``api.key`` or ``runner.auth``
+        # normalize to the same shape as their underscored equivalents and cannot
+        # slip past the fragment/segment checks.
+        normalized = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+        segments = normalized.split("_")
+        if any(
+            fragment in normalized for fragment in _SENSITIVE_LABEL_FRAGMENTS
+        ) or any(segment in _SENSITIVE_LABEL_SEGMENTS for segment in segments):
             raise OmnigentAuthorizationError(
                 f"Omnigent session labels must not carry secret-like keys: {key!r}",
                 failure_class="user_error",
