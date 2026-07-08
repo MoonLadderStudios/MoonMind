@@ -1,0 +1,60 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, please search existing issues. If one already exists, add a 👍 reaction and any new diagnostic details there.
+
+        Please redact secrets, tokens, private URLs, customer data, private repository contents, and internal configuration.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro-steps
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Minimal steps to reproduce the issue. If you can't reproduce it
+        reliably, describe what you observed and when.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: MoonMind version
+      description: Commit SHA, tag, branch, or Docker image digest.
+      placeholder: e.g. main@abc1234 or ghcr.io/...:latest
+    validations:
+      required: false
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Docker/Desktop version, browser, or deployment target when relevant.
+      placeholder: e.g. macOS 15, Ubuntu 24.04, WSL2, Docker Desktop 4.x
+    validations:
+      required: false
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics and logs
+      description: Paste relevant redacted logs, workflow IDs, run IDs, screenshots, or terminal output.
+      render: text
+    validations:
+      required: false
