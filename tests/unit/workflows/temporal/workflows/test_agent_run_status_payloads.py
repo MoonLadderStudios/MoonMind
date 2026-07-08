@@ -103,6 +103,23 @@ def test_resiliency_policy_is_runtime_specific() -> None:
     assert claude_policy["noProgressTimeoutSeconds"] == 2400
     assert claude_policy["noProgressGraceSeconds"] == 900
 
+def test_claude_resiliency_policy_preserves_legacy_window_for_replay() -> None:
+    claude_request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        correlationId="run-1",
+        idempotencyKey="run-1:step-1",
+    )
+
+    policy = MoonMindAgentRun._resiliency_policy_for_request(
+        claude_request,
+        use_extended_claude_no_progress_window=False,
+    )
+
+    assert policy["runtime"] == "claude_code"
+    assert policy["noProgressTimeoutSeconds"] == 1500
+    assert policy["noProgressGraceSeconds"] == 600
+
 def test_status_progress_signature_tracks_metadata_progress_keys() -> None:
     first = AgentRunStatus(
         runId="run-1",
