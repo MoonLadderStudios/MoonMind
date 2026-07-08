@@ -402,11 +402,8 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     assert _network_names(host_service) == {"local-network"}
 
     host_env = _env_map(host_service["environment"])
-    # OPENAI_API_KEY is cleared so Codex uses the mounted ChatGPT subscription
-    # OAuth state instead of OpenAI Platform API-key billing.
-    assert host_env["OPENAI_API_KEY"] == ""
-    # CODEX_HOME points Codex at the mounted MoonMind-managed auth volume.
-    assert host_env["CODEX_HOME"] == "/root/.codex"
+    assert host_env["OPENAI_API_KEY"] == "${OPENAI_API_KEY:-}"
+    assert "CODEX_HOME" not in host_env
     assert host_env["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY:-}"
     assert host_env["GEMINI_API_KEY"] == "${GEMINI_API_KEY:-}"
     assert host_env["GOOGLE_API_KEY"] == "${GOOGLE_API_KEY:-}"
@@ -414,10 +411,12 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     host_volumes = set(host_service["volumes"])
     assert "omnigent-host-state:/root/.omnigent" in host_volumes
     assert "./omnigent_workspaces:/workspaces" in host_volumes
-    # MoonMind-managed Codex OAuth volume, mounted read-write for token refresh.
-    assert "codex_auth_volume:/root/.codex" in host_volumes
-    # MoonMind repo exposed as an Omnigent workspace.
-    assert ".:/workspaces/MoonMind" in host_volumes
+    assert "codex_auth_volume:/root/.codex" not in host_volumes
+    # Operator-managed sanitized workspace, exposed read-only.
+    assert (
+        "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
+        "/workspaces/MoonMind:ro"
+    ) in host_volumes
     assert "omnigent-host-state" in volumes
     assert "codex_auth_volume" in volumes
     assert "omnigent-server-state" not in volumes

@@ -777,12 +777,7 @@ services:
     image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
     command: ["omnigent", "host", "--server", "http://omnigent:8000", "--non-interactive"]
     environment:
-      # Clear OPENAI_API_KEY so Codex uses the mounted ChatGPT/Codex subscription
-      # OAuth state (auth.json) instead of OpenAI Platform API-key billing. An empty
-      # value overrides any OPENAI_API_KEY inherited from .env via env_file.
-      - OPENAI_API_KEY=
-      # Point Codex at the mounted MoonMind-managed auth volume (see volumes below).
-      - CODEX_HOME=/root/.codex
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
@@ -791,13 +786,9 @@ services:
         required: false
     volumes:
       - omnigent-host-state:/root/.omnigent
-      # Reuse MoonMind's UI-managed Codex OAuth credentials. Read-write on purpose:
-      # Codex rewrites auth.json on token refresh and the refreshed material must
-      # propagate back to the durable MoonMind-managed volume (do not mark :ro).
-      - codex_auth_volume:/root/.codex
       - ./omnigent_workspaces:/workspaces
-      # Make the MoonMind repo available as an Omnigent workspace under /workspaces.
-      - .:/workspaces/MoonMind
+      # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
+      - ${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
     depends_on:
       omnigent:
         condition: service_started
