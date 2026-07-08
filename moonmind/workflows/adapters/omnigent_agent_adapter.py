@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from urllib.parse import urlparse
 
+from moonmind.omnigent.bridge_security import enforce_id_only_labels
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
@@ -229,11 +230,15 @@ def build_omnigent_session_create_payload(
     payload: dict[str, Any] = {
         "agent_id": target.agent_id,
         "title": title,
-        "labels": {
-            "moonmind.correlation_id": request.correlation_id,
-            "moonmind.idempotency_key": request.idempotency_key,
-            **session.labels,
-        },
+        # §16 rule 4: session labels carry MoonMind ids and the idempotency key
+        # but never secrets; caller-supplied labels are guarded before merge.
+        "labels": enforce_id_only_labels(
+            {
+                "moonmind.correlation_id": request.correlation_id,
+                "moonmind.idempotency_key": request.idempotency_key,
+                **session.labels,
+            }
+        ),
         "host_type": session.host_type,
         "workspace": session.workspace,
         "model_override": session.model_override,

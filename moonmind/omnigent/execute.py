@@ -18,6 +18,11 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from temporalio import activity
 
+from moonmind.omnigent.bridge_security import (
+    assert_bridge_session_binding,
+    authorize_bridge_access,
+    redact_raw_events,
+)
 from moonmind.omnigent.store import (
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
@@ -30,6 +35,7 @@ from moonmind.omnigent.settings import (
     build_omnigent_gate,
     resolved_api_token,
     resolved_default_agent_name,
+    resolved_proxy_forward_headers,
     resolved_server_url,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -1157,10 +1163,12 @@ async def _build_capture_bundle(
             payload=initial_snapshot,
             link_type="runtime.omnigent.snapshot.initial",
         )
+    # §16 rule 5: redact secret-like fields on the raw-event persistence path
+    # so the artifact system stays a safe evidence boundary.
     raw_ref = await artifact_gateway.write_text(
         request=request,
         name="runtime.omnigent.sse.raw.jsonl",
-        payload=_jsonl(raw_events),
+        payload=_jsonl(redact_raw_events(raw_events)),
         link_type="runtime.omnigent.sse.raw",
         content_type="application/x-ndjson",
     )
@@ -1470,6 +1478,10 @@ async def run_omnigent_execution(
             f"{OMNIGENT_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
         )
 
+    # §16 rule 1: authorize the MoonMind principal + workflow + AgentRun +
+    # bridge session before any provider call. Fails closed on missing identity.
+    authorization = authorize_bridge_access(request)
+
     client: OmnigentHttpClient | None = None
     session_id = ""
     stream_task: asyncio.Task[None] | None = None
@@ -1487,6 +1499,13 @@ async def run_omnigent_execution(
     capture_policy: dict[str, Any] | None = None
     external_state: dict[str, Any] | None = None
     try:
+        # §16 rule 1: authorize the durable bridge session before any provider
+        # call; refuse cross-owner reuse of an idempotency key.
+        if run_store is not None:
+            assert_bridge_session_binding(
+                authorization,
+                await run_store.get_binding(request.idempotency_key),
+            )
         selection = build_omnigent_selection(request)
         capture_policy = selection.capture
         external_state = _new_external_state_evidence(
@@ -1501,6 +1520,7 @@ async def run_omnigent_execution(
                 base_url=resolved_server_url(),
                 api_token=resolved_api_token(),
                 client=httpx_client,
+                upstream_header_allowlist=resolved_proxy_forward_headers(),
             )
 
             async def list_agents() -> list[dict[str, Any]]:
@@ -1928,6 +1948,7 @@ async def run_omnigent_execution(
                     base_url=resolved_server_url(),
                     api_token=resolved_api_token(),
                     client=cleanup_httpx_client,
+                    upstream_header_allowlist=resolved_proxy_forward_headers(),
                 )
                 await _cancel_omnigent_session(cleanup_client, session_id)
                 await _capture_cancelled_omnigent_session(

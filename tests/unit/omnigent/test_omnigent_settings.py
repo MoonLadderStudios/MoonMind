@@ -39,3 +39,19 @@ def test_omnigent_gate_enabled_with_flag_and_server_url() -> None:
     assert gate.enabled is True
     assert gate.missing == ()
     assert resolved_server_url(env=env) == "https://omnigent.example.test"
+
+
+def test_proxy_forward_headers_empty_by_default() -> None:
+    from moonmind.omnigent.settings import resolved_proxy_forward_headers
+
+    assert resolved_proxy_forward_headers(env={}) == frozenset()
+
+
+def test_proxy_forward_headers_parses_comma_separated_allowlist() -> None:
+    from moonmind.omnigent.settings import resolved_proxy_forward_headers
+
+    resolved = resolved_proxy_forward_headers(
+        env={"OMNIGENT_PROXY_FORWARD_HEADERS": " X-Trace-Id , X-MoonMind-Trace ,"}
+    )
+
+    assert resolved == frozenset({"x-trace-id", "x-moonmind-trace"})

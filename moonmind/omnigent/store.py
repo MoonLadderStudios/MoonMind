@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentExternalRun
+from moonmind.omnigent.bridge_security import BridgeSessionBinding
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 FIRST_MESSAGE_NOT_PREPARED = "not_prepared"
@@ -75,6 +76,23 @@ class OmnigentRunStore:
                     await session.commit()
             await session.refresh(row)
             return _detached(session, row)
+
+    async def get_binding(self, idempotency_key: str) -> BridgeSessionBinding | None:
+        """Return the MoonMind identity already bound to a bridge session.
+
+        Read-only lookup used to authorize the bridge session before any
+        provider call (OmnigentBridge.md §16 rule 1); returns ``None`` when no
+        durable row exists yet for the idempotency key.
+        """
+
+        async with self._session_factory() as session:
+            row = await self._get(session, idempotency_key)
+            if row is None:
+                return None
+            return BridgeSessionBinding(
+                workflow_id=row.moonmind_workflow_id,
+                agent_run_id=row.moonmind_agent_run_id,
+            )
 
     async def attach_session(self, idempotency_key: str, session_id: str) -> OmnigentExternalRun:
         async with self._session_factory() as session:
