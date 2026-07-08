@@ -749,7 +749,15 @@ function RoutedDashboardPage({
   useEffect(() => {
     const syncPreferences = () => {
       const prefs = readDashboardPreferences();
-      setRequestedMode(prefs.workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar');
+      // The `/workflows` route is always the full-screen table surface, and
+      // `table` is not representable in the persisted collapse boolean. Deriving
+      // the mode from that boolean here would clobber the table selection back to
+      // `sidebar` whenever a preference change fires (for example when the
+      // already-selected "Full screen table" button re-persists preferences),
+      // so leave the route-owned `table` mode untouched on this surface.
+      if (window.location.pathname.replace(/\/$/, '') !== '/workflows') {
+        setRequestedMode(prefs.workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar');
+      }
       setLastSelectedWorkflowId(prefs.lastSelectedWorkflowId.trim() || null);
     };
     window.addEventListener(DASHBOARD_PREFERENCES_CHANGED_EVENT, syncPreferences);
