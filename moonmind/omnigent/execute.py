@@ -18,10 +18,12 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from temporalio import activity
 
-from moonmind.omnigent.failure_classification import (
-    OmnigentFailureReason,
-    classify_omnigent_failure,
-    failure_class_for_terminal_status,
+from moonmind.omnigent.bridge_security import (
+    BridgeSessionBinding,
+    OmnigentAuthorizationError,
+    assert_bridge_session_binding,
+    authorize_bridge_access,
+    redact_raw_events,
 )
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
@@ -30,11 +32,17 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
 )
+from moonmind.omnigent.failure_classification import (
+    OmnigentFailureReason,
+    classify_omnigent_failure,
+    failure_class_for_terminal_status,
+)
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
     resolved_api_token,
     resolved_default_agent_name,
+    resolved_proxy_forward_headers,
     resolved_server_url,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -1219,10 +1227,12 @@ async def _build_capture_bundle(
             payload=initial_snapshot,
             link_type="runtime.omnigent.snapshot.initial",
         )
+    # §16 rule 5: redact secret-like fields on the raw-event persistence path
+    # so the artifact system stays a safe evidence boundary.
     raw_ref = await artifact_gateway.write_text(
         request=request,
         name="runtime.omnigent.sse.raw.jsonl",
-        payload=_jsonl(raw_events),
+        payload=_jsonl(redact_raw_events(raw_events)),
         link_type="runtime.omnigent.sse.raw",
         content_type="application/x-ndjson",
     )
@@ -1569,6 +1579,17 @@ async def run_omnigent_execution(
     capture_policy: dict[str, Any] | None = None
     external_state: dict[str, Any] | None = None
     try:
+        # §16 rule 1: authorize the MoonMind principal + workflow + AgentRun +
+        # bridge session before any provider call. Fails closed on missing
+        # identity through the non-retryable user-error result path below.
+        authorization = authorize_bridge_access(request)
+        # §16 rule 1: authorize the durable bridge session before any provider
+        # call; refuse cross-owner reuse of an idempotency key.
+        if run_store is not None:
+            assert_bridge_session_binding(
+                authorization,
+                await run_store.get_binding(request.idempotency_key),
+            )
         selection = build_omnigent_selection(request)
         capture_policy = selection.capture
         external_state = _new_external_state_evidence(
@@ -1583,6 +1604,7 @@ async def run_omnigent_execution(
                 base_url=resolved_server_url(),
                 api_token=resolved_api_token(),
                 client=httpx_client,
+                upstream_header_allowlist=resolved_proxy_forward_headers(),
             )
 
             async def list_agents() -> list[dict[str, Any]]:
@@ -1621,6 +1643,25 @@ async def run_omnigent_execution(
                         "hostType": selection.session.host_type,
                         "workspace": selection.session.workspace,
                     },
+                )
+                assert_bridge_session_binding(
+                    authorization,
+                    BridgeSessionBinding(
+                        workflow_id=str(
+                            getattr(
+                                durable_row,
+                                "moonmind_workflow_id",
+                                authorization.workflow_id,
+                            )
+                        ),
+                        agent_run_id=str(
+                            getattr(
+                                durable_row,
+                                "moonmind_agent_run_id",
+                                authorization.agent_run_id,
+                            )
+                        ),
+                    ),
                 )
 
             retry_state = _heartbeat_state()
@@ -2061,6 +2102,7 @@ async def run_omnigent_execution(
                     base_url=resolved_server_url(),
                     api_token=resolved_api_token(),
                     client=cleanup_httpx_client,
+                    upstream_header_allowlist=resolved_proxy_forward_headers(),
                 )
                 await _cancel_omnigent_session(cleanup_client, session_id)
                 await _capture_cancelled_omnigent_session(
@@ -2143,6 +2185,65 @@ async def run_omnigent_execution(
             metadata={
                 "normalizedStatus": "failed",
                 "providerName": "omnigent",
+                **bundle.metadata_refs,
+            },
+        )
+    except OmnigentAuthorizationError as exc:
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
+        failure_class = exc.failure_class
+        final_snapshot = {"status": "failed", "summary": str(exc)}
+        diagnostics = {
+            "error": str(exc),
+            "failureClass": failure_class,
+            "authorizationDenied": True,
+        }
+        try:
+            bundle = await _build_capture_bundle(
+                client=client,
+                artifact_gateway=artifact_gateway,
+                request=request,
+                session_id=session_id,
+                agent_id=target_agent_id,
+                initial_snapshot=initial_snapshot,
+                final_snapshot=final_snapshot,
+                first_message_request=first_message,
+                first_message_response=first_message_response,
+                first_message_posted=first_message_posted,
+                first_message_response_identifiers=first_message_response_identifiers,
+                raw_events=raw_events,
+                normalized_events=normalized_events,
+                terminal_status="failed",
+                diagnostics=diagnostics,
+                harvest_resources=False,
+                external_state=external_state,
+                capture_policy=capture_policy,
+            )
+        except OmnigentArtifactError:
+            return AgentRunResult(
+                summary=_compact_summary(
+                    exc, fallback="Omnigent bridge authorization denied"
+                ),
+                failureClass=failure_class,
+                providerErrorCode="omnigent_authorization_denied",
+                metadata={
+                    "normalizedStatus": "failed",
+                    "providerName": "omnigent",
+                    "authorizationDenied": True,
+                },
+            )
+        return AgentRunResult(
+            outputRefs=bundle.output_refs,
+            summary=_compact_summary(
+                exc, fallback="Omnigent bridge authorization denied"
+            ),
+            diagnosticsRef=bundle.diagnostics_ref,
+            failureClass=failure_class,
+            providerErrorCode="omnigent_authorization_denied",
+            metadata={
+                "normalizedStatus": "failed",
+                "providerName": "omnigent",
+                "authorizationDenied": True,
                 **bundle.metadata_refs,
             },
         )

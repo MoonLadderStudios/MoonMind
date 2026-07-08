@@ -94,6 +94,25 @@ def resolved_default_agent_name(*, env: Mapping[str, Any] | None = None) -> str:
     return _clean(source.get("OMNIGENT_DEFAULT_AGENT_NAME"))
 
 
+def resolved_proxy_forward_headers(
+    *, env: Mapping[str, Any] | None = None
+) -> frozenset[str]:
+    """Return the explicitly-configured upstream proxy header allowlist.
+
+    Proxy mode forwards no MoonMind headers upstream by default (OmnigentBridge
+    §16 rule 7); operators opt in per header via a comma-separated
+    ``OMNIGENT_PROXY_FORWARD_HEADERS``. Names are normalized to lowercase.
+    """
+
+    source = env if env is not None else os.environ
+    raw = _clean(source.get("OMNIGENT_PROXY_FORWARD_HEADERS"))
+    if not raw:
+        return frozenset()
+    return frozenset(
+        part.strip().lower() for part in raw.split(",") if part.strip()
+    )
+
+
 __all__ = [
     "OMNIGENT_DISABLED_MESSAGE",
     "OmnigentRuntimeGate",
@@ -101,5 +120,6 @@ __all__ = [
     "is_omnigent_enabled",
     "resolved_api_token",
     "resolved_default_agent_name",
+    "resolved_proxy_forward_headers",
     "resolved_server_url",
 ]
