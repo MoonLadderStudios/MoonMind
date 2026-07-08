@@ -389,12 +389,26 @@ the same cohesive change, with no parallel table, alias, or compatibility
 wrapper. This guarantees that retries and Workflow Chat always read one durable
 store rather than diverging depending on which table a caller reads.
 
-`status` is a terminal-safe superset of the normalized statuses already produced
-by `moonmind/omnigent/execute.py`. `timed_out` is preserved as a distinct
-terminal status (mapped to the `system_error` failure class, matching the
-existing normalization) so timeouts are never collapsed into `failed`; this
-keeps retry, operator, and Workflow Chat/diagnostics decisions non-lossy across
-the provider path. See §17 for the full failure-class mapping.
+`status` is a terminal-safe mapping (a coalescence, not a superset) of the
+normalized statuses already produced by `moonmind/omnigent/execute.py`. The
+explicit lifecycle-to-normalized-status mapping is:
+
+- `declared` and `creating` are bridge lifecycle states that cover session
+  registration and setup before the provider reports a normalized status.
+- The non-terminal normalized statuses — `created`, `launching`,
+  `provisioning`, `running`, `waiting`, `idle`, `awaiting_approval`, and
+  `intervention_requested` — all coalesce into the single `active` value.
+- The terminal normalized statuses map straight through: `completed`, `failed`,
+  `canceled`, and `timed_out`.
+
+`timed_out` is preserved as a distinct terminal status (mapped to the
+`system_error` failure class, matching the existing normalization) so timeouts
+are never collapsed into `failed`. The session-level `status` column is
+intentionally coarse; the full, non-lossy normalized status stream is preserved
+per event on `omnigent_bridge_session_events.normalized_status` (§7.2), so
+retry, operator, and Workflow Chat/diagnostics decisions still see every
+non-terminal state across the provider path. See §17 for the full failure-class
+mapping.
 
 ### 7.2 `omnigent_bridge_session_events`
 
@@ -805,6 +819,18 @@ When bridge session events are present, Workflow Chat should render:
 - diagnostics and artifact links.
 
 Terminal workflows should not show “managed runtime observability record missing” until the bridge session store and step-scoped agent-run bindings have also been checked.
+
+The Workflow Chat projection reads bridge session events through these canonical
+MoonMind API routes (owned by the Session API Facade in §18.2):
+
+| Purpose | MoonMind route |
+|---|---|
+| List bridge session events | `GET /api/omnigent/bridge-sessions/{bridge_session_id}/events` |
+| Stream bridge session events | `GET /api/omnigent/bridge-sessions/{bridge_session_id}/stream` |
+
+These routes are the durable projection-API contract. The disposable
+[`docs/tmp/OmnigentBridgeRollout.md`](../tmp/OmnigentBridgeRollout.md) only owns
+the phase in which they are delivered, not the contract itself.
 
 ---
 

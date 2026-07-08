@@ -49,14 +49,10 @@ Stock Omnigent Server talks to unchanged host.
 
 ## Phase 3 — Workflow Chat projection
 
-Add API and UI support for bridge-session events:
-
-```text
-GET /api/omnigent/bridge-sessions/{bridge_session_id}/events
-GET /api/omnigent/bridge-sessions/{bridge_session_id}/stream
-```
-
-Update Workflow Chat to prefer bridge session events.
+Deliver the API and UI support for the bridge-session projection routes. The
+durable route contract lives in `docs/Omnigent/OmnigentBridge.md` §15; this
+phase only sequences when that contract is implemented. In this phase, update
+Workflow Chat to prefer bridge session events over legacy logs.
 
 ## Phase 4 — Direct Codex compatibility producer
 
