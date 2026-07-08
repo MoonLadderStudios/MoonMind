@@ -208,6 +208,50 @@ describe('dashboardPreferences', () => {
         expect(sanitizeDashboardPreferences({ lastSelectedWorkflowId: candidate }).lastSelectedWorkflowId).toBe('');
       }
     });
+
+    it('MM-1145 defaults the recurring list display mode to table and the remembered definition to empty', () => {
+      expect(DEFAULT_DASHBOARD_PREFERENCES.recurringListDisplayMode).toBe('table');
+      expect(DEFAULT_DASHBOARD_PREFERENCES.lastSelectedDefinitionId).toBe('');
+    });
+
+    it('MM-1145 keeps a valid persisted recurring list display mode', () => {
+      for (const mode of ['hidden', 'sidebar', 'table'] as const) {
+        expect(
+          sanitizeDashboardPreferences({ recurringListDisplayMode: mode }).recurringListDisplayMode,
+        ).toBe(mode);
+      }
+    });
+
+    it('MM-1145 sanitizes an invalid recurring list display mode back to table', () => {
+      for (const candidate of ['collapsed', '', 42, null, undefined, {}, []]) {
+        expect(
+          sanitizeDashboardPreferences({ recurringListDisplayMode: candidate }).recurringListDisplayMode,
+        ).toBe('table');
+      }
+    });
+
+    it('MM-1145 trims the remembered recurring definition and rejects non-string values', () => {
+      expect(
+        sanitizeDashboardPreferences({ lastSelectedDefinitionId: '  schedule-one  ' }).lastSelectedDefinitionId,
+      ).toBe('schedule-one');
+      for (const candidate of [null, undefined, 42, false, {}, []]) {
+        expect(
+          sanitizeDashboardPreferences({ lastSelectedDefinitionId: candidate }).lastSelectedDefinitionId,
+        ).toBe('');
+      }
+    });
+
+    it('MM-1145 round-trips the recurring mode and remembered definition across a reload', () => {
+      writeDashboardPreferences({
+        ...DEFAULT_DASHBOARD_PREFERENCES,
+        recurringListDisplayMode: 'hidden',
+        lastSelectedDefinitionId: 'schedule-two',
+      });
+
+      const reloaded = readDashboardPreferences();
+      expect(reloaded.recurringListDisplayMode).toBe('hidden');
+      expect(reloaded.lastSelectedDefinitionId).toBe('schedule-two');
+    });
   });
 
   describe('reset behavior (MM-964 reset behavior)', () => {

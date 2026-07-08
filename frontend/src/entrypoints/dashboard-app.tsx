@@ -799,11 +799,15 @@ function RoutedDashboardPage({
   const [requestedMode, setRequestedMode] = useState<WorkflowListDisplayMode>(() => (
     readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
   ));
-  const [requestedRecurringMode, setRequestedRecurringMode] = useState<WorkflowListDisplayMode>('table');
+  const [requestedRecurringMode, setRequestedRecurringMode] = useState<WorkflowListDisplayMode>(
+    () => readDashboardPreferences().recurringListDisplayMode,
+  );
   const [lastSelectedWorkflowId, setLastSelectedWorkflowId] = useState<string | null>(
     () => readDashboardPreferences().lastSelectedWorkflowId.trim() || null,
   );
-  const [lastSelectedDefinitionId, setLastSelectedDefinitionId] = useState<string | null>(null);
+  const [lastSelectedDefinitionId, setLastSelectedDefinitionId] = useState<string | null>(
+    () => readDashboardPreferences().lastSelectedDefinitionId.trim() || null,
+  );
   const [resolutionStatus, setResolutionStatus] = useState<string | null>(null);
   const route = resolveDashboardRoute(location.pathname);
   const apiBase = typeof uiInfo?.apiBase === 'string' ? uiInfo.apiBase : '/api';
@@ -839,6 +843,7 @@ function RoutedDashboardPage({
         const definitionId = decodeURIComponent(match[1] || '').trim();
         if (definitionId) {
           setLastSelectedDefinitionId(definitionId);
+          updateDashboardPreferences({ lastSelectedDefinitionId: definitionId });
         }
       } catch {
         // Ignore malformed paths; route validation handles unsupported pages.
@@ -894,6 +899,7 @@ function RoutedDashboardPage({
         const requestId = Symbol();
         pendingRequestRef.current = requestId;
         setRequestedRecurringMode(selectedMode);
+        updateDashboardPreferences({ recurringListDisplayMode: selectedMode });
         setResolutionStatus('Opening first recurring schedule...');
         try {
           const rememberedId = lastSelectedDefinitionId?.trim() || '';
@@ -912,6 +918,7 @@ function RoutedDashboardPage({
             return;
           }
           setLastSelectedDefinitionId(targetDefinitionId);
+          updateDashboardPreferences({ lastSelectedDefinitionId: targetDefinitionId });
           setResolutionStatus(null);
           navigate(`/schedules/${encodeURIComponent(targetDefinitionId)}`);
         } catch {
@@ -933,8 +940,10 @@ function RoutedDashboardPage({
         return;
       }
       setRequestedRecurringMode(selectedMode);
+      updateDashboardPreferences({ recurringListDisplayMode: selectedMode });
       if (resolved.selection.definitionId) {
         setLastSelectedDefinitionId(resolved.selection.definitionId);
+        updateDashboardPreferences({ lastSelectedDefinitionId: resolved.selection.definitionId });
       }
       const current = `${location.pathname}${location.search}`;
       if (resolved.targetPath !== current) {
