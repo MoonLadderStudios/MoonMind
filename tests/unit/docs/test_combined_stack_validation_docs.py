@@ -76,18 +76,19 @@ def test_readme_links_to_combined_stack_guide_and_host_urls() -> None:
     assert "docs/Omnigent/CombinedStackValidationAndRollback.md" in text
 
 
-def test_combined_stack_doc_documents_omnigent_host_codex_auth_volume() -> None:
+def test_combined_stack_doc_documents_omnigent_host_workspace_and_credentials() -> None:
     text = _doc_text()
 
-    assert "## DOC-REQ-012 Omnigent Host Codex Subscription Auth" in text
+    assert "## DOC-REQ-012 Omnigent Host Workspace and Credentials" in text
 
-    # omnigent-host mounts the MoonMind-managed Codex OAuth volume at the
-    # container Codex home and pins CODEX_HOME to it.
-    assert "codex_auth_volume:/root/.codex" in text
-    assert "CODEX_HOME=/root/.codex" in text
+    # omnigent-host mounts an operator-managed sanitized workspace read-only
+    # instead of exposing the repository root and local deployment secrets.
+    assert "OMNIGENT_MOONMIND_WORKSPACE" in text
+    assert "/workspaces/MoonMind:ro" in text
+    assert "local deployment secrets" in text
 
-    # Subscription auth must not depend on API-key or CODEX_ACCESS_TOKEN paths,
-    # and the mount must stay read-write so token refreshes persist.
-    assert "CODEX_ACCESS_TOKEN" in text
-    assert "read-write" in text
-    assert "read-only" in text
+    # Generic hosts preserve API-key-backed runners and do not expose Codex
+    # subscription OAuth material to every process in the host container.
+    assert "preserves configured provider API keys" in text
+    assert "does not mount MoonMind's Codex OAuth volume" in text
+    assert "does not mount MoonMind's Codex OAuth volume or set `CODEX_HOME` globally" in text
