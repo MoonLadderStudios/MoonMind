@@ -357,7 +357,7 @@ describe('Dashboard shared entry', () => {
     fireEvent.mouseLeave(createLink);
     expect(animatedNavIconMocks.rocketStop).toHaveBeenCalledTimes(1);
 
-    const schedulesLink = screen.getByRole('link', { name: 'Schedules' });
+    const schedulesLink = screen.getByRole('link', { name: 'Recurring' });
     fireEvent.mouseEnter(schedulesLink);
     expect(animatedNavIconMocks.moonStart).toHaveBeenCalledTimes(1);
     fireEvent.mouseLeave(schedulesLink);
@@ -408,11 +408,19 @@ describe('Dashboard shared entry', () => {
 
     await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
 
-    const group = screen.getByRole('group', { name: 'Workflow list display' });
+    const group = screen.getByRole('radiogroup', { name: 'Workflow list display' });
     expect(group).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'No list' }).getAttribute('aria-pressed')).toBe('false');
-    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('false');
-    expect(screen.getByRole('button', { name: 'Full screen table' }).getAttribute('aria-pressed')).toBe('true');
+    const noList = screen.getByRole('radio', { name: 'No list' });
+    const sidebarList = screen.getByRole('radio', { name: 'Sidebar list' });
+    const fullTable = screen.getByRole('radio', { name: 'Full screen table' });
+    expect(noList.getAttribute('aria-checked')).toBe('false');
+    expect(sidebarList.getAttribute('aria-checked')).toBe('false');
+    expect(fullTable.getAttribute('aria-checked')).toBe('true');
+    expect(noList.getAttribute('aria-pressed')).toBeNull();
+    expect(sidebarList.getAttribute('aria-pressed')).toBeNull();
+    expect(fullTable.getAttribute('aria-pressed')).toBeNull();
+    expect(noList.getAttribute('tabindex')).toBe('-1');
+    expect(fullTable.getAttribute('tabindex')).toBe('0');
     expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
@@ -440,13 +448,215 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
-    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95');
     });
     expect(await screen.findByText(/Workflow detail route loaded:/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('renders the Recurring list display selector on schedule routes and opens the first schedule in sidebar mode', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 'schedule-one',
+              name: 'Daily recurring scan',
+              enabled: true,
+              cron: '0 9 * * *',
+              timezone: 'UTC',
+              nextRunAt: '2026-07-09T09:00:00Z',
+              lastDispatchStatus: 'enqueued',
+              target: {},
+              policy: {},
+            }],
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 'schedule-one',
+            name: 'Daily recurring scan',
+            description: 'Runs every morning.',
+            enabled: true,
+            cron: '0 9 * * *',
+            timezone: 'UTC',
+            nextRunAt: '2026-07-09T09:00:00Z',
+            lastScheduledFor: '2026-07-08T09:00:00Z',
+            lastDispatchStatus: 'enqueued',
+            target: {},
+            policy: {},
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    expect(screen.getByRole('radiogroup', { name: 'Recurring list display' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules/schedule-one');
+    });
+    expect(await screen.findByRole('heading', { name: 'Daily recurring scan' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Recurring schedule navigation' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: /Daily recurring scan/ }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('verifies remembered recurring IDs before opening sidebar mode from the schedules table', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows/stale-schedule') {
+        return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 'schedule-one',
+              name: 'Daily recurring scan',
+              enabled: true,
+              cron: '0 9 * * *',
+              timezone: 'UTC',
+              nextRunAt: '2026-07-09T09:00:00Z',
+              lastDispatchStatus: 'enqueued',
+              target: {},
+              policy: {},
+            }],
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 'schedule-one',
+            name: 'Daily recurring scan',
+            description: 'Runs every morning.',
+            enabled: true,
+            cron: '0 9 * * *',
+            timezone: 'UTC',
+            nextRunAt: '2026-07-09T09:00:00Z',
+            lastScheduledFor: '2026-07-08T09:00:00Z',
+            lastDispatchStatus: 'enqueued',
+            target: {},
+            policy: {},
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules/stale-schedule');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Recurring schedule not found.')).toBeTruthy();
+    navigateTo('/schedules');
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules/schedule-one');
+    });
+    expect(await screen.findByRole('heading', { name: 'Daily recurring scan' })).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/recurring-workflows/stale-schedule')).toBe(true);
+  });
+
+  it('switches Recurring detail between full table and hidden-list modes', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 'schedule-one',
+              name: 'Daily recurring scan',
+              enabled: true,
+              cron: '0 9 * * *',
+              timezone: 'UTC',
+              nextRunAt: '2026-07-09T09:00:00Z',
+              lastDispatchStatus: 'enqueued',
+              target: {},
+              policy: {},
+            }],
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 'schedule-one',
+            name: 'Daily recurring scan',
+            description: 'Runs every morning.',
+            enabled: true,
+            cron: '0 9 * * *',
+            timezone: 'UTC',
+            nextRunAt: '2026-07-09T09:00:00Z',
+            lastScheduledFor: '2026-07-08T09:00:00Z',
+            lastDispatchStatus: 'enqueued',
+            target: {},
+            policy: {},
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules/schedule-one');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Daily recurring scan' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Recurring schedule navigation' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    expect(window.location.pathname).toBe('/schedules/schedule-one');
+    await waitFor(() => {
+      expect(screen.queryByRole('complementary', { name: 'Recurring schedule navigation' })).toBeNull();
+    });
+    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Full screen table' }));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules');
+    });
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
   });
 
   it('hides the workflow list display control on unsupported routes', async () => {
@@ -578,17 +788,17 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
     await waitFor(() => {
       expect(document.querySelector('.panel--data-wide')).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
-    expect(screen.getByRole('button', { name: 'No list' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
     expect(window.location.pathname).toBe('/workflows/new');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
-    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
     expect(window.location.pathname).toBe('/workflows/new');
     expect(window.location.search).toBe('?source=temporal');
   });
@@ -690,7 +900,7 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fetchSpy.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/remembered-123');
@@ -711,7 +921,7 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow detail route loaded: /workflows/route-123')).toBeTruthy();
     fetchSpy.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
 
     await waitFor(() => {
       expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
@@ -747,7 +957,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/first-query-row');
@@ -786,7 +996,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Sidebar list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/visible-456');
@@ -820,7 +1030,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/authorized-row');
@@ -848,7 +1058,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/workflows/authorized-task-row');
@@ -875,7 +1085,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
 
     expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
     const completeList = resolveList;
@@ -906,7 +1116,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
 
     await waitFor(() => {
       expect(screen.getByRole('status').textContent).toContain('No workflow to open.');
@@ -929,7 +1139,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
 
     await waitFor(() => {
       expect(screen.getByRole('status').textContent).toContain('No workflow to open.');
@@ -952,7 +1162,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
 
     await waitFor(() => {
       expect(screen.getByRole('status').textContent).toContain('Workflow list is unavailable.');
@@ -979,7 +1189,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'No list' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
     expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
     fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
     expect(await screen.findByText('Settings permissions:')).toBeTruthy();
@@ -2387,6 +2597,9 @@ describe('Dashboard shared entry', () => {
     );
     expect(dashboardCss).toMatch(
       /@media \(max-width: 767px\)\s*\{[\s\S]*\.workflow-list-display-control\s*\{[^}]*display:\s*none/s,
+    );
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 720px\)\s*\{[\s\S]*\.recurring-schedule-sidebar\s*\{[^}]*display:\s*none/s,
     );
     expect(dashboardCss).toMatch(
       /@media \(max-width: 900px\)\s*\{[\s\S]*\.grid-2\s*\{/,
