@@ -13,3 +13,18 @@ def test_runtime_and_skill_visibility_read_canonical_workflow_payload() -> None:
 
     assert workflow._runtime_visibility_from_parameters(parameters) == "codex_cli"
     assert workflow._skill_visibility_from_parameters(parameters) == "fix-ci"
+
+
+def test_runtime_visibility_reads_update_input_runtime_shapes() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    assert (
+        workflow._runtime_visibility_from_parameters({"mode": "claude_code"})
+        == "claude_code"
+    )
+    assert (
+        workflow._runtime_visibility_from_parameters(
+            {"authoredTaskInput": {"runtime": {"mode": "codex_cli"}}}
+        )
+        == "codex_cli"
+    )

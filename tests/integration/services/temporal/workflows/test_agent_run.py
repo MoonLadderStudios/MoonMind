@@ -70,49 +70,69 @@ async def mock_cancel(request: dict) -> AgentRunStatus:
 @_activity.defn(name="provider_profile.list")
 async def mock_provider_profile_list(request: dict) -> dict:
     """Return managed profiles for exact-profile and selector routing tests."""
-    return {
-        "profiles": [
+    runtime_id = request.get("runtime_id", "test-agent")
+    profiles = [
+        {
+            "profile_id": "default-managed",
+            "runtime_id": runtime_id,
+            "auth_mode": "volume",
+            "volume_ref": "test-volume",
+            "volume_mount_path": "/tmp/auth",
+            "account_label": "test",
+            "api_key_ref": None,
+            "runtime_env_overrides": {},
+            "api_key_env_var": None,
+            "max_parallel_runs": 1,
+            "cooldown_after_429_seconds": 900,
+            "rate_limit_policy": "pause_and_retry",
+            "max_lease_duration_seconds": 7200,
+            "enabled": True,
+        },
+        {
+            "profile_id": "explicit-openai-profile",
+            "runtime_id": runtime_id,
+            "provider_id": "openai",
+            "auth_mode": "volume",
+            "volume_ref": "test-volume",
+            "volume_mount_path": "/tmp/auth",
+            "account_label": "openai",
+            "api_key_ref": None,
+            "runtime_env_overrides": {},
+            "api_key_env_var": None,
+            "max_parallel_runs": 1,
+            "cooldown_after_429_seconds": 900,
+            "rate_limit_policy": "pause_and_retry",
+            "max_lease_duration_seconds": 7200,
+            "enabled": True,
+        },
+        {
+            "profile_id": "alternate-managed",
+            "runtime_id": runtime_id,
+            "provider_id": "anthropic",
+            "auth_mode": "volume",
+            "volume_ref": "test-volume",
+            "volume_mount_path": "/tmp/auth",
+            "account_label": "alternate",
+            "api_key_ref": None,
+            "runtime_env_overrides": {},
+            "api_key_env_var": None,
+            "max_parallel_runs": 1,
+            "cooldown_after_429_seconds": 900,
+            "rate_limit_policy": "pause_and_retry",
+            "max_lease_duration_seconds": 7200,
+            "enabled": True,
+        },
+    ]
+    if runtime_id == "claude_code":
+        profiles.append(
             {
-                "profile_id": "default-managed",
-                "runtime_id": request.get("runtime_id", "test-agent"),
-                "auth_mode": "volume",
-                "volume_ref": "test-volume",
-                "volume_mount_path": "/tmp/auth",
-                "account_label": "test",
-                "api_key_ref": None,
-                "runtime_env_overrides": {},
-                "api_key_env_var": None,
-                "max_parallel_runs": 1,
-                "cooldown_after_429_seconds": 900,
-                "rate_limit_policy": "pause_and_retry",
-                "max_lease_duration_seconds": 7200,
-                "enabled": True,
-            },
-            {
-                "profile_id": "explicit-openai-profile",
-                "runtime_id": request.get("runtime_id", "test-agent"),
-                "provider_id": "openai",
-                "auth_mode": "volume",
-                "volume_ref": "test-volume",
-                "volume_mount_path": "/tmp/auth",
-                "account_label": "openai",
-                "api_key_ref": None,
-                "runtime_env_overrides": {},
-                "api_key_env_var": None,
-                "max_parallel_runs": 1,
-                "cooldown_after_429_seconds": 900,
-                "rate_limit_policy": "pause_and_retry",
-                "max_lease_duration_seconds": 7200,
-                "enabled": True,
-            },
-            {
-                "profile_id": "alternate-managed",
-                "runtime_id": request.get("runtime_id", "test-agent"),
+                "profile_id": "claude-managed",
+                "runtime_id": runtime_id,
                 "provider_id": "anthropic",
                 "auth_mode": "volume",
                 "volume_ref": "test-volume",
                 "volume_mount_path": "/tmp/auth",
-                "account_label": "alternate",
+                "account_label": "claude",
                 "api_key_ref": None,
                 "runtime_env_overrides": {},
                 "api_key_env_var": None,
@@ -121,8 +141,30 @@ async def mock_provider_profile_list(request: dict) -> dict:
                 "rate_limit_policy": "pause_and_retry",
                 "max_lease_duration_seconds": 7200,
                 "enabled": True,
-            },
-        ]
+            }
+        )
+    if runtime_id == "codex_cli":
+        profiles.append(
+            {
+                "profile_id": "codex-managed",
+                "runtime_id": runtime_id,
+                "provider_id": "openai",
+                "auth_mode": "volume",
+                "volume_ref": "test-volume",
+                "volume_mount_path": "/tmp/auth",
+                "account_label": "codex",
+                "api_key_ref": None,
+                "runtime_env_overrides": {},
+                "api_key_env_var": None,
+                "max_parallel_runs": 1,
+                "cooldown_after_429_seconds": 900,
+                "rate_limit_policy": "pause_and_retry",
+                "max_lease_duration_seconds": 7200,
+                "enabled": True,
+            }
+        )
+    return {
+        "profiles": profiles
     }
 
 @_activity.defn(name="provider_profile.ensure_manager")
@@ -511,11 +553,16 @@ class RuntimeUpdateProviderProfileManager:
             "pending_requests": list(self.pending_requests),
             "release_payloads": list(self.release_payloads),
             "request_payloads": list(self.request_payloads),
+            "assignable_profile_id": self.assignable_profile_id,
         }
 
     @workflow.run
     async def run(self, input_payload: dict) -> dict:
         self.assign_then_update_model = input_payload.get("assign_then_update_model")
+        self.assignable_profile_id = input_payload.get(
+            "assignable_profile_id",
+            self.assignable_profile_id,
+        )
         while True:
             await workflow.wait_condition(lambda: bool(self.pending_requests))
             req = self.pending_requests[0]
@@ -532,7 +579,10 @@ class RuntimeUpdateProviderProfileManager:
                 await handle.signal("slot_assigned", {"profile_id": profile_id})
                 await workflow.sleep(3600)
                 continue
-            if req.get("execution_profile_ref") != self.assignable_profile_id:
+            if (
+                self.assignable_profile_id != "*"
+                and req.get("execution_profile_ref") != self.assignable_profile_id
+            ):
                 await workflow.sleep(1)
                 continue
             self.pending_requests.pop(0)
@@ -820,6 +870,126 @@ async def test_managed_agent_runtime_selection_update_replaces_slot_wait_request
             )
             result = await child_handle.result()
             assert result.summary == "completed after runtime update"
+
+
+@pytest.mark.asyncio
+async def test_managed_agent_runtime_selection_update_switches_runtime_manager():
+    """Runtime edits while awaiting a slot must move the request to the new manager."""
+    _managed_launch_requests.clear()
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with (
+            Worker(
+                env.client,
+                task_queue="agent-run-task-queue-runtime-manager-switch",
+                workflows=[MoonMindAgentRun, RuntimeUpdateProviderProfileManager],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.artifacts",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.agent_runtime",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+        ):
+            claude_manager_id = "provider-profile-manager:claude_code"
+            codex_manager_id = "provider-profile-manager:codex_cli"
+            await env.client.start_workflow(
+                RuntimeUpdateProviderProfileManager.run,
+                {
+                    "runtime_id": "claude_code",
+                    "assignable_profile_id": "claude-after-edit",
+                },
+                id=claude_manager_id,
+                task_queue="agent-run-task-queue-runtime-manager-switch",
+            )
+            await env.client.start_workflow(
+                RuntimeUpdateProviderProfileManager.run,
+                {
+                    "runtime_id": "codex_cli",
+                    "assignable_profile_id": "codex-managed",
+                },
+                id=codex_manager_id,
+                task_queue="agent-run-task-queue-runtime-manager-switch",
+            )
+            claude_manager_handle = env.client.get_workflow_handle(
+                claude_manager_id
+            )
+            codex_manager_handle = env.client.get_workflow_handle(codex_manager_id)
+
+            child_id = "test-agent-runtime-manager-switch"
+            child_handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                AgentExecutionRequest(
+                    agent_kind="managed",
+                    agent_id="claude_code",
+                    execution_profile_ref="claude-managed",
+                    correlation_id="corr-runtime-manager-switch",
+                    idempotency_key="idem-runtime-manager-switch",
+                    parameters={
+                        "targetRuntime": "claude_code",
+                        "profileId": "claude-managed",
+                        "model": "old-model",
+                    },
+                ),
+                id=child_id,
+                task_queue="agent-run-task-queue-runtime-manager-switch",
+            )
+            await asyncio.sleep(0.1)
+
+            await child_handle.signal(
+                "update_runtime_selection",
+                {
+                    "targetRuntime": "codex_cli",
+                    "executionProfileRef": "codex-managed",
+                    "model": "new-model",
+                    "parametersPatch": {
+                        "targetRuntime": "codex_cli",
+                        "profileId": "codex-managed",
+                        "model": "new-model",
+                        "workflow": {
+                            "runtime": {
+                                "mode": "codex_cli",
+                                "profileId": "codex-managed",
+                            }
+                        },
+                    },
+                },
+            )
+
+            for _ in range(80):
+                codex_state = await codex_manager_handle.query(
+                    RuntimeUpdateProviderProfileManager.get_state
+                )
+                if codex_state["pending_requests"]:
+                    break
+                await asyncio.sleep(0.1)
+
+            claude_state = await claude_manager_handle.query(
+                RuntimeUpdateProviderProfileManager.get_state
+            )
+            codex_state = await codex_manager_handle.query(
+                RuntimeUpdateProviderProfileManager.get_state
+            )
+            assert claude_state["pending_requests"] == []
+            assert any(
+                payload.get("requester_workflow_id") == child_id
+                for payload in claude_state["release_payloads"]
+            )
+            assert codex_state["request_payloads"]
+            codex_request = codex_state["request_payloads"][-1]
+            assert codex_request["requester_workflow_id"] == child_id
+            assert codex_request["runtime_id"] == "codex_cli"
+            assert codex_request["execution_profile_ref"] == "codex-managed"
+
+            await child_handle.cancel()
+            with pytest.raises(WorkflowFailureError):
+                await child_handle.result()
+
 
 @pytest.mark.asyncio
 async def test_managed_agent_model_update_keeps_simultaneously_assigned_slot():

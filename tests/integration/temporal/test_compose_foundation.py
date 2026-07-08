@@ -211,11 +211,19 @@ def test_documented_compose_startup_config_succeeds_without_env_file(tmp_path):
     assert result.returncode == 0, result.stderr
 
 def test_omnigent_trusted_origins_render_local_and_public_defaults():
-    local_env = _render_omnigent_compose_env({"OMNIGENT_PORT": "8010"})
+    local_env = _render_omnigent_compose_env(
+        {
+            "OMNIGENT_PORT": "8010",
+            "HOSTNAME": "cs30",
+            "COMPUTERNAME": "ASUS-LAPTOP",
+        }
+    )
 
     assert local_env["OMNIGENT_ACCOUNTS_BASE_URL"] == "http://localhost:8010"
     assert local_env["OMNIGENT_WS_ALLOWED_ORIGINS"] == (
-        "http://localhost:8010,http://127.0.0.1:8010"
+        "http://localhost:8010,http://127.0.0.1:8010,"
+        "http://host.docker.internal:8010,http://cs30:8010,"
+        "http://ASUS-LAPTOP:8010"
     )
 
     public_env = _render_omnigent_compose_env(
@@ -527,7 +535,9 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     )
     assert omnigent_env["OMNIGENT_WS_ALLOWED_ORIGINS"] == (
         "${OMNIGENT_WS_ALLOWED_ORIGINS:-${OMNIGENT_ACCOUNTS_BASE_URL:-http://"
-        "localhost:${OMNIGENT_PORT:-8000},http://127.0.0.1:${OMNIGENT_PORT:-8000}}}"
+        "localhost:${OMNIGENT_PORT:-8000},http://127.0.0.1:${OMNIGENT_PORT:-8000},"
+        "http://host.docker.internal:${OMNIGENT_PORT:-8000},http://${HOSTNAME:-localhost}:"
+        "${OMNIGENT_PORT:-8000},http://${COMPUTERNAME:-localhost}:${OMNIGENT_PORT:-8000}}}"
     )
     assert omnigent_env["OMNIGENT_ACCOUNTS_AUTO_OPEN"] == (
         "${OMNIGENT_ACCOUNTS_AUTO_OPEN:-0}"

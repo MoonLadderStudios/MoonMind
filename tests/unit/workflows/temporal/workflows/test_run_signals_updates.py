@@ -538,6 +538,7 @@ async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(
     )
     monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
 
     result = await workflow_instance.update_inputs(
         {
@@ -593,6 +594,7 @@ async def test_update_inputs_forwards_runtime_selection_from_canonical_workflow_
     )
     monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
 
     result = await workflow_instance.update_inputs(
         {
@@ -647,6 +649,7 @@ async def test_update_inputs_forwards_runtime_profile_clear_to_active_managed_ch
     )
     monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
 
     result = await workflow_instance.update_inputs(
         {
@@ -673,6 +676,144 @@ async def test_update_inputs_forwards_runtime_profile_clear_to_active_managed_ch
                         "profileId": "",
                     }
                 }
+            },
+        },
+    )
+    assert result["forwardedRuntimeSelectionUpdate"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_inputs_refreshes_parent_runtime_visibility(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "claude_code"
+    workflow_instance._target_runtime = "claude_code"
+    workflow_instance._target_skill = "jira-implement"
+
+    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+
+    search_updates: list[tuple[str | None, str | None]] = []
+    memo_updates: list[tuple[str | None, str | None]] = []
+    monkeypatch.setattr(
+        workflow_instance,
+        "_update_search_attributes",
+        lambda: search_updates.append(
+            (workflow_instance._target_runtime, workflow_instance._target_skill)
+        ),
+    )
+    monkeypatch.setattr(
+        workflow_instance,
+        "_update_memo",
+        lambda: memo_updates.append(
+            (workflow_instance._target_runtime, workflow_instance._target_skill)
+        ),
+    )
+
+    result = await workflow_instance.update_inputs(
+        {
+            "parametersPatch": {
+                "workflow": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                    },
+                    "tool": {
+                        "type": "skill",
+                        "name": "pr-resolver",
+                    },
+                }
+            }
+        }
+    )
+
+    assert workflow_instance._target_runtime == "codex_cli"
+    assert workflow_instance._target_skill == "pr-resolver"
+    assert ("codex_cli", "pr-resolver") in search_updates
+    assert ("codex_cli", "pr-resolver") in memo_updates
+    mock_handle.signal.assert_awaited_once_with(
+        "update_runtime_selection",
+        {
+            "targetRuntime": "codex_cli",
+            "parametersPatch": {
+                "workflow": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                    },
+                    "tool": {
+                        "type": "skill",
+                        "name": "pr-resolver",
+                    },
+                }
+            },
+        },
+    )
+    assert result["forwardedRuntimeSelectionUpdate"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_inputs_skips_parent_visibility_refresh_when_unpatched(
+    monkeypatch,
+):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "claude_code"
+    workflow_instance._target_runtime = "claude_code"
+    workflow_instance._target_skill = "jira-implement"
+
+    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH,
+    )
+
+    search_updates: list[tuple[str | None, str | None]] = []
+    monkeypatch.setattr(
+        workflow_instance,
+        "_update_search_attributes",
+        lambda: search_updates.append(
+            (workflow_instance._target_runtime, workflow_instance._target_skill)
+        ),
+    )
+
+    result = await workflow_instance.update_inputs(
+        {
+            "parametersPatch": {
+                "mode": "codex_cli",
+                "authoredTaskInput": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                    },
+                },
+            }
+        }
+    )
+
+    assert workflow_instance._target_runtime == "claude_code"
+    assert workflow_instance._target_skill == "jira-implement"
+    assert search_updates == []
+    mock_handle.signal.assert_awaited_once_with(
+        "update_runtime_selection",
+        {
+            "targetRuntime": "codex_cli",
+            "parametersPatch": {
+                "mode": "codex_cli",
+                "authoredTaskInput": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                    },
+                },
             },
         },
     )

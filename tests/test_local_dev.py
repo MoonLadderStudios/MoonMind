@@ -485,7 +485,9 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
     )
     assert omnigent_env["OMNIGENT_WS_ALLOWED_ORIGINS"] == (
         "${OMNIGENT_WS_ALLOWED_ORIGINS:-${OMNIGENT_ACCOUNTS_BASE_URL:-http://"
-        "localhost:${OMNIGENT_PORT:-8000},http://127.0.0.1:${OMNIGENT_PORT:-8000}}}"
+        "localhost:${OMNIGENT_PORT:-8000},http://127.0.0.1:${OMNIGENT_PORT:-8000},"
+        "http://host.docker.internal:${OMNIGENT_PORT:-8000},http://${HOSTNAME:-localhost}:"
+        "${OMNIGENT_PORT:-8000},http://${COMPUTERNAME:-localhost}:${OMNIGENT_PORT:-8000}}}"
     )
     assert omnigent_env["OMNIGENT_OIDC_ISSUER"] == "${OMNIGENT_OIDC_ISSUER:-}"
     assert "POSTGRES_USER" not in omnigent_env
