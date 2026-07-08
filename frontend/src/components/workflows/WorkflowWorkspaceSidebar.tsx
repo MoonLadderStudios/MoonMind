@@ -17,6 +17,7 @@ import {
   RouteIcon,
   type RouteIconHandle,
 } from 'lucide-animated';
+import { Moon } from 'lucide-react';
 import { z } from 'zod';
 import type { BootPayload } from '../../boot/parseBootPayload';
 import {
@@ -158,6 +159,21 @@ function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefin
     .replace(/\s+/g, '_');
   if (normalizedStatus === 'running') {
     normalizedStatus = 'executing';
+  }
+  if (normalizedStatus === 'scheduled') {
+    const label = sidebarStatusLabel(status);
+    const pillProps = executionStatusPillProps(normalizedStatus, { enableMotion: false });
+    return (
+      <span
+        {...pillProps}
+        className={`${pillProps.className} workflow-workspace-sidebar-status-icon`}
+        aria-label={`Status: ${label}`}
+        title={label}
+        data-testid="workflow-workspace-sidebar-status-icon"
+      >
+        <Moon size={16} aria-hidden="true" />
+      </span>
+    );
   }
   if (isSidebarAnimatedWorkflowStatus(normalizedStatus)) {
     const label = sidebarStatusLabel(status);
