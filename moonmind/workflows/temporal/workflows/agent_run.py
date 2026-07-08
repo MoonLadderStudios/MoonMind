@@ -1264,6 +1264,15 @@ class MoonMindAgentRun:
                 if isinstance(value, str) and value.strip():
                     metadata["verify_artifact_path"] = value.strip()
                     break
+        # Surface the assessment handoff path so publish_artifacts can publish the
+        # verdict JSON as a durable artifact ref. Only the initial-assessment step
+        # propagates this parameter (see _ensure_assessment_parameters), so no
+        # skill gate is needed here.
+        for key in ("assessment_artifact_path", "assessmentArtifactPath"):
+            value = request_params.get(key)
+            if isinstance(value, str) and value.strip():
+                metadata["assessment_artifact_path"] = value.strip()
+                break
         request_metadata = request_params.get("metadata")
         request_moonmind = (
             request_metadata.get("moonmind")

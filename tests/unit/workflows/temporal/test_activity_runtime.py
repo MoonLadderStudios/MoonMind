@@ -5545,3 +5545,127 @@ async def test_agent_runtime_send_turn_retries_transient_failures(
             assert send_turn.timeouts.start_to_close_seconds == 3600
             assert send_turn.timeouts.schedule_to_close_seconds == 3900
             assert send_turn.timeouts.heartbeat_timeout_seconds == 30
+
+
+async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace = tmp_path / "workspace"
+            assessment_path = (
+                workspace / "artifacts/jira-implement-assessment.json"
+            )
+            assessment_path.parent.mkdir(parents=True)
+            assessment_path.write_text(
+                json.dumps(
+                    {
+                        "issue_provider": "jira",
+                        "issue_ref": "MM-1139",
+                        "verdict": "NOT_IMPLEMENTED",
+                        "mode": "main",
+                        "summary": "not implemented",
+                        "requirements": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run_store = ManagedRunStore(tmp_path / "runs")
+            run_store.save(
+                ManagedRunRecord(
+                    runId="assess-run-1",
+                    agentId="codex_cli",
+                    runtimeId="codex_cli",
+                    status="completed",
+                    startedAt=datetime.now(timezone.utc),
+                    workspacePath=workspace.as_posix(),
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                run_store=run_store,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities, "execution_notify_completion", _skip_notify
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:assess",
+                    workflow_run_id="child-run-assess",
+                ),
+            )
+
+            result = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Completed.",
+                    metadata={
+                        "agentRunId": "assess-run-1",
+                        "assessment_artifact_path": (
+                            "artifacts/jira-implement-assessment.json"
+                        ),
+                    },
+                )
+            )
+
+            assert isinstance(result, AgentRunResult)
+            assert result.metadata["assessmentArtifactRef"].startswith("art_")
+            assert result.metadata["assessmentVerdict"] == "NOT_IMPLEMENTED"
+
+            # The published artifact carries the full structured verdict payload,
+            # readable by ref (the bridge-compatible channel) without a shared FS.
+            _artifact, artifact_path = await service.read_path(
+                artifact_id=result.metadata["assessmentArtifactRef"],
+                principal="system:agent_runtime",
+            )
+            persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
+            assert persisted["verdict"] == "NOT_IMPLEMENTED"
+            assert persisted["issue_ref"] == "MM-1139"
+
+
+async def test_agent_runtime_publish_artifacts_skips_assessment_without_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Agent steps that do not declare an assessment path must not surface a ref.
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(artifact_service=service)
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities, "execution_notify_completion", _skip_notify
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:other",
+                    workflow_run_id="child-run-other",
+                ),
+            )
+
+            result = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(summary="Completed.", metadata={"agentRunId": "x"})
+            )
+
+            assert "assessmentArtifactRef" not in (result.metadata or {})
+            assert "assessmentVerdict" not in (result.metadata or {})

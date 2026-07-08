@@ -109,6 +109,50 @@ def test_secret_redactor_from_environ():
     # also checking that variants are generated
     assert "bXlfc3VwZXJfc2VjcmV0" in redactor._secrets  # base64 of my_super_secret
 
+def test_secret_redactor_ignores_trivially_short_values():
+    redactor = SecretRedactor(secrets=["0", "1", "ab", "abc", "abcd", "my_secret"])
+
+    # Values shorter than the minimum redactable length are dropped: they carry
+    # no secret entropy and would over-redact unrelated content.
+    assert "0" not in redactor._secrets
+    assert "1" not in redactor._secrets
+    assert "ab" not in redactor._secrets
+    assert "abc" not in redactor._secrets
+
+    # Values at or above the threshold are still registered.
+    assert "abcd" in redactor._secrets
+    assert "my_secret" in redactor._secrets
+
+    # Short values must not corrupt normal text (digits, issue keys, shas).
+    assert redactor.scrub("MM-1139 at line 601, sha 3e6fe59b7") == (
+        "MM-1139 at line 601, sha 3e6fe59b7"
+    )
+
+@patch.dict(
+    os.environ,
+    {
+        "OMNIGENT_AUTH_ENABLED": "0",
+        "MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION": "1",
+        "API_TOKEN": "my_super_secret_token",
+    },
+    clear=True,
+)
+def test_secret_redactor_from_environ_boolean_flags_do_not_poison_digits():
+    redactor = SecretRedactor.from_environ()
+
+    # Boolean-flag env vars with sensitively-named keys must not register
+    # "0"/"1" as redaction targets.
+    assert "0" not in redactor._secrets
+    assert "1" not in redactor._secrets
+
+    # Real secrets are still scrubbed; digit-bearing text is left intact.
+    scrubbed = redactor.scrub(
+        "Assessment Complete: MM-1139 — NOT_IMPLEMENTED (my_super_secret_token)"
+    )
+    assert "MM-1139" in scrubbed
+    assert "NOT_IMPLEMENTED" in scrubbed
+    assert "my_super_secret_token" not in scrubbed
+
 def test_secret_redactor_scrub():
     redactor = SecretRedactor(secrets=["my_secret"])
 

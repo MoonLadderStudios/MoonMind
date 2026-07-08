@@ -3477,10 +3477,16 @@ async def check_jira_blockers(
     if not target_issue_key:
         raise ValueError("targetIssueKey is required for Jira blocker preflight.")
 
-    assessment_verdict, _ = _jira_assessment_verdict(inputs, _context)
-    assessment_output = (
-        {"assessmentVerdict": assessment_verdict} if assessment_verdict else {}
-    )
+    assessment_verdict, _ = await _resolve_jira_assessment_verdict(inputs, _context)
+    assessment_ref = _assessment_artifact_ref(inputs, _context)
+    assessment_output: dict[str, Any] = {}
+    if assessment_verdict:
+        assessment_output["assessmentVerdict"] = assessment_verdict
+    # Carry the durable ref forward so the next step (In Progress transition)
+    # can resolve the verdict by ref even though this step sits between it and
+    # the assessment agent step.
+    if assessment_ref:
+        assessment_output["assessmentArtifactRef"] = assessment_ref
 
     service = jira_service_factory()
     try:
@@ -3994,9 +4000,8 @@ async def update_jira_issue_status(
         _jira_status_match_token(target_status) == "inprogress"
     ):
         if inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path"):
-            assessment_verdict, assessment_available = _jira_assessment_verdict(
-                inputs,
-                _context,
+            assessment_verdict, assessment_available = (
+                await _resolve_jira_assessment_verdict(inputs, _context)
             )
             if not assessment_available:
                 return ToolResult(
@@ -4348,10 +4353,24 @@ async def check_github_issue_blockers(
         github_service_factory=github_service_factory,
     )
     issue_ref = f"{repository}#{issue_number}"
+    # Carry the assessment verdict + durable ref forward so the In Progress step
+    # (which sits after this blocker step) can resolve the verdict by ref without
+    # sharing the assessment agent's filesystem.
+    assessment_verdict, _ = await _augment_assessment_verdict_with_ref(
+        _assessment_verdict_from_artifact(inputs, _context),
+        inputs,
+        _context,
+    )
+    assessment_ref = _assessment_artifact_ref(inputs, _context)
+    assessment_output: dict[str, Any] = {}
+    if assessment_verdict:
+        assessment_output["assessmentVerdict"] = assessment_verdict
+    if assessment_ref:
+        assessment_output["assessmentArtifactRef"] = assessment_ref
     if issue_data is None:
         return ToolResult(
             status="FAILED",
-            outputs={"issueRef": issue_ref, "decision": "blocked", "summary": error or "GitHub blocker check failed."},
+            outputs={"issueRef": issue_ref, "decision": "blocked", "summary": error or "GitHub blocker check failed.", **assessment_output},
         )
     issue = _github_issue_payload(issue_data, repository)
     blockers = _github_blockers_from_issue(issue)
@@ -4363,6 +4382,7 @@ async def check_github_issue_blockers(
                 "decision": "blocked",
                 "blockingIssues": blockers,
                 "summary": f"GitHub issue {issue_ref} has unresolved blocker evidence.",
+                **assessment_output,
             },
         )
     return ToolResult(
@@ -4372,6 +4392,7 @@ async def check_github_issue_blockers(
             "decision": "continue",
             "blockingIssues": [],
             "summary": f"GitHub issue {issue_ref} has no configured blocker evidence.",
+            **assessment_output,
         },
     )
 
@@ -4595,6 +4616,118 @@ def _jira_assessment_verdict(
     return "", True
 
 
+def _assessment_artifact_ref(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> str:
+    """Return the durable artifact ref for the assessment verdict, if present.
+
+    The assessment agent step publishes its structured verdict JSON to the
+    MoonMind artifact store and surfaces the ref as ``assessmentArtifactRef``.
+    That ref rides ``previousOutputs`` between steps, so downstream deterministic
+    tools can read the verdict without sharing the agent's filesystem — the
+    bridge-compatible channel that keeps working when agentic compute runs on an
+    Omnigent host rather than a co-located worker volume.
+    """
+
+    previous_outputs = _mapping(
+        inputs.get("previousOutputs")
+        or inputs.get("previous_outputs")
+        or (context or {}).get("previousOutputs")
+        or (context or {}).get("previous_outputs")
+    )
+    for source in (inputs, previous_outputs, _mapping(context)):
+        ref = _first_string(
+            source.get("assessmentArtifactRef"),
+            source.get("assessment_artifact_ref"),
+        )
+        if ref:
+            return ref
+    return ""
+
+
+async def _read_json_artifact_by_ref(
+    ref: str,
+    context: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    """Read a JSON artifact payload by ref using the injected artifact service.
+
+    Returns ``None`` when no service is available (for example a fleet without an
+    artifact binding, or unit tests) or the artifact cannot be read/parsed, so
+    callers degrade to their other verdict sources instead of failing.
+    """
+
+    service = (context or {}).get("temporal_artifact_service")
+    if service is None or not ref:
+        return None
+    principal = (
+        _string((context or {}).get("deployment_evidence_principal"))
+        or "system:agent_runtime"
+    )
+    try:
+        _artifact, payload = await service.read(
+            artifact_id=ref,
+            principal=principal,
+            allow_restricted_raw=True,
+        )
+    except Exception:
+        return None
+    if isinstance(payload, Mapping):
+        return payload
+    try:
+        if isinstance(payload, (bytes, bytearray)):
+            payload = payload.decode("utf-8")
+        data = json.loads(payload)
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, Mapping) else None
+
+
+async def _augment_assessment_verdict_with_ref(
+    base: tuple[str, bool],
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[str, bool]:
+    """Fall back to the published assessment artifact ref when no verdict is found.
+
+    The ref path can only UPGRADE a missing verdict to a real one; it never
+    downgrades an existing ``(verdict, available)`` result, keeping behavior
+    identical for in-flight runs that carry no ref. This is the bridge-compatible
+    channel: it resolves via the artifact store, so it works even when the
+    assessment ran on an Omnigent host whose workspace the tool cannot mount.
+    """
+
+    verdict, available = base
+    if verdict:
+        return verdict, True
+    ref = _assessment_artifact_ref(inputs, context)
+    if ref:
+        payload = await _read_json_artifact_by_ref(ref, context)
+        if payload is None:
+            return verdict, False
+        if payload is not None:
+            ref_verdict = _normalize_assessment_verdict(payload.get("verdict"))
+            if ref_verdict:
+                return ref_verdict, True
+    return verdict, available
+
+
+async def _resolve_jira_assessment_verdict(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[str, bool]:
+    """Resolve the Jira assessment verdict, preferring durable in-payload sources.
+
+    Tries the synchronous sources first (compact ``assessmentVerdict`` in
+    ``previousOutputs``, a locally resolvable handoff file, then free text), then
+    the published artifact ref.
+    """
+
+    return await _augment_assessment_verdict_with_ref(
+        _jira_assessment_verdict(inputs, context), inputs, context
+    )
+
+
 def _verification_verdict_from_payload(payload: Mapping[str, Any]) -> str:
     for key in (
         "verdict",
@@ -4748,14 +4881,18 @@ async def update_github_issue_status(
 ) -> ToolResult:
     repository, issue_number = _github_issue_inputs(inputs)
     mode = _github_status_mode(inputs)
-    assessment_verdict, assessment_available = _assessment_verdict_from_artifact(
-        inputs,
-        _context,
+    assessment_verdict, assessment_available = (
+        await _augment_assessment_verdict_with_ref(
+            _assessment_verdict_from_artifact(inputs, _context),
+            inputs,
+            _context,
+        )
     )
     issue_ref = f"{repository}#{issue_number}"
     require_verification = _github_status_requires_verification(inputs)
     if mode in {"start", "in_progress"} and (
         inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path")
+        or _assessment_artifact_ref(inputs, _context)
     ):
         if not assessment_available:
             return ToolResult(

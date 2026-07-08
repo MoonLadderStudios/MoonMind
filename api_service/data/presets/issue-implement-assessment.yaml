@@ -133,6 +133,7 @@ steps:
     the evidence clearly supports it.'
   skill:
     id: auto
-    args: {}
+    args:
+      assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
     requiredCapabilities:
     - git
