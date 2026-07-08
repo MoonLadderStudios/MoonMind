@@ -278,6 +278,18 @@ def test_deployment_configuration_is_accepted() -> None:
     assert config.host_connection.embedded.port == 7000
 
 
+def test_host_dispatch_is_not_rejected_as_custom_build() -> None:
+    # "hostDispatch" normalizes to contain "patch" (from "dispatch") but must not
+    # be treated as a custom host build request. It still fails structural
+    # validation as an unknown/extra field, but not via the host-build gate.
+    with pytest.raises(BridgeConfigError) as exc_info:
+        parse_bridge_config({"hostConnection": {"hostDispatch": "value"}})
+
+    message = str(exc_info.value)
+    assert "custom host build" not in message
+    assert "Extra inputs are not permitted" in message
+
+
 # ---------------------------------------------------------------------------
 # AC: The authority map is validated and surfaced to downstream components.
 # ---------------------------------------------------------------------------

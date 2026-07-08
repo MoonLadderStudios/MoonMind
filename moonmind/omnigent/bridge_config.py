@@ -35,7 +35,7 @@ errors.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Iterator, Literal, Union
+from typing import Any, Iterator, Literal
 
 import yaml
 from pydantic import (
@@ -78,7 +78,7 @@ FirstMessageState = Literal[
     "terminal",
 ]
 
-WorkspaceDiffsCapture = Union[bool, Literal["capability_probe"]]
+WorkspaceDiffsCapture = bool | Literal["capability_probe"]
 
 # §2.1 Omnigent nouns recognized in bridge routes. Route values must reference at
 # least one of these so the boundary keeps Omnigent vocabulary.
@@ -188,7 +188,11 @@ def _is_host_build_key(normalized_key: str) -> bool:
         return False
     if "custom" in normalized_key:
         return True
-    return any(marker in normalized_key for marker in _HOST_BUILD_MARKERS)
+    # "dispatch" contains the "patch" build marker; strip it first so common
+    # dispatch-style keys (hostDispatch, hostDispatcher) are not mistaken for a
+    # custom host build request.
+    key_for_checking = normalized_key.replace("dispatch", "")
+    return any(marker in key_for_checking for marker in _HOST_BUILD_MARKERS)
 
 
 def _reject_host_build_configuration(data: Mapping[str, Any]) -> None:
