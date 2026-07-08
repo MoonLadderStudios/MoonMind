@@ -3059,8 +3059,7 @@ tr[data-proposal-id].proposal-consuming td {
 
 .status-queued,
 .status-pending,
-.status-scheduled,
-.status-awaiting-slot {
+.status-scheduled {
   color: rgb(var(--mm-status-queued));
   background: rgb(var(--mm-status-queued) / 0.14);
   border-color: rgb(var(--mm-status-queued) / 0.62);
@@ -3076,6 +3075,7 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .status-initializing,
+.status-awaiting-slot,
 .status-ready,
 .status-reviewing,
 .status-planning,
