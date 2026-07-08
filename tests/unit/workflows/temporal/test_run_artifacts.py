@@ -1998,6 +1998,26 @@ async def test_jira_blocker_recheck_preserves_assessment_context(
     }
 
 
+def test_assessment_context_merge_treats_aliases_as_one_field() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._record_assessment_context(
+        {"assessmentVerdict": "PARTIALLY_IMPLEMENTED"}
+    )
+
+    result = workflow._merge_assessment_context_into_result(
+        {
+            "status": "COMPLETED",
+            "outputs": {"assessment_verdict": "NOT_IMPLEMENTED"},
+        }
+    )
+
+    assert result["outputs"]["assessment_verdict"] == "NOT_IMPLEMENTED"
+    assert "assessmentVerdict" not in result["outputs"]
+    workflow._record_assessment_context(result["outputs"])
+    assert workflow._assessment_context["assessmentVerdict"] == "NOT_IMPLEMENTED"
+    assert workflow._assessment_context["assessment_verdict"] == "NOT_IMPLEMENTED"
+
+
 @pytest.mark.asyncio
 async def test_jira_blocker_recheck_applies_retry_floor_for_one_attempt_route(
     monkeypatch: pytest.MonkeyPatch,

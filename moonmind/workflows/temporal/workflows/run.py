@@ -5779,15 +5779,17 @@ class MoonMindRunWorkflow:
             self._trusted_issue_context = context
 
     def _record_assessment_context(self, outputs: Mapping[str, Any]) -> None:
-        for key in (
-            "assessmentArtifactRef",
-            "assessment_artifact_ref",
-            "assessmentVerdict",
-            "assessment_verdict",
+        for aliases in (
+            ("assessmentArtifactRef", "assessment_artifact_ref"),
+            ("assessmentVerdict", "assessment_verdict"),
         ):
-            value = outputs.get(key)
-            if value not in (None, "", {}, []):
-                self._assessment_context[key] = value
+            for key in aliases:
+                value = outputs.get(key)
+                if value in (None, "", {}, []):
+                    continue
+                for alias in aliases:
+                    self._assessment_context[alias] = value
+                break
 
     def _merge_assessment_context_into_result(self, execution_result: Any) -> Any:
         if not self._assessment_context:
@@ -5798,19 +5800,21 @@ class MoonMindRunWorkflow:
 
         merged_outputs = dict(outputs)
         changed = False
-        for key in (
-            "assessmentArtifactRef",
-            "assessment_artifact_ref",
-            "assessmentVerdict",
-            "assessment_verdict",
+        for aliases in (
+            ("assessmentArtifactRef", "assessment_artifact_ref"),
+            ("assessmentVerdict", "assessment_verdict"),
         ):
-            value = self._assessment_context.get(key)
-            if value in (None, "", {}, []):
+            if any(
+                merged_outputs.get(alias) not in (None, "", {}, [])
+                for alias in aliases
+            ):
                 continue
-            if merged_outputs.get(key) not in (None, "", {}, []):
-                continue
-            merged_outputs[key] = value
-            changed = True
+            for alias in aliases:
+                value = self._assessment_context.get(alias)
+                if value in (None, "", {}, []):
+                    continue
+                merged_outputs[alias] = value
+                changed = True
         if not changed:
             return execution_result
 
