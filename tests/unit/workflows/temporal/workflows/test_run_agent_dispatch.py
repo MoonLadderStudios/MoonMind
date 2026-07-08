@@ -2425,3 +2425,47 @@ class TestFetchProfileSnapshots(unittest.TestCase):
             self.assertFalse(hasattr(wf, "_profile_snapshots"))
 
         asyncio.run(run_test())
+
+
+class TestEnsureAssessmentParameters(unittest.TestCase):
+    """Verify assessment-verdict handoff path propagation into agent parameters."""
+
+    def test_propagates_from_top_level_node_inputs(self) -> None:
+        wf = MoonMindRunWorkflow()
+        parameters: dict[str, Any] = {}
+        wf._ensure_assessment_parameters(
+            parameters=parameters,
+            node_inputs={"assessment_artifact_path": "artifacts/a.json"},
+        )
+        self.assertEqual(
+            parameters["assessment_artifact_path"], "artifacts/a.json"
+        )
+
+    def test_propagates_from_nested_skill_inputs(self) -> None:
+        wf = MoonMindRunWorkflow()
+        parameters: dict[str, Any] = {}
+        wf._ensure_assessment_parameters(
+            parameters=parameters,
+            node_inputs={"inputs": {"assessmentArtifactPath": "artifacts/b.json"}},
+        )
+        self.assertEqual(
+            parameters["assessment_artifact_path"], "artifacts/b.json"
+        )
+
+    def test_noop_when_path_absent(self) -> None:
+        wf = MoonMindRunWorkflow()
+        parameters: dict[str, Any] = {}
+        wf._ensure_assessment_parameters(
+            parameters=parameters,
+            node_inputs={"inputs": {"other": "value"}},
+        )
+        self.assertNotIn("assessment_artifact_path", parameters)
+
+    def test_does_not_overwrite_existing(self) -> None:
+        wf = MoonMindRunWorkflow()
+        parameters: dict[str, Any] = {"assessment_artifact_path": "existing.json"}
+        wf._ensure_assessment_parameters(
+            parameters=parameters,
+            node_inputs={"assessment_artifact_path": "artifacts/new.json"},
+        )
+        self.assertEqual(parameters["assessment_artifact_path"], "existing.json")

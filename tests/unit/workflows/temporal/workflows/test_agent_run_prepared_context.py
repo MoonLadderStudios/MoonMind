@@ -130,3 +130,49 @@ def test_result_metadata_carries_compact_workspace_capture_input(monkeypatch):
         "workspaceCheckpointKind": "git_patch",
     }
     assert result.metadata["workspacePath"] == "/work/agent_jobs/job-1/repo"
+
+
+def test_result_metadata_carries_assessment_artifact_path(monkeypatch):
+    # The assessment path parameter must reach result metadata so
+    # publish_artifacts can publish the verdict JSON and surface its ref.
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="corr-assess",
+        idempotencyKey="idem-assess",
+        parameters={
+            "assessment_artifact_path": "artifacts/jira-implement-assessment.json",
+        },
+    )
+
+    result = run._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult(summary="done", metadata={}),
+    )
+
+    assert result is not None
+    assert result.metadata["assessment_artifact_path"] == (
+        "artifacts/jira-implement-assessment.json"
+    )
+
+
+def test_result_metadata_omits_assessment_path_when_absent(monkeypatch):
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="corr-noassess",
+        idempotencyKey="idem-noassess",
+        parameters={},
+    )
+
+    result = run._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult(summary="done", metadata={}),
+    )
+
+    assert result is not None
+    assert "assessment_artifact_path" not in (result.metadata or {})

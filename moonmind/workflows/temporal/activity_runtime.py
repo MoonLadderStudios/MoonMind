@@ -7664,6 +7664,90 @@ class TemporalAgentRuntimeActivities:
                 )
             return result_refs
 
+        async def _publish_assessment_verdict_artifact() -> dict[str, Any]:
+            assessment_path = _metadata_text(
+                "assessment_artifact_path",
+                "assessmentArtifactPath",
+            )
+            if not assessment_path:
+                return {}
+            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
+            if not agent_run_id or self._run_store is None:
+                return {}
+            record = self._run_store.load(agent_run_id)
+            if record is None:
+                logger.warning(
+                    "Skipping assessment verdict artifact publication: run record "
+                    "not found for %s",
+                    agent_run_id,
+                )
+                return {}
+            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
+            if not workspace_path:
+                return {}
+            workspace = Path(workspace_path).expanduser().resolve()
+            candidates = _workspace_moonspec_verify_path_candidates(
+                workspace,
+                assessment_path,
+            )
+            path = next(
+                (candidate for candidate in candidates if candidate.is_file()),
+                None,
+            )
+            if path is None:
+                logger.warning(
+                    "Assessment verdict artifact file was not found for "
+                    "publication: %s",
+                    assessment_path,
+                )
+                return {}
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                logger.warning(
+                    "Assessment verdict artifact could not be read as JSON: %s",
+                    assessment_path,
+                    exc_info=True,
+                )
+                return {}
+            if not isinstance(payload, Mapping):
+                logger.warning(
+                    "Assessment verdict artifact payload must be a JSON object: %s",
+                    assessment_path,
+                )
+                return {}
+            verdict_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal="system:agent_runtime",
+                payload=dict(payload),
+                execution_ref=_execution_ref("output.assessment_verdict"),
+                metadata_json={
+                    "name": "assessment-verdict.json",
+                    "path": assessment_path,
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": [
+                        "agent_runtime",
+                        "output.assessment_verdict",
+                        "assessment",
+                    ],
+                    **step_artifact_metadata,
+                },
+            )
+            published: dict[str, Any] = {
+                "assessmentArtifactRef": verdict_ref.artifact_id,
+            }
+            # Compact structured verdict rides previousOutputs as a fast path for
+            # adjacent steps; the ref is the durable, bridge-compatible channel.
+            verdict = str(payload.get("verdict") or "").strip().upper()
+            if verdict in {
+                "FULLY_IMPLEMENTED",
+                "PARTIALLY_IMPLEMENTED",
+                "NOT_IMPLEMENTED",
+                "BLOCKED",
+            }:
+                published["assessmentVerdict"] = verdict
+            return published
+
         result_summary = result_dict.get("summary") or result_dict.get("raw", "")
         operator_summary = self._sanitize_operator_summary(
             _metadata_text("operator_summary", "operatorSummary")
@@ -7801,6 +7885,16 @@ class TemporalAgentRuntimeActivities:
                     else {}
                 )
                 enriched_metadata_for_result.update(moonspec_verify_refs)
+                result_dict["metadata"] = enriched_metadata_for_result
+            assessment_verdict_refs = await _publish_assessment_verdict_artifact()
+            if assessment_verdict_refs:
+                published_refs.update(assessment_verdict_refs)
+                enriched_metadata_for_result = (
+                    dict(result_dict.get("metadata") or {})
+                    if isinstance(result_dict.get("metadata"), Mapping)
+                    else {}
+                )
+                enriched_metadata_for_result.update(assessment_verdict_refs)
                 result_dict["metadata"] = enriched_metadata_for_result
             summary_ref = await _write_json_artifact(
                 self._artifact_service,

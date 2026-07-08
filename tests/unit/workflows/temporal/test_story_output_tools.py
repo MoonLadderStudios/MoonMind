@@ -7,6 +7,7 @@ import pytest
 
 from moonmind.workflows.temporal import story_output_tools as story_tools
 from moonmind.workflows.temporal.story_output_tools import (
+    check_github_issue_blockers,
     check_jira_blockers,
     create_document_update_tasks_from_paths,
     create_github_issue_implement_workflows_from_issue_mappings,
@@ -4563,3 +4564,226 @@ async def test_create_document_update_tasks_reports_partial_failures():
 async def test_create_document_update_tasks_requires_execution_creator():
     with pytest.raises(ValueError, match="execution_creator is required"):
         await create_document_update_tasks_from_paths({"documentPaths": ["/docs/a.md"]})
+
+
+class _FakeAssessmentArtifactService:
+    """Minimal artifact service exposing read-by-ref for verdict resolution."""
+
+    def __init__(self, payloads: dict[str, Any]) -> None:
+        self._payloads = payloads
+        self.read_calls: list[str] = []
+
+    async def read(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        allow_restricted_raw: bool = False,
+    ) -> tuple[object, bytes]:
+        self.read_calls.append(artifact_id)
+        payload = self._payloads[artifact_id]
+        return object(), json.dumps(payload).encode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_update_jira_issue_status_resolves_verdict_by_artifact_ref() -> None:
+    # No local file and no in-payload verdict: the durable artifact ref is the
+    # only source. This is the bridge-compatible path (agent workspace not shared).
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_assessment_1": {"verdict": "FULLY_IMPLEMENTED"}}
+    )
+    service = _FakeJiraService()
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1139",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": "artifacts/missing-assessment.json",
+            "assessmentArtifactRef": "art_assessment_1",
+        },
+        {"temporal_artifact_service": artifact_service},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "skipped"
+    assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+    assert artifact_service.read_calls == ["art_assessment_1"]
+    assert service.get_issue_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_jira_issue_status_blocks_by_artifact_ref_blocked_verdict() -> None:
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_assessment_2": {"verdict": "BLOCKED"}}
+    )
+    service = _FakeJiraService()
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1139",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": "artifacts/missing-assessment.json",
+            "previousOutputs": {"assessmentArtifactRef": "art_assessment_2"},
+        },
+        {"temporal_artifact_service": artifact_service},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["assessmentVerdict"] == "BLOCKED"
+    assert service.transition_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_jira_issue_status_ref_missing_verdict_preserves_unavailable() -> None:
+    # An artifact that resolves but has no verdict must NOT flip the
+    # "unavailable" result to a proceed decision — behavior stays identical to
+    # today for payloads that carry no usable verdict.
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_assessment_3": {"summary": "no verdict here"}}
+    )
+    service = _FakeJiraService()
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1139",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": "artifacts/missing-assessment.json",
+            "assessmentArtifactRef": "art_assessment_3",
+        },
+        {"temporal_artifact_service": artifact_service},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert "assessment verdict" in result.outputs["summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_update_jira_issue_status_without_ref_or_service_stays_unavailable() -> None:
+    # No local file, no ref, no artifact service: the pre-existing fail-safe
+    # behavior is preserved (no regression for in-flight runs carrying no ref).
+    service = _FakeJiraService()
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1139",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": "artifacts/missing-assessment.json",
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_check_jira_blockers_resolves_and_forwards_artifact_ref() -> None:
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_assessment_4": {"verdict": "NOT_IMPLEMENTED"}}
+    )
+    service = _FakeJiraService()
+    service.issue_responses["MM-1139"] = {
+        "key": "MM-1139",
+        "fields": {"status": {"id": "1", "name": "Backlog"}, "issuelinks": []},
+    }
+
+    result = await check_jira_blockers(
+        {
+            "targetIssueKey": "MM-1139",
+            "assessmentArtifactPath": "artifacts/missing-assessment.json",
+            "assessmentArtifactRef": "art_assessment_4",
+        },
+        {"temporal_artifact_service": artifact_service},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["assessmentVerdict"] == "NOT_IMPLEMENTED"
+    # The ref is forwarded so the later In Progress step can resolve by ref too.
+    assert result.outputs["assessmentArtifactRef"] == "art_assessment_4"
+
+
+@pytest.mark.asyncio
+async def test_update_jira_issue_status_prefers_in_payload_verdict_over_ref() -> None:
+    # The compact in-payload verdict is the fast path; the artifact must not be
+    # read when a verdict is already present in previousOutputs.
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_assessment_5": {"verdict": "NOT_IMPLEMENTED"}}
+    )
+    service = _FakeJiraService()
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1139",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": "artifacts/missing-assessment.json",
+            "previousOutputs": {
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+                "assessmentArtifactRef": "art_assessment_5",
+            },
+        },
+        {"temporal_artifact_service": artifact_service},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "skipped"
+    assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+    assert artifact_service.read_calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_resolves_verdict_by_artifact_ref() -> None:
+    # GitHub In Progress gate resolves the verdict via the durable artifact ref
+    # when the local handoff file is unavailable across the step boundary.
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_gh_assessment": {"verdict": "FULLY_IMPLEMENTED"}}
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "start",
+            "assessmentArtifactPath": "artifacts/missing-assessment.json",
+            "assessmentArtifactRef": "art_gh_assessment",
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "skipped"
+    assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+    assert artifact_service.read_calls == ["art_gh_assessment"]
+
+
+@pytest.mark.asyncio
+async def test_check_github_issue_blockers_forwards_artifact_ref() -> None:
+    # The verdict + durable ref are forwarded unconditionally so the later
+    # In Progress step can resolve by ref regardless of the blocker outcome.
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_gh_assessment_2": {"verdict": "NOT_IMPLEMENTED"}}
+    )
+    service = _FakeGitHubService()
+
+    result = await check_github_issue_blockers(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactPath": "artifacts/missing-assessment.json",
+            "assessmentArtifactRef": "art_gh_assessment_2",
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.outputs["assessmentVerdict"] == "NOT_IMPLEMENTED"
+    assert result.outputs["assessmentArtifactRef"] == "art_gh_assessment_2"

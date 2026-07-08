@@ -38,6 +38,14 @@ _AUTH_PATH_MARKERS = (
 _NON_SECRET_SENTINEL_VALUES = frozenset(
     {"true", "false", "none", "null", "yes", "no", "on", "off"}
 )
+# Values shorter than this are never registered as redaction targets. The
+# redactor scrubs secrets by naive substring replacement, so a very short
+# value carries no meaningful secret entropy yet corrupts unrelated content:
+# a boolean-flag env var with a sensitively-named key (for example
+# ``OMNIGENT_AUTH_ENABLED=0`` or ``MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=1``)
+# would otherwise turn every ``0``/``1`` in logs, diagnostics, agent summaries,
+# issue keys, and commit shas into the placeholder.
+_MIN_REDACTABLE_SECRET_LENGTH = 4
 _NON_SECRET_REF_KEYS = frozenset(
     {
         "auth_actions",
@@ -213,6 +221,8 @@ class SecretRedactor:
             if not value:
                 continue
             if _is_non_secret_sentinel(value):
+                continue
+            if len(value.strip()) < _MIN_REDACTABLE_SECRET_LENGTH:
                 continue
             for variant in _secret_variants(value):
                 if variant and variant not in seen:

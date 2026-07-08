@@ -13359,6 +13359,37 @@ class MoonMindRunWorkflow:
             or self._default_moonspec_verify_artifact_path(node_id)
         )
 
+    def _ensure_assessment_parameters(
+        self,
+        *,
+        parameters: dict[str, Any],
+        node_inputs: Mapping[str, Any],
+    ) -> None:
+        """Propagate the assessment handoff path so its verdict can be published.
+
+        The initial-assessment agent step writes a structured verdict JSON to
+        ``assessment_artifact_path`` in its workspace. Surfacing that path in the
+        agent parameters lets ``agent_runtime.publish_artifacts`` publish the JSON
+        as a durable MoonMind artifact and hand downstream steps an
+        ``assessmentArtifactRef`` — a bridge-compatible verdict channel that does
+        not depend on a shared filesystem (the assessment may run on an Omnigent
+        host whose workspace the deterministic Jira tools cannot mount).
+
+        Unlike moonspec-verify this applies to any agent skill (the assessment
+        step runs as ``auto``); callers gate it away from moonspec-verify steps,
+        which merely READ the assessment path, so only the writer publishes.
+        """
+        if parameters.get("assessment_artifact_path"):
+            return
+        nested_inputs = node_inputs.get("inputs")
+        skill_inputs = nested_inputs if isinstance(nested_inputs, Mapping) else {}
+        for source in (node_inputs, skill_inputs):
+            for key in ("assessment_artifact_path", "assessmentArtifactPath"):
+                value = source.get(key)
+                if isinstance(value, str) and value.strip():
+                    parameters["assessment_artifact_path"] = value.strip()
+                    return
+
     def _build_agent_execution_request(
         self,
         *,
@@ -13590,6 +13621,13 @@ class MoonMindRunWorkflow:
                     node_inputs=node_inputs,
                     node_id=node_id,
                 )
+        # The initial-assessment step (skill: auto) writes the verdict artifact;
+        # moonspec-verify steps only read it, so exclude them from publication.
+        if str(selected_skill or "").strip().lower() != "moonspec-verify":
+            self._ensure_assessment_parameters(
+                parameters=parameters,
+                node_inputs=node_inputs,
+            )
         bundle_payload: dict[str, Any] = {}
         for bundle_key in (
             "bundleId",
