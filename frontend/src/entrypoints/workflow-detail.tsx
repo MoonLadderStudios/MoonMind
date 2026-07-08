@@ -250,7 +250,7 @@ export function WorkflowWorkspaceShell({
       className="workflow-workspace-shell"
       data-sidebar-collapsed={effectiveDisplayMode === 'sidebar' ? 'false' : 'true'}
       data-workflow-list-display-mode={effectiveDisplayMode}
-      data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008"
+      data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008 MM-1138"
       data-source-issue="MM-975"
     >
       {effectiveDisplayMode === 'sidebar' ? (
@@ -1790,17 +1790,18 @@ function SegmentedNav<T extends string>({
   const activeIndex = items.findIndex((item) => item.value === active);
   return (
     <nav
-      className={['segmented-nav', activeIndex < 0 ? 'segmented-nav-no-active' : ''].filter(Boolean).join(' ')}
+      className={['segmented-control', activeIndex < 0 ? 'segmented-control-no-active' : ''].filter(Boolean).join(' ')}
+      data-intensity="quiet"
       aria-label={ariaLabel}
       style={{
-        '--segmented-nav-count': items.length,
-        '--segmented-nav-active-index': Math.max(0, activeIndex),
+        '--segmented-control-count': items.length,
+        '--segmented-control-active-index': Math.max(0, activeIndex),
       } as CSSProperties}
     >
       {items.map((item) => (
         <a
           key={item.value}
-          className="segmented-nav-item"
+          className="segmented-control-item"
           href={item.href}
           aria-current={active === item.value ? 'page' : undefined}
           onClick={(event) => {
@@ -1808,9 +1809,9 @@ function SegmentedNav<T extends string>({
             onNavigate(item.value, item.href);
           }}
         >
-          <span>{item.label}</span>
+          <span className="segmented-control-item-label">{item.label}</span>
           {item.badge !== null && item.badge !== undefined ? (
-            <span className="segmented-nav-badge" aria-hidden="true">{item.badge}</span>
+            <span className="segmented-control-badge" aria-hidden="true">{item.badge}</span>
           ) : null}
         </a>
       ))}

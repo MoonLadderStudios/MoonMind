@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
@@ -257,15 +257,21 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       />
 
       <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-3 shadow-sm">
-        <fieldset className="settings-nav-field">
+        <fieldset className="segmented-control-field">
           <legend className="sr-only">Settings Section</legend>
-          <div className="settings-nav-options">
+          <div
+            className="segmented-control"
+            data-intensity="loud"
+            style={{
+              '--segmented-control-count': SETTINGS_SECTIONS.length,
+            } as CSSProperties}
+          >
             {SETTINGS_SECTIONS.map((candidate) => {
               const Icon = candidate.Icon;
               return (
                 <label
                   key={candidate.id}
-                  className="settings-nav-option"
+                  className="segmented-control-item"
                   title={candidate.description}
                 >
                   <input
@@ -275,10 +281,10 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
                     checked={candidate.id === section}
                     onChange={() => handleSelectSection(candidate.id)}
                   />
-                  <span className="settings-nav-option-icon">
+                  <span className="segmented-control-item-icon">
                     <Icon />
                   </span>
-                  <span className="settings-nav-option-label">
+                  <span className="segmented-control-item-label">
                     {candidate.label}
                   </span>
                 </label>

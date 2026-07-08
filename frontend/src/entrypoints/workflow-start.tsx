@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactElement } from "react";
+import type { CSSProperties, ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useInRouterContext, useLocation } from "react-router-dom";
@@ -11483,15 +11483,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     </div>
                   </div>
 
-                  <fieldset className="queue-step-type-field">
+                  <fieldset className="segmented-control-field">
                     <legend className="sr-only">Step Type</legend>
-                    <div className="queue-step-type-options">
+                    <div
+                      className="segmented-control"
+                      data-intensity="loud"
+                      style={{
+                        "--segmented-control-count": STEP_TYPE_OPTIONS.length,
+                      } as CSSProperties}
+                    >
                       {STEP_TYPE_OPTIONS.map((option) => {
                         const Icon = option.Icon;
                         return (
                           <label
                             key={option.value}
-                            className="queue-step-type-option"
+                            className="segmented-control-item"
                             title={STEP_TYPE_HELP_TEXT[option.value]}
                           >
                             <input
@@ -11508,10 +11514,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                                 )
                               }
                             />
-                            <span className="queue-step-type-option-icon">
+                            <span className="segmented-control-item-icon">
                               <Icon />
                             </span>
-                            <span className="queue-step-type-option-label">
+                            <span className="segmented-control-item-label">
                               {option.label}
                             </span>
                           </label>
@@ -11520,7 +11526,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     </div>
                   </fieldset>
                   {step.stepType === "tool" ? (
-                    <div className="stack queue-step-type-panel">
+                    <div className="stack segmented-control-panel">
                       <p className="small">
                         Tool steps run typed governed operations with schema-backed
                         inputs, authorization, capability, retry, binding,
@@ -11630,9 +11636,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                             <div className="stack queue-tool-dynamic-options">
                               <strong>Approved Scope</strong>
                               <div
-                                className="queue-step-type-options"
+                                className="segmented-control"
+                                data-intensity="loud"
                                 role="radiogroup"
                                 aria-label="Approved Scope mode"
+                                style={{
+                                  "--segmented-control-count": 3,
+                                } as CSSProperties}
                               >
                                 {[
                                   ["generate", "Generate from fields"],
@@ -11641,7 +11651,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                                 ].map(([mode, label]) => (
                                   <label
                                     key={mode}
-                                    className="queue-step-type-option"
+                                    className="segmented-control-item"
                                   >
                                     <input
                                       type="radio"
@@ -11655,7 +11665,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                                         })
                                       }
                                     />
-                                    <span className="queue-step-type-option-label">
+                                    <span className="segmented-control-item-label">
                                       {label}
                                     </span>
                                   </label>
@@ -12021,7 +12031,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   ) : null}
 
                   {step.stepType === "skill" ? (
-                    <div className="stack queue-step-type-panel">
+                    <div className="stack segmented-control-panel">
                       <div className="field">
                         <label htmlFor={`queue-step-${step.localId}-skill-id`}>
                           Skill (optional)
@@ -12123,7 +12133,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
                   {step.stepType === "preset" ? (
                     <div
-                      className="stack queue-step-type-panel"
+                      className="stack segmented-control-panel"
                       aria-label="Step Preset"
                     >
                       <label>
