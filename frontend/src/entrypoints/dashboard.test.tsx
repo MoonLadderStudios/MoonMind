@@ -12,10 +12,14 @@ import postcss from 'postcss';
 import type { Root, Rule } from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
-import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
+import { act, fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { DashboardApp } from './dashboard-app';
 import { navigateTo } from '../lib/navigation';
-import { readDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
+import {
+  readDashboardPreferences,
+  resetDashboardPreferences,
+  updateDashboardPreferences,
+} from '../utils/dashboardPreferences';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -845,6 +849,56 @@ describe('Dashboard shared entry', () => {
     });
     expect(window.location.pathname).toBe('/schedules/schedule-one');
     expect(readDashboardPreferences().lastSelectedDefinitionId).toBe('schedule-one');
+  });
+
+  it('MM-1145 refreshes the recurring mode on a preference change so a reset default replaces a stale mode', async () => {
+    // Seed a persisted `hidden` and open a detail route directly so the shell
+    // seeds that stale mode into local state on mount.
+    updateDashboardPreferences({ recurringListDisplayMode: 'hidden' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => recurringScheduleDetail('schedule-one', 'Daily recurring scan'),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules/schedule-one');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Daily recurring scan' })).toBeTruthy();
+    // The persisted `hidden` is honored on load: no sidebar list is mounted.
+    expect(screen.queryByRole('complementary', { name: 'Recurring schedule navigation' })).toBeNull();
+    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+
+    // Resetting preferences (for example from another route in the same SPA
+    // session, or a `storage` event from another tab) fires the change event.
+    // The shell must refresh the recurring mode from storage so the reset default
+    // replaces the stale `hidden` without a full reload; on a detail route the
+    // route-owned default is `sidebar`.
+    act(() => {
+      resetDashboardPreferences();
+    });
+
+    expect(
+      await screen.findByRole('complementary', { name: 'Recurring schedule navigation' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
   });
 
   it('hides the workflow list display control on unsupported routes', async () => {

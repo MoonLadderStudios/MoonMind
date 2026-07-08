@@ -843,7 +843,12 @@ function RoutedDashboardPage({
         const definitionId = decodeURIComponent(match[1] || '').trim();
         if (definitionId) {
           setLastSelectedDefinitionId(definitionId);
-          updateDashboardPreferences({ lastSelectedDefinitionId: definitionId });
+          // This effect also runs on `location.search` changes, so only persist
+          // when the remembered definition actually changed to avoid a redundant
+          // localStorage write, JSON round-trip, and change-event dispatch.
+          if (readDashboardPreferences().lastSelectedDefinitionId !== definitionId) {
+            updateDashboardPreferences({ lastSelectedDefinitionId: definitionId });
+          }
         }
       } catch {
         // Ignore malformed paths; route validation handles unsupported pages.
@@ -854,16 +859,35 @@ function RoutedDashboardPage({
   useEffect(() => {
     const syncPreferences = () => {
       const prefs = readDashboardPreferences();
+      const normalizedPath = window.location.pathname.replace(/\/$/, '');
       // The `/workflows` route is always the full-screen table surface, and
       // `table` is not representable in the persisted collapse boolean. Deriving
       // the mode from that boolean here would clobber the table selection back to
       // `sidebar` whenever a preference change fires (for example when the
       // already-selected "Full screen table" button re-persists preferences),
       // so leave the route-owned `table` mode untouched on this surface.
-      if (window.location.pathname.replace(/\/$/, '') !== '/workflows') {
+      if (normalizedPath !== '/workflows') {
         setRequestedMode(prefs.workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar');
       }
       setLastSelectedWorkflowId(prefs.lastSelectedWorkflowId.trim() || null);
+      // Recurring preferences are seeded into local state on mount, so a
+      // preference change while the shell stays mounted (for example a reset from
+      // another route in the same SPA session or a `storage` event from another
+      // tab) must refresh them too; otherwise a stale recurring mode or remembered
+      // definition survives until a full reload. Mirror the route-ownership
+      // coercion applied on navigation: `/schedules` is route-owned `table`, and a
+      // detail route coerces `table` -> `sidebar` while honoring a persisted
+      // `hidden`.
+      if (normalizedPath === '/schedules') {
+        setRequestedRecurringMode('table');
+      } else if (normalizedPath.startsWith('/schedules/')) {
+        setRequestedRecurringMode(
+          prefs.recurringListDisplayMode === 'table' ? 'sidebar' : prefs.recurringListDisplayMode,
+        );
+      } else {
+        setRequestedRecurringMode(prefs.recurringListDisplayMode);
+      }
+      setLastSelectedDefinitionId(prefs.lastSelectedDefinitionId.trim() || null);
     };
     window.addEventListener(DASHBOARD_PREFERENCES_CHANGED_EVENT, syncPreferences);
     window.addEventListener('storage', syncPreferences);
@@ -940,11 +964,16 @@ function RoutedDashboardPage({
         return;
       }
       setRequestedRecurringMode(selectedMode);
-      updateDashboardPreferences({ recurringListDisplayMode: selectedMode });
+      // Batch both preference fields into a single persisted update to avoid a
+      // redundant localStorage write, JSON round-trip, and change-event dispatch.
+      const patch: Parameters<typeof updateDashboardPreferences>[0] = {
+        recurringListDisplayMode: selectedMode,
+      };
       if (resolved.selection.definitionId) {
         setLastSelectedDefinitionId(resolved.selection.definitionId);
-        updateDashboardPreferences({ lastSelectedDefinitionId: resolved.selection.definitionId });
+        patch.lastSelectedDefinitionId = resolved.selection.definitionId;
       }
+      updateDashboardPreferences(patch);
       const current = `${location.pathname}${location.search}`;
       if (resolved.targetPath !== current) {
         navigate(resolved.targetPath);
