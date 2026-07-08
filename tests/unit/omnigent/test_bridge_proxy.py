@@ -54,14 +54,17 @@ class _FakeStore:
     async def record_session_created(
         self, key: str, *, session_id: str, agent_id=None, endpoint_ref=None
     ) -> _FakeRow:
-        self.created_events.append(
-            {
-                "key": key,
-                "session_id": session_id,
-                "agent_id": agent_id,
-                "endpoint_ref": endpoint_ref,
-            }
-        )
+        # Mirror the real store: session.created is recorded once per session
+        # (idempotent), so create/reuse retries never duplicate the event.
+        if not any(evt["key"] == key for evt in self.created_events):
+            self.created_events.append(
+                {
+                    "key": key,
+                    "session_id": session_id,
+                    "agent_id": agent_id,
+                    "endpoint_ref": endpoint_ref,
+                }
+            )
         return self.rows[key]
 
 
@@ -152,6 +155,36 @@ async def test_create_session_reuse_is_idempotent() -> None:
     assert len(client.created_payloads) == 1
     assert len(store.attached) == 1
     assert len(store.created_events) == 1
+    assert response["moonmind"]["reused"] is True
+
+
+async def test_create_session_records_session_created_on_reuse_recovery() -> None:
+    # Partial-failure recovery: a prior attempt attached the provider session id
+    # but crashed before the session.created journal write landed. A retry that
+    # reuses the attached session must still emit session.created (idempotently)
+    # rather than dropping it, so no upstream create happens but the event is
+    # recorded.
+    store, client = _FakeStore(), _FakeClient()
+    key = "idem-1"
+    store.rows[key] = _FakeRow(session_id="sess-existing")
+    proxy = _proxy(store, client)
+    req = BridgeSessionCreateRequest(
+        agent_id="agent-1",
+        host_type="managed",
+        workspace="https://github.com/org/repo#main",
+    )
+
+    response = await proxy.create_session(request=req, binding=_binding(key))
+
+    assert not client.created_payloads
+    assert store.created_events == [
+        {
+            "key": "idem-1",
+            "session_id": "sess-existing",
+            "agent_id": "agent-1",
+            "endpoint_ref": "default",
+        }
+    ]
     assert response["moonmind"]["reused"] is True
 
 

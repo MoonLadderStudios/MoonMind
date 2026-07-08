@@ -32,6 +32,7 @@ from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     OmnigentAdapterError,
+    OmnigentExecutionSelection,
     _is_git_url_with_optional_branch,
     build_omnigent_selection,
     build_omnigent_session_create_payload,
@@ -228,16 +229,21 @@ class OmnigentBridgeSessionProxy:
             create_response = await self._forward_create(payload)
             session_id = _session_id(create_response)
             # Persist provider session id BEFORE any first-message prepare/post
-            # (OB-§8.2 step 5), then emit session.created (step 6).
+            # (OB-§8.2 step 5).
             await self._run_store.attach_session(
                 exec_request.idempotency_key, session_id
             )
-            await self._run_store.record_session_created(
-                exec_request.idempotency_key,
-                session_id=session_id,
-                agent_id=target.agent_id,
-                endpoint_ref=endpoint_ref,
-            )
+        # Emit session.created (OB-§8.2 step 6) idempotently on both the create
+        # and reuse paths. If a prior attempt attached the session id but crashed
+        # before the journal write landed, a retry finds the session already
+        # attached; re-emitting here (the store append is idempotent) prevents the
+        # session.created event from being permanently lost on partial failure.
+        await self._run_store.record_session_created(
+            exec_request.idempotency_key,
+            session_id=session_id,
+            agent_id=target.agent_id,
+            endpoint_ref=endpoint_ref,
+        )
 
         snapshot = await self._best_effort_snapshot(session_id)
         return self._session_response(
@@ -372,7 +378,7 @@ def _build_execution_request(
     )
 
 
-def _selection(exec_request: AgentExecutionRequest):
+def _selection(exec_request: AgentExecutionRequest) -> OmnigentExecutionSelection:
     try:
         return build_omnigent_selection(exec_request)
     except OmnigentAdapterError as exc:
