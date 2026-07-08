@@ -442,6 +442,9 @@ RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH = "run-jira-blocker-wait-coalescing-v1"
 RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH = (
     "run-jira-blocker-recheck-retry-floor-v1"
 )
+RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_PATCH = (
+    "run-jira-blocker-recheck-assessment-context-v1"
+)
 # Replay-stable patch id for the v2 workflow-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
@@ -5786,6 +5789,45 @@ class MoonMindRunWorkflow:
             if value not in (None, "", {}, []):
                 self._assessment_context[key] = value
 
+    def _merge_assessment_context_into_result(self, execution_result: Any) -> Any:
+        if not self._assessment_context:
+            return execution_result
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return execution_result
+
+        merged_outputs = dict(outputs)
+        changed = False
+        for key in (
+            "assessmentArtifactRef",
+            "assessment_artifact_ref",
+            "assessmentVerdict",
+            "assessment_verdict",
+        ):
+            value = self._assessment_context.get(key)
+            if value in (None, "", {}, []):
+                continue
+            if merged_outputs.get(key) not in (None, "", {}, []):
+                continue
+            merged_outputs[key] = value
+            changed = True
+        if not changed:
+            return execution_result
+
+        if isinstance(execution_result, Mapping):
+            merged_result = dict(execution_result)
+            merged_result["outputs"] = merged_outputs
+            return merged_result
+        model_copy = getattr(execution_result, "model_copy", None)
+        if callable(model_copy):
+            return model_copy(update={"outputs": merged_outputs})
+        if dataclasses.is_dataclass(execution_result):
+            try:
+                return dataclasses.replace(execution_result, outputs=merged_outputs)
+            except TypeError:
+                return execution_result
+        return execution_result
+
     def _merge_trusted_issue_context(
         self,
         previous_outputs: Mapping[str, Any],
@@ -9853,6 +9895,13 @@ class MoonMindRunWorkflow:
         skipped = False
         recheck_count = 0
         current_result = execution_result
+        preserve_assessment_context = workflow.patched(
+            RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_PATCH
+        )
+        if preserve_assessment_context:
+            outputs = self._get_from_result(current_result, "outputs")
+            if isinstance(outputs, Mapping):
+                self._record_assessment_context(outputs)
         while self._jira_blocker_waitable_result(
             current_result,
             tool_type=tool_type,
@@ -10021,6 +10070,13 @@ class MoonMindRunWorkflow:
                     if failure_mode == "FAIL_FAST":
                         raise
                     break
+            if preserve_assessment_context:
+                current_result = self._merge_assessment_context_into_result(
+                    current_result
+                )
+                outputs = self._get_from_result(current_result, "outputs")
+                if isinstance(outputs, Mapping):
+                    self._record_assessment_context(outputs)
             self._record_step_result_evidence(
                 node_id,
                 execution_result=current_result,
