@@ -994,7 +994,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     const expectedIcons = [
-      ['Scheduled workflow', 'Status: Scheduled', 'status-scheduled', 'lucide-calendar-clock'],
+      ['Scheduled workflow', 'Status: Scheduled', 'status-scheduled', 'lucide-moon'],
       ['Initializing workflow', 'Status: Initializing', 'status-initializing', null],
       ['Running workflow', 'Status: Running', 'status-running', null],
       ['Dependency wait workflow', 'Status: Awaiting dependencies', 'status-awaiting-dependencies', 'lucide-link'],

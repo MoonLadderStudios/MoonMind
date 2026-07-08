@@ -1,6 +1,5 @@
 import {
   Ban,
-  CalendarClock,
   Check,
   Hand,
   Hourglass,
@@ -8,6 +7,7 @@ import {
   Link,
   Map as MapIcon,
   Minus,
+  Moon,
   PackageCheck,
   Play,
   Power,
@@ -19,7 +19,7 @@ import { formatStatusLabel } from './formatters';
 import { stepStatusPillProps } from '../status/stepStatus';
 
 export const WORKFLOW_STATUS_ICONS = {
-  scheduled: CalendarClock,
+  scheduled: Moon,
   initializing: Power,
   waiting_on_dependencies: Link,
   planning: MapIcon,
