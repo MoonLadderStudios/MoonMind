@@ -78,9 +78,16 @@ def test_resiliency_policy_is_runtime_specific() -> None:
         correlationId="run-2",
         idempotencyKey="run-2:step-1",
     )
+    claude_request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        correlationId="run-3",
+        idempotencyKey="run-3:step-1",
+    )
 
     codex_policy = MoonMindAgentRun._resiliency_policy_for_request(codex_request)
     jules_policy = MoonMindAgentRun._resiliency_policy_for_request(jules_request)
+    claude_policy = MoonMindAgentRun._resiliency_policy_for_request(claude_request)
 
     assert codex_policy["runtime"] == "codex_cli"
     assert codex_policy["retryPolicy"] == "session_turn_self_heal_then_cooldown_retry"
@@ -92,6 +99,9 @@ def test_resiliency_policy_is_runtime_specific() -> None:
     assert codex_policy["noProgressTimeoutSeconds"] != jules_policy[
         "noProgressTimeoutSeconds"
     ]
+    assert claude_policy["runtime"] == "claude_code"
+    assert claude_policy["noProgressTimeoutSeconds"] == 2400
+    assert claude_policy["noProgressGraceSeconds"] == 900
 
 def test_status_progress_signature_tracks_metadata_progress_keys() -> None:
     first = AgentRunStatus(

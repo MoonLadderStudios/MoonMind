@@ -361,6 +361,8 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
 _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS = 1800
+_CLAUDE_CODE_NO_PROGRESS_TIMEOUT_SECONDS = 2400
+_CLAUDE_CODE_NO_PROGRESS_GRACE_SECONDS = 900
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
 _MAX_PROVIDER_COOLDOWN_BACKOFF_SECONDS = 3600
 _MANAGED_RUNTIME_STORE_ROOT = os.environ.get(
@@ -988,8 +990,8 @@ class MoonMindAgentRun:
         if runtime_id == "claude_code":
             return {
                 "runtime": runtime_id,
-                "noProgressTimeoutSeconds": 1500,
-                "noProgressGraceSeconds": 600,
+                "noProgressTimeoutSeconds": _CLAUDE_CODE_NO_PROGRESS_TIMEOUT_SECONDS,
+                "noProgressGraceSeconds": _CLAUDE_CODE_NO_PROGRESS_GRACE_SECONDS,
                 "stuckAction": "request_intervention",
                 "retryPolicy": "managed_runtime_polling_with_profile_cooldown",
             }

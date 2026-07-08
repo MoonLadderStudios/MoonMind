@@ -219,6 +219,61 @@ class TestClaudeCodeProgressProbe:
 
         assert observed is None
 
+    def test_probe_progress_uses_workspace_source_file_mtime(self, tmp_path) -> None:
+        strategy = ClaudeCodeStrategy()
+        workspace_path = tmp_path / "repo"
+        source_path = workspace_path / "frontend" / "src" / "workflow-detail.tsx"
+        git_index = workspace_path / ".git" / "index"
+        live_spool = workspace_path / "live_streams.spool"
+        source_path.parent.mkdir(parents=True)
+        git_index.parent.mkdir(parents=True)
+        source_path.write_text("export const changed = true;\n", encoding="utf-8")
+        git_index.write_text("git metadata", encoding="utf-8")
+        live_spool.write_text("system annotation", encoding="utf-8")
+
+        started_at = datetime(2026, 7, 7, 23, 11, 26, tzinfo=UTC)
+        expected_progress_at = datetime(2026, 7, 7, 23, 44, 58, tzinfo=UTC)
+        later_internal_ts = datetime(2026, 7, 7, 23, 45, 30, tzinfo=UTC).timestamp()
+        os.utime(
+            source_path,
+            (expected_progress_at.timestamp(), expected_progress_at.timestamp()),
+        )
+        os.utime(git_index, (later_internal_ts, later_internal_ts))
+        os.utime(live_spool, (later_internal_ts, later_internal_ts))
+
+        observed = strategy.probe_progress_at(
+            workspace_path=str(workspace_path),
+            run_id="run-source-progress",
+            started_at=started_at,
+        )
+
+        assert observed == expected_progress_at
+
+    def test_probe_progress_ignores_internal_only_workspace_updates(
+        self,
+        tmp_path,
+    ) -> None:
+        strategy = ClaudeCodeStrategy()
+        workspace_path = tmp_path / "repo"
+        git_index = workspace_path / ".git" / "index"
+        live_spool = workspace_path / "live_streams.spool"
+        git_index.parent.mkdir(parents=True)
+        git_index.write_text("git metadata", encoding="utf-8")
+        live_spool.write_text("system annotation", encoding="utf-8")
+
+        started_at = datetime(2026, 7, 7, 23, 11, 26, tzinfo=UTC)
+        internal_ts = datetime(2026, 7, 7, 23, 45, 30, tzinfo=UTC).timestamp()
+        os.utime(git_index, (internal_ts, internal_ts))
+        os.utime(live_spool, (internal_ts, internal_ts))
+
+        observed = strategy.probe_progress_at(
+            workspace_path=str(workspace_path),
+            run_id="run-internal-only",
+            started_at=started_at,
+        )
+
+        assert observed is None
+
 
 _RUNTIME_MODEL_ENV_KEYS = (
     "MOONMIND_CODEX_MODEL",
