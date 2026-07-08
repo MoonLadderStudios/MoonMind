@@ -342,6 +342,108 @@ describe("SchedulesPage", () => {
     expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
   });
 
+  it("surfaces a failed run-now row action as a button tooltip", async () => {
+    const listResponse = {
+      items: [
+        {
+          id: "schedule-1",
+          name: "Daily repository sweep",
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC",
+          lastDispatchStatus: "enqueued",
+          lastDispatchError: null,
+          nextRunAt: "2026-05-31T12:00:00Z",
+          lastScheduledFor: "2026-05-30T12:00:00Z",
+          updatedAt: "2025-01-15T09:30:00Z",
+          scopeType: "personal",
+          target: {},
+          policy: {},
+        },
+      ],
+    };
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/api/recurring-workflows/schedule-1/run" && method === "POST") {
+        return {
+          ok: false,
+          status: 403,
+          statusText: "Forbidden",
+          json: async () => ({ detail: "You lost permission to run this schedule." }),
+        } as Response;
+      }
+      return { ok: true, json: async () => listResponse } as Response;
+    });
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    const runNow = await screen.findByRole("button", {
+      name: "Run Daily repository sweep now",
+    });
+
+    fireEvent.click(runNow);
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("button", { name: "Run Daily repository sweep now" })
+          .getAttribute("title"),
+      ).toBe("You lost permission to run this schedule."),
+    );
+  });
+
+  it("surfaces a failed pause row action as a button tooltip", async () => {
+    const listResponse = {
+      items: [
+        {
+          id: "schedule-1",
+          name: "Daily repository sweep",
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC",
+          lastDispatchStatus: "enqueued",
+          lastDispatchError: null,
+          nextRunAt: "2026-05-31T12:00:00Z",
+          lastScheduledFor: "2026-05-30T12:00:00Z",
+          updatedAt: "2025-01-15T09:30:00Z",
+          scopeType: "personal",
+          target: {},
+          policy: {},
+        },
+      ],
+    };
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/api/recurring-workflows/schedule-1" && method === "PATCH") {
+        return {
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+          json: async () => ({ detail: "Adapter rejected the pause request." }),
+        } as Response;
+      }
+      return { ok: true, json: async () => listResponse } as Response;
+    });
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    const pause = await screen.findByRole("button", {
+      name: "Pause Daily repository sweep",
+    });
+
+    fireEvent.click(pause);
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("button", { name: "Pause Daily repository sweep" })
+          .getAttribute("title"),
+      ).toBe("Adapter rejected the pause request."),
+    );
+  });
+
   it("routes creation to the workflow create page without local mutations", async () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 

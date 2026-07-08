@@ -1359,7 +1359,9 @@ function ScheduleRowActions({
         body: JSON.stringify({ enabled }),
       });
       if (!response.ok) {
-        throw new Error(`Failed to ${enabled ? 'resume' : 'pause'} schedule: ${response.statusText}`);
+        throw new Error(
+          await responseErrorMessage(response, `Failed to ${enabled ? 'resume' : 'pause'} schedule`),
+        );
       }
       return ScheduleSchema.parse(await response.json());
     },
@@ -1378,7 +1380,11 @@ function ScheduleRowActions({
         className="secondary"
         onClick={() => runNowMutation.mutate()}
         disabled={busy || !availability.canRun}
-        {...(availability.canRun ? {} : { title: availability.runReason })}
+        {...(runNowMutation.isError
+          ? { title: errorMessage(runNowMutation.error, 'Failed to run schedule') }
+          : availability.canRun
+          ? {}
+          : { title: availability.runReason })}
         aria-label={`Run ${schedule.name} now`}
       >
         {runNowMutation.isPending ? 'Running' : 'Run now'}
@@ -1388,7 +1394,16 @@ function ScheduleRowActions({
         className="secondary"
         onClick={() => pauseResumeMutation.mutate(!schedule.enabled)}
         disabled={busy || !availability.canEdit}
-        {...(availability.canEdit ? {} : { title: availability.editReason })}
+        {...(pauseResumeMutation.isError
+          ? {
+              title: errorMessage(
+                pauseResumeMutation.error,
+                `Failed to ${schedule.enabled ? 'pause' : 'resume'} schedule`,
+              ),
+            }
+          : availability.canEdit
+          ? {}
+          : { title: availability.editReason })}
         aria-label={`${pauseLabel} ${schedule.name}`}
       >
         {pauseResumeMutation.isPending ? 'Updating' : pauseLabel}
