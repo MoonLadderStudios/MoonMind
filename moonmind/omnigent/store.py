@@ -18,6 +18,12 @@ FIRST_MESSAGE_POSTING = "posting"
 FIRST_MESSAGE_POSTED = "posted"
 FIRST_MESSAGE_TERMINAL = "terminal"
 
+# MM-1155 (source: MM-1140): durable bridge event journal carried on the
+# STORY-002 run row. ``session.created`` (OB-§8.2 step 6, §10.3) is recorded
+# here before the bridge attempts any first-message prepare/post.
+BRIDGE_EVENT_JOURNAL_KEY = "bridge_event_journal"
+SESSION_CREATED_EVENT_TYPE = "session.created"
+
 
 class OmnigentIdempotencyError(RuntimeError):
     """Base error for invalid durable retry state."""
@@ -86,6 +92,50 @@ class OmnigentRunStore:
             row.omnigent_session_id = session_id
             await session.commit()
             await session.refresh(row)
+            return _detached(session, row)
+
+    async def record_session_created(
+        self,
+        idempotency_key: str,
+        *,
+        session_id: str,
+        agent_id: str | None = None,
+        endpoint_ref: str | None = None,
+    ) -> OmnigentExternalRun:
+        """Emit ``session.created`` into the durable bridge event journal.
+
+        MM-1155 (source: MM-1140): STORY-002 store persistence for the
+        proxy-mode bridge (OB-§8.2 step 6). The append is idempotent so a
+        create/attach retry under the same idempotency key does not duplicate
+        the event.
+        """
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            metadata = dict(row.target_metadata or {})
+            journal = [
+                entry
+                for entry in (metadata.get(BRIDGE_EVENT_JOURNAL_KEY) or [])
+                if isinstance(entry, dict)
+            ]
+            already_recorded = any(
+                entry.get("type") == SESSION_CREATED_EVENT_TYPE for entry in journal
+            )
+            if not already_recorded:
+                journal.append(
+                    {
+                        "type": SESSION_CREATED_EVENT_TYPE,
+                        "sequence": len(journal) + 1,
+                        "timestamp": datetime.now(tz=UTC).isoformat(),
+                        "omnigentSessionId": session_id,
+                        "omnigentAgentId": agent_id,
+                        "endpointRef": endpoint_ref,
+                    }
+                )
+                metadata[BRIDGE_EVENT_JOURNAL_KEY] = journal
+                row.target_metadata = metadata
+                await session.commit()
+                await session.refresh(row)
             return _detached(session, row)
 
     async def mark_prepared(
@@ -191,11 +241,13 @@ def _detached(session: AsyncSession, row: OmnigentExternalRun) -> OmnigentExtern
 
 
 __all__ = [
+    "BRIDGE_EVENT_JOURNAL_KEY",
     "FIRST_MESSAGE_NOT_PREPARED",
     "FIRST_MESSAGE_POSTED",
     "FIRST_MESSAGE_POSTING",
     "FIRST_MESSAGE_PREPARED",
     "FIRST_MESSAGE_TERMINAL",
+    "SESSION_CREATED_EVENT_TYPE",
     "OmnigentDigestMismatchError",
     "OmnigentIdempotencyError",
     "OmnigentRunStore",
