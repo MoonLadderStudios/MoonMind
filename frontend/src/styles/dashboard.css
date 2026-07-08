@@ -1737,6 +1737,20 @@ h1 {
   font-size: 0.88rem;
 }
 
+.schedules-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.schedules-row-actions .secondary {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .schedules-state {
   display: inline-flex;
   align-items: center;

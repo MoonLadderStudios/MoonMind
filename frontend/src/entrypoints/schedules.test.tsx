@@ -169,6 +169,7 @@ describe("SchedulesPage", () => {
             lastDispatchError: null,
             nextRunAt: "2026-05-31T12:00:00Z",
             lastScheduledFor: "2026-05-30T12:00:00Z",
+            updatedAt: "2025-01-15T09:30:00Z",
             scopeType: "personal",
             target: {
               kind: "queue_task",
@@ -245,6 +246,100 @@ describe("SchedulesPage", () => {
     expect(screen.getByText("Skip / Latest")).not.toBeNull();
     expect(screen.getByText("Adapter rejected schedule")).not.toBeNull();
     expect(screen.getByText("Total").nextElementSibling?.textContent).toBe("3");
+  });
+
+  it("renders the documented Updated and Actions columns in the recurring table", async () => {
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
+
+    // Column 9: Updated (updatedAt freshness) after Policy.
+    expect(screen.getByRole("columnheader", { name: "Updated" })).not.toBeNull();
+    const expectedUpdated = new Date("2025-01-15T09:30:00Z").toLocaleString();
+    expect(screen.getByText(expectedUpdated)).not.toBeNull();
+
+    // Column 10: Actions with safe, common row actions only.
+    expect(screen.getByRole("columnheader", { name: "Actions" })).not.toBeNull();
+    // One "Run now" action per schedule definition row.
+    expect(screen.getAllByRole("button", { name: /^Run .+ now$/ })).toHaveLength(3);
+    // Pause for enabled definitions, Resume for the paused one.
+    expect(screen.getAllByRole("button", { name: /^Pause / })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^Resume / })).toHaveLength(1);
+
+    // Destructive delete stays on detail; it is never surfaced in the list Actions.
+    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+
+    // Testing contract item 16: recurring definitions only, no spawned execution content.
+    expect(screen.queryByRole("heading", { name: "Steps" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Artifacts" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Logs" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
+  });
+
+  it("triggers a safe run-now row action without exposing destructive delete", async () => {
+    const listResponse = {
+      items: [
+        {
+          id: "schedule-1",
+          name: "Daily repository sweep",
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC",
+          lastDispatchStatus: "enqueued",
+          lastDispatchError: null,
+          nextRunAt: "2026-05-31T12:00:00Z",
+          lastScheduledFor: "2026-05-30T12:00:00Z",
+          updatedAt: "2025-01-15T09:30:00Z",
+          scopeType: "personal",
+          target: {},
+          policy: {},
+        },
+      ],
+    };
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/api/recurring-workflows/schedule-1/run" && method === "POST") {
+        return {
+          ok: true,
+          json: async () => ({
+            id: "run-manual",
+            definitionId: "schedule-1",
+            scheduledFor: "2025-01-16T09:30:00Z",
+            trigger: "manual",
+            outcome: "enqueued",
+            dispatchAttempts: 1,
+            createdAt: "2025-01-16T09:30:00Z",
+            updatedAt: "2025-01-16T09:30:00Z",
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => listResponse } as Response;
+    });
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    const runNow = await screen.findByRole("button", {
+      name: "Run Daily repository sweep now",
+    });
+
+    fireEvent.click(runNow);
+
+    await waitFor(() =>
+      expect(
+        fetchSpy.mock.calls.some(([url, init]) => {
+          const method = String(init?.method || "GET").toUpperCase();
+          return (
+            String(url) === "/api/recurring-workflows/schedule-1/run" &&
+            method === "POST"
+          );
+        }),
+      ).toBe(true),
+    );
+
+    // The row action set never includes a delete control.
+    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
   });
 
   it("routes creation to the workflow create page without local mutations", async () => {

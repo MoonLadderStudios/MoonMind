@@ -1320,11 +1320,89 @@ function ScheduleDetailPage({
   );
 }
 
+function ScheduleRowActions({
+  schedule,
+  payload,
+  sources,
+  listEndpoint,
+}: {
+  schedule: Schedule;
+  payload: BootPayload;
+  sources: ScheduleSources | undefined;
+  listEndpoint: string;
+}) {
+  const queryClient = useQueryClient();
+  const availability = scheduleActionAvailability(schedule, sources);
+  const runNowEndpoint = scheduleEndpoint(payload, 'runNow', schedule.id);
+  const updateEndpoint = scheduleEndpoint(payload, 'update', schedule.id);
+
+  const invalidateList = () =>
+    queryClient.invalidateQueries({ queryKey: ['schedules', listEndpoint] });
+
+  const runNowMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(runNowEndpoint, { method: 'POST', credentials: 'include' });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'Failed to run schedule'));
+      }
+      return ScheduleRunSchema.parse(await response.json());
+    },
+    onSuccess: () => invalidateList(),
+  });
+
+  const pauseResumeMutation = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      const response = await fetch(updateEndpoint, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to ${enabled ? 'resume' : 'pause'} schedule: ${response.statusText}`);
+      }
+      return ScheduleSchema.parse(await response.json());
+    },
+    onSuccess: () => invalidateList(),
+  });
+
+  const busy = runNowMutation.isPending || pauseResumeMutation.isPending;
+  const pauseLabel = schedule.enabled ? 'Pause' : 'Resume';
+
+  // Safe, common row actions only. Destructive delete stays on detail
+  // (docs/UI/RecurringSchedulesPage.md#s21) with confirmation + permission handling.
+  return (
+    <div className="schedules-row-actions">
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => runNowMutation.mutate()}
+        disabled={busy || !availability.canRun}
+        {...(availability.canRun ? {} : { title: availability.runReason })}
+        aria-label={`Run ${schedule.name} now`}
+      >
+        {runNowMutation.isPending ? 'Running' : 'Run now'}
+      </button>
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => pauseResumeMutation.mutate(!schedule.enabled)}
+        disabled={busy || !availability.canEdit}
+        {...(availability.canEdit ? {} : { title: availability.editReason })}
+        aria-label={`${pauseLabel} ${schedule.name}`}
+      >
+        {pauseResumeMutation.isPending ? 'Updating' : pauseLabel}
+      </button>
+    </div>
+  );
+}
+
 export function SchedulesPage({ payload }: { payload: BootPayload }) {
   const routeDefinitionId = useMemo(() => scheduleRouteDefinitionId(payload), [payload]);
   const listDisplayMode = recurringListDisplayMode(payload, Boolean(routeDefinitionId));
 
   const listEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
+  const sources = useMemo(() => scheduleSources(payload), [payload]);
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
     queryKey: ['schedules', listEndpoint],
     enabled: !routeDefinitionId || listDisplayMode === 'sidebar',
@@ -1491,7 +1569,20 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
                 header: 'Policy',
                 render: (item) => policySummary(item),
               },
+              {
+                key: 'updatedAt',
+                header: 'Updated',
+                render: (item) => formatWhen(item.updatedAt),
+              },
             ]}
+            rowActions={(item) => (
+              <ScheduleRowActions
+                schedule={item}
+                payload={payload}
+                sources={sources}
+                listEndpoint={listEndpoint}
+              />
+            )}
             emptyMessage="No recurring schedules yet. Create one from the workflow page."
             getRowKey={(item) => item.id}
             ariaLabel="Recurring schedules"
