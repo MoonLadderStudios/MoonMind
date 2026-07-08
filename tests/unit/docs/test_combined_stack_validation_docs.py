@@ -74,3 +74,21 @@ def test_readme_links_to_combined_stack_guide_and_host_urls() -> None:
     assert "http://localhost:7000" in text
     assert "http://localhost:8000" not in text
     assert "docs/Omnigent/CombinedStackValidationAndRollback.md" in text
+
+
+def test_combined_stack_doc_documents_omnigent_host_workspace_and_credentials() -> None:
+    text = _doc_text()
+
+    assert "## DOC-REQ-012 Omnigent Host Workspace and Credentials" in text
+
+    # omnigent-host mounts an operator-managed sanitized workspace read-only
+    # instead of exposing the repository root and local deployment secrets.
+    assert "OMNIGENT_MOONMIND_WORKSPACE" in text
+    assert "/workspaces/MoonMind:ro" in text
+    assert "local deployment secrets" in text
+
+    # Generic hosts preserve API-key-backed runners and do not expose Codex
+    # subscription OAuth material to every process in the host container.
+    assert "preserves configured provider API keys" in text
+    assert "does not mount MoonMind's Codex OAuth volume" in text
+    assert "does not mount MoonMind's Codex OAuth volume or set `CODEX_HOME` globally" in text

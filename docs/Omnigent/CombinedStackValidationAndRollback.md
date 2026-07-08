@@ -2,7 +2,7 @@
 
 **Document Class:** Canonical declarative
 **Status:** Current
-**Updated:** 2026-06-28
+**Updated:** 2026-07-08
 **Audience:** Local and self-hosted MoonMind operators
 **Authority:** Operator-facing startup, validation, rollback, and troubleshooting behavior for the combined MoonMind plus Omnigent Docker Compose stack
 **Owning Surface:** Docker Compose deployment with MoonMind and Omnigent services
@@ -204,3 +204,32 @@ A file mounted where a directory is expected, or a directory mounted where a fil
 Built-in accounts mode is the documented default for the combined local stack. Operators should create the first admin account in the Omnigent web UI unless they have deliberately configured an external OIDC provider.
 
 OIDC is a future or operator-provided configuration path for this combined stack documentation. If sign-in behavior looks inconsistent, confirm whether the running environment is using built-in accounts or an explicit OIDC configuration before resetting credentials or deleting volumes.
+
+## DOC-REQ-012 Omnigent Host Workspace and Credentials
+
+The optional `omnigent-host` service is a generic Omnigent host. It preserves configured provider API keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `GOOGLE_API_KEY` for runners that need them. It does not mount MoonMind's Codex OAuth volume or set `CODEX_HOME` globally, because the host may serve non-Codex runners and more than one Omnigent user.
+
+The host exposes `/workspaces` through the operator-managed `./omnigent_workspaces` directory. The MoonMind workspace entry is mounted read-only from `OMNIGENT_MOONMIND_WORKSPACE`, defaulting to `./omnigent_workspaces/MoonMind`:
+
+```bash
+${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
+```
+
+Do not point `OMNIGENT_MOONMIND_WORKSPACE` at a checkout that contains local deployment secrets such as `.env`, provider credentials, private keys, or unreviewed state. Use a sanitized checkout, export, or worktree containing only the files that Omnigent sessions should inspect.
+
+Operator flow:
+
+1. Prepare the sanitized MoonMind workspace path referenced by `OMNIGENT_MOONMIND_WORKSPACE`.
+2. Start or recreate the host:
+
+   ```bash
+   docker compose --profile omnigent-host up -d --force-recreate omnigent-host
+   ```
+
+3. Confirm the read-only workspace is visible inside the container:
+
+   ```bash
+   docker compose --profile omnigent-host exec omnigent-host sh -lc 'ls -la /workspaces/MoonMind; test ! -w /workspaces/MoonMind && echo "workspace is read-only"'
+   ```
+
+Codex subscription OAuth remains owned by MoonMind's managed Codex runtime and the OAuth flow documented in [OAuth Terminal](../ManagedAgents/OAuthTerminal.md). If Omnigent needs Codex subscription credentials later, add them at a Codex-specific launch boundary or a dedicated trusted host profile rather than exposing `codex_auth_volume` to every process in the generic host container.

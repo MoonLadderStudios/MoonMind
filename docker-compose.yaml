@@ -787,6 +787,8 @@ services:
     volumes:
       - omnigent-host-state:/root/.omnigent
       - ./omnigent_workspaces:/workspaces
+      # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
+      - ${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
     depends_on:
       omnigent:
         condition: service_started
