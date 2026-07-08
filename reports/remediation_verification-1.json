@@ -1,0 +1,37 @@
+{
+  "artifact_type": "remediation.verification",
+  "attempt": 1,
+  "verifiesRemediationAttempt": 1,
+  "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
+  "issue_ref": "MoonLadderStudios/MoonMind#3068",
+  "sourceBriefArtifact": "artifacts/github-issue-implement-brief.json",
+  "sourceAssessmentArtifact": "artifacts/github-issue-implement-assessment.json",
+  "authoritativeVerdict": "FULLY_IMPLEMENTED",
+  "verdict": "FULLY_IMPLEMENTED",
+  "recommendedNextAction": "advance",
+  "recoverableInCurrentRuntime": true,
+  "summary": "Verification attempt 1 confirms remediation attempt 1 satisfies all repo-verifiable issue requirements. The remaining unavailable browser/mobile execution is recorded as a non-blocking environment limitation, not remaining implementation work.",
+  "verificationArtifact": "artifacts/github-issue-implement-verify.json",
+  "testResults": [
+    {
+      "command": "npm run ui:test -- frontend/src/lib/workflowListDisplayMode.test.ts frontend/src/entrypoints/dashboard.test.tsx frontend/src/entrypoints/schedules.test.tsx frontend/src/styles/dashboardBrand.test.ts",
+      "result": "PASS",
+      "notes": "4 test files passed, 143 tests passed."
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/lib/workflowListDisplayMode.test.ts frontend/src/entrypoints/dashboard.test.tsx frontend/src/entrypoints/schedules.test.tsx frontend/src/styles/dashboardBrand.test.ts",
+      "result": "FAIL",
+      "nonBlocking": true,
+      "notes": "Failed before UI execution because Python pytest is unavailable: /usr/local/bin/python: No module named pytest."
+    }
+  ],
+  "remainingWork": [],
+  "environmentNotes": [
+    {
+      "tooling": "Python pytest / browser e2e harness",
+      "status": "NOT_AVAILABLE",
+      "gatesVerdict": false,
+      "reason": "Advisory browser/mobile checks depend on unavailable Python pytest in this runtime."
+    }
+  ]
+}
