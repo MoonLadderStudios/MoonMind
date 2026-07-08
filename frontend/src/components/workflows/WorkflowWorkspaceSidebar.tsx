@@ -355,7 +355,7 @@ function WorkflowSidebarHeader({
       <div role="row" className="workflow-workspace-sidebar-header-row">
         <div role="columnheader" className="workflow-workspace-sidebar-header-cell">
           <WorkflowColumnHeader
-            label={<span className="workflow-workspace-sidebar-header-title">Workflow</span>}
+            label={<span className="workflow-workspace-sidebar-header-title workflow-list-column-header-label">Workflow</span>}
             filterButton={
               <WorkflowColumnFilterButton
                 active={active}

@@ -7344,7 +7344,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .workflow-workspace-sidebar-header-title {
   color: inherit;
-  font: inherit;
 }
 
 .workflow-workspace-sidebar-filter-popover {
