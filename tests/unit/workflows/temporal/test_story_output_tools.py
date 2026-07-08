@@ -982,6 +982,47 @@ async def test_update_jira_issue_status_accepts_concise_previous_verdict(
 
 
 @pytest.mark.asyncio
+async def test_update_jira_issue_status_accepts_markdown_heading_previous_verdict(
+    tmp_path,
+) -> None:
+    service = _FakeJiraService()
+    service.issue_responses["MM-1139"] = {
+        "key": "MM-1139",
+        "fields": {"status": {"id": "1", "name": "Backlog"}},
+    }
+    service.transition_responses["MM-1139"] = {
+        "key": "MM-1139",
+        "fields": {"status": {"id": "3", "name": "In Progress"}},
+    }
+    service.transitions_response = {
+        "transitions": [
+            {"id": "31", "name": "In Progress", "to": {"name": "In Progress"}}
+        ]
+    }
+
+    result = await update_jira_issue_status(
+        {
+            "issueKey": "MM-1139",
+            "targetStatus": "In Progress",
+            "assessmentArtifactPath": str(tmp_path / "missing-assessment.json"),
+            "previousOutputs": {
+                "summary": (
+                    "Both handoff artifacts are written and valid. "
+                    "Here is the assessment result.\n\n"
+                    "## Verdict: NOT_IMPLEMENTED\n\n"
+                    "Evidence follows."
+                ),
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "transitioned"
+    assert service.transition_requests[0].transition_id == "31"
+
+
+@pytest.mark.asyncio
 async def test_update_jira_issue_status_blocks_for_malformed_assessment_artifact(
     tmp_path,
 ) -> None:
@@ -3429,6 +3470,35 @@ async def test_check_jira_blockers_preserves_sentence_previous_assessment_verdic
     assert result.status == "COMPLETED"
     assert result.outputs["decision"] == "continue"
     assert result.outputs["assessmentVerdict"] == "PARTIALLY_IMPLEMENTED"
+
+
+@pytest.mark.asyncio
+async def test_check_jira_blockers_preserves_markdown_heading_previous_assessment_verdict():
+    service = _FakeJiraService()
+    service.issue_responses["MM-1139"] = {
+        "key": "MM-1139",
+        "fields": {"issuelinks": []},
+    }
+
+    result = await check_jira_blockers(
+        {
+            "targetIssueKey": "MM-1139",
+            "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
+            "previousOutputs": {
+                "summary": (
+                    "Both handoff artifacts are written and valid. "
+                    "Here is the assessment result.\n\n"
+                    "## Verdict: NOT_IMPLEMENTED\n\n"
+                    "Evidence follows."
+                ),
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["assessmentVerdict"] == "NOT_IMPLEMENTED"
 
 
 @pytest.mark.asyncio
