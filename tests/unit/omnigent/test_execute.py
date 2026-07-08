@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -844,6 +845,30 @@ async def test_local_omnigent_artifact_gateway_rejects_traversal_refs(tmp_path) 
     assert ref == "artifact://omnigent/corr-1/segment/session.log"
     assert (tmp_path / "corr-1" / "segment" / "session.log").read_bytes() == b"evidence"
     assert not (tmp_path.parent / "session.log").exists()
+
+
+@pytest.mark.asyncio
+async def test_local_omnigent_artifact_gateway_wraps_os_errors(
+    tmp_path, monkeypatch
+) -> None:
+    # §17: a filesystem persistence failure (disk full, permission, missing
+    # directory) must surface as OmnigentArtifactError so the required
+    # artifact-persistence handler classifies it instead of letting a raw
+    # OSError escape the activity.
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", _boom)
+
+    with pytest.raises(OmnigentArtifactError):
+        await gateway.write_bytes(
+            request=_request(),
+            name="output.omnigent.snapshot.final.json",
+            payload=b"evidence",
+            link_type="output.omnigent.snapshot",
+        )
 
 
 @pytest.mark.asyncio
@@ -1780,6 +1805,10 @@ async def test_run_omnigent_execution_escalates_harvest_failure_when_full_eviden
     # system_error rather than completed-with-diagnostics.
     assert result.failure_class == "system_error"
     assert result.provider_error_code == "omnigent_required_resource_evidence_missing"
+    # §17: the escalated failure result must not inherit the provider's
+    # success snapshot summary ("done") and must describe the missing evidence.
+    assert result.summary != "done"
+    assert "evidence" in result.summary.lower()
     manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["optionalResourceHarvest"]["outcome"] == "required_evidence_missing"

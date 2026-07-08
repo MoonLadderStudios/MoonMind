@@ -37,8 +37,9 @@ HostType = Literal["managed", "external"]
 # §17 invalid-session-create-payload row -> user_error, resolved through the one
 # shared classifier so request validation and terminal execution agree on the
 # canonical MoonMind failure class (OB-§17 / DESIGN-REQ-010; MM-1140 -> MM-1153).
-_INVALID_SESSION_PAYLOAD_FAILURE_CLASS: FailureClass = classify_omnigent_failure(
-    OmnigentFailureReason.INVALID_SESSION_PAYLOAD
+_INVALID_SESSION_PAYLOAD_FAILURE_CLASS: FailureClass = (
+    classify_omnigent_failure(OmnigentFailureReason.INVALID_SESSION_PAYLOAD)
+    or "user_error"
 )
 
 _OMNIGENT_CAPABILITY = ProviderCapabilityDescriptor(

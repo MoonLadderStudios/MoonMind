@@ -194,11 +194,9 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
         path = (self._root / safe_correlation / safe_name).resolve()
         if not path.is_relative_to(self._root):
             raise OmnigentArtifactError("Omnigent artifact path escapes artifact root")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
         digest = hashlib.sha256(payload).hexdigest()
         metadata_path = path.with_suffix(f"{path.suffix}.metadata.json")
-        metadata_path.write_text(
+        metadata_payload = (
             json.dumps(
                 {
                     "contentType": content_type,
@@ -209,9 +207,20 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
                 indent=2,
                 sort_keys=True,
             )
-            + "\n",
-            encoding="utf-8",
+            + "\n"
         )
+        # Surface filesystem persistence failures (disk full, permission,
+        # missing directory) as OmnigentArtifactError so the §17 required
+        # artifact-persistence handler classifies them instead of letting a
+        # raw OSError escape the activity.
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+            metadata_path.write_text(metadata_payload, encoding="utf-8")
+        except OSError as exc:
+            raise OmnigentArtifactError(
+                f"Unable to persist Omnigent artifact '{safe_name}': {exc}"
+            ) from exc
         return f"artifact://omnigent/{safe_correlation}/{safe_name}"
 
     async def read_text(self, artifact_ref: str) -> str:
@@ -636,7 +645,23 @@ def build_omnigent_result(
     _assert_no_provider_native_refs(
         [*output_refs, diagnostics_ref, *capture_bundle.metadata_refs.values()]
     )
-    summary = final_snapshot.get("summary") or failure_summary
+    failure_class = (
+        classify_omnigent_failure(
+            failure_reason,
+            require_full_evidence=require_full_evidence,
+        )
+        if failure_reason is not None
+        else failure_class_for_terminal_status(terminal_status)
+    )
+
+    # A classified failure must never be summarized with the provider's
+    # success snapshot text (for example a full-evidence harvest escalation on
+    # a "completed" session whose snapshot summary still says "done"). Prefer an
+    # explicit failure summary so operators are not told a failed run succeeded.
+    if failure_class is not None and failure_summary:
+        summary = failure_summary
+    else:
+        summary = final_snapshot.get("summary") or failure_summary
     if not summary:
         summary = (
             "Omnigent session completed"
@@ -671,15 +696,6 @@ def build_omnigent_result(
         value = final_snapshot.get(metadata_key) or final_snapshot.get(snake_key)
         if value:
             metadata[metadata_key] = str(value)
-
-    failure_class = (
-        classify_omnigent_failure(
-            failure_reason,
-            require_full_evidence=require_full_evidence,
-        )
-        if failure_reason is not None
-        else failure_class_for_terminal_status(terminal_status)
-    )
 
     return AgentRunResult(
         outputRefs=output_refs,
@@ -2024,6 +2040,12 @@ async def run_omnigent_execution(
                 capture_bundle=bundle,
                 failure_reason=harvest_failure_reason,
                 require_full_evidence=harvest_failure_reason is not None,
+                failure_summary=(
+                    "Required Omnigent resource evidence was missing after "
+                    "session completion"
+                    if harvest_failure_reason is not None
+                    else None
+                ),
                 provider_error_code=(
                     "omnigent_required_resource_evidence_missing"
                     if harvest_failure_reason is not None
@@ -2131,7 +2153,9 @@ async def run_omnigent_execution(
     ) as exc:
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
-        if isinstance(exc, OmnigentAdapterError) and exc.failure_class == "user_error":
+        if isinstance(exc, OmnigentAdapterError) and exc.failure_class == classify_omnigent_failure(
+            OmnigentFailureReason.INVALID_SESSION_PAYLOAD
+        ):
             # §17: invalid session-create payload -> user_error.
             failure_reason = OmnigentFailureReason.INVALID_SESSION_PAYLOAD
             provider_error_code = "omnigent_invalid_session_payload"
