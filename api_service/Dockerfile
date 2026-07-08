@@ -209,6 +209,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY pyproject.toml /app/pyproject.toml
 COPY poetry.lock /app/poetry.lock
 COPY README.md /app/README.md
+COPY LICENSE /app/LICENSE
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps
