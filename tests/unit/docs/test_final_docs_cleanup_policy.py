@@ -78,6 +78,16 @@ def test_manifest_consolidation_claims_follow_current_code_evidence() -> None:
 
 
 def test_roadmap_milestones_are_evidence_aligned_and_gated() -> None:
+    """Pin roadmap strings that encode durable safety/evidence invariants.
+
+    These assertions are not stylistic. The ``11.1`` line and the "external
+    targets stay gated until enforcement exists" phrase encode the PentestGPT
+    external-egress safety gate; the ``5.1``/``5.2``/``5.3``/``6.2``/``7.1``
+    task labels pin the checkpoint-resume, remediation-evidence, and
+    RAG-injection acceptance claims. Do not delete an assertion here to make a
+    roadmap edit pass — update the roadmap so the invariant still holds, or
+    change the invariant deliberately with the owner's sign-off.
+    """
     text = _read(ROADMAP_DOC)
 
     assert "Completed historical milestones have been removed from the active roadmap" in text
