@@ -1291,7 +1291,8 @@ async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_rec
         artifact_gateway=artifact_gateway,
     )
 
-    assert result.failure_class == "execution_error"
+    # §17: ambiguous `posting` reconciliation fails closed as integration_error.
+    assert result.failure_class == "integration_error"
     assert result.provider_error_code == "omnigent_first_message_reconcile_failed"
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
     assert "post_event" not in calls
@@ -1362,7 +1363,9 @@ async def test_run_omnigent_execution_digest_mismatch_is_non_retryable_with_diag
         artifact_gateway=artifact_gateway,
     )
 
-    assert result.failure_class == "execution_error"
+    # §17: first-message digest mismatch is a conflicting replay under the same
+    # idempotency key and maps to user_error, not execution_error.
+    assert result.failure_class == "user_error"
     assert result.provider_error_code == "omnigent_first_message_digest_mismatch"
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
     external_state = json.loads(
@@ -1703,3 +1706,194 @@ async def test_run_omnigent_execution_records_missing_resource_harvest_and_child
     assert "changedFilesUnavailable" in manifest
     assert "workspaceFilesUnavailable" in manifest
     assert "sessionFilesUnavailable" in manifest
+    # §17: optional resource-harvest failure resolves to completed-with-diagnostics
+    # (no failure class) when policy does not require full evidence.
+    assert manifest["optionalResourceHarvest"]["outcome"] == "completed_with_diagnostics"
+    assert manifest["optionalResourceHarvest"]["failureClass"] is None
+
+
+class _HarvestFailureClient:
+    """Fake client that completes a session but fails every resource harvest."""
+
+    def __init__(self, **_: object) -> None:
+        pass
+
+    async def list_agents(self) -> dict[str, object]:
+        return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+    async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+        return {"id": "session-1"}
+
+    async def post_event(
+        self,
+        session_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        return {"pending_id": "pending-1"}
+
+    async def stream_events(self, session_id: str):
+        yield {"type": "response.completed"}
+
+    async def get_session(self, session_id: str) -> dict[str, object]:
+        return {"status": "completed", "summary": "done"}
+
+    async def list_changed_files(self, session_id: str) -> dict[str, object]:
+        raise RuntimeError("changed-file endpoint missing")
+
+    async def list_workspace_files(self, session_id: str) -> dict[str, object]:
+        raise RuntimeError("workspace-file endpoint missing")
+
+    async def list_session_files(self, session_id: str) -> dict[str, object]:
+        raise RuntimeError("session-file endpoint missing")
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_escalates_harvest_failure_when_full_evidence(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient", _HarvestFailureClient
+    )
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                    "capture": {"requireFullEvidence": True},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    # §17: required full evidence turns an optional harvest failure into a
+    # system_error rather than completed-with-diagnostics.
+    assert result.failure_class == "system_error"
+    assert result.provider_error_code == "omnigent_required_resource_evidence_missing"
+    manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["optionalResourceHarvest"]["outcome"] == "required_evidence_missing"
+    assert manifest["optionalResourceHarvest"]["failureClass"] == "system_error"
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_harvest_failure_completes_without_policy(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient", _HarvestFailureClient
+    )
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    # §17: without a full-evidence policy an optional harvest failure stays a
+    # completed run (no failure class).
+    assert result.failure_class is None
+    assert result.provider_error_code is None
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_required_artifact_persistence_is_system_error(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            return {"status": "running"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    # Unresolvable MoonMind artifact ref -> artifact-authority read
+                    # failure raised as OmnigentArtifactError.
+                    "prompt": {"instructionRef": "artifact://omnigent/missing-ref"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    # §17: required artifact-persistence/authority failure -> system_error.
+    assert result.failure_class == "system_error"
+    assert result.provider_error_code == "omnigent_artifact_persistence_failed"
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_invalid_session_payload_is_user_error(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "session": {
+                        "hostType": "managed",
+                        "hostId": "host-1",
+                        "workspace": "https://github.com/o/r",
+                    },
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    # §17: invalid session-create payload (managed hostId) -> user_error.
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "omnigent_invalid_session_payload"
