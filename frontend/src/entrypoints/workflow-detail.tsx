@@ -7650,9 +7650,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     : '';
   const compareHref =
     workflowId && actions?.canEditForRerun ? taskCompareHref(workflowId) : '';
-  const detailHref = workflowId
-    ? `${window.location.pathname}${window.location.search}`
-    : '/workflows';
+  const detailHref =
+    workflowId && typeof window !== 'undefined'
+      ? `${window.location.pathname}${window.location.search}`
+      : '/workflows';
   const workflowSubject = execution?.title?.trim() || taskId || workflowId || 'Workflow';
   const onRerun = () => {
     setActionError(null);
