@@ -18,12 +18,12 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from temporalio import activity
 
-from moonmind.omnigent.store import (
+from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
     FIRST_MESSAGE_TERMINAL,
+    OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
-    OmnigentRunStore,
 )
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
@@ -1460,7 +1460,7 @@ async def run_omnigent_execution(
     request: AgentExecutionRequest,
     *,
     artifact_gateway: OmnigentArtifactGateway | None = None,
-    run_store: OmnigentRunStore | None = None,
+    run_store: OmnigentBridgeSessionStore | None = None,
 ) -> AgentRunResult:
     """Execute one Omnigent session and return only terminal AgentRunResult."""
 
@@ -1909,6 +1909,9 @@ async def run_omnigent_execution(
                         "diagnosticsRef": bundle.diagnostics_ref,
                         "metadataRefs": bundle.metadata_refs,
                     },
+                    # Persist the full, non-lossy normalized status stream into
+                    # the durable event index (OmnigentBridge §7.2).
+                    events=normalized_events,
                 )
             return build_omnigent_result(
                 request=request,

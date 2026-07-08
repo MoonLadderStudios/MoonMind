@@ -21,7 +21,7 @@ from moonmind.omnigent.execute import (
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
-from moonmind.omnigent.store import OmnigentDigestMismatchError
+from moonmind.omnigent.bridge_store import OmnigentDigestMismatchError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
