@@ -38,6 +38,13 @@ FIRST_MESSAGE_POSTING = "posting"
 FIRST_MESSAGE_POSTED = "posted"
 FIRST_MESSAGE_TERMINAL = "terminal"
 
+# MM-1155 (source: MM-1140): durable bridge event journal carried on the
+# canonical bridge session row metadata. ``session.created`` (OmnigentBridge.md
+# §8.2 step 6, §10.3) is recorded here before the bridge attempts any
+# first-message prepare/post.
+BRIDGE_EVENT_JOURNAL_KEY = "bridge_event_journal"
+SESSION_CREATED_EVENT_TYPE = "session.created"
+
 BRIDGE_PROVIDER = "omnigent"
 BRIDGE_COMPATIBILITY_PROFILE = "omnigent.server.v1"
 
@@ -130,8 +137,24 @@ class OmnigentBridgeSessionStore:
         agent_id: str | None,
         agent_name: str | None,
         target_metadata: dict[str, Any],
+        workflow_id: str | None = None,
+        agent_run_id: str | None = None,
     ) -> OmnigentBridgeSession:
+        """Create or reuse a durable bridge row keyed by idempotency key.
+
+        ``workflow_id`` / ``agent_run_id`` override the request-derived MoonMind
+        identity when the caller already holds a verified binding (the Session
+        API Facade validates ownership out-of-band and synthesizes an
+        ``AgentExecutionRequest`` with no ``step_execution``). Without them the
+        identity is derived from the request, preserving the managed-execution
+        path behavior.
+        """
+
         metadata = dict(target_metadata or {})
+        resolved_workflow_id = (workflow_id or "").strip() or _workflow_id(request)
+        resolved_agent_run_id = (
+            agent_run_id or ""
+        ).strip() or _agent_run_id(request)
         async with self._session_factory() as session:
             row = await self._get(session, request.idempotency_key)
             if row is None:
@@ -139,9 +162,9 @@ class OmnigentBridgeSessionStore:
                     bridge_session_id=f"brs_{uuid4().hex}",
                     provider=BRIDGE_PROVIDER,
                     compatibility_profile=BRIDGE_COMPATIBILITY_PROFILE,
-                    moonmind_workflow_id=_workflow_id(request),
+                    moonmind_workflow_id=resolved_workflow_id,
                     moonmind_run_id=_run_id(request),
-                    moonmind_agent_run_id=_agent_run_id(request),
+                    moonmind_agent_run_id=resolved_agent_run_id,
                     step_execution_id=_step_execution_id(request),
                     idempotency_key=request.idempotency_key,
                     omnigent_endpoint_ref=endpoint_ref,
@@ -189,6 +212,54 @@ class OmnigentBridgeSessionStore:
                 agent_run_id=row.moonmind_agent_run_id,
             )
 
+    async def get_existing(
+        self, idempotency_key: str
+    ) -> OmnigentBridgeSession | None:
+        """Return the durable bridge row for an idempotency key, if any.
+
+        Read-only lookup so the Session API Facade can inspect an already
+        attached ``omnigent_session_id`` (and its persisted MoonMind owner)
+        before resolving the current target or forwarding a provider create.
+        Returns ``None`` when no row exists yet for the key.
+        """
+
+        key = (idempotency_key or "").strip()
+        if not key:
+            return None
+        async with self._session_factory() as session:
+            row = await self._get(session, key)
+            if row is None:
+                return None
+            return _detached(session, row)
+
+    async def get_session_owner(
+        self, session_id: str
+    ) -> BridgeSessionBinding | None:
+        """Return the MoonMind identity bound to a provider ``session_id``.
+
+        Read-only lookup used to authorize direct session reads at the facade
+        boundary (OmnigentBridge.md §16 rule 1) so a caller may only read a
+        bridge session owned by a workflow they control. Returns ``None`` when
+        no bridge row is bound to the provider session id.
+        """
+
+        key = (session_id or "").strip()
+        if not key:
+            return None
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.omnigent_session_id == key)
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            return BridgeSessionBinding(
+                workflow_id=row.moonmind_workflow_id,
+                agent_run_id=row.moonmind_agent_run_id,
+            )
+
     async def attach_session(
         self, idempotency_key: str, session_id: str
     ) -> OmnigentBridgeSession:
@@ -203,6 +274,51 @@ class OmnigentBridgeSessionStore:
                 row.status = STATUS_CREATING
             await session.commit()
             await session.refresh(row)
+            return _detached(session, row)
+
+    async def record_session_created(
+        self,
+        idempotency_key: str,
+        *,
+        session_id: str,
+        agent_id: str | None = None,
+        endpoint_ref: str | None = None,
+    ) -> OmnigentBridgeSession:
+        """Emit ``session.created`` into the durable bridge event journal.
+
+        MM-1155 (source: MM-1140): proxy-mode Session API Facade persistence
+        (OmnigentBridge.md §8.2 step 6). The append is idempotent so a
+        create/attach retry under the same idempotency key does not duplicate
+        the event; the journal is carried on the canonical bridge session row
+        metadata.
+        """
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            metadata = dict(row.metadata_ or {})
+            journal = [
+                entry
+                for entry in (metadata.get(BRIDGE_EVENT_JOURNAL_KEY) or [])
+                if isinstance(entry, dict)
+            ]
+            already_recorded = any(
+                entry.get("type") == SESSION_CREATED_EVENT_TYPE for entry in journal
+            )
+            if not already_recorded:
+                journal.append(
+                    {
+                        "type": SESSION_CREATED_EVENT_TYPE,
+                        "sequence": len(journal) + 1,
+                        "timestamp": datetime.now(tz=UTC).isoformat(),
+                        "omnigentSessionId": session_id,
+                        "omnigentAgentId": agent_id,
+                        "endpointRef": endpoint_ref,
+                    }
+                )
+                metadata[BRIDGE_EVENT_JOURNAL_KEY] = journal
+                row.metadata_ = metadata
+                await session.commit()
+                await session.refresh(row)
             return _detached(session, row)
 
     async def mark_prepared(
@@ -427,8 +543,10 @@ def _detached(
 
 __all__ = [
     "BRIDGE_COMPATIBILITY_PROFILE",
+    "BRIDGE_EVENT_JOURNAL_KEY",
     "BRIDGE_PROVIDER",
     "BRIDGE_STORE_TRACEABILITY_ISSUES",
+    "SESSION_CREATED_EVENT_TYPE",
     "FIRST_MESSAGE_NOT_PREPARED",
     "FIRST_MESSAGE_POSTED",
     "FIRST_MESSAGE_POSTING",
