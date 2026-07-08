@@ -315,6 +315,9 @@ RUNTIME_SELECTION_PROFILE_CLEAR_PATCH_ID = (
     "agent-run-runtime-selection-profile-clear-v1"
 )
 AGENT_RUN_RESILIENCY_POLICY_PATCH_ID = "agent-run-resiliency-policy-v1"
+AGENT_RUN_CLAUDE_NO_PROGRESS_POLICY_PATCH_ID = (
+    "agent-run-claude-code-no-progress-policy-v2"
+)
 # Prefer the canonical structured provider failure event (retry_after_seconds /
 # reset_at / quota_scope / provider_error_class) when deciding profile cooldowns,
 # falling back to text-marker classification only when the structured fields are
@@ -361,6 +364,8 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
 _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS = 1800
+_CLAUDE_CODE_NO_PROGRESS_TIMEOUT_SECONDS = 2400
+_CLAUDE_CODE_NO_PROGRESS_GRACE_SECONDS = 900
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
 _MAX_PROVIDER_COOLDOWN_BACKOFF_SECONDS = 3600
 _MANAGED_RUNTIME_STORE_ROOT = os.environ.get(
@@ -951,6 +956,8 @@ class MoonMindAgentRun:
     @staticmethod
     def _resiliency_policy_for_request(
         request: AgentExecutionRequest,
+        *,
+        use_extended_claude_no_progress_window: bool = True,
     ) -> dict[str, Any]:
         """Return runtime-specific retry and stuck-detection policy metadata."""
 
@@ -986,10 +993,15 @@ class MoonMindAgentRun:
                 "retryPolicy": "session_turn_self_heal_then_cooldown_retry",
             }
         if runtime_id == "claude_code":
+            no_progress_timeout_seconds = 1500
+            no_progress_grace_seconds = 600
+            if use_extended_claude_no_progress_window:
+                no_progress_timeout_seconds = _CLAUDE_CODE_NO_PROGRESS_TIMEOUT_SECONDS
+                no_progress_grace_seconds = _CLAUDE_CODE_NO_PROGRESS_GRACE_SECONDS
             return {
                 "runtime": runtime_id,
-                "noProgressTimeoutSeconds": 1500,
-                "noProgressGraceSeconds": 600,
+                "noProgressTimeoutSeconds": no_progress_timeout_seconds,
+                "noProgressGraceSeconds": no_progress_grace_seconds,
                 "stuckAction": "request_intervention",
                 "retryPolicy": "managed_runtime_polling_with_profile_cooldown",
             }
@@ -3029,7 +3041,20 @@ class MoonMindAgentRun:
         requested_execution_profile_ref = request.execution_profile_ref
         resiliency_policy: Mapping[str, Any] = {}
         if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
-            resiliency_policy = self._resiliency_policy_for_request(request)
+            use_extended_claude_no_progress_window = True
+            if (
+                request.agent_kind == "managed"
+                and self._managed_runtime_id(request.agent_id) == "claude_code"
+            ):
+                use_extended_claude_no_progress_window = workflow.patched(
+                    AGENT_RUN_CLAUDE_NO_PROGRESS_POLICY_PATCH_ID
+                )
+            resiliency_policy = self._resiliency_policy_for_request(
+                request,
+                use_extended_claude_no_progress_window=(
+                    use_extended_claude_no_progress_window
+                ),
+            )
 
         try:
             while True:

@@ -19,6 +19,32 @@ from moonmind.workflows.temporal.runtime.strategies.base import (
 from moonmind.workflows.provider_failures import classify_provider_failure
 
 _CLAUDE_PROGRESS_MTIME_PADDING_SECONDS = 5.0
+_CLAUDE_WORKSPACE_PROGRESS_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".moonmind",
+        ".mypy_cache",
+        ".nox",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".venv",
+        "__pycache__",
+        "build",
+        "coverage",
+        "dist",
+        "node_modules",
+        "skills_active",
+        "venv",
+    }
+)
+_CLAUDE_WORKSPACE_PROGRESS_SKIP_FILES = frozenset(
+    {
+        "live_streams.spool",
+    }
+)
 _CLAUDE_PR_RESOLVER_PROGRESS_FILES: tuple[Path, ...] = (
     Path("var/pr_resolver/result.json"),
     Path("var/pr_resolver/snapshot.json"),
@@ -147,7 +173,7 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         run_id: str,
         started_at: datetime,
     ) -> datetime | None:
-        """Use MoonMind pr-resolver artifacts as a silent-run progress signal."""
+        """Use workspace file mtimes as a silent-run progress signal."""
 
         if not workspace_path:
             return None
@@ -160,7 +186,7 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
 
         threshold_ts = started_at.timestamp() - _CLAUDE_PROGRESS_MTIME_PADDING_SECONDS
         latest_ts: float | None = None
-        for candidate in self._iter_pr_resolver_progress_candidates(workspace_root):
+        for candidate in self._iter_progress_candidates(workspace_root):
             try:
                 stat = candidate.stat()
             except OSError:
@@ -175,6 +201,31 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         return datetime.fromtimestamp(latest_ts, tz=UTC)
 
     @staticmethod
+    def _iter_progress_candidates(workspace_root: Path) -> Iterator[Path]:
+        try:
+            resolved_root = workspace_root.resolve()
+        except OSError:
+            resolved_root = workspace_root
+
+        yielded: set[Path] = set()
+        for candidate in ClaudeCodeStrategy._iter_pr_resolver_progress_candidates(
+            resolved_root
+        ):
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                resolved = candidate
+            yielded.add(resolved)
+            yield candidate
+
+        for candidate in ClaudeCodeStrategy._iter_workspace_progress_candidates(
+            resolved_root
+        ):
+            if candidate in yielded:
+                continue
+            yield candidate
+
+    @staticmethod
     def _iter_pr_resolver_progress_candidates(workspace_root: Path) -> Iterator[Path]:
         for rel_path in _CLAUDE_PR_RESOLVER_PROGRESS_FILES:
             yield workspace_root / rel_path
@@ -186,6 +237,34 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         artifacts_dir = workspace_root / "artifacts"
         if artifacts_dir.is_dir():
             yield from artifacts_dir.glob("pr_resolver*.json")
+
+    @staticmethod
+    def _iter_workspace_progress_candidates(workspace_root: Path) -> Iterator[Path]:
+        pending: list[Path] = [workspace_root]
+
+        while pending:
+            current = pending.pop()
+            try:
+                for entry in current.iterdir():
+                    name = entry.name
+                    if name in _CLAUDE_WORKSPACE_PROGRESS_SKIP_FILES:
+                        continue
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir():
+                            if name in _CLAUDE_WORKSPACE_PROGRESS_SKIP_DIRS:
+                                continue
+                            pending.append(entry)
+                            continue
+                        if not entry.is_file():
+                            continue
+                    except OSError:
+                        continue
+
+                    yield entry
+            except OSError:
+                continue
 
     async def prepare_workspace(
         self,
