@@ -568,6 +568,9 @@ function WorkflowListDisplayModeControl({
 
     event.preventDefault();
     const nextMode = WORKFLOW_LIST_DISPLAY_MODES[nextIndex];
+    if (!nextMode) {
+      return;
+    }
     onSelect(nextMode.value);
     const nextRadio = event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(
       `[data-list-display-mode="${nextMode.value}"]`,
@@ -652,7 +655,7 @@ function DashboardNavigation({
 
       {workflowListMode ? (
         <WorkflowListDisplayModeControl
-          accessibleName={listDisplayAccessibleName}
+          {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
           effectiveMode={workflowListMode}
           status={workflowListDisplayStatus}
           onSelect={onWorkflowListModeSelect}
