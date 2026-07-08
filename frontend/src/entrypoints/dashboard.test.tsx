@@ -1046,6 +1046,71 @@ describe('Dashboard shared entry', () => {
     expect(lastCellBlock).toContain('padding-right: 1rem');
   });
 
+  it('MM-1138 Q1 bleeds the workspace rail to the screen edge and aligns its titles like the table column', async () => {
+    // The shell mirrors the data slab's bleed token so the rail (which lives
+    // outside `.workflow-list-data-slab`) can consume it.
+    const shellBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-shell');
+    expect(shellBlock).toContain('--workflow-list-slab-bleed-inline: 1rem');
+
+    // Only the left edge widens (right edge stays on the grid boundary); the
+    // container padding stays 0 so the rail's dividers reach the screen edge.
+    const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
+    expect(sidebarBlock).toContain('width: calc(100% + var(--workflow-list-slab-bleed-inline))');
+    expect(sidebarBlock).toContain('margin-left: calc(var(--workflow-list-slab-bleed-inline) * -1)');
+    expect(sidebarBlock).toContain('padding: 0');
+
+    // Header and rows re-inset the left padding by the bleed so titles land at
+    // the same 1rem inset as the list table's first column.
+    const sidebarHeaderBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-header');
+    expect(sidebarHeaderBlock).toContain('padding: 0.5rem 0.75rem 0.5rem var(--workflow-list-slab-bleed-inline)');
+
+    const sidebarRowBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-row');
+    expect(sidebarRowBlock).toContain('0.58rem 0.55rem 0.58rem var(--workflow-list-slab-bleed-inline)');
+  });
+
+  it('MM-1138 Q1 scopes the workflow-list row divider to the shared list token', async () => {
+    const rowDividerBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-list-data-slab .queue-table-wrapper td',
+    );
+    expect(rowDividerBlock).toContain('border-bottom-color: var(--workflow-list-divider-color)');
+
+    // The global table divider stays at 0.65 for other tables (bounded scope).
+    const genericCellBlock = cssRuleBlock(dashboardCss, 'th,\ntd');
+    expect(genericCellBlock).toContain('border-bottom: 1px solid rgb(var(--mm-border) / 0.65)');
+  });
+
+  it('MM-1138 Q2 keeps the create page content anchored when the rail is toggled', async () => {
+    // Primary content stays in column 2 rather than spanning the full width.
+    const primaryCollapsedBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-start-workspace[data-sidebar-collapsed="true"] .workflow-start-primary',
+    );
+    expect(primaryCollapsedBlock).toContain('grid-column: 2');
+    expect(primaryCollapsedBlock).not.toContain('1 / -1');
+
+    // The two-column track stays reserved on the create page when collapsed.
+    const createCollapsedGridBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector)
+        === '.workflow-start-workspace.workflow-workspace-shell[data-sidebar-collapsed="true"]' &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes('min-width: 768px')
+    ));
+    expect(createCollapsedGridBlock).toContain(
+      'grid-template-columns: var(--workflow-list-column-workflow-width) minmax(0, 1fr)',
+    );
+
+    // The displacement offset is preserved: there is no collapsed reset to 0.
+    const startWorkspaceBlock = cssRuleBlock(dashboardCss, '.workflow-start-workspace');
+    expect(startWorkspaceBlock).toContain('--workflow-start-primary-offset');
+    const collapsedOffsetResetBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-start-workspace[data-sidebar-collapsed="true"]',
+    );
+    expect(collapsedOffsetResetBlock).not.toContain('--workflow-start-primary-offset: 0rem');
+  });
+
   it('MM-1116 defines one workflow-list row metric token family for table and sidebar modes', async () => {
     const rootBlock = cssRuleBlock(dashboardCss, ':root');
     expect(rootBlock).toContain('--workflow-list-header-row-height: 2.75rem');
@@ -1284,10 +1349,10 @@ describe('Dashboard shared entry', () => {
   });
 
   it('keeps the Step Type segmented control focus ring visible', async () => {
-    const stepTypeBlock = cssRuleBlock(dashboardCss, '.queue-step-type-options');
+    const stepTypeBlock = cssRuleBlock(dashboardCss, '.segmented-control[data-intensity="loud"]');
     const stepTypeFocusBlock = cssRuleBlock(
       dashboardCss,
-      '.queue-step-type-option:has(input:focus-visible)',
+      '.segmented-control[data-intensity="loud"] .segmented-control-item:has(input:focus-visible)',
     );
 
     expect(stepTypeBlock).toContain('backdrop-filter: blur(14px) saturate(140%)');
@@ -1297,16 +1362,58 @@ describe('Dashboard shared entry', () => {
   });
 
   it('MM-1020 keeps Workflow Detail segmented tabs count-aware and step toggles contained', async () => {
-    const segmentedNavBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
-      normalizeCssSelector(rule.selector) === '.segmented-nav' && !rule.parent?.parent
+    const segmentedBaseBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.segmented-control' && !rule.parent?.parent
     ));
-    const segmentedThumbBlock = cssRuleBlock(dashboardCss, '.segmented-nav::before');
+    const baseThumbBlock = cssRuleBlock(dashboardCss, '.segmented-control::before');
+    const quietThumbBlock = cssRuleBlock(dashboardCss, '.segmented-control[data-intensity="quiet"]::before');
     const stepToggleBlock = cssRuleBlock(dashboardCss, '.step-tl-toggle');
 
-    expect(segmentedNavBlock).toContain('--segmented-nav-count: 1');
-    expect(segmentedThumbBlock).toContain('width: calc((100% - 0.5rem) / var(--segmented-nav-count))');
-    expect(segmentedThumbBlock).toContain('translateX(calc(var(--segmented-nav-active-index) * 100%))');
+    expect(segmentedBaseBlock).toContain('--segmented-control-count: 1');
+    expect(quietThumbBlock).toContain('width: calc((100% - 0.5rem) / var(--segmented-control-count))');
+    expect(baseThumbBlock).toContain('translateX(calc(var(--segmented-control-active-index) * 100%))');
     expect(stepToggleBlock).toContain('box-sizing: border-box');
+  });
+
+  it('MM-1138 Q3 unifies the segmented controls into one system with two intensity tiers', async () => {
+    // Shared base owns the thumb-position variables, chrome, and stacking.
+    const baseBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.segmented-control' && !rule.parent?.parent
+    ));
+    expect(baseBlock).toContain('--segmented-control-count: 1');
+    expect(baseBlock).toContain('--segmented-control-active-index: 0');
+    expect(baseBlock).toContain('isolation: isolate');
+
+    // Quiet tier: subtle detail-tab look (padded container, full width).
+    const quietBlock = cssRuleBlock(dashboardCss, '.segmented-control[data-intensity="quiet"]');
+    expect(quietBlock).toContain('padding: 0.25rem');
+    expect(quietBlock).toContain('width: 100%');
+
+    // Loud tier: high-energy create/settings look (glass blur + count-driven,
+    // animated neon thumb positioned from the checked radio via :has()).
+    const loudBlock = cssRuleBlock(dashboardCss, '.segmented-control[data-intensity="loud"]');
+    expect(loudBlock).toContain('backdrop-filter: blur(14px) saturate(140%)');
+
+    const loudThumbBlock = cssRuleBlock(dashboardCss, '.segmented-control[data-intensity="loud"]::before');
+    expect(loudThumbBlock).toContain('width: calc(100% / var(--segmented-control-count))');
+    expect(loudThumbBlock).toContain('animation: segmented-control-thumb-shimmer 5.5s ease-in-out infinite');
+
+    const loudActiveIndexBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      rule.selector.includes('data-intensity="loud"') &&
+      rule.selector.includes(':has(') &&
+      rule.selector.includes(':nth-child(2)') &&
+      !rule.parent?.parent
+    ));
+    expect(loudActiveIndexBlock).toContain('--segmented-control-active-index: 1');
+
+    // The badge (quiet detail-tab affordance) rides the shared system.
+    const badgeBlock = cssRuleBlock(dashboardCss, '.segmented-control-badge');
+    expect(badgeBlock).toContain('border-radius: 999px');
+
+    // The superseded per-consumer class families are fully removed.
+    expect(dashboardCss).not.toContain('segmented-nav');
+    expect(dashboardCss).not.toContain('queue-step-type');
+    expect(dashboardCss).not.toContain('settings-nav');
   });
 
   it('lets Settings use the page canvas without a surrounding shared card', async () => {
@@ -1367,9 +1474,11 @@ describe('Dashboard shared entry', () => {
   });
 
   it('stacks Settings section radio controls on mobile viewports', async () => {
+    const settingsLoudSelector = '.settings-page .segmented-control[data-intensity="loud"]';
+    const settingsLoudItemSelector = `${settingsLoudSelector} .segmented-control-item`;
     const mobileSettingsNavBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
-        normalizeCssSelector(rule.selector) === '.settings-nav-options' &&
+        normalizeCssSelector(rule.selector) === settingsLoudSelector &&
         rule.parent?.type === 'atrule' &&
         rule.parent.name === 'media' &&
         rule.parent.params.includes('max-width: 640px')
@@ -1377,7 +1486,7 @@ describe('Dashboard shared entry', () => {
     });
     const mobileSettingsOptionBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
-        normalizeCssSelector(rule.selector) === '.settings-nav-option' &&
+        normalizeCssSelector(rule.selector) === settingsLoudItemSelector &&
         rule.parent?.type === 'atrule' &&
         rule.parent.name === 'media' &&
         rule.parent.params.includes('max-width: 640px')
@@ -1385,7 +1494,7 @@ describe('Dashboard shared entry', () => {
     });
     const mobileFirstSettingsOptionBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
-        normalizeCssSelector(rule.selector) === '.settings-nav-option:first-of-type' &&
+        normalizeCssSelector(rule.selector) === `${settingsLoudItemSelector}:first-of-type` &&
         rule.parent?.type === 'atrule' &&
         rule.parent.name === 'media' &&
         rule.parent.params.includes('max-width: 640px')
@@ -1393,7 +1502,7 @@ describe('Dashboard shared entry', () => {
     });
     const mobileLastSettingsOptionBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
-        normalizeCssSelector(rule.selector) === '.settings-nav-option:last-of-type' &&
+        normalizeCssSelector(rule.selector) === `${settingsLoudItemSelector}:last-of-type` &&
         rule.parent?.type === 'atrule' &&
         rule.parent.name === 'media' &&
         rule.parent.params.includes('max-width: 640px')
@@ -1401,7 +1510,7 @@ describe('Dashboard shared entry', () => {
     });
     const mobileSettingsLabelBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
-        normalizeCssSelector(rule.selector) === '.settings-nav-option-label' &&
+        normalizeCssSelector(rule.selector) === `${settingsLoudSelector} .segmented-control-item-label` &&
         rule.parent?.type === 'atrule' &&
         rule.parent.name === 'media' &&
         rule.parent.params.includes('max-width: 640px')
@@ -1409,7 +1518,7 @@ describe('Dashboard shared entry', () => {
     });
     const mobileSettingsActiveBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
-        normalizeCssSelector(rule.selector) === '.settings-nav-option:has(input:checked)' &&
+        normalizeCssSelector(rule.selector) === `${settingsLoudItemSelector}:has(input:checked)` &&
         rule.parent?.type === 'atrule' &&
         rule.parent.name === 'media' &&
         rule.parent.params.includes('max-width: 640px')
@@ -1417,7 +1526,7 @@ describe('Dashboard shared entry', () => {
     });
     const reducedMotionSettingsActiveBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
-        normalizeCssSelector(rule.selector) === '.settings-nav-option:has(input:checked)' &&
+        normalizeCssSelector(rule.selector) === `${settingsLoudItemSelector}:has(input:checked)` &&
         rule.parent?.type === 'atrule' &&
         rule.parent.name === 'media' &&
         rule.parent.params.includes('prefers-reduced-motion: reduce')
@@ -1437,7 +1546,7 @@ describe('Dashboard shared entry', () => {
     expect(mobileSettingsActiveBlock).toContain('0 0 18px rgb(var(--mm-accent) / 0.55)');
     expect(mobileSettingsActiveBlock).toContain('0 0 32px rgb(var(--mm-accent-2) / 0.22)');
     expect(mobileSettingsActiveBlock).toContain(
-      'animation: queue-step-type-thumb-shimmer 5.5s ease-in-out infinite',
+      'animation: segmented-control-thumb-shimmer 5.5s ease-in-out infinite',
     );
     expect(reducedMotionSettingsActiveBlock).toContain('animation: none');
     expect(mobileSettingsLabelBlock).toContain('white-space: normal');

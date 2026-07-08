@@ -24,7 +24,7 @@ function Harness({ initialValue = "" }: { initialValue?: string }): ReactElement
 function HarnessWithLinkedDescription(): ReactElement {
   const [value, setValue] = useState("pr-resolver");
   return (
-    <div className="stack queue-step-type-panel">
+    <div className="stack segmented-control-panel">
       <div className="field">
         <SkillCombobox
           value={value}

@@ -925,8 +925,14 @@ describe("WorkflowStart CSS Layout", () => {
     expect(dashboardCss).toMatch(
       /\.workflow-start-workspace\s*\.queue-floating-bar\s*\{[^}]*left:\s*calc\(50%\s*\+\s*var\(--workflow-start-primary-offset\)\);[^}]*width:\s*min\(var\(--workflow-start-primary-available-width\),\s*70rem\);/s,
     );
+    // MM-1138 Q2: toggling the rail must not move the composer. The collapsed
+    // state keeps the primary content in column 2 (rather than resetting the
+    // offset to 0 and re-centering), so the floating bar holds its position.
     expect(dashboardCss).toMatch(
-      /\.workflow-start-workspace\[data-sidebar-collapsed="true"\]\s*\{[^}]*--workflow-start-primary-offset:\s*0rem;[^}]*--workflow-start-primary-available-width:\s*calc\(100%\s*-\s*2rem\);/s,
+      /\.workflow-start-workspace\[data-sidebar-collapsed="true"\]\s*\.workflow-start-primary\s*\{[^}]*grid-column:\s*2;/s,
+    );
+    expect(dashboardCss).not.toMatch(
+      /\.workflow-start-workspace\[data-sidebar-collapsed="true"\]\s*\{[^}]*--workflow-start-primary-offset:\s*0rem;/s,
     );
     expect(dashboardCss).toMatch(
       /@media \(max-width:\s*924px\) and \(min-width:\s*641px\)\s*\{[^}]*\.workflow-start-workspace \.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto;/s,
@@ -8608,13 +8614,13 @@ describe.skip("Task Create Entrypoint", () => {
     const toolRadio = getStepTypeRadio(step, "Tool");
     const presetRadio = getStepTypeRadio(step, "Preset");
 
-    expect(skillRadio.closest(".queue-step-type-option")?.getAttribute("title")).toBe(
+    expect(skillRadio.closest(".segmented-control-item")?.getAttribute("title")).toBe(
       "Skill asks an agent to perform work using reusable behavior.",
     );
-    expect(toolRadio.closest(".queue-step-type-option")?.getAttribute("title")).toBe(
+    expect(toolRadio.closest(".segmented-control-item")?.getAttribute("title")).toBe(
       "Tool runs a typed integration or system operation directly.",
     );
-    expect(presetRadio.closest(".queue-step-type-option")?.getAttribute("title")).toBe(
+    expect(presetRadio.closest(".segmented-control-item")?.getAttribute("title")).toBe(
       "Preset inserts a reusable set of configured steps.",
     );
     expect(

@@ -2208,6 +2208,14 @@ tbody tr:hover {
   padding-right: 1rem;
 }
 
+/* MM-1138 Q1: scope the workflow-list row divider to the shared list token so
+ * the table's first column and the split-view rail draw the same 0.72 divider.
+ * Bounded to the workflow list rather than the global `th, td` rule, which other
+ * tables keep at 0.65. */
+.workflow-list-data-slab .queue-table-wrapper td {
+  border-bottom-color: var(--workflow-list-divider-color);
+}
+
 .queue-table-wrapper code {
   white-space: normal;
   overflow-wrap: anywhere;
@@ -5491,26 +5499,33 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding: 0;
 }
 
-.queue-step-type-field,
-.settings-nav-field {
+/* MM-1138 Q3: one canonical segmented-control system with two intensity tiers.
+ * `data-intensity="quiet"` is the low-key detail-tab look (subtle accent thumb,
+ * navigation links); `data-intensity="loud"` is the high-energy create/settings
+ * look (neon gradient thumb, animated scan border, radio group). Both tiers
+ * share the container chrome, item typography, focus ring and the sliding thumb,
+ * which is driven by the shared --segmented-control-count /
+ * --segmented-control-active-index pair: the quiet tier sets them from JS (nav
+ * index), the loud tier derives the active index from the checked radio via
+ * :has() and carries its option count as an inline custom property. */
+.segmented-control-field {
   border: 0;
   margin: 0;
   padding: 0;
 }
 
-.queue-step-type-field legend,
-.settings-nav-field legend {
+.segmented-control-field legend {
   font-weight: 650;
   margin-bottom: 0.4rem;
 }
 
-.queue-step-type-field legend.sr-only,
-.settings-nav-field legend.sr-only {
+.segmented-control-field legend.sr-only {
   margin-bottom: 0;
 }
 
-.queue-step-type-options,
-.settings-nav-options {
+.segmented-control {
+  --segmented-control-count: 1;
+  --segmented-control-active-index: 0;
   position: relative;
   display: inline-flex;
   align-items: stretch;
@@ -5520,17 +5535,49 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.08),
     inset 0 -1px 0 rgb(0 0 0 / 0.25);
-  backdrop-filter: blur(14px) saturate(140%);
   isolation: isolate;
 }
 
-/* Sliding thumb: gradient fill, glossy highlight, neon halo */
-.queue-step-type-options::before,
-.settings-nav-options::before {
+.segmented-control[data-intensity="quiet"] {
+  width: 100%;
+  min-width: 0;
+  padding: 0.25rem;
+}
+
+.segmented-control[data-intensity="loud"] {
+  backdrop-filter: blur(14px) saturate(140%);
+}
+
+/* Sliding thumb (shared position, tier-specific fill). */
+.segmented-control::before {
   content: "";
   position: absolute;
+  border-radius: 8px;
+  transform: translateX(calc(var(--segmented-control-active-index) * 100%));
+  pointer-events: none;
+  z-index: 0;
+}
+
+.segmented-control[data-intensity="quiet"]::before {
+  top: 0.25rem;
+  bottom: 0.25rem;
+  left: 0.25rem;
+  width: calc((100% - 0.5rem) / var(--segmented-control-count));
+  background: rgb(var(--mm-accent) / 0.16);
+  box-shadow:
+    0 0 0 1px rgb(var(--mm-accent) / 0.32),
+    inset 0 1px 0 rgb(255 255 255 / 0.16);
+  transition: transform 180ms ease;
+}
+
+.segmented-control-no-active::before {
+  opacity: 0;
+}
+
+/* Loud tier: gradient fill, glossy highlight, neon halo. */
+.segmented-control[data-intensity="loud"]::before {
   inset: 0;
-  width: calc(100% / 3);
+  width: calc(100% / var(--segmented-control-count));
   border-radius: 9px;
   background:
     linear-gradient(
@@ -5550,32 +5597,25 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     0 0 18px rgb(var(--mm-accent) / 0.55),
     0 0 32px rgb(var(--mm-accent-2) / 0.22),
     inset 0 1px 0 rgb(255 255 255 / 0.22);
-  transform: translateX(0);
   transition: transform 360ms cubic-bezier(0.34, 1.3, 0.5, 1);
-  animation: queue-step-type-thumb-shimmer 5.5s ease-in-out infinite;
-  pointer-events: none;
+  animation: segmented-control-thumb-shimmer 5.5s ease-in-out infinite;
   z-index: 1;
 }
 
-.queue-step-type-options:has(
-    .queue-step-type-option:nth-child(2) input:checked
-  )::before,
-.settings-nav-options:has(
-    .settings-nav-option:nth-child(2) input:checked
-  )::before {
-  transform: translateX(100%);
+/* Loud tier: derive the active thumb index from the checked radio. */
+.segmented-control[data-intensity="loud"]:has(
+    .segmented-control-item:nth-child(2) input:checked
+  ) {
+  --segmented-control-active-index: 1;
 }
 
-.queue-step-type-options:has(
-    .queue-step-type-option:nth-child(3) input:checked
-  )::before,
-.settings-nav-options:has(
-    .settings-nav-option:nth-child(3) input:checked
-  )::before {
-  transform: translateX(200%);
+.segmented-control[data-intensity="loud"]:has(
+    .segmented-control-item:nth-child(3) input:checked
+  ) {
+  --segmented-control-active-index: 2;
 }
 
-@keyframes queue-step-type-thumb-shimmer {
+@keyframes segmented-control-thumb-shimmer {
   0%,
   100% {
     background-position:
@@ -5589,9 +5629,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 }
 
-/* Animated cyberpunk scan border */
-.queue-step-type-options::after,
-.settings-nav-options::after {
+/* Loud tier: animated cyberpunk scan border. */
+.segmented-control[data-intensity="loud"]::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -5614,13 +5653,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
-  animation: queue-step-type-scan 6s linear infinite;
+  animation: segmented-control-scan 6s linear infinite;
   opacity: 0.6;
   pointer-events: none;
   z-index: 2;
 }
 
-@keyframes queue-step-type-scan {
+@keyframes segmented-control-scan {
   0% {
     background-position: 0% 0;
   }
@@ -5630,61 +5669,79 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .queue-step-type-options::before,
-  .queue-step-type-options::after,
-  .settings-nav-options::before,
-  .settings-nav-options::after {
+  .segmented-control::before,
+  .segmented-control[data-intensity="loud"]::after {
     animation: none;
-  }
-  .queue-step-type-options::before,
-  .settings-nav-options::before {
     transition: none;
   }
 }
 
-.queue-step-type-option,
-.settings-nav-option {
+/* Items (shared structure, tier-specific weight/case). */
+.segmented-control-item {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: 1 1 0;
   align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-width: 0;
+  text-align: center;
+}
+
+.segmented-control[data-intensity="quiet"] .segmented-control-item {
+  min-height: 2.15rem;
+  padding: 0.42rem 0.55rem;
+  border-radius: 8px;
+  color: rgb(var(--mm-muted) / 0.92);
+  text-decoration: none;
+  font-size: 0.86rem;
+  font-weight: 650;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.segmented-control[data-intensity="loud"] .segmented-control-item {
+  z-index: 3;
+  min-height: 2.25rem;
+  padding: 0.5rem 0.9rem;
   border: 0;
   color: rgb(var(--mm-muted));
   cursor: pointer;
-  display: inline-flex;
-  flex: 1 1 0;
   font-weight: 600;
-  gap: 0.4rem;
-  justify-content: center;
   letter-spacing: 0.08em;
-  min-height: 2.25rem;
-  min-width: 0;
-  padding: 0.5rem 0.9rem;
-  position: relative;
-  text-align: center;
   text-transform: uppercase;
   transition: var(--mm-control-transition);
-  z-index: 3;
 }
 
-.queue-step-type-option:hover:not(:has(input:checked)),
-.settings-nav-option:hover:not(:has(input:checked)) {
+.segmented-control[data-intensity="quiet"] .segmented-control-item:hover,
+.segmented-control[data-intensity="quiet"] .segmented-control-item:focus-visible,
+.segmented-control[data-intensity="quiet"] .segmented-control-item[aria-current="page"] {
+  color: rgb(var(--mm-ink));
+}
+
+.segmented-control[data-intensity="quiet"] .segmented-control-item:focus-visible {
+  outline: none;
+  box-shadow: var(--mm-control-focus-ring);
+}
+
+.segmented-control[data-intensity="loud"] .segmented-control-item:hover:not(:has(input:checked)) {
   color: rgb(var(--mm-accent));
 }
 
-.queue-step-type-option:has(input:checked),
-.settings-nav-option:has(input:checked) {
+.segmented-control[data-intensity="loud"] .segmented-control-item:has(input:checked) {
   color: rgb(var(--mm-accent-contrast));
   font-weight: 700;
   text-shadow: 0 1px 2px rgb(0 0 0 / 0.45);
 }
 
-.queue-step-type-option:has(input:focus-visible),
-.settings-nav-option:has(input:focus-visible) {
+.segmented-control[data-intensity="loud"] .segmented-control-item:has(input:focus-visible) {
   box-shadow: var(--mm-control-focus-ring);
   border-radius: 9px;
   z-index: 4;
 }
 
-.queue-step-type-option input[type="radio"],
-.settings-nav-option input[type="radio"] {
+.segmented-control-item input[type="radio"] {
   border: 0;
   clip: rect(0 0 0 0);
   height: 1px;
@@ -5696,15 +5753,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 1px;
 }
 
-.queue-step-type-option-icon,
-.settings-nav-option-icon {
+.segmented-control-item-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
-.queue-step-type-option-icon svg,
-.settings-nav-option-icon svg {
+.segmented-control-item-icon svg {
   width: 1rem;
   height: 1rem;
   stroke: currentcolor;
@@ -5714,14 +5769,23 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   stroke-linejoin: round;
 }
 
-.queue-step-type-option:has(input:checked) .queue-step-type-option-icon svg,
-.settings-nav-option:has(input:checked) .settings-nav-option-icon svg {
+.segmented-control[data-intensity="loud"] .segmented-control-item:has(input:checked) .segmented-control-item-icon svg {
   filter: drop-shadow(0 0 6px rgb(var(--mm-accent-contrast) / 0.55));
 }
 
-.queue-step-type-option-label,
-.settings-nav-option-label {
+.segmented-control[data-intensity="loud"] .segmented-control-item-label {
   font-size: 0.78rem;
+}
+
+.segmented-control-badge {
+  min-width: 1.35rem;
+  padding: 0.08rem 0.36rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-panel) / 0.72);
+  color: rgb(var(--mm-ink));
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.25;
 }
 
 @media (max-width: 640px) {
@@ -5739,7 +5803,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .settings-nav-options {
+  /* MM-1138 Q3: the Settings section switcher (a loud-tier segmented control)
+   * stacks vertically on narrow viewports. Scoped to `.settings-page` so the
+   * create-page controls keep their inline layout, matching prior behavior. */
+  .settings-page .segmented-control[data-intensity="loud"] {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 0.25rem;
@@ -5747,12 +5814,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     padding: 0;
   }
 
-  .settings-nav-options::before,
-  .settings-nav-options::after {
+  .settings-page .segmented-control[data-intensity="loud"]::before,
+  .settings-page .segmented-control[data-intensity="loud"]::after {
     display: none;
   }
 
-  .settings-nav-option {
+  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item {
     justify-content: flex-start;
     min-height: 2.75rem;
     width: 100%;
@@ -5762,17 +5829,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     text-align: left;
   }
 
-  .settings-nav-option:first-of-type {
+  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item:first-of-type {
     border-top-left-radius: 9px;
     border-top-right-radius: 9px;
   }
 
-  .settings-nav-option:last-of-type {
+  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item:last-of-type {
     border-bottom-left-radius: 9px;
     border-bottom-right-radius: 9px;
   }
 
-  .settings-nav-option:has(input:checked) {
+  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item:has(input:checked) {
     background:
       linear-gradient(
           115deg,
@@ -5791,10 +5858,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
       0 0 18px rgb(var(--mm-accent) / 0.55),
       0 0 32px rgb(var(--mm-accent-2) / 0.22),
       inset 0 1px 0 rgb(255 255 255 / 0.22);
-    animation: queue-step-type-thumb-shimmer 5.5s ease-in-out infinite;
+    animation: segmented-control-thumb-shimmer 5.5s ease-in-out infinite;
   }
 
-  .settings-nav-option-label {
+  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item-label {
     white-space: normal;
     overflow-wrap: anywhere;
     line-height: 1.2;
@@ -5802,12 +5869,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .settings-nav-option:has(input:checked) {
+  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item:has(input:checked) {
     animation: none;
   }
 }
 
-.queue-step-type-panel {
+.segmented-control-panel {
   padding: 0.25rem 0 0;
 }
 
@@ -7243,6 +7310,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-shell {
+  /* MM-1138 Q1: the rail consumes the same edge-bleed the data slab uses to
+   * cancel `.dashboard-root`'s inline padding. The token lives on the slab for
+   * the list page; mirror it here so the split-view rail can reach the screen
+   * edge too. */
+  --workflow-list-slab-bleed-inline: 1rem;
+
   display: grid;
   grid-template-columns: var(--workflow-list-column-workflow-width) minmax(0, 1fr);
   align-items: start;
@@ -7276,6 +7349,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   /* Not a card: the sidebar is a plain left column separated from the detail by
    * the grid gap rather than a vertical divider. */
   padding: 0;
+  /* MM-1138 Q1: bleed the rail's left edge to the screen edge like the list
+   * table's first column. The right edge stays on the grid-column boundary, so
+   * only the left side widens; inner content is re-inset by the same amount
+   * (below) so titles stay aligned with the table cell text. */
+  width: calc(100% + var(--workflow-list-slab-bleed-inline));
+  margin-left: calc(var(--workflow-list-slab-bleed-inline) * -1);
 }
 
 .workflow-workspace-sidebar-header {
@@ -7285,7 +7364,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: grid;
   min-height: var(--workflow-list-header-row-height);
   min-width: 0;
-  padding: 0.5rem 0.75rem;
+  /* MM-1138 Q1: re-inset the left padding by the bleed so the "Workflow" label
+   * lands at the same 1rem inset as the list table's first header cell. */
+  padding: 0.5rem 0.75rem 0.5rem var(--workflow-list-slab-bleed-inline);
   background: rgb(var(--mm-panel) / 0.98);
   box-shadow: 0 1px 0 var(--workflow-list-divider-color);
   color: rgb(var(--mm-ink) / 0.85);
@@ -7394,7 +7475,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   align-items: center;
   height: var(--workflow-list-body-row-height);
   max-height: var(--workflow-list-body-row-height);
-  padding: 0.58rem 0.55rem;
+  /* MM-1138 Q1: align the row title with the list table's first cell (1rem
+   * inset) now that the rail bleeds to the screen edge; the status icon keeps
+   * its own trailing inset. */
+  padding: 0.58rem 0.55rem 0.58rem var(--workflow-list-slab-bleed-inline);
   gap: 0.55rem;
   border: 0;
   background: transparent;
@@ -7477,7 +7561,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   align-items: center;
   gap: 0.5rem;
   min-height: var(--workflow-list-body-row-height);
-  padding: 0.5rem 0.75rem;
+  /* MM-1138 Q1: keep empty/loading copy on the same left inset as the rows. */
+  padding: 0.5rem 0.75rem 0.5rem var(--workflow-list-slab-bleed-inline);
   color: rgb(var(--mm-muted));
   font-size: 0.85rem;
 }
@@ -7513,18 +7598,25 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   grid-column: 1 / -1;
 }
 
-.workflow-workspace-shell[data-sidebar-collapsed="true"] .workflow-start-primary {
-  grid-column: 1 / -1;
-}
-
-.workflow-start-workspace[data-sidebar-collapsed="true"] {
-  --workflow-start-primary-offset: 0rem;
-  --workflow-start-primary-available-width: calc(100% - 2rem);
+/* MM-1138 Q2: on the create page the primary content must not move when the
+ * rail is toggled. Instead of spanning both columns and re-centering, it stays
+ * in column 2 while column 1 (the rail's reserved track) is simply left empty,
+ * so the composer and its floating submit bar hold their position. */
+.workflow-start-workspace[data-sidebar-collapsed="true"] .workflow-start-primary {
+  grid-column: 2;
 }
 
 @media (min-width: 768px) {
   .workflow-workspace-shell[data-sidebar-collapsed="true"] {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* MM-1138 Q2: keep the create page's two-column track reserved when the rail
+   * is hidden, so the composer keeps its expanded-layout offset and width and
+   * does not shift. The extra class raises specificity above the shared
+   * collapse rule regardless of source order. */
+  .workflow-start-workspace.workflow-workspace-shell[data-sidebar-collapsed="true"] {
+    grid-template-columns: var(--workflow-list-column-workflow-width) minmax(0, 1fr);
   }
 }
 
@@ -7614,13 +7706,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     padding-bottom: 0.15rem;
   }
 
-  .segmented-nav {
+  .segmented-control[data-intensity="quiet"] {
     overflow-x: auto;
     width: max-content;
     min-width: 100%;
   }
 
-  .segmented-nav-item {
+  .segmented-control[data-intensity="quiet"] .segmented-control-item {
     flex: 0 0 auto;
     min-width: 4.75rem;
     white-space: normal;
@@ -7681,89 +7773,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: flex;
   align-items: stretch;
   gap: 0.5rem;
-}
-
-.segmented-nav {
-  --segmented-nav-count: 1;
-  --segmented-nav-active-index: 0;
-  position: relative;
-  display: inline-flex;
-  align-items: stretch;
-  width: 100%;
-  min-width: 0;
-  padding: 0.25rem;
-  border: 1px solid rgb(var(--mm-border));
-  border-radius: 10px;
-  background: var(--mm-input-well);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.08),
-    inset 0 -1px 0 rgb(0 0 0 / 0.2);
-  isolation: isolate;
-}
-
-.segmented-nav::before {
-  content: "";
-  position: absolute;
-  top: 0.25rem;
-  bottom: 0.25rem;
-  left: 0.25rem;
-  width: calc((100% - 0.5rem) / var(--segmented-nav-count));
-  border-radius: 8px;
-  background: rgb(var(--mm-accent) / 0.16);
-  box-shadow:
-    0 0 0 1px rgb(var(--mm-accent) / 0.32),
-    inset 0 1px 0 rgb(255 255 255 / 0.16);
-  transform: translateX(calc(var(--segmented-nav-active-index) * 100%));
-  transition: transform 180ms ease;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.segmented-nav-no-active::before {
-  opacity: 0;
-}
-
-.segmented-nav-item {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  flex: 1 1 0;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  min-width: 0;
-  min-height: 2.15rem;
-  padding: 0.42rem 0.55rem;
-  border-radius: 8px;
-  color: rgb(var(--mm-muted) / 0.92);
-  text-decoration: none;
-  font-size: 0.86rem;
-  font-weight: 650;
-  line-height: 1.1;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.segmented-nav-item:hover,
-.segmented-nav-item:focus-visible,
-.segmented-nav-item[aria-current="page"] {
-  color: rgb(var(--mm-ink));
-}
-
-.segmented-nav-item:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
-}
-
-.segmented-nav-badge {
-  min-width: 1.35rem;
-  padding: 0.08rem 0.36rem;
-  border-radius: 999px;
-  background: rgb(var(--mm-panel) / 0.72);
-  color: rgb(var(--mm-ink));
-  font-size: 0.72rem;
-  font-weight: 700;
-  line-height: 1.25;
 }
 
 .td-subroute-more-trigger {
