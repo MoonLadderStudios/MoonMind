@@ -574,6 +574,7 @@ RUN_STEP_RESILIENCE_POLICY_PATCH = "run-step-resilience-policy-v1"
 RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH = (
     "run-agent-runtime-retry-classification-v1"
 )
+RUN_FAIL_FAST_STEP_FAILURE_SUMMARY_PATCH = "run-fail-fast-step-failure-summary-v1"
 # MM-884: stamp a stable correlation (trace) ref onto step-execution manifests
 # and emit a single incident reconstruction manifest before terminal failure so
 # policy, provider/profile/credential source, failed step, progress, workspace
@@ -806,6 +807,48 @@ class MoonMindRunWorkflow:
                 "diagnostic detail — inspect step diagnostics/artifacts."
             )
         return f"{tool_name} failed"
+
+    def _format_step_failure_exception_message(
+        self,
+        *,
+        node_id: str,
+        tool_name: str,
+        result_status: str,
+        step_failure_summary: str,
+        failure_message: str | None,
+        child_workflow_id: str | None,
+        diagnostics_ref: str | None,
+    ) -> str:
+        """Build the fail-fast ApplicationError text for a failed plan step."""
+
+        summary = (
+            self._sanitize_operator_summary(step_failure_summary)
+            or step_failure_summary
+            or f"{tool_name} failed"
+        )
+        bounded_summary = self._coerce_text(summary, max_chars=900) or (
+            f"{tool_name} failed"
+        )
+        message = (
+            f"Plan step '{node_id}' ({tool_name}) returned status "
+            f"{result_status}: {bounded_summary}"
+        )
+        details: list[str] = []
+        raw_last_error = self._coerce_text(failure_message, max_chars=240)
+        last_error = (
+            self._sanitize_operator_summary(raw_last_error) or raw_last_error
+        )
+        if last_error and last_error not in bounded_summary:
+            details.append(f"lastError={last_error}")
+        child_id = self._coerce_text(child_workflow_id, max_chars=400)
+        if child_id:
+            details.append(f"childWorkflowId={child_id}")
+        diag_ref = self._coerce_text(diagnostics_ref, max_chars=400)
+        if diag_ref:
+            details.append(f"diagnosticsRef={diag_ref}")
+        if details:
+            message = f"{message} ({'; '.join(details)})"
+        return self._coerce_text(message, max_chars=1200) or message
 
     def _failure_diagnostic_from_exception(
         self,
@@ -8309,6 +8352,20 @@ class MoonMindRunWorkflow:
                         if failure_mode == "FAIL_FAST":
                             if provider_failure_summary:
                                 raise ValueError(provider_failure_summary)
+                            if workflow.patched(
+                                RUN_FAIL_FAST_STEP_FAILURE_SUMMARY_PATCH
+                            ):
+                                raise ValueError(
+                                    self._format_step_failure_exception_message(
+                                        node_id=node_id,
+                                        tool_name=tool_name,
+                                        result_status=result_status,
+                                        step_failure_summary=step_failure_summary,
+                                        failure_message=failure_message,
+                                        child_workflow_id=child_workflow_id,
+                                        diagnostics_ref=diagnostics_ref,
+                                    )
+                                )
                             detail = (
                                 f" with error '{failure_message}'"
                                 if failure_message
