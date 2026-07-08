@@ -2042,10 +2042,7 @@ async def test_run_omnigent_execution_rejects_cross_owner_bridge_session(
 ) -> None:
     """§16 rule 1: authorize the bridge session before any provider call."""
 
-    from moonmind.omnigent.bridge_security import (
-        BridgeSessionBinding,
-        OmnigentAuthorizationError,
-    )
+    from moonmind.omnigent.bridge_security import BridgeSessionBinding
 
     class Store:
         async def get_binding(self, *_a: object, **_k: object) -> BridgeSessionBinding:
@@ -2064,23 +2061,79 @@ async def test_run_omnigent_execution_rejects_cross_owner_bridge_session(
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
 
-    with pytest.raises(OmnigentAuthorizationError):
-        await run_omnigent_execution(
-            AgentExecutionRequest(
-                agentKind="external",
-                agentId="omnigent",
-                correlationId="corr-1",
-                idempotencyKey="idem-1",
-                parameters={
-                    "omnigent": {
-                        "agent": {"agentName": "codex-native-ui"},
-                        "session": {"allowEmptyWorkspace": True},
-                        "prompt": {"text": "Do the task"},
-                    },
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
                 },
-            ),
-            run_store=Store(),
-        )
+            },
+        ),
+        run_store=Store(),
+    )
+
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "omnigent_authorization_denied"
+    assert result.metadata["authorizationDenied"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_rechecks_owner_after_get_or_create(
+    monkeypatch,
+) -> None:
+    """§16 rule 1: reject a concurrently created cross-owner durable row."""
+
+    class Row:
+        moonmind_workflow_id = "other-workflow"
+        moonmind_agent_run_id = "other-run"
+
+    class Store:
+        async def get_binding(self, *_a: object, **_k: object) -> None:
+            return None
+
+        async def get_or_create(self, *_a: object, **_k: object) -> Row:
+            return Row()
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, *_a: object, **_k: object) -> dict[str, object]:
+            raise AssertionError("session attach/create must not use cross-owner row")
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        run_store=Store(),
+    )
+
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "omnigent_authorization_denied"
+    assert result.metadata["authorizationDenied"] is True
 
 
 @pytest.mark.asyncio

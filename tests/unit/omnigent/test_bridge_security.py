@@ -112,7 +112,14 @@ def test_enforce_id_only_labels_rejects_secret_like_key() -> None:
 
 @pytest.mark.parametrize(
     "key",
-    ["session_secret", "runnerCredential", "authorization", "x.bearer.marker"],
+    [
+        "session_secret",
+        "runnerCredential",
+        "authorization",
+        "x.bearer.marker",
+        "api.key",
+        "runner.auth",
+    ],
 )
 def test_enforce_id_only_labels_rejects_various_secret_keys(key: str) -> None:
     with pytest.raises(OmnigentAuthorizationError):
@@ -130,6 +137,13 @@ def test_enforce_id_only_labels_rejects_github_token_value() -> None:
     with pytest.raises(OmnigentAuthorizationError):
         enforce_id_only_labels(
             {"moonmind.note": "ghp_0123456789abcdefghijABCDEFGHIJ012345"}
+        )
+
+
+def test_enforce_id_only_labels_rejects_raw_provider_token_value() -> None:
+    with pytest.raises(OmnigentAuthorizationError):
+        enforce_id_only_labels(
+            {"moonmind.note": "sk-proj-0123456789abcdefghijklmnop"}
         )
 
 
@@ -152,7 +166,13 @@ def test_sanitize_proxy_headers_drops_moonmind_internal_auth_headers() -> None:
 
 
 def test_sanitize_proxy_headers_drops_sensitive_by_fragment() -> None:
-    forwarded = sanitize_proxy_headers({"X-Runner-Secret": "value"})
+    forwarded = sanitize_proxy_headers(
+        {
+            "X-Runner-Secret": "value",
+            "X_Api_Key": "value",
+            "X-Api_Key": "value",
+        }
+    )
 
     assert forwarded == {}
 
@@ -188,3 +208,12 @@ def test_redact_raw_events_scrubs_authorization_header_text() -> None:
     redacted = redact_raw_events(events)
 
     assert "secret-value" not in redacted[0]["message"]
+
+
+def test_redact_raw_events_scrubs_bare_provider_token_text() -> None:
+    events = [{"type": "system", "message": "provider said sk-proj-0123456789abc"}]
+
+    redacted = redact_raw_events(events)
+
+    assert "sk-proj-0123456789abc" not in redacted[0]["message"]
+    assert "[REDACTED]" in redacted[0]["message"]

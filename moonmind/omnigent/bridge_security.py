@@ -20,6 +20,7 @@ Source issue traceability: MM-1140 -> MM-1154.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -74,6 +75,7 @@ _SENSITIVE_HEADER_FRAGMENTS: tuple[str, ...] = (
     "credential",
     "password",
     "api-key",
+    "api_key",
     "apikey",
 )
 # Label-key fragments that flag an attempt to smuggle a credential into the
@@ -90,8 +92,31 @@ _SENSITIVE_LABEL_FRAGMENTS: tuple[str, ...] = (
     "privatekey",
     "bearer",
     "cookie",
+    "auth",
     "authorization",
 )
+_RAW_PROVIDER_TOKEN_PATTERN = re.compile(
+    r"\b(?:sk|sk-proj|sk-ant|sk-live|sk-test)-[A-Za-z0-9_-]{8,}\b"
+)
+
+
+def _credential_fragment_key(value: str) -> str:
+    return value.lower().replace("-", "_").replace(".", "_")
+
+
+def _redact_raw_provider_tokens(value: Any) -> Any:
+    if isinstance(value, str):
+        return _RAW_PROVIDER_TOKEN_PATTERN.sub("[REDACTED]", value)
+    if isinstance(value, Mapping):
+        return {
+            str(nested_key): _redact_raw_provider_tokens(nested_value)
+            for nested_key, nested_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_raw_provider_tokens(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_raw_provider_tokens(item) for item in value)
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,7 +224,7 @@ def enforce_id_only_labels(labels: Mapping[str, Any]) -> dict[str, Any]:
     sanitized: dict[str, Any] = {}
     for raw_key, raw_value in labels.items():
         key = str(raw_key).strip()
-        normalized = key.lower().replace("-", "_")
+        normalized = _credential_fragment_key(key)
         if any(fragment in normalized for fragment in _SENSITIVE_LABEL_FRAGMENTS):
             raise OmnigentAuthorizationError(
                 f"Omnigent session labels must not carry secret-like keys: {key!r}",
@@ -208,7 +233,10 @@ def enforce_id_only_labels(labels: Mapping[str, Any]) -> dict[str, Any]:
         # Compare the value against its redacted form (keyless, so a legitimate
         # id such as an idempotency key is not flagged by its label name). Any
         # difference means the redactor found credential-shaped content.
-        if redact_sensitive_payload(raw_value) != raw_value:
+        if (
+            redact_sensitive_payload(raw_value) != raw_value
+            or _redact_raw_provider_tokens(raw_value) != raw_value
+        ):
             raise OmnigentAuthorizationError(
                 f"Omnigent session label {key!r} must not carry a secret-like value",
                 failure_class="user_error",
@@ -240,12 +268,13 @@ def sanitize_proxy_headers(
         if not name:
             continue
         normalized = name.lower()
+        fragment_key = _credential_fragment_key(name)
         if normalized in allowlist:
             forwarded[name] = str(raw_value)
             continue
         if normalized in _MOONMIND_INTERNAL_AUTH_HEADERS:
             continue
-        if any(fragment in normalized for fragment in _SENSITIVE_HEADER_FRAGMENTS):
+        if any(fragment in fragment_key for fragment in _SENSITIVE_HEADER_FRAGMENTS):
             continue
         forwarded[name] = str(raw_value)
     return forwarded
@@ -260,7 +289,7 @@ def redact_raw_events(events: Iterable[Mapping[str, Any]]) -> list[dict[str, Any
 
     redacted: list[dict[str, Any]] = []
     for event in events:
-        scrubbed = redact_sensitive_payload(dict(event))
+        scrubbed = _redact_raw_provider_tokens(redact_sensitive_payload(dict(event)))
         redacted.append(
             scrubbed if isinstance(scrubbed, dict) else {"value": scrubbed}
         )
