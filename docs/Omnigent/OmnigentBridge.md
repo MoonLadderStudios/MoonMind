@@ -888,7 +888,8 @@ disposable phase-by-phase rollout sequence lives in
 ### 18.1 Canonical package placement
 
 All bridge code lives in the existing `moonmind/omnigent/` package alongside the
-current `moonmind/omnigent/store.py` and `moonmind/omnigent/execute.py`. There is
+canonical `moonmind/omnigent/bridge_store.py` and `moonmind/omnigent/execute.py`.
+`bridge_store.py` supersedes the removed `moonmind/omnigent/store.py`. There is
 no separate `moonmind/omnigent_bridge/` package; a parallel package would
 duplicate the active Omnigent code and split ownership.
 

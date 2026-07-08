@@ -14,13 +14,13 @@ async def omnigent_execute_activity(
     """Run one Omnigent streaming execution."""
 
     from api_service.db.base import async_session_maker
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
     from moonmind.omnigent.execute import LocalOmnigentArtifactGateway, run_omnigent_execution
-    from moonmind.omnigent.store import OmnigentRunStore
 
     return await run_omnigent_execution(
         request,
         artifact_gateway=LocalOmnigentArtifactGateway(),
-        run_store=OmnigentRunStore(async_session_maker),
+        run_store=OmnigentBridgeSessionStore(async_session_maker),
     )
 
 

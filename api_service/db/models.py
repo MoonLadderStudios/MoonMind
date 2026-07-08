@@ -345,29 +345,44 @@ class RecurringWorkflowRun(Base):
     )
 
 
-class OmnigentExternalRun(Base):
-    """Provider-specific retry mapping for one Omnigent delegated run."""
+class OmnigentBridgeSession(Base):
+    """Canonical Omnigent bridge session, idempotency, and evidence-ref store.
 
-    __tablename__ = "omnigent_external_runs"
+    Source design: docs/Omnigent/OmnigentBridge.md §7.1 (MM-1152, source MM-1140).
+    Supersedes the ``omnigent_external_runs`` mapping formerly owned by
+    ``OmnigentRunStore``; there is no parallel table, alias, or wrapper.
+    """
+
+    __tablename__ = "omnigent_bridge_sessions"
     __table_args__ = (
-        Index("ix_omnigent_external_runs_session", "omnigent_session_id"),
-        Index("ix_omnigent_external_runs_status", "status"),
+        UniqueConstraint("idempotency_key", name="uq_omnigent_bridge_sessions_idempotency_key"),
+        Index("ix_omnigent_bridge_sessions_session", "omnigent_session_id"),
+        Index("ix_omnigent_bridge_sessions_workflow", "moonmind_workflow_id"),
+        Index("ix_omnigent_bridge_sessions_status", "status"),
     )
 
-    idempotency_key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    bridge_session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    compatibility_profile: Mapped[str] = mapped_column(String(128), nullable=False)
     moonmind_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    moonmind_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     moonmind_agent_run_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    correlation_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+
     omnigent_endpoint_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     omnigent_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_runner_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     omnigent_agent_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     omnigent_agent_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    target_metadata: Mapped[dict[str, Any]] = mapped_column(
-        mutable_json_dict(), nullable=False, default=dict
-    )
+
+    host_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    workspace: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="active", server_default="active"
+        String(64), nullable=False, default="declared", server_default="declared"
     )
+
     first_message_state: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
@@ -382,22 +397,24 @@ class OmnigentExternalRun(Base):
     first_message_posted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    first_message_pending_id: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True
-    )
+    first_message_pending_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     first_message_item_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    first_message_request_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    first_message_response_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    artifact_refs: Mapped[dict[str, Any]] = mapped_column(
-        mutable_json_dict(), nullable=False, default=dict
-    )
+
+    raw_events_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    normalized_events_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    initial_snapshot_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    final_snapshot_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    capture_manifest_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    diagnostics_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    external_state_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+
     terminal_refs: Mapped[dict[str, Any]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )
-    final_snapshot_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    sse_events_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    diagnostics_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    result_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", mutable_json_dict(), nullable=False, default=dict
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -406,6 +423,39 @@ class OmnigentExternalRun(Base):
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+
+class OmnigentBridgeSessionEvent(Base):
+    """Durable index over the Omnigent bridge session event stream.
+
+    Source design: docs/Omnigent/OmnigentBridge.md §7.2 (MM-1152, source MM-1140).
+    The DB rows are an index; full raw/normalized event bodies live in MoonMind
+    artifacts. ``normalized_status`` preserves the full, non-lossy normalized
+    status stream (contrasted with the coarse, coalesced session ``status``).
+    """
+
+    __tablename__ = "omnigent_bridge_session_events"
+    __table_args__ = (
+        Index("ix_omnigent_bridge_session_events_session", "bridge_session_id"),
+        Index(
+            "ix_omnigent_bridge_session_events_sequence",
+            "bridge_session_id",
+            "sequence",
+        ),
+    )
+
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    bridge_session_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    direction: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    text_preview: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    artifact_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", mutable_json_dict(), nullable=False, default=dict
     )
 
 
@@ -681,7 +731,8 @@ __all__ = [
     "RecurringWorkflowRunTrigger",
     "RecurringWorkflowScheduleType",
     "RecurringWorkflowScopeType",
-    "OmnigentExternalRun",
+    "OmnigentBridgeSession",
+    "OmnigentBridgeSessionEvent",
     "WorkflowCheckpointBranch",
     "WorkflowCheckpointBranchTurn",
     "WorkflowCheckpointBranchGitBinding",
