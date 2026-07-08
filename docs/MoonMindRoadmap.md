@@ -41,9 +41,11 @@ These are not active roadmap milestones, but they are important assumptions for 
 - `integration.omnigent.execute` exists as the v1 streaming-gateway activity and can create or reattach to an Omnigent session, post the first message idempotently, stream events, harvest terminal evidence, and return a canonical `AgentRunResult`.
 - `omnigent_bridge_sessions` is the canonical durable store for Omnigent bridge/session state, first-message idempotency, terminal refs, and normalized event indexing.
 - Omnigent terminal evidence can include normalized/raw stream artifacts, initial/final snapshots, capture manifests, diagnostics, changed files, workspace files, optional diffs, session files, child-session evidence, and `checkpoint.omnigent.external_state.json`.
+- The run workflow records per-step Omnigent external-agent identity and passes it into checkpoint policy resolution, so Omnigent checkpoint captures select the `external_state_ref` lane.
 - Workflow RAG already has the core ContextPack, gateway/direct transport, Qdrant, multi-collection, overlay, budgeting, and artifact/ref model used by the current managed-session path.
 - Dashboard list/detail display modes exist for Workflows and Recurring Schedules, but they are not yet a reusable application-wide pattern.
-- Checkpoint, Checkpoint Branch, and Workflow Remediation desired-state docs exist; the remaining work is to make them default, end-to-end operator flows for Omnigent-backed executions.
+- The Checkpoint Branch API and persistence model already support branch create, turn launch, continue, fork, compare, promote, archive, source checkpoint identity, instruction digest, workspace policy, turn ids, git binding, and remediation-created branches; remaining work is the operator/UI/default-flow and Omnigent runtime handoff.
+- The remediation context builder writes a restricted `reports/remediation_context.json` artifact during remediation execution creation; remaining work is Omnigent-specific evidence enrichment, tools, typed actions, and UI.
 
 ---
 
@@ -139,14 +141,13 @@ These are not active roadmap milestones, but they are important assumptions for 
 
 ### Remaining work
 
-- [ ] **5.1 Activate Omnigent checkpoint policy at call sites** — thread external-agent identity into Step Execution checkpoint policy resolution so `agentId=omnigent` selects the `external_state_ref` lane without relying on runtime aliases.
-- [ ] **5.2 External-state checkpoint completeness** — ensure every relevant boundary captures `externalStateRef`, `idempotencyKey`, `omnigentSessionId`, diagnostics refs, terminal refs, and patch/diff availability metadata.
-- [ ] **5.3 Resume-from-checkpoint default flow** — make failed-run recovery default to evidence-gated resume when checkpoint evidence is valid, with clear reasons when resume is unavailable.
-- [ ] **5.4 Branch-from-checkpoint API** — expose a first-class Checkpoint Branch operation that records source workflow/run, step, checkpoint boundary/ref, instruction artifact/digest, workspace policy, runtime/profile, publish mode, remediation provenance, and idempotency key.
-- [ ] **5.5 Omnigent branch execution** — start a fresh Omnigent session for a branch turn, carrying corrected instructions and validated external-state evidence without mutating the original workflow input.
-- [ ] **5.6 Local vs external restore semantics** — split or normalize ambiguous workspace refs so local sandbox paths and provider-owned external-state artifact refs cannot be confused.
-- [ ] **5.7 UI flows** — add Workflow Detail actions for resume, retry, branch, compare branch, and inspect checkpoint evidence.
-- [ ] **5.8 Replay and idempotency tests** — cover worker restart, Temporal retry, duplicate first-message prevention, checkpoint validation failures, branch duplicate prevention, and unsupported restore attempts.
+- [ ] **5.1 External-state checkpoint completeness** — ensure every relevant Omnigent boundary captures `externalStateRef`, `idempotencyKey`, `omnigentSessionId`, diagnostics refs, terminal refs, and patch/diff availability metadata.
+- [ ] **5.2 Resume-from-checkpoint default flow** — make failed-run recovery default to evidence-gated resume when checkpoint evidence is valid, with clear reasons when resume is unavailable.
+- [ ] **5.3 Checkpoint Branch UI and runtime-profile gaps** — connect the existing Checkpoint Branch API to Workflow Detail actions, runtime/profile selection, publish-mode selection, and Omnigent-compatible launch evidence without duplicating branch endpoints.
+- [ ] **5.4 Omnigent branch execution** — start a fresh Omnigent session for a branch turn, carrying corrected instructions and validated external-state evidence without mutating the original workflow input.
+- [ ] **5.5 Local vs external restore semantics** — split or normalize ambiguous workspace refs so local sandbox paths and provider-owned external-state artifact refs cannot be confused.
+- [ ] **5.6 UI flows** — add Workflow Detail actions for resume, retry, branch, compare branch, and inspect checkpoint evidence.
+- [ ] **5.7 Replay and idempotency tests** — cover worker restart, Temporal retry, duplicate first-message prevention, checkpoint validation failures, branch duplicate prevention, and unsupported restore attempts.
 
 **Done means:** failed workflows can resume from validated checkpoints by default, operators can intentionally branch with new instructions or runtime/profile settings, and Omnigent external state is handled as MoonMind artifact evidence rather than host-local mutable state.
 
@@ -161,7 +162,7 @@ These are not active roadmap milestones, but they are important assumptions for 
 ### Remaining work
 
 - [ ] **6.1 Create-path remediation authoring** — let operators create remediation workflows from the normal Create experience with target workflow/run, custom instructions, runtime/profile selection, authority mode, approval policy, and evidence policy.
-- [ ] **6.2 Remediation Context Builder** — generate `reports/remediation_context.json` with target identity, selected steps, step manifests, checkpoint refs, branch refs, incident/recovery manifests, Omnigent capture refs, logs, diagnostics, policy snapshots, and bounded summaries.
+- [ ] **6.2 Omnigent remediation context enrichment** — extend the existing `reports/remediation_context.json` builder with Omnigent capture refs, bridge/session event summaries, branch refs, incident/recovery manifests, policy snapshots, and bounded evidence needed by host-backed repair runs.
 - [ ] **6.3 Artifact and log access tools** — provide typed remediation tools/API calls for reading target artifacts, diagnostics, step evidence, managed/bridge event streams, and bounded logs without scraping dashboard pages.
 - [ ] **6.4 Typed action registry** — implement allowlisted remediation actions such as resume, branch, retry with provenance, interrupt, stop, stale lease cleanup, host cleanup, profile lease eviction, and verification.
 - [ ] **6.5 Corrected-instruction repair through Checkpoint Branches** — any remediation repair that changes instructions, branch, runtime, model, or publish mode must create a branch turn instead of mutating the original workflow input.
@@ -251,6 +252,22 @@ These are not active roadmap milestones, but they are important assumptions for 
 
 ---
 
+## Milestone 11 — Pentest Restricted-Egress Safety Blocker 🔒
+
+**Goal:** External-target pentest workflows remain gated until a real network-enforced restricted-egress boundary exists.
+
+**Why it matters:** `security.pentest.run` discovery is enabled by default, and `pentestgpt-claude-oauth` currently runs on Docker `bridge`. Approved-scope validation is necessary, but it is not network enforcement. External-target enablement must stay blocked until MoonMind can prove the runner can reach only approved lab/provider endpoints.
+
+### Remaining work
+
+- [ ] **11.1 Restricted egress boundary for PentestGPT external targets** — implement and document a dedicated Docker network, egress proxy, or firewall sidecar that can reach only approved lab/provider endpoints before external targets can be enabled.
+- [ ] **11.2 External-target enablement gate** — fail fast when an operator enables external pentest targets without a validated restricted-egress profile and recorded security review.
+- [ ] **11.3 Enforcement tests and diagnostics** — cover egress-denied launches, missing network attachment, approval metadata, and dashboard/runbook warnings.
+
+**Done means:** external-target pentest runs cannot be enabled unless the deployment has validated restricted egress, explicit approval evidence, and operator-visible diagnostics proving the enforced network posture.
+
+---
+
 ## Re-assessed items from the previous roadmap
 
 | Previous theme | New disposition |
@@ -259,7 +276,8 @@ These are not active roadmap milestones, but they are important assumptions for 
 | Automatic RAG context injection and RAG context packs | Moved into Milestone 7, with Omnigent first-message delivery and host-initiated retrieval gateway support as the acceptance path. |
 | Dashboard artifact browsing and remediation panels | Split across Milestone 1 for reusable navigation/list surfaces, Milestone 4 for Omnigent chat/artifact projection, and Milestone 6 for remediation-specific panels. |
 | Resume-from-checkpoint and recovery actions | Consolidated into Milestone 5 as checkpoint resume/branching, with Milestone 6 owning remediation’s custom-instruction branch flow. |
-| Safety guardrails, governance telemetry, and secret lifecycle | Embedded into Milestones 2, 3, 6, and 8 as auth-volume boundaries, host launch policy, remediation audit, and Omnigent policy enforcement. Standalone safety work should be added only when it is not tied to those product paths. |
+| Safety guardrails, governance telemetry, and secret lifecycle | Embedded into Milestones 2, 3, 6, 8, and 11 as auth-volume boundaries, host launch policy, remediation audit, Omnigent policy enforcement, and PentestGPT restricted egress. Standalone safety work should be added only when it is not tied to those product paths. |
+| PentestGPT restricted egress and external target safety | Kept as standalone Milestone 11 because the current Docker `bridge` runner is not a restricted-egress boundary; external targets stay gated until enforcement exists. |
 | Deep observability, live logs, and trace/log links | Embedded into Milestones 4, 5, and 6 as bridge chat replay, checkpoint evidence, remediation evidence access, and artifact diagnostics. Full OTel/cost expansion can follow after Omnigent-host execution is stable. |
 | Responses API feature parity | Not on the critical path for Omnigent host cutover unless a concrete Omnigent/cloud-agent integration requires it. |
 | Completed resiliency, sandbox, memory, vendor portability, and baseline observability milestones | Removed from active roadmap tracking. They remain part of the product substrate and should be documented elsewhere, not tracked as unfinished roadmap items. |
@@ -276,6 +294,7 @@ These are not active roadmap milestones, but they are important assumptions for 
 | 🔴 P0 | 4 — Omnigent bridge communication and Workflow Detail chat | 🚧 Active | Required for usable operator experience |
 | 🔴 P0 | 5 — Checkpoints, resume, and branching | 🚧 Active | Required for resilient Omnigent execution |
 | 🔴 P0 | 6 — Remediation workflows and evidence-based repair | 🚧 Active | Depends on 4 and 5 for full power |
+| 🔴 P0 | 11 — Pentest restricted-egress safety blocker | 🔒 Gated | Required before external-target pentest enablement |
 | 🟠 P1 | 7 — RAG for Omnigent host agents | 🔧 Partial | Depends on basic Omnigent execution and profile selection |
 | 🟠 P1 | 8 — Omnigent policy management UI | 📐 Designed | Depends on launch/bridge enforcement points |
 | 🟠 P1 | 9 — Omnigent agent profiles UI | 📐 Designed | Depends on endpoint/profile/policy data model |
@@ -287,8 +306,9 @@ These are not active roadmap milestones, but they are important assumptions for 
 
 1. **Land the bridge operator slice:** proxy-mode bridge routes, event normalizer, bridge-session projection API, and Workflow Detail chat rendering for Omnigent session events.
 2. **Make host launch real:** define auth-volume/profile contracts, launch Omnigent host containers from MoonMind, and validate Codex/Claude auth inside those hosts.
-3. **Finish recovery primitives:** activate Omnigent external-agent checkpoint policy at Step Execution call sites, make resume the default failed-run path, and expose Checkpoint Branch creation with custom instructions.
-4. **Complete remediation authoring:** create remediation workflows from the normal Create flow, build the remediation context artifact, expose target artifact/log tools, and route corrective execution through Checkpoint Branches.
+3. **Finish recovery primitives:** complete Omnigent external-state checkpoint evidence, make resume the default failed-run path, and wire the existing Checkpoint Branch API into operator/runtime flows.
+4. **Complete remediation authoring:** create remediation workflows from the normal Create flow, enrich the remediation context artifact for Omnigent evidence, expose target artifact/log tools, and route corrective execution through Checkpoint Branches.
 5. **Unify operator UI:** generalize sidebar/full-list behavior across all major collection pages while adding Omnigent agent and policy management surfaces.
 6. **Restore context parity:** wire Workflow RAG into Omnigent first-message and host-initiated retrieval gateway paths.
 7. **Clean up the story:** update README/architecture docs and compatibility guidance once Omnigent-host execution is the preferred path.
+8. **Keep pentest external-target gates closed:** do not enable external-target PentestGPT runs until restricted egress, security review, tests, and operator diagnostics exist.

@@ -52,7 +52,7 @@ def test_temp_plan_cleanup_matches_closed_final_definition_of_done() -> None:
     assert not TEMP_PLAN.exists()
     assert "Status: Execution plan (disposable; not canonical)" not in docs_text
     assert "Final definition of done" not in docs_text
-    assert "- [ ] **13.1** Resume-from-checkpoint as the default recovery path" in roadmap_text
+    assert "- [ ] **5.2 Resume-from-checkpoint default flow**" in roadmap_text
 
 
 def test_roadmap_and_implementation_evidence_remain_consistent() -> None:
@@ -61,8 +61,10 @@ def test_roadmap_and_implementation_evidence_remain_consistent() -> None:
 
     assert "_record_step_execution_manifest" in runtime_text
     assert "build_step_execution_manifest_payload" not in runtime_text
-    assert "Durable step ledger & checkpoints" in roadmap_text
-    assert "Resume foundations" in roadmap_text
-    assert "checkpoint restore logic exists but is not yet the primary operator flow" in roadmap_text
-    assert "retrieval-backed context packs" in roadmap_text
-    assert "Tracked with 13.3" in roadmap_text
+    assert "Omnigent host as the unified managed agent runtime" in roadmap_text
+    assert "checkpoint captures select the `external_state_ref` lane" in roadmap_text
+    assert "Checkpoint Branch API and persistence model already support" in roadmap_text
+    assert "- [ ] **5.2 Resume-from-checkpoint default flow**" in roadmap_text
+    assert "- [ ] **6.2 Omnigent remediation context enrichment**" in roadmap_text
+    assert "- [ ] **7.1 Initial context injection for Omnigent**" in roadmap_text
+    assert "- [ ] **11.1 Restricted egress boundary for PentestGPT external targets**" in roadmap_text
