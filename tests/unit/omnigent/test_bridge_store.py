@@ -153,6 +153,81 @@ async def test_get_or_create_is_idempotent_and_declared(store):
 
 
 @pytest.mark.asyncio
+async def test_get_or_create_persists_binding_identity_override(store):
+    # The Session API Facade holds a verified workflow id out-of-band and
+    # synthesizes a request with no step_execution (correlation id != workflow
+    # id). The explicit override must be persisted, not the correlation id.
+    request = _request()  # correlationId="corr-1", no step_execution
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-verified",
+        agent_run_id="ar-verified",
+    )
+    assert row.moonmind_workflow_id == "mm:wf-verified"
+    assert row.moonmind_agent_run_id == "ar-verified"
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_without_override_derives_from_request(store):
+    # Managed-execution path behavior is preserved when no override is given.
+    request = _request()  # no step_execution -> falls back to correlation id
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+    )
+    assert row.moonmind_workflow_id == "corr-1"
+    assert row.moonmind_agent_run_id == "corr-1"
+
+
+@pytest.mark.asyncio
+async def test_get_existing_returns_none_then_row(store):
+    request = _request()
+    assert await store.get_existing(request.idempotency_key) is None
+    await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-1",
+    )
+    row = await store.get_existing(request.idempotency_key)
+    assert row is not None
+    assert row.moonmind_workflow_id == "mm:wf-1"
+    assert row.omnigent_agent_id == "ag_1"
+
+
+@pytest.mark.asyncio
+async def test_get_session_owner_resolves_by_session_id(store):
+    request = _request()
+    await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-owner",
+    )
+    await store.attach_session(request.idempotency_key, "sess-abc")
+
+    owner = await store.get_session_owner("sess-abc")
+    assert owner is not None
+    assert owner.workflow_id == "mm:wf-owner"
+    assert owner.agent_run_id == "ar-owner"
+
+    assert await store.get_session_owner("sess-missing") is None
+    assert await store.get_session_owner("") is None
+
+
+@pytest.mark.asyncio
 async def test_attach_and_first_message_transitions(store):
     request = _request()
     await store.get_or_create(

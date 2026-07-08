@@ -28,6 +28,7 @@ from api_service.db.models import User
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_PROXY,
     OmnigentBridgeConfig,
+    resolve_bridge_config,
 )
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
@@ -46,9 +47,11 @@ from moonmind.omnigent.settings import (
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 # The bridge is exposed at the operator-declared mount path (OB-§6, §21.1). The
-# route table is read from the declarative bridge configuration so the public
-# surface matches the canonical contract.
-_BRIDGE_CONFIG = OmnigentBridgeConfig()
+# route table and enablement are read from the operator-declared declarative
+# bridge configuration (OMNIGENT_BRIDGE_CONFIG_PATH) before routes are mounted,
+# so a deployment that disables the bridge, selects a non-proxy mode, or mounts
+# at a custom path is honored rather than always exposing the default surface.
+_BRIDGE_CONFIG = resolve_bridge_config()
 _ROUTES = _BRIDGE_CONFIG.public_api.routes
 
 OMNIGENT_BRIDGE_MOUNT_PATH = _BRIDGE_CONFIG.public_api.mount_path
@@ -231,10 +234,54 @@ async def create_omnigent_session(
 async def get_omnigent_session(
     session_id: str,
     _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    _user: User = Depends(get_current_user()),
+    user: User = Depends(get_current_user()),
+    principal_context: dict[str, Any] = Depends(execution_principal_dependency),
+    service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
 ) -> dict[str, Any]:
-    """Return an Omnigent-shaped session snapshot (OB-§4.1, §8.2)."""
+    """Return an Omnigent-shaped session snapshot (OB-§4.1, §8.2).
+
+    Enforces the §16 rule-1 authorization boundary on direct reads: unlike the
+    create path, the raw provider ``session_id`` is caller-supplied, so the
+    facade must confirm the caller owns the workflow that owns the session
+    before proxying the read with the service credential. This closes the IDOR
+    where any authenticated user could read any session snapshot by id.
+    """
+
+    owner = await proxy.get_session_owner(session_id)
+    if owner is None:
+        # The bridge only exposes sessions it created/attached; an id it does
+        # not own is not proxied upstream (avoids leaking arbitrary sessions).
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "omnigent_bridge_session_unknown",
+                "message": (
+                    "No Omnigent bridge session is bound to the requested "
+                    "session id."
+                ),
+            },
+        )
+
+    principal = await resolve_execution_principal(
+        user=user,
+        service=service,
+        request=principal_context.get("request"),
+        workflow_id_header=owner.workflow_id,
+        run_id_header=principal_context.get("run_id_header"),
+        agent_run_id_header=principal_context.get("agent_run_id_header"),
+    )
+    if not principal.workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "workflow_ownership_denied",
+                "message": (
+                    "The authenticated principal does not own the workflow "
+                    "that owns this Omnigent session."
+                ),
+            },
+        )
 
     try:
         return await proxy.get_session(session_id)

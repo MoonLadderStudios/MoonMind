@@ -7,6 +7,7 @@ STORY-002 store.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -25,8 +26,22 @@ pytestmark = [pytest.mark.asyncio]
 
 
 class _FakeRow:
-    def __init__(self, session_id: str | None = None) -> None:
+    def __init__(
+        self,
+        session_id: str | None = None,
+        *,
+        workflow_id: str | None = None,
+        agent_run_id: str | None = None,
+        agent_id: str | None = None,
+        agent_name: str | None = None,
+        endpoint_ref: str | None = None,
+    ) -> None:
         self.omnigent_session_id = session_id
+        self.moonmind_workflow_id = workflow_id
+        self.moonmind_agent_run_id = agent_run_id
+        self.omnigent_agent_id = agent_id
+        self.omnigent_agent_name = agent_name
+        self.omnigent_endpoint_ref = endpoint_ref
         self.target_metadata: dict[str, Any] = {}
 
 
@@ -36,12 +51,41 @@ class _FakeStore:
         self.attached: list[tuple[str, str]] = []
         self.created_events: list[dict[str, Any]] = []
 
+    async def get_existing(self, idempotency_key: str) -> _FakeRow | None:
+        return self.rows.get(idempotency_key)
+
+    async def get_session_owner(self, session_id: str):
+        for row in self.rows.values():
+            if row.omnigent_session_id == session_id:
+                return SimpleNamespace(
+                    workflow_id=row.moonmind_workflow_id,
+                    agent_run_id=row.moonmind_agent_run_id,
+                )
+        return None
+
     async def get_or_create(
-        self, *, request, endpoint_ref, agent_id, agent_name, target_metadata
+        self,
+        *,
+        request,
+        endpoint_ref,
+        agent_id,
+        agent_name,
+        target_metadata,
+        workflow_id=None,
+        agent_run_id=None,
     ) -> _FakeRow:
         row = self.rows.get(request.idempotency_key)
         if row is None:
-            row = _FakeRow()
+            # Mirror the real store: the *verified* MoonMind owner is persisted
+            # from the explicit binding override, not the synthesized request's
+            # correlation id.
+            row = _FakeRow(
+                workflow_id=workflow_id,
+                agent_run_id=agent_run_id,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                endpoint_ref=endpoint_ref,
+            )
             row.target_metadata = dict(target_metadata)
             self.rows[request.idempotency_key] = row
         return row
@@ -65,7 +109,7 @@ class _FakeStore:
                     "endpoint_ref": endpoint_ref,
                 }
             )
-        return self.rows[key]
+        return self.rows.get(key)
 
 
 class _FakeClient:
@@ -73,8 +117,10 @@ class _FakeClient:
         self.created_payloads: list[dict[str, Any]] = []
         self.create_error = create_error
         self.get_calls: list[str] = []
+        self.list_agents_calls = 0
 
     async def list_agents(self) -> list[dict[str, Any]]:
+        self.list_agents_calls += 1
         return [{"id": "agent-1", "name": "codex"}]
 
     async def create_session(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -166,7 +212,13 @@ async def test_create_session_records_session_created_on_reuse_recovery() -> Non
     # recorded.
     store, client = _FakeStore(), _FakeClient()
     key = "idem-1"
-    store.rows[key] = _FakeRow(session_id="sess-existing")
+    store.rows[key] = _FakeRow(
+        session_id="sess-existing",
+        workflow_id="mm:w1",
+        agent_run_id="ar-1",
+        agent_id="agent-1",
+        endpoint_ref="default",
+    )
     proxy = _proxy(store, client)
     req = BridgeSessionCreateRequest(
         agent_id="agent-1",
@@ -186,6 +238,103 @@ async def test_create_session_records_session_created_on_reuse_recovery() -> Non
         }
     ]
     assert response["moonmind"]["reused"] is True
+
+
+async def test_create_session_persists_verified_workflow_id() -> None:
+    # OB-§8.2: the durable row must bind to the *verified* workflow id from the
+    # principal binding, not the correlation id, even when they differ.
+    store, client = _FakeStore(), _FakeClient()
+    proxy = _proxy(store, client)
+    req = BridgeSessionCreateRequest(
+        agent_id="agent-1",
+        host_type="managed",
+        workspace="https://github.com/org/repo#main",
+    )
+
+    await proxy.create_session(request=req, binding=_binding())
+
+    row = store.rows["idem-1"]
+    assert row.moonmind_workflow_id == "mm:w1"  # not the "corr-1" correlation id
+    assert row.moonmind_agent_run_id == "ar-1"
+
+
+async def test_create_session_rejects_cross_workflow_idempotency_key() -> None:
+    # A key already bound to another workflow must fail closed before any
+    # provider call, rather than returning that workflow's session snapshot.
+    store, client = _FakeStore(), _FakeClient()
+    store.rows["idem-1"] = _FakeRow(
+        session_id="sess-existing",
+        workflow_id="mm:other",
+        agent_run_id="ar-other",
+        agent_id="agent-1",
+        endpoint_ref="default",
+    )
+    proxy = _proxy(store, client)
+    req = BridgeSessionCreateRequest(
+        agent_id="agent-1",
+        host_type="managed",
+        workspace="https://github.com/org/repo#main",
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await proxy.create_session(request=req, binding=_binding())
+
+    assert excinfo.value.failure_class == "user_error"
+    assert excinfo.value.status_code == 409
+    assert not client.created_payloads
+    assert not store.created_events
+
+
+async def test_create_session_reuse_skips_target_resolution() -> None:
+    # A durable retry whose provider session is already attached must not
+    # re-resolve the target: /api/agents being down must not fail the retry.
+    class _AgentsDownClient(_FakeClient):
+        async def list_agents(self):  # type: ignore[override]
+            raise AssertionError("target resolution must be skipped on reuse")
+
+    store, client = _FakeStore(), _AgentsDownClient()
+    store.rows["idem-1"] = _FakeRow(
+        session_id="sess-existing",
+        workflow_id="mm:w1",
+        agent_run_id="ar-1",
+        agent_id="agent-7",
+        endpoint_ref="custom",
+    )
+    proxy = _proxy(store, client)
+    req = BridgeSessionCreateRequest(
+        agent_id="agent-1",
+        host_type="managed",
+        workspace="https://github.com/org/repo#main",
+    )
+
+    response = await proxy.create_session(request=req, binding=_binding())
+
+    assert response["moonmind"]["reused"] is True
+    assert client.list_agents_calls == 0
+    assert not client.created_payloads
+    # session.created recovery uses the persisted agent/endpoint, not a re-resolve.
+    assert store.created_events == [
+        {
+            "key": "idem-1",
+            "session_id": "sess-existing",
+            "agent_id": "agent-7",
+            "endpoint_ref": "custom",
+        }
+    ]
+
+
+async def test_get_session_owner_returns_binding() -> None:
+    store, client = _FakeStore(), _FakeClient()
+    store.rows["idem-1"] = _FakeRow(
+        session_id="sess-existing", workflow_id="mm:w1", agent_run_id="ar-1"
+    )
+    proxy = _proxy(store, client)
+
+    owner = await proxy.get_session_owner("sess-existing")
+    assert owner is not None
+    assert owner.workflow_id == "mm:w1"
+
+    assert await proxy.get_session_owner("unknown") is None
 
 
 async def test_create_session_rejects_managed_host_id() -> None:

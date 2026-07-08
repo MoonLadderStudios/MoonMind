@@ -137,8 +137,24 @@ class OmnigentBridgeSessionStore:
         agent_id: str | None,
         agent_name: str | None,
         target_metadata: dict[str, Any],
+        workflow_id: str | None = None,
+        agent_run_id: str | None = None,
     ) -> OmnigentBridgeSession:
+        """Create or reuse a durable bridge row keyed by idempotency key.
+
+        ``workflow_id`` / ``agent_run_id`` override the request-derived MoonMind
+        identity when the caller already holds a verified binding (the Session
+        API Facade validates ownership out-of-band and synthesizes an
+        ``AgentExecutionRequest`` with no ``step_execution``). Without them the
+        identity is derived from the request, preserving the managed-execution
+        path behavior.
+        """
+
         metadata = dict(target_metadata or {})
+        resolved_workflow_id = (workflow_id or "").strip() or _workflow_id(request)
+        resolved_agent_run_id = (
+            agent_run_id or ""
+        ).strip() or _agent_run_id(request)
         async with self._session_factory() as session:
             row = await self._get(session, request.idempotency_key)
             if row is None:
@@ -146,9 +162,9 @@ class OmnigentBridgeSessionStore:
                     bridge_session_id=f"brs_{uuid4().hex}",
                     provider=BRIDGE_PROVIDER,
                     compatibility_profile=BRIDGE_COMPATIBILITY_PROFILE,
-                    moonmind_workflow_id=_workflow_id(request),
+                    moonmind_workflow_id=resolved_workflow_id,
                     moonmind_run_id=_run_id(request),
-                    moonmind_agent_run_id=_agent_run_id(request),
+                    moonmind_agent_run_id=resolved_agent_run_id,
                     step_execution_id=_step_execution_id(request),
                     idempotency_key=request.idempotency_key,
                     omnigent_endpoint_ref=endpoint_ref,
@@ -189,6 +205,54 @@ class OmnigentBridgeSessionStore:
 
         async with self._session_factory() as session:
             row = await self._get(session, idempotency_key)
+            if row is None:
+                return None
+            return BridgeSessionBinding(
+                workflow_id=row.moonmind_workflow_id,
+                agent_run_id=row.moonmind_agent_run_id,
+            )
+
+    async def get_existing(
+        self, idempotency_key: str
+    ) -> OmnigentBridgeSession | None:
+        """Return the durable bridge row for an idempotency key, if any.
+
+        Read-only lookup so the Session API Facade can inspect an already
+        attached ``omnigent_session_id`` (and its persisted MoonMind owner)
+        before resolving the current target or forwarding a provider create.
+        Returns ``None`` when no row exists yet for the key.
+        """
+
+        key = (idempotency_key or "").strip()
+        if not key:
+            return None
+        async with self._session_factory() as session:
+            row = await self._get(session, key)
+            if row is None:
+                return None
+            return _detached(session, row)
+
+    async def get_session_owner(
+        self, session_id: str
+    ) -> BridgeSessionBinding | None:
+        """Return the MoonMind identity bound to a provider ``session_id``.
+
+        Read-only lookup used to authorize direct session reads at the facade
+        boundary (OmnigentBridge.md §16 rule 1) so a caller may only read a
+        bridge session owned by a workflow they control. Returns ``None`` when
+        no bridge row is bound to the provider session id.
+        """
+
+        key = (session_id or "").strip()
+        if not key:
+            return None
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.omnigent_session_id == key)
+                .limit(1)
+            )
+            row = result.scalars().first()
             if row is None:
                 return None
             return BridgeSessionBinding(

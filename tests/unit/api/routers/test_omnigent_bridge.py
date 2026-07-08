@@ -28,6 +28,10 @@ _USER_ID = uuid4()
 _CREATE_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions"
 _AGENTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/agents"
 
+# Sentinel so ``_FakeProxy(session_owner=None)`` can distinguish "no owner
+# bound" from "use the default mm:w1 owner".
+_UNSET = object()
+
 
 def _mock_user():
     return SimpleNamespace(id=_USER_ID, email="bridge@example.com", is_superuser=False)
@@ -42,15 +46,26 @@ class _FakeService:
 
 
 class _FakeProxy:
-    def __init__(self) -> None:
+    def __init__(self, *, session_owner: Any | None = _UNSET) -> None:
         self.created: list[dict[str, Any]] = []
         self.create_error: OmnigentBridgeError | None = None
+        # By default a read resolves to the mm:w1 owner used across the tests;
+        # pass ``session_owner=None`` to simulate a session the bridge does not
+        # own, or an explicit binding to simulate a foreign owner.
+        self._session_owner = (
+            SimpleNamespace(workflow_id="mm:w1", agent_run_id="ar-1")
+            if session_owner is _UNSET
+            else session_owner
+        )
 
     async def create_session(self, *, request, binding):
         if self.create_error is not None:
             raise self.create_error
         self.created.append({"binding": binding, "request": request})
         return {"id": "sess-1", "status": "running", "moonmind": {"reused": False}}
+
+    async def get_session_owner(self, session_id: str):
+        return self._session_owner
 
     async def get_session(self, session_id: str):
         return {"id": session_id, "status": "completed"}
@@ -140,11 +155,28 @@ def test_create_session_maps_integration_error_to_502() -> None:
     assert resp.status_code == 502
 
 
-def test_get_session_returns_snapshot() -> None:
-    client, _ = _build()
+def test_get_session_returns_snapshot_for_owner() -> None:
+    client, _ = _build()  # user owns mm:w1 (the session owner)
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77")
     assert resp.status_code == 200
     assert resp.json() == {"id": "sess-77", "status": "completed"}
+
+
+def test_get_session_unknown_session_is_not_found() -> None:
+    # A provider session id the bridge does not own is never proxied upstream.
+    proxy = _FakeProxy(session_owner=None)
+    client, _ = _build(proxy=proxy)
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-unknown")
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "omnigent_bridge_session_unknown"
+
+
+def test_get_session_denies_non_owner() -> None:
+    # The session is owned by mm:w1, but the caller does not own that workflow.
+    client, _ = _build(owner_id=uuid4())
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77")
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "workflow_ownership_denied"
 
 
 def test_list_agents_returns_catalog() -> None:

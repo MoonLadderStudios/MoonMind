@@ -28,6 +28,7 @@ from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_PROXY,
     OmnigentBridgeConfig,
 )
+from moonmind.omnigent.bridge_security import BridgeSessionBinding
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
@@ -185,6 +186,25 @@ class OmnigentBridgeSessionProxy:
         )
 
         exec_request = _build_execution_request(request, binding)
+
+        # OB-§8.2 step 2 / §16 rule 1: read the durable row up front so an
+        # idempotency key that is already bound to another MoonMind workflow is
+        # rejected before any provider call, and so a durable retry that already
+        # has a provider session can be served without re-resolving the target.
+        existing = await self._run_store.get_existing(exec_request.idempotency_key)
+        if existing is not None:
+            self._assert_row_owner(existing, binding)
+            reused_session_id = str(
+                getattr(existing, "omnigent_session_id", None) or ""
+            ).strip()
+            if reused_session_id:
+                return await self._reuse_attached_session(
+                    exec_request=exec_request,
+                    binding=binding,
+                    row=existing,
+                    session_id=reused_session_id,
+                )
+
         selection = _selection(exec_request)
         endpoint_ref = str(selection.endpoint_ref or "default")
 
@@ -211,7 +231,9 @@ class OmnigentBridgeSessionProxy:
         if isinstance(labels, dict):
             labels.setdefault("moonmind.issue", SOURCE_ISSUE)
 
-        # Create or reuse the durable row by idempotency key (OB-§8.2 step 2).
+        # Create or reuse the durable row by idempotency key (OB-§8.2 step 2),
+        # persisting the *verified* MoonMind owner so later workflow-scoped
+        # lookup/authorization binds to the workflow, not the correlation id.
         row = await self._run_store.get_or_create(
             request=exec_request,
             endpoint_ref=endpoint_ref,
@@ -221,7 +243,13 @@ class OmnigentBridgeSessionProxy:
                 "hostType": selection.session.host_type,
                 "workspace": selection.session.workspace,
             },
+            workflow_id=binding.workflow_id,
+            agent_run_id=binding.agent_run_id,
         )
+        # Re-assert ownership after get_or_create closes the concurrent-create
+        # race: a row created by another workflow under the same key must not be
+        # reused under this caller's binding.
+        self._assert_row_owner(row, binding)
 
         session_id = str(getattr(row, "omnigent_session_id", None) or "").strip()
         reused = bool(session_id)
@@ -253,6 +281,63 @@ class OmnigentBridgeSessionProxy:
             reused=reused,
         )
 
+    async def _reuse_attached_session(
+        self,
+        *,
+        exec_request: AgentExecutionRequest,
+        binding: BridgePrincipalBinding,
+        row: Any,
+        session_id: str,
+    ) -> dict[str, Any]:
+        """Serve a durable retry whose provider session is already attached.
+
+        Skips target resolution and the upstream create entirely (OB-§8.2): a
+        default-agent request must not fail an otherwise-safe idempotent retry
+        just because ``/api/agents`` is momentarily down or the default agent
+        renamed. ``session.created`` is still re-emitted idempotently so a prior
+        partial failure (attach landed, journal write did not) recovers.
+        """
+
+        endpoint_ref = str(
+            getattr(row, "omnigent_endpoint_ref", None) or "default"
+        )
+        agent_id = getattr(row, "omnigent_agent_id", None)
+        await self._run_store.record_session_created(
+            exec_request.idempotency_key,
+            session_id=session_id,
+            agent_id=agent_id,
+            endpoint_ref=endpoint_ref,
+        )
+        snapshot = await self._best_effort_snapshot(session_id)
+        return self._session_response(
+            snapshot=snapshot,
+            session_id=session_id,
+            binding=binding,
+            reused=True,
+        )
+
+    def _assert_row_owner(
+        self, row: Any, binding: BridgePrincipalBinding
+    ) -> None:
+        """Refuse cross-owner reuse of a bridge idempotency key (§16 rule 1).
+
+        A durable bridge row (idempotency key) may only be reused by the
+        MoonMind workflow that created it. Idempotency keys are caller-supplied
+        labels on this public API, so a key already bound to another workflow
+        fails fast instead of leaking that workflow's session snapshot.
+        """
+
+        stored_workflow_id = str(
+            getattr(row, "moonmind_workflow_id", None) or ""
+        ).strip()
+        if stored_workflow_id and stored_workflow_id != binding.workflow_id:
+            raise OmnigentBridgeError(
+                "Omnigent bridge idempotency key is bound to a different MoonMind "
+                "workflow; refusing cross-owner reuse",
+                failure_class="user_error",
+                status_code=409,
+            )
+
     async def get_session(self, session_id: str) -> dict[str, Any]:
         """Return an Omnigent-shaped session snapshot (OB-§8.2 / §4.1)."""
 
@@ -269,6 +354,19 @@ class OmnigentBridgeSessionProxy:
             snapshot = {}
         snapshot.setdefault("id", session_id)
         return snapshot
+
+    async def get_session_owner(
+        self, session_id: str
+    ) -> BridgeSessionBinding | None:
+        """Return the MoonMind identity bound to a provider ``session_id``.
+
+        Read-only durable lookup so the Session API Facade can authorize a
+        direct session read (OB-§16 rule 1) before proxying it upstream with
+        the service credential. Returns ``None`` when the bridge has no row
+        bound to the provider session id.
+        """
+
+        return await self._run_store.get_session_owner(session_id)
 
     async def list_agents(self) -> list[dict[str, Any]]:
         """Proxy ``GET /api/agents`` to the stock Omnigent Server (OB-§4.1)."""

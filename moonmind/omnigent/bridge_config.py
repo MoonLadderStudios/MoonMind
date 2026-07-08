@@ -34,7 +34,9 @@ errors.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Iterator, Literal
 
 import yaml
@@ -52,6 +54,11 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 OMNIGENT_BRIDGE_CONFIG_SCHEMA_VERSION = "moonmind.omnigent_bridge.v1"
+
+# Env var naming the operator-declared §6 bridge configuration document. When
+# set, it is loaded before routes are mounted so the enabled flag, host
+# protocol mode, and custom mount path/routes are honored (OB-§6, §21.1).
+OMNIGENT_BRIDGE_CONFIG_PATH_ENV = "OMNIGENT_BRIDGE_CONFIG_PATH"
 
 # §2.4 host protocol modes. Proxy is preferred (proxy-first default).
 HOST_PROTOCOL_MODE_PROXY = "upstream_omnigent_server_proxy"
@@ -585,10 +592,39 @@ def load_bridge_config(text: str) -> OmnigentBridgeConfig:
     return parse_bridge_config(loaded)
 
 
+def resolve_bridge_config(
+    *, env: Mapping[str, str] | None = None
+) -> OmnigentBridgeConfig:
+    """Resolve the operator-declared bridge configuration (OB-§6, §21.1).
+
+    Loads the §6 declarative document referenced by
+    ``OMNIGENT_BRIDGE_CONFIG_PATH`` so operator-declared values (the enabled
+    flag, host protocol mode, and custom ``publicApi`` mount path/routes) are
+    honored before the router registers routes. Falls back to safe defaults
+    when the env var is unset, and fails fast with an actionable
+    :class:`BridgeConfigError` when the path is unreadable or the document is
+    invalid rather than silently mounting the default proxy surface.
+    """
+
+    source = env if env is not None else os.environ
+    raw_path = str(source.get(OMNIGENT_BRIDGE_CONFIG_PATH_ENV) or "").strip()
+    if not raw_path:
+        return OmnigentBridgeConfig()
+    try:
+        text = Path(raw_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BridgeConfigError(
+            f"Omnigent bridge config path {raw_path!r} "
+            f"({OMNIGENT_BRIDGE_CONFIG_PATH_ENV}) could not be read: {exc}"
+        ) from exc
+    return load_bridge_config(text)
+
+
 __all__ = [
     "CANONICAL_FIRST_MESSAGE_STATES",
     "HOST_PROTOCOL_MODE_EMBEDDED",
     "HOST_PROTOCOL_MODE_PROXY",
+    "OMNIGENT_BRIDGE_CONFIG_PATH_ENV",
     "OMNIGENT_BRIDGE_CONFIG_SCHEMA_VERSION",
     "BridgeAuthority",
     "BridgeCaptureDefaults",
@@ -607,4 +643,5 @@ __all__ = [
     "WorkspaceDiffsCapture",
     "load_bridge_config",
     "parse_bridge_config",
+    "resolve_bridge_config",
 ]
