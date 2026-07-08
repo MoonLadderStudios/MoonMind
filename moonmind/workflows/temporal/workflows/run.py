@@ -445,6 +445,9 @@ RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH = (
 RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_PATCH = (
     "run-jira-blocker-recheck-assessment-context-v1"
 )
+RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_ALIAS_PATCH = (
+    "run-jira-blocker-recheck-assessment-context-alias-v1"
+)
 # Replay-stable patch id for the v2 workflow-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
@@ -459,6 +462,9 @@ RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = "run-workflow-child-task-queue-v2"
 RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH = "run-runtime-profile-clear-forwarding-v1"
+RUN_UPDATE_INPUTS_VISIBILITY_REFRESH_PATCH = (
+    "run-update-inputs-visibility-refresh-v1"
+)
 RUN_RECURRING_SCHEDULED_START_PATCH = "run-recurring-scheduled-start-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
@@ -5779,6 +5785,9 @@ class MoonMindRunWorkflow:
             self._trusted_issue_context = context
 
     def _record_assessment_context(self, outputs: Mapping[str, Any]) -> None:
+        record_aliases = workflow.patched(
+            RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_ALIAS_PATCH
+        )
         for aliases in (
             ("assessmentArtifactRef", "assessment_artifact_ref"),
             ("assessmentVerdict", "assessment_verdict"),
@@ -5787,8 +5796,11 @@ class MoonMindRunWorkflow:
                 value = outputs.get(key)
                 if value in (None, "", {}, []):
                     continue
-                for alias in aliases:
-                    self._assessment_context[alias] = value
+                if record_aliases:
+                    for alias in aliases:
+                        self._assessment_context[alias] = value
+                else:
+                    self._assessment_context[key] = value
                 break
 
     def _merge_assessment_context_into_result(self, execution_result: Any) -> Any:
@@ -7136,12 +7148,31 @@ class MoonMindRunWorkflow:
             else {}
         ) or {}
         runtime_payload = self._mapping_value(parameters, "runtime") or {}
+        authored_payload = self._mapping_value(parameters, "authoredTaskInput") or {}
+        authored_runtime_payload = (
+            self._mapping_value(authored_payload, "runtime")
+            if isinstance(authored_payload, Mapping)
+            else {}
+        ) or {}
         return (
             self._coerce_text(parameters.get("targetRuntime"), max_chars=80)
+            or self._coerce_text(parameters.get("target_runtime"), max_chars=80)
+            or self._coerce_text(parameters.get("mode"), max_chars=80)
             or self._coerce_text(task_runtime_payload.get("mode"), max_chars=80)
             or self._coerce_text(task_runtime_payload.get("targetRuntime"), max_chars=80)
+            or self._coerce_text(
+                task_runtime_payload.get("target_runtime"), max_chars=80
+            )
             or self._coerce_text(runtime_payload.get("mode"), max_chars=80)
             or self._coerce_text(runtime_payload.get("targetRuntime"), max_chars=80)
+            or self._coerce_text(runtime_payload.get("target_runtime"), max_chars=80)
+            or self._coerce_text(authored_runtime_payload.get("mode"), max_chars=80)
+            or self._coerce_text(
+                authored_runtime_payload.get("targetRuntime"), max_chars=80
+            )
+            or self._coerce_text(
+                authored_runtime_payload.get("target_runtime"), max_chars=80
+            )
         )
 
     def _skill_visibility_from_parameters(
@@ -17000,7 +17031,8 @@ class MoonMindRunWorkflow:
         if isinstance(parameters_patch, Mapping):
             self._parameters_updated = True
             self._updated_parameters = dict(parameters_patch)
-            self._apply_visibility_from_parameters_patch(parameters_patch)
+            if workflow.patched(RUN_UPDATE_INPUTS_VISIBILITY_REFRESH_PATCH):
+                self._apply_visibility_from_parameters_patch(parameters_patch)
         forwarded_runtime_update = (
             await self._forward_runtime_selection_update_to_active_child(payload)
         )

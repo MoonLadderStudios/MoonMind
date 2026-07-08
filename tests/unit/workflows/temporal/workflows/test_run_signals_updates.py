@@ -756,6 +756,71 @@ async def test_update_inputs_refreshes_parent_runtime_visibility(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_inputs_skips_parent_visibility_refresh_when_unpatched(
+    monkeypatch,
+):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "claude_code"
+    workflow_instance._target_runtime = "claude_code"
+    workflow_instance._target_skill = "jira-implement"
+
+    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH,
+    )
+
+    search_updates: list[tuple[str | None, str | None]] = []
+    monkeypatch.setattr(
+        workflow_instance,
+        "_update_search_attributes",
+        lambda: search_updates.append(
+            (workflow_instance._target_runtime, workflow_instance._target_skill)
+        ),
+    )
+
+    result = await workflow_instance.update_inputs(
+        {
+            "parametersPatch": {
+                "mode": "codex_cli",
+                "authoredTaskInput": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                    },
+                },
+            }
+        }
+    )
+
+    assert workflow_instance._target_runtime == "claude_code"
+    assert workflow_instance._target_skill == "jira-implement"
+    assert search_updates == []
+    mock_handle.signal.assert_awaited_once_with(
+        "update_runtime_selection",
+        {
+            "targetRuntime": "codex_cli",
+            "parametersPatch": {
+                "mode": "codex_cli",
+                "authoredTaskInput": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                    },
+                },
+            },
+        },
+    )
+    assert result["forwardedRuntimeSelectionUpdate"] is True
+
+
+@pytest.mark.asyncio
 async def test_run_workflow_send_message_update_uses_temporal_boundary(
     mock_run_environment, monkeypatch
 ):

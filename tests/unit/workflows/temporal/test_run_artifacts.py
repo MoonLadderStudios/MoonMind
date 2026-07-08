@@ -1998,7 +1998,15 @@ async def test_jira_blocker_recheck_preserves_assessment_context(
     }
 
 
-def test_assessment_context_merge_treats_aliases_as_one_field() -> None:
+def test_assessment_context_merge_treats_aliases_as_one_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_workflow_module.RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_ALIAS_PATCH,
+    )
     workflow = MoonMindRunWorkflow()
     workflow._record_assessment_context(
         {"assessmentVerdict": "PARTIALLY_IMPLEMENTED"}
@@ -2016,6 +2024,21 @@ def test_assessment_context_merge_treats_aliases_as_one_field() -> None:
     workflow._record_assessment_context(result["outputs"])
     assert workflow._assessment_context["assessmentVerdict"] == "NOT_IMPLEMENTED"
     assert workflow._assessment_context["assessment_verdict"] == "NOT_IMPLEMENTED"
+
+
+def test_assessment_context_keeps_recorded_shape_when_alias_patch_unapplied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_assessment_context(
+        {"assessmentVerdict": "PARTIALLY_IMPLEMENTED"}
+    )
+
+    assert workflow._assessment_context == {
+        "assessmentVerdict": "PARTIALLY_IMPLEMENTED"
+    }
 
 
 @pytest.mark.asyncio
