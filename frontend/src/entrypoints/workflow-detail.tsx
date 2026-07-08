@@ -16,6 +16,10 @@ import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { ExecutionStatusPill, StepExecutionStatusPill, StepLedgerStatusPill } from '../components/ExecutionStatusPill';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
+import {
+  DashboardToastProvider,
+  useDashboardToast,
+} from '../components/dashboard/DashboardToast';
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { CANONICAL_STEP_STATUSES, StatusIcon } from '../utils/statusIcons';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
@@ -282,6 +286,27 @@ function firstDetailObjectValue(...values: unknown[]): Record<string, unknown> {
     }
   }
   return {};
+}
+
+function workflowActionResultHref(result: unknown, fallbackHref: string): string {
+  const resultObject = detailObjectValue(result);
+  const execution = detailObjectValue(resultObject.execution);
+  const redirectPath =
+    typeof execution.redirectPath === 'string' ? execution.redirectPath.trim() : '';
+  if (redirectPath) return redirectPath;
+
+  const resultWorkflowId =
+    typeof execution.workflowId === 'string' ? execution.workflowId.trim() : '';
+  if (resultWorkflowId) {
+    const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+    if (!params.has('source')) {
+      params.set('source', 'temporal');
+    }
+    const query = params.toString();
+    return `/workflows/${encodeURIComponent(resultWorkflowId)}${query ? `?${query}` : ''}`;
+  }
+
+  return fallbackHref;
 }
 
 function detailStringValue(...values: unknown[]): string {
@@ -6848,8 +6873,9 @@ function RunComparisonPanel({
   );
 }
 
-export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
+function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
+  const toast = useDashboardToast();
   const cfg = readDashboardConfig(payload);
   const agentRunRoutes = readAgentRunRouteTemplates(cfg);
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
@@ -7624,6 +7650,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     : '';
   const compareHref =
     workflowId && actions?.canEditForRerun ? taskCompareHref(workflowId) : '';
+  const detailHref = workflowId
+    ? `${window.location.pathname}${window.location.search}`
+    : '/workflows';
+  const workflowSubject = execution?.title?.trim() || taskId || workflowId || 'Workflow';
   const onRerun = () => {
     setActionError(null);
     if (busy || !workflowId) return;
@@ -7635,8 +7665,15 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     updateMutation.mutate(
       { updateName: 'RequestRerun' },
       {
-        onSuccess: () => {
-          setActionNotice('Rerun was requested and the latest execution view is ready.');
+        onSuccess: (result) => {
+          toast.success({
+            title: 'Rerun requested',
+            message: `${workflowSubject} has been queued.`,
+            action: {
+              label: 'View workflow',
+              href: workflowActionResultHref(result, detailHref),
+            },
+          });
         },
       },
     );
@@ -8682,6 +8719,14 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         <p>No workflow details.</p>
       )}
     </div>
+  );
+}
+
+export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
+  return (
+    <DashboardToastProvider>
+      <WorkflowDetailPageContent payload={payload} />
+    </DashboardToastProvider>
   );
 }
 

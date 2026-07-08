@@ -4604,12 +4604,16 @@ describe('Workflow Detail Entrypoint', () => {
     expect(
       window.sessionStorage.getItem('moonmind.temporalTaskEditing.notice'),
     ).toBeNull();
-    expect(
-      await screen.findByText('Rerun was requested and the latest execution view is ready.'),
-    ).toBeTruthy();
-    expect(screen.getByRole('status', { name: '' }).textContent).toContain(
-      'Rerun was requested and the latest execution view is ready.',
+    const viewport = await screen.findByLabelText('Dashboard notifications');
+    const toast = within(viewport).getByRole('status');
+    expect(within(toast).getByText('Rerun requested')).toBeTruthy();
+    expect(within(toast).getByText('Editable task has been queued.')).toBeTruthy();
+    expect(within(toast).getByRole('link', { name: 'View workflow' }).getAttribute('href')).toBe(
+      '/workflows/test-123/steps?source=temporal',
     );
+    expect(
+      screen.queryByText('Rerun was requested and the latest execution view is ready.'),
+    ).toBeNull();
     expect(telemetryEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
