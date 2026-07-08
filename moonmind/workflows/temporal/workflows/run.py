@@ -16938,6 +16938,27 @@ class MoonMindRunWorkflow:
         selection["parametersPatch"] = dict(parameters_patch)
         return selection
 
+    def _apply_visibility_from_parameters_patch(
+        self, parameters_patch: Mapping[str, Any]
+    ) -> bool:
+        """Refresh parent runtime/skill facets from an accepted input edit."""
+
+        changed = False
+        target_runtime = self._runtime_visibility_from_parameters(parameters_patch)
+        if target_runtime and target_runtime != self._target_runtime:
+            self._target_runtime = target_runtime
+            changed = True
+
+        target_skill = self._skill_visibility_from_parameters(parameters_patch)
+        if target_skill and target_skill != self._target_skill:
+            self._target_skill = target_skill
+            changed = True
+
+        if changed:
+            self._update_search_attributes()
+            self._update_memo()
+        return changed
+
     async def _forward_runtime_selection_update_to_active_child(
         self, payload: Mapping[str, Any] | None
     ) -> bool:
@@ -16979,6 +17000,7 @@ class MoonMindRunWorkflow:
         if isinstance(parameters_patch, Mapping):
             self._parameters_updated = True
             self._updated_parameters = dict(parameters_patch)
+            self._apply_visibility_from_parameters_patch(parameters_patch)
         forwarded_runtime_update = (
             await self._forward_runtime_selection_update_to_active_child(payload)
         )
