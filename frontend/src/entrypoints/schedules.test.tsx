@@ -135,6 +135,12 @@ function mockScheduleDetailFetch(fetchSpy: MockInstance, overrides: Record<strin
         json: async () => detailRuns,
       } as Response;
     }
+    if (url === "/console/schedules?scope=personal") {
+      return {
+        ok: true,
+        json: async () => ({ items: [schedule] }),
+      } as Response;
+    }
     if (url === "/console/schedules/schedule-alpha") {
       return {
         ok: true,
@@ -219,8 +225,8 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     expect(screen.getByRole("heading", { name: "Recurring Schedules" })).toBeTruthy();
-    expect(screen.getByText("Schedules summary loading placeholder").closest('[role="status"]')).toBeTruthy();
-    expect(screen.getByText("Schedules list loading placeholder").closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByText("Recurring summary loading placeholder").closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByText("Recurring list loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-metric-strip")).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-table")).toBeTruthy();
   });
@@ -356,9 +362,11 @@ describe("SchedulesPage", () => {
     expect(screen.queryByRole("heading", { name: "Logs" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules?scope=personal")).toBe(false);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules?scope=personal")).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha")).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha/runs?limit=200")).toBe(true);
+    expect(screen.getByRole("complementary", { name: "Recurring schedule navigation" })).not.toBeNull();
+    expect(screen.getByRole("link", { name: /Nightly detail sweep/ }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("button", { name: "Edit schedule" })).not.toBeNull();
     expect(screen.getByRole("button", { name: "Run now" })).not.toBeNull();
     expect(screen.getByRole("button", { name: "Pause schedule" })).not.toBeNull();
@@ -389,6 +397,9 @@ describe("SchedulesPage", () => {
       if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
         return { ok: true, json: async () => detailRuns } as Response;
       }
+      if (url === "/console/schedules?scope=personal") {
+        return { ok: true, json: async () => ({ items: [] }) } as Response;
+      }
       if (url === "/console/schedules/schedule-alpha") {
         return { ok: false, status: 403, statusText: "Forbidden", json: async () => ({}) } as Response;
       }
@@ -398,7 +409,7 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={detailPayload} />);
 
     expect(await screen.findByText("You do not have access to this recurring schedule.")).not.toBeNull();
-    expect(screen.getByRole("link", { name: "Back to schedules" }).getAttribute("href")).toBe("/schedules");
+    expect(screen.getByRole("link", { name: "Back to recurring schedules" }).getAttribute("href")).toBe("/schedules");
     expect(screen.queryByRole("heading", { name: "Nightly detail sweep" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit schedule" })).toBeNull();
   });

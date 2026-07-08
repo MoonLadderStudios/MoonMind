@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { DataTable } from '../components/tables/DataTable';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
@@ -68,6 +68,8 @@ type ScheduleSources = {
 const SchedulesBootDataSchema = z
   .object({
     initialPath: z.string().optional(),
+    recurringListDisplayMode: z.enum(['hidden', 'sidebar', 'table']).optional(),
+    recurringListDisplayStatus: z.string().nullable().optional(),
     dashboardConfig: z
       .object({
         initialPath: z.string().optional(),
@@ -138,6 +140,14 @@ function scheduleRouteDefinitionId(payload: BootPayload): string | null {
   } catch {
     return null;
   }
+}
+
+function recurringListDisplayMode(payload: BootPayload, hasRouteDefinition: boolean): 'hidden' | 'sidebar' | 'table' {
+  const mode = scheduleBootData(payload)?.recurringListDisplayMode;
+  if (mode) {
+    return mode;
+  }
+  return hasRouteDefinition ? 'sidebar' : 'table';
 }
 
 function scheduleEndpoint(
@@ -593,7 +603,102 @@ function isDueSoon(schedule: Schedule, now: number): boolean {
   return Number.isFinite(nextRun) && nextRun >= now && nextRun <= now + 24 * 60 * 60 * 1000;
 }
 
-function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; definitionId: string }) {
+function RecurringScheduleSidebar({
+  definitionId,
+  schedules,
+  isLoading,
+  error,
+}: {
+  definitionId: string;
+  schedules: Schedule[];
+  isLoading: boolean;
+  error: unknown;
+}) {
+  return (
+    <aside className="recurring-schedule-sidebar" aria-label="Recurring schedule navigation">
+      <div className="recurring-schedule-sidebar-header">
+        <strong>Recurring</strong>
+      </div>
+      {isLoading ? (
+        <p className="recurring-schedule-sidebar-state">Loading recurring schedules...</p>
+      ) : error ? (
+        <p className="recurring-schedule-sidebar-state" role="alert">
+          {errorMessage(error, 'Recurring schedule navigation unavailable')}
+        </p>
+      ) : schedules.length === 0 ? (
+        <p className="recurring-schedule-sidebar-state">No recurring schedules yet.</p>
+      ) : (
+        <nav className="recurring-schedule-sidebar-list">
+          {schedules.map((schedule) => {
+            const active = schedule.id === definitionId;
+            return (
+              <a
+                key={schedule.id}
+                href={`/schedules/${encodeURIComponent(schedule.id)}`}
+                aria-current={active ? 'page' : undefined}
+                className={`recurring-schedule-sidebar-row${active ? ' recurring-schedule-sidebar-row--active' : ''}`}
+              >
+                <span className="recurring-schedule-sidebar-name">{schedule.name}</span>
+                <span className="recurring-schedule-sidebar-meta">
+                  {stateLabel(schedule)} · next {formatWhen(schedule.nextRunAt)}
+                </span>
+              </a>
+            );
+          })}
+        </nav>
+      )}
+    </aside>
+  );
+}
+
+function RecurringScheduleWorkspace({
+  definitionId,
+  listDisplayMode,
+  schedules,
+  isLoading,
+  error,
+  children,
+}: {
+  definitionId: string;
+  listDisplayMode: 'hidden' | 'sidebar' | 'table';
+  schedules: Schedule[];
+  isLoading: boolean;
+  error: unknown;
+  children: ReactNode;
+}) {
+  if (listDisplayMode !== 'sidebar') {
+    return <>{children}</>;
+  }
+  return (
+    <div className="recurring-schedule-workspace">
+      <RecurringScheduleSidebar
+        definitionId={definitionId}
+        schedules={schedules}
+        isLoading={isLoading}
+        error={error}
+      />
+      <div className="recurring-schedule-workspace-detail">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ScheduleDetailPage({
+  payload,
+  definitionId,
+  listDisplayMode = 'sidebar',
+  sidebarSchedules = [],
+  isSidebarLoading = false,
+  sidebarError = null,
+}: {
+  payload: BootPayload;
+  definitionId: string;
+  listDisplayMode?: 'hidden' | 'sidebar' | 'table';
+  sidebarSchedules?: Schedule[];
+  isSidebarLoading?: boolean;
+  sidebarError?: unknown;
+}) {
   const queryClient = useQueryClient();
   const [isEditing, setIsEditing] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -753,27 +858,50 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
 
   if (detailQuery.isLoading) {
     return (
-      <div className="schedules-page stack">
-        <p className="loading">Loading recurring schedule...</p>
-      </div>
+      <RecurringScheduleWorkspace
+        definitionId={definitionId}
+        listDisplayMode={listDisplayMode}
+        schedules={sidebarSchedules}
+        isLoading={isSidebarLoading}
+        error={sidebarError}
+      >
+        <div className="schedules-page stack">
+          <p className="loading">Loading recurring schedule...</p>
+        </div>
+      </RecurringScheduleWorkspace>
     );
   }
 
   if (detailQuery.isError || !schedule) {
     return (
-      <div className="schedules-page stack">
-        <a href="/schedules" className="secondary">Back to schedules</a>
-        <div className="schedules-error" role="alert">{errorMessage(detailQuery.error, 'Schedule not found')}</div>
-      </div>
+      <RecurringScheduleWorkspace
+        definitionId={definitionId}
+        listDisplayMode={listDisplayMode}
+        schedules={sidebarSchedules}
+        isLoading={isSidebarLoading}
+        error={sidebarError}
+      >
+        <div className="schedules-page stack">
+          <a href="/schedules" className="secondary">Back to recurring schedules</a>
+          <div className="schedules-error" role="alert">{errorMessage(detailQuery.error, 'Schedule not found')}</div>
+        </div>
+      </RecurringScheduleWorkspace>
     );
   }
 
   return (
+    <RecurringScheduleWorkspace
+      definitionId={definitionId}
+      listDisplayMode={listDisplayMode}
+      schedules={sidebarSchedules}
+      isLoading={isSidebarLoading}
+      error={sidebarError}
+    >
     <div className="schedules-page schedules-detail-page stack">
       <header className="toolbar schedules-toolbar">
         <div className="schedules-detail-title">
           <nav className="page-meta" aria-label="Breadcrumb">
-            <a href="/schedules">Schedules</a>
+            <a href="/schedules">Recurring</a>
             <span>/</span>
             <span>{schedule.name}</span>
           </nav>
@@ -1185,18 +1313,18 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
         <pre className="schedules-json-block">{formatJsonValue(schedule.target)}</pre>
       </section>
     </div>
+    </RecurringScheduleWorkspace>
   );
 }
 
 export function SchedulesPage({ payload }: { payload: BootPayload }) {
   const routeDefinitionId = useMemo(() => scheduleRouteDefinitionId(payload), [payload]);
-  if (routeDefinitionId) {
-    return <ScheduleDetailPage payload={payload} definitionId={routeDefinitionId} />;
-  }
+  const listDisplayMode = recurringListDisplayMode(payload, Boolean(routeDefinitionId));
 
   const listEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
     queryKey: ['schedules', listEndpoint],
+    enabled: !routeDefinitionId || listDisplayMode === 'sidebar',
     queryFn: async () => {
       const response = await fetch(listEndpoint, { credentials: 'include' });
       if (!response.ok) {
@@ -1214,6 +1342,19 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     const dueSoon = schedules.filter((schedule) => isDueSoon(schedule, now)).length;
     return { active, attention, dueSoon, total: schedules.length };
   }, [schedules]);
+
+  if (routeDefinitionId) {
+    return (
+      <ScheduleDetailPage
+        payload={payload}
+        definitionId={routeDefinitionId}
+        listDisplayMode={listDisplayMode}
+        sidebarSchedules={schedules}
+        isSidebarLoading={isLoading}
+        sidebarError={isError ? error : null}
+      />
+    );
+  }
 
   return (
     <div className="schedules-page stack">

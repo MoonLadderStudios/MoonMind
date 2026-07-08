@@ -48,6 +48,36 @@ export type ResolvedWorkflowListDisplay = {
   status: string | null;
 };
 
+export type RecurringListDisplaySurface =
+  | 'recurring-table'
+  | 'recurring-detail'
+  | 'future-recurring-create';
+
+export type RecurringListSelection = {
+  definitionId: string | null;
+  source: 'route' | 'last-selected' | 'first-visible-row' | 'none';
+};
+
+export type ResolvedRecurringListDisplay = {
+  requestedMode: WorkflowListDisplayMode;
+  effectiveMode: WorkflowListDisplayMode;
+  surface: RecurringListDisplaySurface;
+  routeAction: WorkflowListDisplayRouteAction;
+  primarySurface: 'recurring-detail' | 'recurring-table' | 'empty-recurring';
+  listSurface: WorkflowListDisplayListSurface;
+  selection: RecurringListSelection;
+  targetPath: string;
+  status: string | null;
+};
+
+export type ResolveRecurringListDisplayInput = {
+  pathname: string;
+  requestedMode: WorkflowListDisplayMode;
+  search?: string | URLSearchParams | null;
+  selectedDefinitionId?: string | null;
+  firstVisibleDefinitionId?: string | null;
+};
+
 export type ResolveWorkflowListDisplayInput = {
   pathname: string;
   requestedMode: WorkflowListDisplayMode;
@@ -162,6 +192,125 @@ function selectedWorkflow(input: ResolveWorkflowListDisplayInput): WorkflowListS
     return { workflowId: first, source: 'first-visible-row' };
   }
   return { workflowId: null, source: 'none' };
+}
+
+function decodeRecurringDetail(pathname: string): { definitionId: string } | null {
+  const parts = normalizedPathname(pathname).split('/').slice(1);
+  if (parts.length !== 2 || parts[0] !== 'schedules') {
+    return null;
+  }
+  let definitionId: string;
+  try {
+    definitionId = decodeURIComponent(parts[1] ?? '');
+  } catch {
+    return null;
+  }
+  if (!definitionId || definitionId.includes('/') || definitionId.toLowerCase() === 'new') {
+    return null;
+  }
+  return { definitionId };
+}
+
+function selectedRecurring(input: ResolveRecurringListDisplayInput): RecurringListSelection {
+  const selected = input.selectedDefinitionId?.trim();
+  if (selected) {
+    return { definitionId: selected, source: 'last-selected' };
+  }
+  const first = input.firstVisibleDefinitionId?.trim();
+  if (first) {
+    return { definitionId: first, source: 'first-visible-row' };
+  }
+  return { definitionId: null, source: 'none' };
+}
+
+function encodeRecurringDetailPath(
+  definitionId: string,
+  search: string | URLSearchParams | null | undefined,
+): string {
+  return pathWithSearch(`/schedules/${encodeURIComponent(definitionId)}`, search);
+}
+
+export function resolveRecurringListDisplay(
+  input: ResolveRecurringListDisplayInput,
+): ResolvedRecurringListDisplay | null {
+  const pathname = normalizedPathname(input.pathname);
+  const requestedMode = input.requestedMode;
+
+  if (pathname === '/schedules') {
+    if (requestedMode === 'table') {
+      return {
+        requestedMode,
+        effectiveMode: 'table',
+        surface: 'recurring-table',
+        routeAction: 'none',
+        primarySurface: 'recurring-table',
+        listSurface: 'table',
+        selection: { definitionId: null, source: 'none' },
+        targetPath: pathWithSearch('/schedules', input.search),
+        status: null,
+      };
+    }
+
+    const selection = selectedRecurring(input);
+    if (selection.definitionId) {
+      return {
+        requestedMode,
+        effectiveMode: requestedMode,
+        surface: 'recurring-table',
+        routeAction: selection.source === 'first-visible-row'
+          ? 'resolve-first-workflow'
+          : 'navigate-selected-detail',
+        primarySurface: 'recurring-detail',
+        listSurface: requestedMode === 'hidden' ? 'none' : 'sidebar',
+        selection,
+        targetPath: encodeRecurringDetailPath(selection.definitionId, input.search),
+        status: null,
+      };
+    }
+
+    return {
+      requestedMode,
+      effectiveMode: 'table',
+      surface: 'recurring-table',
+      routeAction: 'none',
+      primarySurface: 'empty-recurring',
+      listSurface: 'table',
+      selection,
+      targetPath: pathWithSearch('/schedules', input.search),
+      status: 'No recurring schedule can be opened from the current list.',
+    };
+  }
+
+  const detail = decodeRecurringDetail(pathname);
+  if (!detail) {
+    return null;
+  }
+
+  if (requestedMode === 'table') {
+    return {
+      requestedMode,
+      effectiveMode: 'table',
+      surface: 'recurring-detail',
+      routeAction: 'navigate-workflows',
+      primarySurface: 'recurring-table',
+      listSurface: 'table',
+      selection: { definitionId: detail.definitionId, source: 'route' },
+      targetPath: '/schedules',
+      status: null,
+    };
+  }
+
+  return {
+    requestedMode,
+    effectiveMode: requestedMode,
+    surface: 'recurring-detail',
+    routeAction: 'none',
+    primarySurface: 'recurring-detail',
+    listSurface: requestedMode === 'hidden' ? 'none' : 'sidebar',
+    selection: { definitionId: detail.definitionId, source: 'route' },
+    targetPath: pathWithSearch(pathname, input.search),
+    status: null,
+  };
 }
 
 export function resolveWorkflowListDisplay(

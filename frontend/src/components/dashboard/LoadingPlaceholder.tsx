@@ -34,7 +34,7 @@ const surfaceLabels: Record<LoadingPlaceholderSurface, string> = {
   'workflow-list': 'Workflow list',
   'workflow-detail': 'Workflow detail',
   settings: 'Settings',
-  schedules: 'Schedules',
+  schedules: 'Recurring',
   manifests: 'Manifests',
   skills: 'Skills',
   'workflow-start': 'Workflow start',

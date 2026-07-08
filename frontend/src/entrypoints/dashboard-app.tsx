@@ -45,6 +45,7 @@ import {
 } from '../lib/dashboardRoutes';
 import {
   WORKFLOW_LIST_DISPLAY_MODES,
+  resolveRecurringListDisplay,
   resolveWorkflowListDisplay,
   type WorkflowListDisplayMode,
 } from '../lib/workflowListDisplayMode';
@@ -243,6 +244,24 @@ async function firstVisibleWorkflowId(apiBase: string, search: URLSearchParams):
   const items = body && typeof body === 'object' && Array.isArray(body.items) ? body.items : null;
   const firstRow = items ? items.find((row) => workflowRowId(row)) : null;
   return firstRow ? workflowRowId(firstRow) : null;
+}
+
+async function firstVisibleRecurringDefinitionId(apiBase: string): Promise<string | null> {
+  const response = await fetch(`${apiBase}/recurring-tasks?scope=personal`, { credentials: 'include' });
+  if (!response.ok) {
+    throw new Error(`Recurring schedule list request failed: ${response.status}`);
+  }
+  const payload = (await response.json()) as { items?: Array<{ id?: unknown; definitionId?: unknown }> };
+  const first = payload.items?.find((item) => (
+    (typeof item.id === 'string' && item.id.trim()) ||
+    (typeof item.definitionId === 'string' && item.definitionId.trim())
+  ));
+  if (!first) {
+    return null;
+  }
+  return typeof first.id === 'string' && first.id.trim()
+    ? first.id.trim()
+    : String(first.definitionId).trim();
 }
 
 function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
@@ -506,10 +525,12 @@ function DashboardLiveUpdateProvider({
 }
 
 function WorkflowListDisplayModeControl({
+  accessibleName = 'Workflow list display',
   effectiveMode,
   status,
   onSelect,
 }: {
+  accessibleName?: string;
   effectiveMode: WorkflowListDisplayMode;
   status?: string | null | undefined;
   onSelect: (mode: WorkflowListDisplayMode) => void;
@@ -517,8 +538,8 @@ function WorkflowListDisplayModeControl({
   return (
     <div
       className="workflow-list-display-control"
-      role="group"
-      aria-label="Workflow list display"
+      role="radiogroup"
+      aria-label={accessibleName}
     >
       {WORKFLOW_LIST_DISPLAY_MODES.map((mode) => {
         const Icon = iconForWorkflowListMode(mode.icon);
@@ -548,11 +569,13 @@ function WorkflowListDisplayModeControl({
 
 function DashboardNavigation({
   uiInfo,
+  listDisplayAccessibleName,
   workflowListMode,
   workflowListDisplayStatus,
   onWorkflowListModeSelect,
 }: {
   uiInfo: DashboardUiInfo | null;
+  listDisplayAccessibleName?: string | undefined;
   workflowListMode: WorkflowListDisplayMode | null;
   workflowListDisplayStatus?: string | null | undefined;
   onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
@@ -585,6 +608,7 @@ function DashboardNavigation({
 
       {workflowListMode ? (
         <WorkflowListDisplayModeControl
+          accessibleName={listDisplayAccessibleName}
           effectiveMode={workflowListMode}
           status={workflowListDisplayStatus}
           onSelect={onWorkflowListModeSelect}
@@ -628,7 +652,7 @@ function DashboardNavigation({
             icon={SchedulesNavIcon}
             className={({ isActive }) => (isActive ? 'active' : undefined)}
           >
-            Schedules
+            Recurring
           </AnimatedRouteNavLink>
           <AnimatedRouteNavLink
             to="/skills"
@@ -661,6 +685,7 @@ function DashboardNavigation({
 function AppShell({
   dataWidePanel,
   uiInfo,
+  listDisplayAccessibleName,
   workflowListMode,
   workflowListDisplayStatus,
   onWorkflowListModeSelect,
@@ -668,6 +693,7 @@ function AppShell({
 }: {
   dataWidePanel: boolean;
   uiInfo: DashboardUiInfo | null;
+  listDisplayAccessibleName?: string | undefined;
   workflowListMode: WorkflowListDisplayMode | null;
   workflowListDisplayStatus?: string | null | undefined;
   onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
@@ -691,6 +717,7 @@ function AppShell({
         <div className="dashboard-shell-full">
           <DashboardNavigation
             uiInfo={uiInfo}
+            listDisplayAccessibleName={listDisplayAccessibleName}
             workflowListMode={workflowListMode}
             workflowListDisplayStatus={workflowListDisplayStatus}
             onWorkflowListModeSelect={onWorkflowListModeSelect}
@@ -725,9 +752,11 @@ function RoutedDashboardPage({
   const [requestedMode, setRequestedMode] = useState<WorkflowListDisplayMode>(() => (
     readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
   ));
+  const [requestedRecurringMode, setRequestedRecurringMode] = useState<WorkflowListDisplayMode>('table');
   const [lastSelectedWorkflowId, setLastSelectedWorkflowId] = useState<string | null>(
     () => readDashboardPreferences().lastSelectedWorkflowId.trim() || null,
   );
+  const [lastSelectedDefinitionId, setLastSelectedDefinitionId] = useState<string | null>(null);
   const [resolutionStatus, setResolutionStatus] = useState<string | null>(null);
   const route = resolveDashboardRoute(location.pathname);
   const apiBase = typeof uiInfo?.apiBase === 'string' ? uiInfo.apiBase : '/api';
@@ -738,11 +767,35 @@ function RoutedDashboardPage({
     selectedWorkflowId: lastSelectedWorkflowId,
     firstVisibleWorkflowId: null,
   });
+  const resolvedRecurringDisplay = resolveRecurringListDisplay({
+    pathname: location.pathname,
+    search: location.search,
+    requestedMode: requestedRecurringMode,
+    selectedDefinitionId: lastSelectedDefinitionId,
+    firstVisibleDefinitionId: null,
+  });
+  const activeListDisplay = resolvedDisplay ?? resolvedRecurringDisplay;
+  const activeListDisplayAccessibleName = resolvedRecurringDisplay
+    ? 'Recurring list display'
+    : resolvedDisplay
+      ? 'Workflow list display'
+      : undefined;
 
   useEffect(() => {
     const routeWorkflowId = decodeWorkflowIdFromPath(location.pathname);
     if (routeWorkflowId) {
       setLastSelectedWorkflowId(routeWorkflowId);
+    }
+    const match = location.pathname.match(/^\/schedules\/([^/]+)$/);
+    if (match) {
+      try {
+        const definitionId = decodeURIComponent(match[1] || '').trim();
+        if (definitionId) {
+          setLastSelectedDefinitionId(definitionId);
+        }
+      } catch {
+        // Ignore malformed paths; route validation handles unsupported pages.
+      }
     }
   }, [location.pathname, location.search]);
 
@@ -766,6 +819,10 @@ function RoutedDashboardPage({
       setRequestedMode('table');
     } else if (normalizedPath.startsWith('/workflows/') && normalizedPath !== '/workflows/new') {
       setRequestedMode((mode) => (mode === 'table' ? 'sidebar' : mode));
+    } else if (normalizedPath === '/schedules') {
+      setRequestedRecurringMode('table');
+    } else if (normalizedPath.startsWith('/schedules/')) {
+      setRequestedRecurringMode((mode) => (mode === 'table' ? 'sidebar' : mode));
     }
     pendingRequestRef.current = null;
     setResolutionStatus(null);
@@ -776,6 +833,53 @@ function RoutedDashboardPage({
     const search = new URLSearchParams(location.search);
     pendingRequestRef.current = null;
     setResolutionStatus(null);
+
+    if (resolvedRecurringDisplay) {
+      if (location.pathname.replace(/\/$/, '') === '/schedules' && selectedMode !== 'table') {
+        const requestId = Symbol();
+        pendingRequestRef.current = requestId;
+        setRequestedRecurringMode(selectedMode);
+        setResolutionStatus('Opening first recurring schedule...');
+        try {
+          const targetDefinitionId = lastSelectedDefinitionId?.trim() || await firstVisibleRecurringDefinitionId(apiBase);
+          if (pendingRequestRef.current !== requestId) {
+            return;
+          }
+          if (!targetDefinitionId) {
+            setResolutionStatus('No recurring schedule to open.');
+            return;
+          }
+          setLastSelectedDefinitionId(targetDefinitionId);
+          setResolutionStatus(null);
+          navigate(`/schedules/${encodeURIComponent(targetDefinitionId)}`);
+        } catch {
+          if (pendingRequestRef.current === requestId) {
+            setResolutionStatus('Recurring schedule list is unavailable.');
+          }
+        }
+        return;
+      }
+
+      const resolved = resolveRecurringListDisplay({
+        pathname: location.pathname,
+        search: location.search,
+        requestedMode: selectedMode,
+        selectedDefinitionId: lastSelectedDefinitionId,
+        firstVisibleDefinitionId: null,
+      });
+      if (!resolved) {
+        return;
+      }
+      setRequestedRecurringMode(selectedMode);
+      if (resolved.selection.definitionId) {
+        setLastSelectedDefinitionId(resolved.selection.definitionId);
+      }
+      const current = `${location.pathname}${location.search}`;
+      if (resolved.targetPath !== current) {
+        navigate(resolved.targetPath);
+      }
+      return;
+    }
 
     if (location.pathname.replace(/\/$/, '') === '/workflows' && selectedMode !== 'table') {
       const requestId = Symbol();
@@ -844,6 +948,7 @@ function RoutedDashboardPage({
       <AppShell
         dataWidePanel={false}
         uiInfo={uiInfo}
+        listDisplayAccessibleName={activeListDisplayAccessibleName}
         workflowListMode={null}
         workflowListDisplayStatus={resolutionStatus}
         onWorkflowListModeSelect={handleWorkflowListModeSelect}
@@ -861,8 +966,9 @@ function RoutedDashboardPage({
       <AppShell
         dataWidePanel={route.dataWidePanel}
         uiInfo={uiInfo}
-        workflowListMode={resolvedDisplay?.effectiveMode ?? null}
-        workflowListDisplayStatus={resolutionStatus ?? resolvedDisplay?.status}
+        listDisplayAccessibleName={activeListDisplayAccessibleName}
+        workflowListMode={activeListDisplay?.effectiveMode ?? null}
+        workflowListDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
         onWorkflowListModeSelect={handleWorkflowListModeSelect}
       >
         <LoadingPage />
@@ -880,6 +986,15 @@ function RoutedDashboardPage({
       workflowListDisplayStatus: resolutionStatus ?? resolvedDisplay.status,
     };
   }
+  if (resolvedRecurringDisplay) {
+    routedPayload.initialData = {
+      ...(routedPayload.initialData && typeof routedPayload.initialData === 'object'
+        ? routedPayload.initialData
+        : {}),
+      recurringListDisplayMode: resolvedRecurringDisplay.effectiveMode,
+      recurringListDisplayStatus: resolutionStatus ?? resolvedRecurringDisplay.status,
+    };
+  }
   const layout = readSharedLayout(routedPayload);
   const routeKey = route.page === 'workflows-workspace'
     ? 'workflows-workspace'
@@ -889,8 +1004,9 @@ function RoutedDashboardPage({
     <AppShell
       dataWidePanel={layout.dataWidePanel === true}
       uiInfo={uiInfo}
-      workflowListMode={resolvedDisplay?.effectiveMode ?? null}
-      workflowListDisplayStatus={resolutionStatus ?? resolvedDisplay?.status}
+      listDisplayAccessibleName={activeListDisplayAccessibleName}
+      workflowListMode={activeListDisplay?.effectiveMode ?? null}
+      workflowListDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
       onWorkflowListModeSelect={handleWorkflowListModeSelect}
     >
       <PageContent key={routeKey} payload={routedPayload} />
