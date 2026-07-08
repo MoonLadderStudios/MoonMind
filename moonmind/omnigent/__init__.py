@@ -7,6 +7,7 @@ from moonmind.omnigent.settings import (
     is_omnigent_enabled,
     resolved_api_token,
     resolved_default_agent_name,
+    resolved_proxy_forward_headers,
     resolved_server_url,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "is_omnigent_enabled",
     "resolved_api_token",
     "resolved_default_agent_name",
+    "resolved_proxy_forward_headers",
     "resolved_server_url",
 ]

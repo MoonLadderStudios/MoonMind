@@ -16,6 +16,11 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from urllib.parse import urlparse
 
+from moonmind.omnigent.bridge_security import enforce_id_only_labels
+from moonmind.omnigent.failure_classification import (
+    OmnigentFailureReason,
+    classify_omnigent_failure,
+)
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
@@ -29,6 +34,14 @@ from moonmind.workflows.adapters.base_external_agent_adapter import (
 )
 
 HostType = Literal["managed", "external"]
+
+# §17 invalid-session-create-payload row -> user_error, resolved through the one
+# shared classifier so request validation and terminal execution agree on the
+# canonical MoonMind failure class (OB-§17 / DESIGN-REQ-010; MM-1140 -> MM-1153).
+_INVALID_SESSION_PAYLOAD_FAILURE_CLASS: FailureClass = (
+    classify_omnigent_failure(OmnigentFailureReason.INVALID_SESSION_PAYLOAD)
+    or "user_error"
+)
 
 _OMNIGENT_CAPABILITY = ProviderCapabilityDescriptor(
     providerName="omnigent",
@@ -110,13 +123,13 @@ def build_omnigent_selection(
     if request.agent_kind != "external":
         raise OmnigentAdapterError(
             "Omnigent only supports external agent_kind",
-            failure_class="user_error",
+            failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
         )
     if request.agent_id.strip().lower() != "omnigent":
         raise OmnigentAdapterError(
             "Omnigent target selection must not alter top-level agentId; "
             "use agentId='omnigent'",
-            failure_class="user_error",
+            failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
         )
 
     parameters = dict(request.parameters or {})
@@ -125,7 +138,7 @@ def build_omnigent_selection(
         raise OmnigentAdapterError(
             "Omnigent selection fields must be nested under parameters.omnigent: "
             + ", ".join(leaked),
-            failure_class="user_error",
+            failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
         )
 
     raw = parameters.get("omnigent")
@@ -136,7 +149,7 @@ def build_omnigent_selection(
     else:
         raise OmnigentAdapterError(
             "parameters.omnigent must be an object",
-            failure_class="user_error",
+            failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
         )
 
     agent = _parse_agent(raw_payload.get("agent"))
@@ -229,11 +242,15 @@ def build_omnigent_session_create_payload(
     payload: dict[str, Any] = {
         "agent_id": target.agent_id,
         "title": title,
-        "labels": {
-            "moonmind.correlation_id": request.correlation_id,
-            "moonmind.idempotency_key": request.idempotency_key,
-            **session.labels,
-        },
+        # §16 rule 4: session labels carry MoonMind ids and the idempotency key
+        # but never secrets; caller-supplied labels are guarded before merge.
+        "labels": enforce_id_only_labels(
+            {
+                "moonmind.correlation_id": request.correlation_id,
+                "moonmind.idempotency_key": request.idempotency_key,
+                **session.labels,
+            }
+        ),
         "host_type": session.host_type,
         "workspace": session.workspace,
         "model_override": session.model_override,
@@ -297,7 +314,7 @@ def _parse_session(raw: object) -> OmnigentSessionSelection:
     if host_type not in {"managed", "external"}:
         raise OmnigentAdapterError(
             "parameters.omnigent.session.hostType must be 'managed' or 'external'",
-            failure_class="user_error",
+            failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
         )
     labels = _mapping(
         payload.get("labels"),
@@ -309,7 +326,7 @@ def _parse_session(raw: object) -> OmnigentSessionSelection:
     ):
         raise OmnigentAdapterError(
             "parameters.omnigent.session.terminalLaunchArgs must be a string array",
-            failure_class="user_error",
+            failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
         )
     return OmnigentSessionSelection(
         host_type=host_type,
@@ -356,13 +373,13 @@ def _validate_session(session: OmnigentSessionSelection) -> None:
         if session.host_id:
             raise OmnigentAdapterError(
                 "Managed Omnigent sessions reject caller-provided hostId",
-                failure_class="user_error",
+                failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
             )
         if not session.workspace and not session.allow_empty_workspace:
             raise OmnigentAdapterError(
                 "Managed Omnigent sessions require a repository workspace or "
                 "parameters.omnigent.session.allowEmptyWorkspace=true",
-                failure_class="user_error",
+                failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
             )
         if session.workspace and not _is_git_url_with_optional_branch(
             session.workspace
@@ -370,30 +387,30 @@ def _validate_session(session: OmnigentSessionSelection) -> None:
             raise OmnigentAdapterError(
                 "Managed Omnigent session.workspace must be a git repository "
                 "URL or absent",
-                failure_class="user_error",
+                failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
             )
         return
 
     if not session.host_id:
         raise OmnigentAdapterError(
             "External Omnigent sessions require hostId",
-            failure_class="user_error",
+            failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
         )
     if not session.workspace:
         raise OmnigentAdapterError(
             "External Omnigent sessions require an absolute host workspace path",
-            failure_class="user_error",
+            failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
         )
     if _is_git_url_with_optional_branch(session.workspace):
         raise OmnigentAdapterError(
             "External Omnigent session.workspace must be a host path, "
             "not a repository URL",
-            failure_class="user_error",
+            failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
         )
     if not session.workspace.startswith("/"):
         raise OmnigentAdapterError(
             "External Omnigent session.workspace must be an absolute host path",
-            failure_class="user_error",
+            failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
         )
 
 
@@ -409,7 +426,7 @@ async def _resolve_agent_name(
                 return agent_id
     raise OmnigentAdapterError(
         f"Unknown Omnigent agent name: {agent_name}",
-        failure_class="user_error",
+        failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
     )
 
 
@@ -464,7 +481,7 @@ def _mapping(raw: object, *, field_name: str) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise OmnigentAdapterError(
             f"{field_name} must be an object",
-            failure_class="user_error",
+            failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
         )
     return dict(raw)
 
