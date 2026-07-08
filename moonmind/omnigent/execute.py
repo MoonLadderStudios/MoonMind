@@ -18,12 +18,12 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from temporalio import activity
 
-from moonmind.omnigent.store import (
+from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
     FIRST_MESSAGE_TERMINAL,
+    OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
-    OmnigentRunStore,
 )
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
@@ -1460,7 +1460,7 @@ async def run_omnigent_execution(
     request: AgentExecutionRequest,
     *,
     artifact_gateway: OmnigentArtifactGateway | None = None,
-    run_store: OmnigentRunStore | None = None,
+    run_store: OmnigentBridgeSessionStore | None = None,
 ) -> AgentRunResult:
     """Execute one Omnigent session and return only terminal AgentRunResult."""
 
@@ -1872,6 +1872,18 @@ async def run_omnigent_execution(
                     "timed_out",
                 }:
                     terminal_status = normalized_snapshot
+                    # The stream ended without emitting a terminal event but the
+                    # final snapshot is terminal. Append an indexed terminal event
+                    # derived from the snapshot so the durable event index records
+                    # how the run ended; otherwise diagnostics/Workflow Chat would
+                    # see a terminal session row with no terminal event (§7.2).
+                    normalized_events.append(
+                        {
+                            "eventType": "session.final_snapshot",
+                            "normalizedStatus": normalized_snapshot,
+                            "sequence": len(normalized_events) + 1,
+                        }
+                    )
                 elif normalized_snapshot in _NON_TERMINAL_STATUSES:
                     raise OmnigentSessionStillRunningError(
                         "Omnigent stream ended while the provider session is still running"
@@ -1909,6 +1921,9 @@ async def run_omnigent_execution(
                         "diagnosticsRef": bundle.diagnostics_ref,
                         "metadataRefs": bundle.metadata_refs,
                     },
+                    # Persist the full, non-lossy normalized status stream into
+                    # the durable event index (OmnigentBridge §7.2).
+                    events=normalized_events,
                 )
             return build_omnigent_result(
                 request=request,

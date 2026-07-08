@@ -6,7 +6,7 @@ from temporalio.testing import ActivityEnvironment
 
 from moonmind.omnigent import execute as omnigent_execute_module
 from moonmind.omnigent.execute import LocalOmnigentArtifactGateway
-from moonmind.omnigent.store import OmnigentRunStore
+from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.temporal.activities import (
     omnigent_activities as omnigent_activities_module,
@@ -37,7 +37,7 @@ async def test_omnigent_execute_activity_delegates(mock_run):
     called_req = mock_run.call_args.args[0]
     assert called_req == req
     assert isinstance(mock_run.call_args.kwargs["artifact_gateway"], LocalOmnigentArtifactGateway)
-    assert isinstance(mock_run.call_args.kwargs["run_store"], OmnigentRunStore)
+    assert isinstance(mock_run.call_args.kwargs["run_store"], OmnigentBridgeSessionStore)
 
 
 def test_omnigent_execution_path_does_not_use_managed_github_broker() -> None:
