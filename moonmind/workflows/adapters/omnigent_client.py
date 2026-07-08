@@ -10,6 +10,7 @@ from urllib.parse import quote
 import httpx
 
 from moonmind.omnigent.bridge_security import sanitize_proxy_headers
+from moonmind.omnigent.failure_classification import classify_omnigent_http_status
 from moonmind.utils.logging import (
     SecretRedactor,
     redact_sensitive_payload,
@@ -351,7 +352,7 @@ class OmnigentHttpClient:
             self._redact(f"Omnigent HTTP {status_code}"),
             status_code=status_code,
             response_body=response_body,
-            failure_class=_failure_class_for_status(status_code),
+            failure_class=classify_omnigent_http_status(status_code),
         )
 
     def _redact(self, value: str) -> str:
@@ -395,12 +396,6 @@ def _scrub_payload_with_redactor(payload: Any, *, redactor: SecretRedactor) -> A
             for item in payload
         ]
     return payload
-
-
-def _failure_class_for_status(status_code: int) -> str:
-    if status_code in {400, 404, 409, 422}:
-        return "user_error"
-    return "integration_error"
 
 
 __all__ = [
