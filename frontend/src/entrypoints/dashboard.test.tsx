@@ -1169,6 +1169,33 @@ describe('Dashboard shared entry', () => {
     expect(sidebarHeaderBlock).toContain('text-align: left');
   });
 
+  it('renders the Workflow header label at identical size and weight in the table and sidebar', async () => {
+    // Full-screen table column header labels (sortable button or static span).
+    const tableHeaderLabelBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-list-header-cell .table-sort-button',
+    );
+    expect(tableHeaderLabelBlock).toContain('font-size: 0.82rem');
+    expect(tableHeaderLabelBlock).toContain('font-weight: 720');
+    expect(tableHeaderLabelBlock).toContain('line-height: 1.2');
+
+    // Sidebar header label uses the shared column-header label token.
+    const sidebarHeaderLabelBlock = cssRuleBlock(dashboardCss, '.workflow-list-column-header-label');
+    expect(sidebarHeaderLabelBlock).toContain('font-size: 0.82rem');
+    expect(sidebarHeaderLabelBlock).toContain('font-weight: 720');
+    expect(sidebarHeaderLabelBlock).toContain('line-height: 1.2');
+
+    // Equal label metrics + the shared header-row-height token means the two
+    // header bars are the same height.
+    const tableHeaderBlock = cssRuleBlock(dashboardCss, '.queue-table-wrapper th');
+    expect(tableHeaderBlock).toContain('height: var(--workflow-list-header-row-height)');
+    const sidebarHeaderContainerBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-workspace-sidebar-header',
+    );
+    expect(sidebarHeaderContainerBlock).toContain('min-height: var(--workflow-list-header-row-height)');
+  });
+
   it('keeps workflow titles clamped to two consistent lines in the list and sidebar', async () => {
     const tableRowBlock = cssRuleBlock(dashboardCss, '.workflow-list-data-slab tbody tr');
     expect(tableRowBlock).toContain('height: var(--workflow-list-body-row-height)');
@@ -1243,12 +1270,42 @@ describe('Dashboard shared entry', () => {
     expect(reducedMotionBlock).toContain('transform: none !important');
   });
 
-  it('keeps the workflow sidebar scrollbar close to its divider', async () => {
+  it('draws a thin divider directly to the left of the workflow sidebar scrollbar', async () => {
     const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
     expect(sidebarBlock).toContain('padding: 0');
+    // The scrollbar width is a shared token so the divider offset tracks it.
+    expect(sidebarBlock).toContain('--workflow-list-sidebar-scrollbar-width: 6px');
 
     const sidebarTableBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-table');
     expect(sidebarTableBlock).toContain('scrollbar-width: thin');
+
+    const scrollbarBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-workspace-sidebar-table::-webkit-scrollbar',
+    );
+    expect(scrollbarBlock).toContain('width: var(--workflow-list-sidebar-scrollbar-width)');
+
+    // The divider sits directly to the left of the scrollbar (offset by its
+    // width) and reuses the shared list divider token for color/thickness.
+    const dividerBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar::after');
+    expect(dividerBlock).toContain('right: var(--workflow-list-sidebar-scrollbar-width)');
+    expect(dividerBlock).toContain('width: var(--workflow-list-divider-width)');
+    expect(dividerBlock).toContain('background: var(--workflow-list-divider-color)');
+    expect(dividerBlock).toContain('top: 0');
+    expect(dividerBlock).toContain('bottom: 0');
+
+    // The full-screen workflow table has no inner scrollbar and never draws the
+    // sidebar divider.
+    const tableWrapperBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-list-data-slab .queue-table-wrapper',
+    );
+    expect(tableWrapperBlock).not.toContain('scrollbar');
+    const tableWrapperDividerBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-list-data-slab .queue-table-wrapper::after',
+    );
+    expect(tableWrapperDividerBlock).toBe('');
   });
 
   it('MM-1064 keeps workflow sidebar status icons compact inside status-colored containers', async () => {

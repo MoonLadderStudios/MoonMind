@@ -788,6 +788,20 @@ h1 {
 }
 
 /*
+ * The list-table column header labels reuse the shared sidebar label metrics so
+ * "Workflow" (and its sibling headers) render at the same size and weight in the
+ * full-screen table header and the sidebar header. Parity with
+ * `.workflow-list-column-header-label`; the header cell container keeps its own
+ * font-weight: 600 for any stray text, and the label owns the heavier weight.
+ */
+.workflow-list-header-cell .table-sort-button,
+.workflow-list-header-cell .workflow-list-static-header {
+  font-size: 0.82rem;
+  font-weight: 720;
+  line-height: 1.2;
+}
+
+/*
  * The advanced filter drawer is the single surface that exposes the full filter
  * UI. The control deck only carries the trigger and active chips, so the table
  * headers stay calm (sort buttons only).
@@ -7285,6 +7299,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-sidebar {
+  /* Width of the sidebar list's thin scrollbar; the divider below sits directly
+   * to its left, and the ::-webkit-scrollbar rule keeps the two in sync. */
+  --workflow-list-sidebar-scrollbar-width: 6px;
+
   position: sticky;
   top: 0;
   display: flex;
@@ -7292,8 +7310,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0;
   max-height: 100vh;
   overflow: visible;
-  /* Not a card: the sidebar is a plain left column separated from the detail by
-   * the grid gap rather than a vertical divider. */
+  /* Not a card: the sidebar is a plain left column. It is separated from the
+   * detail by the grid gap plus a single thin divider (::after) that sits
+   * directly to the left of the list scrollbar — see below. */
   padding: 0;
   /* MM-1138 Q1: bleed the rail's left edge to the screen edge like the list
    * table's first column. The right edge stays on the grid-column boundary, so
@@ -7301,6 +7320,26 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
    * (below) so titles stay aligned with the table cell text. */
   width: calc(100% + var(--workflow-list-slab-bleed-inline));
   margin-left: calc(var(--workflow-list-slab-bleed-inline) * -1);
+}
+
+/*
+ * A thin vertical line directly to the left of the sidebar scrollbar, running
+ * the full height of the rail (over the sticky header too). It is scoped to the
+ * sidebar, so the full-screen workflow table — which has no sidebar and no inner
+ * scrollbar — never draws it. Offset by the scrollbar width so the scrollbar
+ * sits in the narrow gutter just to its right; z-index clears the sticky header
+ * (z-index 8) and pinned list (z-index 6) so the line stays continuous.
+ */
+.workflow-workspace-sidebar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: var(--workflow-list-sidebar-scrollbar-width);
+  z-index: 9;
+  width: var(--workflow-list-divider-width);
+  background: var(--workflow-list-divider-color);
+  pointer-events: none;
 }
 
 .workflow-workspace-sidebar-header {
@@ -7367,7 +7406,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-sidebar-table::-webkit-scrollbar {
-  width: 6px;
+  width: var(--workflow-list-sidebar-scrollbar-width);
 }
 
 .workflow-workspace-sidebar-table::-webkit-scrollbar-thumb {
