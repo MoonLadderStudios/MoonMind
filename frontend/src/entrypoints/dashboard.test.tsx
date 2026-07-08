@@ -426,20 +426,20 @@ describe('Dashboard shared entry', () => {
     expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
   });
 
-  it('keeps the full screen table selected when its radio button is re-clicked on the workflows table', async () => {
+  it('keeps the full screen table selected when its radio is re-clicked on the workflows table', async () => {
     window.history.replaceState({}, '', '/workflows');
     updateDashboardPreferences({ lastSelectedWorkflowId: 'mm:97d44980-355c-4300-96a7-0ad166440d95' });
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
 
-    const tableButton = screen.getByRole('button', { name: 'Full screen table' });
-    expect(tableButton.getAttribute('aria-pressed')).toBe('true');
+    const tableButton = screen.getByRole('radio', { name: 'Full screen table' });
+    expect(tableButton.getAttribute('aria-checked')).toBe('true');
 
     fireEvent.click(tableButton);
 
-    expect(screen.getByRole('button', { name: 'Full screen table' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('button', { name: 'Sidebar list' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('false');
     expect(window.location.pathname).toBe('/workflows');
   });
 
