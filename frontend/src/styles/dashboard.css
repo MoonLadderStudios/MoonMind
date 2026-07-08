@@ -5655,6 +5655,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   white-space: nowrap;
 }
 
+/* MM-964: the diagnostic Debug tab reads as secondary until hovered/active.
+ * This single-class selector is intentionally lower specificity than the shared
+ * :hover / [aria-current="page"] brighten rule below, so the active/hover state
+ * still resolves to the full ink color. */
+.segmented-control[data-intensity="quiet"] .segmented-control-item-quiet {
+  color: rgb(var(--mm-muted) / 0.58);
+}
+
 .segmented-control[data-intensity="loud"] .segmented-control-item {
   z-index: 3;
   min-height: 2.25rem;
@@ -7718,21 +7726,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: flex;
   align-items: stretch;
   gap: 0.5rem;
-}
-
-.td-subroute-more-trigger {
-  /* MM-1138 Q3/B4: match the quiet-tier tab height so the "More" trigger sits
-   * flush with the detail segmented tabs it overflows from. */
-  min-height: 2.15rem;
-  padding-inline: 0.9rem;
-  border-radius: 10px;
-  white-space: nowrap;
-}
-
-.td-subroute-more-trigger.active {
-  border-color: rgb(var(--mm-accent));
-  background: rgb(var(--mm-accent) / 0.14);
-  color: rgb(var(--mm-ink));
 }
 
 .td-facts-region {

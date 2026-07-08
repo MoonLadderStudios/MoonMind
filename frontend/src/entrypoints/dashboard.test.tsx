@@ -1423,10 +1423,9 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).not.toContain('@keyframes segmented-control-scan');
     expect(dashboardCss).not.toContain('data-intensity="loud"]::after');
 
-    // MM-1138 Q3/B4: the detail "More" overflow trigger is aligned to the quiet
-    // tab height (2.15rem) so it sits flush with the tabs it overflows from.
-    const moreTriggerBlock = cssRuleBlock(dashboardCss, '.td-subroute-more-trigger');
-    expect(moreTriggerBlock).toContain('min-height: 2.15rem');
+    // MM-964: the detail sections (including the quiet Debug tab) share one
+    // segmented control — the single-item "More" overflow trigger is gone.
+    expect(dashboardCss).not.toContain('td-subroute-more-trigger');
     const quietItemBlock = cssRuleBlock(
       dashboardCss,
       '.segmented-control[data-intensity="quiet"] .segmented-control-item',

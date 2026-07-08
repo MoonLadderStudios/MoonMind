@@ -183,6 +183,10 @@ type SegmentedNavItem<T extends string> = {
   label: string;
   href: string;
   badge?: ReactNode;
+  /** Optional leading glyph (e.g. the diagnostic Debug tab). */
+  icon?: ReactNode;
+  /** `quiet` visually de-emphasizes the item without hiding it. */
+  tone?: 'quiet';
 };
 type WorkflowDialogKind =
   | 'rename'
@@ -1801,7 +1805,9 @@ function SegmentedNav<T extends string>({
       {items.map((item) => (
         <a
           key={item.value}
-          className="segmented-control-item"
+          className={['segmented-control-item', item.tone === 'quiet' ? 'segmented-control-item-quiet' : '']
+            .filter(Boolean)
+            .join(' ')}
           href={item.href}
           aria-current={active === item.value ? 'page' : undefined}
           onClick={(event) => {
@@ -1809,6 +1815,9 @@ function SegmentedNav<T extends string>({
             onNavigate(item.value, item.href);
           }}
         >
+          {item.icon ? (
+            <span className="segmented-control-item-icon" aria-hidden="true">{item.icon}</span>
+          ) : null}
           <span className="segmented-control-item-label">{item.label}</span>
           {item.badge !== null && item.badge !== undefined ? (
             <span className="segmented-control-badge" aria-hidden="true">{item.badge}</span>
@@ -6672,6 +6681,20 @@ function AuditTrailPanel({
   );
 }
 
+const DEBUG_ICON = (
+  <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+    <path d="M9 9v-1a3 3 0 0 1 6 0v1" />
+    <path d="M8 9h8a6 6 0 0 1 1 3v3a5 5 0 0 1 -10 0v-3a6 6 0 0 1 1 -3" />
+    <path d="M3 13h4" />
+    <path d="M17 13h4" />
+    <path d="M12 20v-6" />
+    <path d="M4 19l3.35 -2" />
+    <path d="M20 19l-3.35 -2" />
+    <path d="M4 7l3.75 2.4" />
+    <path d="M20 7l-3.75 2.4" />
+  </svg>
+);
+
 function WorkflowDetailSubrouteNav({
   workflowId,
   current,
@@ -6704,29 +6727,24 @@ function WorkflowDetailSubrouteNav({
       href: workflowDetailSubrouteHref(workflowId, 'evidence', search),
       badge: artifactCount ?? null,
     },
+    {
+      // MM-964: Debug is a first-class-but-quiet diagnostic tab. It rides the
+      // same segmented control (one click, scrolls with the other tabs on
+      // narrow viewports) rather than hiding behind a single-item overflow menu.
+      value: 'debug',
+      label: 'Debug',
+      href: workflowDetailSubrouteHref(workflowId, 'debug', search),
+      icon: DEBUG_ICON,
+      tone: 'quiet',
+    },
   ];
-  const debugHref = workflowDetailSubrouteHref(workflowId, 'debug', search);
   return (
-    <>
-      <SegmentedNav
-        items={items}
-        active={current === 'debug' ? null : current}
-        ariaLabel="Workflow detail sections"
-        onNavigate={onNavigate}
-      />
-      <WorkflowActionsMenu
-        items={[
-          {
-            id: 'workflow-detail-debug',
-            label: 'Debug',
-            onSelect: () => onNavigate('debug', debugHref),
-          },
-        ]}
-        triggerContent="More"
-        triggerClassName={`secondary td-subroute-more-trigger${current === 'debug' ? ' active' : ''}`}
-        menuAriaLabel="More workflow detail sections"
-      />
-    </>
+    <SegmentedNav
+      items={items}
+      active={current}
+      ariaLabel="Workflow detail sections"
+      onNavigate={onNavigate}
+    />
   );
 }
 
