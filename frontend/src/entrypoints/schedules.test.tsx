@@ -267,8 +267,8 @@ describe("SchedulesPage", () => {
     });
     expect(mutationCalls).toEqual([]);
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/recurring-tasks"),
-    ).toBe(false);
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/recurring-workflows?scope=personal"),
+    ).toBe(true);
   });
 
   it("shows an empty state without adding local create controls", async () => {
@@ -329,7 +329,7 @@ describe("SchedulesPage", () => {
     );
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/tenant/api/recurring-tasks?scope=personal");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/tenant/api/recurring-workflows?scope=personal");
   });
 
   it("loads the recurring schedule detail route by the routed definition id", async () => {

@@ -123,7 +123,7 @@ function scheduleSources(payload: BootPayload): ScheduleSources | undefined {
 
 function scheduleListEndpoint(payload: BootPayload): string {
   const schedules = scheduleSources(payload);
-  return schedules?.list || `${payload.apiBase || '/api'}/recurring-tasks?scope=personal`;
+  return schedules?.list || `${payload.apiBase || '/api'}/recurring-workflows?scope=personal`;
 }
 
 function scheduleRouteDefinitionId(payload: BootPayload): string | null {
@@ -714,6 +714,7 @@ function ScheduleDetailPage({
   const runNowEndpoint = useMemo(() => scheduleEndpoint(payload, 'runNow', definitionId), [payload, definitionId]);
   const runsEndpoint = useMemo(() => scheduleEndpoint(payload, 'runs', definitionId), [payload, definitionId]);
   const deleteEndpoint = useMemo(() => scheduleEndpoint(payload, 'delete', definitionId), [payload, definitionId]);
+  const listEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
   const sources = useMemo(() => scheduleSources(payload), [payload]);
 
   const detailQuery = useQuery({
@@ -748,6 +749,7 @@ function ScheduleDetailPage({
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['schedule-detail', definitionId] }),
       queryClient.invalidateQueries({ queryKey: ['schedule-runs', definitionId] }),
+      queryClient.invalidateQueries({ queryKey: ['schedules', listEndpoint] }),
     ]);
   };
 
@@ -803,6 +805,7 @@ function ScheduleDetailPage({
       }
     },
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['schedules', listEndpoint] });
       navigateTo('/schedules');
     },
   });

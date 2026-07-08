@@ -446,7 +446,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-tasks?scope=personal') {
+      if (url === '/api/recurring-workflows?scope=personal') {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -506,13 +506,80 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
   });
 
+  it('verifies remembered recurring IDs before opening sidebar mode from the schedules table', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows/stale-schedule') {
+        return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 'schedule-one',
+              name: 'Daily recurring scan',
+              enabled: true,
+              cron: '0 9 * * *',
+              timezone: 'UTC',
+              nextRunAt: '2026-07-09T09:00:00Z',
+              lastDispatchStatus: 'enqueued',
+              target: {},
+              policy: {},
+            }],
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 'schedule-one',
+            name: 'Daily recurring scan',
+            description: 'Runs every morning.',
+            enabled: true,
+            cron: '0 9 * * *',
+            timezone: 'UTC',
+            nextRunAt: '2026-07-09T09:00:00Z',
+            lastScheduledFor: '2026-07-08T09:00:00Z',
+            lastDispatchStatus: 'enqueued',
+            target: {},
+            policy: {},
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules/stale-schedule');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Recurring schedule not found.')).toBeTruthy();
+    navigateTo('/schedules');
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules/schedule-one');
+    });
+    expect(await screen.findByRole('heading', { name: 'Daily recurring scan' })).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/recurring-workflows/stale-schedule')).toBe(true);
+  });
+
   it('switches Recurring detail between full table and hidden-list modes', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-tasks?scope=personal') {
+      if (url === '/api/recurring-workflows?scope=personal') {
         return Promise.resolve({
           ok: true,
           json: async () => ({

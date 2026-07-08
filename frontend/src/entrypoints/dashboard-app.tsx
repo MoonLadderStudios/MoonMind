@@ -248,12 +248,12 @@ async function firstVisibleWorkflowId(apiBase: string, search: URLSearchParams):
 }
 
 async function firstVisibleRecurringDefinitionId(apiBase: string): Promise<string | null> {
-  const response = await fetch(`${apiBase}/recurring-tasks?scope=personal`, { credentials: 'include' });
+  const response = await fetch(`${apiBase}/recurring-workflows?scope=personal`, { credentials: 'include' });
   if (!response.ok) {
     throw new Error(`Recurring schedule list request failed: ${response.status}`);
   }
-  const payload = (await response.json()) as { items?: Array<{ id?: unknown; definitionId?: unknown }> };
-  const first = payload.items?.find((item) => (
+  const payload = (await response.json()) as { items?: Array<{ id?: unknown; definitionId?: unknown }> } | null;
+  const first = payload?.items?.find((item) => (
     (typeof item.id === 'string' && item.id.trim()) ||
     (typeof item.definitionId === 'string' && item.definitionId.trim())
   ));
@@ -263,6 +263,15 @@ async function firstVisibleRecurringDefinitionId(apiBase: string): Promise<strin
   return typeof first.id === 'string' && first.id.trim()
     ? first.id.trim()
     : String(first.definitionId).trim();
+}
+
+async function authorizedRecurringDefinitionId(apiBase: string, definitionId: string): Promise<string | null> {
+  const encoded = encodeURIComponent(definitionId);
+  const response = await fetch(`${apiBase}/recurring-workflows/${encoded}`, { credentials: 'include' });
+  if (!response.ok) {
+    return null;
+  }
+  return definitionId;
 }
 
 function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
@@ -876,7 +885,14 @@ function RoutedDashboardPage({
         setRequestedRecurringMode(selectedMode);
         setResolutionStatus('Opening first recurring schedule...');
         try {
-          const targetDefinitionId = lastSelectedDefinitionId?.trim() || await firstVisibleRecurringDefinitionId(apiBase);
+          const rememberedId = lastSelectedDefinitionId?.trim() || '';
+          const authorizedRememberedId = rememberedId
+            ? await authorizedRecurringDefinitionId(apiBase, rememberedId)
+            : null;
+          if (pendingRequestRef.current !== requestId) {
+            return;
+          }
+          const targetDefinitionId = authorizedRememberedId || await firstVisibleRecurringDefinitionId(apiBase);
           if (pendingRequestRef.current !== requestId) {
             return;
           }
