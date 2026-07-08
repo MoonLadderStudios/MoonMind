@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
@@ -249,7 +249,23 @@ class OmnigentBridgeSessionStore:
             row.first_message_state = FIRST_MESSAGE_TERMINAL
             if terminal_refs:
                 row.terminal_refs = terminal_refs
+                # Keep the first-class evidence ref columns in sync with the
+                # capture bundle instead of leaving them NULL for post-migration
+                # rows (§7.1); the JSON ``terminal_refs`` blob is preserved as-is.
+                for column, value in _canonical_ref_columns(terminal_refs).items():
+                    setattr(row, column, value)
             if events:
+                # Terminal event indexing must be idempotent: a Temporal activity
+                # retry that reattaches to the durable session can call
+                # ``mark_terminal`` again for the same idempotency key. Replace the
+                # session's event rows rather than appending, so ``list_events``
+                # never returns duplicate sequences (§7.2).
+                await session.execute(
+                    delete(OmnigentBridgeSessionEvent).where(
+                        OmnigentBridgeSessionEvent.bridge_session_id
+                        == row.bridge_session_id
+                    )
+                )
                 for event_row in _build_event_rows(row.bridge_session_id, events):
                     session.add(event_row)
             await session.commit()
@@ -289,6 +305,42 @@ class OmnigentBridgeSessionStore:
         if row is None:
             raise OmnigentIdempotencyError("missing Omnigent bridge session row")
         return row
+
+
+# Maps each first-class evidence ref column to the capture-bundle ref key that
+# supplies it (see ``moonmind.omnigent.execute`` capture bundle metadata refs).
+# ``diagnostics_ref`` is sourced from the top-level ``diagnosticsRef`` and is
+# handled separately below.
+_CANONICAL_REF_COLUMN_SOURCES = {
+    "raw_events_ref": "rawSseStreamRef",
+    "normalized_events_ref": "normalizedEventStreamRef",
+    "initial_snapshot_ref": "initialSnapshotRef",
+    "final_snapshot_ref": "finalSnapshotRef",
+    "capture_manifest_ref": "captureManifestRef",
+    "external_state_ref": "externalStateRef",
+}
+
+
+def _canonical_ref_columns(terminal_refs: dict[str, Any] | None) -> dict[str, str]:
+    """Project capture-bundle refs onto the first-class evidence columns (§7.1).
+
+    ``terminal_refs`` carries the capture bundle's ``metadataRefs`` map plus the
+    top-level ``diagnosticsRef``. Only non-empty values are returned so a partial
+    bundle never clobbers an already-populated column with ``None``.
+    """
+
+    if not terminal_refs:
+        return {}
+    metadata_refs = terminal_refs.get("metadataRefs") or {}
+    columns: dict[str, str] = {}
+    for column, source_key in _CANONICAL_REF_COLUMN_SOURCES.items():
+        value = _string_or_none(metadata_refs.get(source_key))
+        if value is not None:
+            columns[column] = value
+    diagnostics_ref = _string_or_none(terminal_refs.get("diagnosticsRef"))
+    if diagnostics_ref is not None:
+        columns["diagnostics_ref"] = diagnostics_ref
+    return columns
 
 
 def _build_event_rows(

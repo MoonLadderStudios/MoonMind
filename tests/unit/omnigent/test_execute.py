@@ -1703,3 +1703,99 @@ async def test_run_omnigent_execution_records_missing_resource_harvest_and_child
     assert "changedFilesUnavailable" in manifest
     assert "workspaceFilesUnavailable" in manifest
     assert "sessionFilesUnavailable" in manifest
+
+
+@pytest.mark.asyncio
+async def test_snapshot_derived_terminal_status_is_indexed(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A stream that ends non-terminal but a terminal final snapshot must still
+    record a terminal event in the durable event index (OmnigentBridge §7.2)."""
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            return {"pending_id": "pending-1"}
+
+        async def stream_events(self, session_id: str):
+            # Stream ends without ever emitting a terminal normalized status.
+            yield {"session": {"status": "running"}}
+            yield {"session": {"status": "running"}}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            # The provider's final snapshot is terminal.
+            return {"status": "completed", "summary": "done"}
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    store = OmnigentBridgeSessionStore(session_maker)
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    try:
+        result = await run_omnigent_execution(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="corr-1",
+                idempotencyKey="idem-1",
+                parameters={
+                    "omnigent": {
+                        "agent": {"agentName": "codex-native-ui"},
+                        "session": {"allowEmptyWorkspace": True},
+                        "prompt": {"text": "Do the task"},
+                    },
+                },
+            ),
+            run_store=store,
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        )
+        assert result.metadata["normalizedStatus"] == "completed"
+
+        from sqlalchemy import select
+
+        from api_service.db.models import OmnigentBridgeSession
+
+        async with session_maker() as session:
+            row = (
+                await session.execute(
+                    select(OmnigentBridgeSession).where(
+                        OmnigentBridgeSession.idempotency_key == "idem-1"
+                    )
+                )
+            ).scalar_one()
+            bridge_session_id = row.bridge_session_id
+
+        events = await store.list_events(bridge_session_id)
+    finally:
+        await engine.dispose()
+
+    # The event index must contain a terminal completion event even though the
+    # stream itself never emitted one, and sequences must stay unique/monotonic.
+    sequences = [e.sequence for e in events]
+    assert sequences == sorted(sequences)
+    assert len(sequences) == len(set(sequences))
+    assert events[-1].normalized_status == "completed"
+    assert events[-1].event_type == "session.final_snapshot"

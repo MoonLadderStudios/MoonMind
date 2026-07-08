@@ -8,9 +8,13 @@ parallel table (repository Compatibility Policy).
 
 Source design traceability: OmnigentBridge.md (MM-1152, source issue MM-1140).
 
-Revision ID: 334_mm1152_omnigent_bridge_sessions
+Revision ID: 334_mm1152_bridge_sessions
 Revises: 333_checkpoint_branch_graph
 Create Date: 2026-07-08
+
+The revision id is kept <= 32 characters so it fits Alembic's
+``alembic_version.version_num`` column (enforced by
+``tests/unit/api_service/test_provider_profile_enums.py``).
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "334_mm1152_omnigent_bridge_sessions"
+revision: str = "334_mm1152_bridge_sessions"
 down_revision: Union[str, None] = "333_checkpoint_branch_graph"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

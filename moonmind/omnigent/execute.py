@@ -1872,6 +1872,18 @@ async def run_omnigent_execution(
                     "timed_out",
                 }:
                     terminal_status = normalized_snapshot
+                    # The stream ended without emitting a terminal event but the
+                    # final snapshot is terminal. Append an indexed terminal event
+                    # derived from the snapshot so the durable event index records
+                    # how the run ended; otherwise diagnostics/Workflow Chat would
+                    # see a terminal session row with no terminal event (§7.2).
+                    normalized_events.append(
+                        {
+                            "eventType": "session.final_snapshot",
+                            "normalizedStatus": normalized_snapshot,
+                            "sequence": len(normalized_events) + 1,
+                        }
+                    )
                 elif normalized_snapshot in _NON_TERMINAL_STATUSES:
                     raise OmnigentSessionStillRunningError(
                         "Omnigent stream ended while the provider session is still running"

@@ -267,6 +267,77 @@ async def test_mark_terminal_coalesces_and_preserves_event_stream(store):
 
 
 @pytest.mark.asyncio
+async def test_mark_terminal_event_indexing_is_idempotent_on_retry(store):
+    # A Temporal activity retry can reattach to the durable session and call
+    # mark_terminal again with the same idempotency key. The event index must not
+    # accumulate duplicate sequences (§7.2).
+    request = _request()
+    created = await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    stream = [
+        {"eventType": "session.created", "normalizedStatus": "created", "sequence": 1},
+        {"eventType": "response.completed", "normalizedStatus": "completed", "sequence": 2},
+    ]
+
+    await store.mark_terminal(
+        "idem-1", status="completed", terminal_refs={"outputRefs": ["art"]}, events=stream
+    )
+    # Retry: same key, same events.
+    await store.mark_terminal(
+        "idem-1", status="completed", terminal_refs={"outputRefs": ["art"]}, events=stream
+    )
+
+    events = await store.list_events(created.bridge_session_id)
+    assert [e.sequence for e in events] == [1, 2]
+    assert [e.normalized_status for e in events] == ["created", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_mark_terminal_populates_canonical_ref_columns(store):
+    # The dedicated first-class evidence ref columns must be populated from the
+    # capture bundle refs (§7.1) instead of remaining NULL for new runs.
+    request = _request()
+    await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    terminal_refs = {
+        "outputRefs": ["art_final", "art_norm", "art_manifest"],
+        "diagnosticsRef": "art_diag",
+        "metadataRefs": {
+            "rawSseStreamRef": "art_raw",
+            "normalizedEventStreamRef": "art_norm",
+            "initialSnapshotRef": "art_initial",
+            "finalSnapshotRef": "art_final",
+            "captureManifestRef": "art_manifest",
+            "externalStateRef": "art_external",
+        },
+    }
+
+    terminal = await store.mark_terminal(
+        "idem-1", status="completed", terminal_refs=terminal_refs
+    )
+
+    assert terminal.raw_events_ref == "art_raw"
+    assert terminal.normalized_events_ref == "art_norm"
+    assert terminal.initial_snapshot_ref == "art_initial"
+    assert terminal.final_snapshot_ref == "art_final"
+    assert terminal.capture_manifest_ref == "art_manifest"
+    assert terminal.external_state_ref == "art_external"
+    assert terminal.diagnostics_ref == "art_diag"
+    # The JSON terminal_refs blob is preserved unchanged alongside the columns.
+    assert terminal.terminal_refs == terminal_refs
+
+
+@pytest.mark.asyncio
 async def test_unique_idempotency_key_enforced(store):
     request = _request()
     await store.get_or_create(
