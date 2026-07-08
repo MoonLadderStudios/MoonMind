@@ -78,16 +78,28 @@ def test_manifest_consolidation_claims_follow_current_code_evidence() -> None:
 
 
 def test_roadmap_milestones_are_evidence_aligned_and_gated() -> None:
+    """Pin roadmap strings that encode durable safety/evidence invariants.
+
+    These assertions are not stylistic. The ``11.1`` line and the "external
+    targets stay gated until enforcement exists" phrase encode the PentestGPT
+    external-egress safety gate; the ``5.1``/``5.2``/``5.3``/``6.2``/``7.1``
+    task labels pin the checkpoint-resume, remediation-evidence, and
+    RAG-injection acceptance claims. Do not delete an assertion here to make a
+    roadmap edit pass — update the roadmap so the invariant still holds, or
+    change the invariant deliberately with the owner's sign-off.
+    """
     text = _read(ROADMAP_DOC)
 
-    assert "- [ ] **13.1** Resume-from-checkpoint as the default recovery path" in text
-    assert "checkpoint restore logic exists but is not yet the primary operator flow" in text
-    assert "- [ ] **3.2** Automatic RAG context injection per step" in text
-    assert "- [ ] **5.3** Context pack assembly wired into agent runs" in text
-    assert "- [ ] **13.3** Dashboard remediation panels" in text
-    assert "- [ ] **7.7** Remediation panels - Tracked with 13.3" in text
-    assert "- [ ] **13.4** Autonomous remediation supervisor" in text
-    assert "Gated on:** 12.1" in text
+    assert "Completed historical milestones have been removed from the active roadmap" in text
+    assert "Omnigent host as the unified managed agent runtime" in text
+    assert "checkpoint captures select the `external_state_ref` lane" in text
+    assert "- [ ] **5.1 External-state checkpoint completeness**" in text
+    assert "- [ ] **5.2 Resume-from-checkpoint default flow**" in text
+    assert "- [ ] **5.3 Checkpoint Branch UI and runtime-profile gaps**" in text
+    assert "- [ ] **6.2 Omnigent remediation context enrichment**" in text
+    assert "- [ ] **7.1 Initial context injection for Omnigent**" in text
+    assert "- [ ] **11.1 Restricted egress boundary for PentestGPT external targets**" in text
+    assert "external targets stay gated until enforcement exists" in text
 
 
 def test_temp_plan_cleanup_guard_removes_plan_after_final_dod_closes() -> None:
