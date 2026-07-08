@@ -12,10 +12,14 @@ import postcss from 'postcss';
 import type { Root, Rule } from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
-import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
+import { act, fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { DashboardApp } from './dashboard-app';
 import { navigateTo } from '../lib/navigation';
-import { readDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
+import {
+  readDashboardPreferences,
+  resetDashboardPreferences,
+  updateDashboardPreferences,
+} from '../utils/dashboardPreferences';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -657,6 +661,244 @@ describe('Dashboard shared entry', () => {
     });
     expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  // MM-1145: persistence + reseeding of the Recurring list display mode and the
+  // last-selected definition (dashboard preferences), and honoring a persisted
+  // `hidden` on a direct `/schedules/{definitionId}` visit.
+  const recurringScheduleRow = (id: string, name: string) => ({
+    id,
+    name,
+    enabled: true,
+    cron: '0 9 * * *',
+    timezone: 'UTC',
+    nextRunAt: '2026-07-09T09:00:00Z',
+    lastDispatchStatus: 'enqueued',
+    target: {},
+    policy: {},
+  });
+  const recurringScheduleDetail = (id: string, name: string) => ({
+    ...recurringScheduleRow(id, name),
+    description: 'Runs every morning.',
+    lastScheduledFor: '2026-07-08T09:00:00Z',
+  });
+
+  it('MM-1145 honors a persisted hidden recurring mode on a direct detail visit', async () => {
+    updateDashboardPreferences({ recurringListDisplayMode: 'hidden' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => recurringScheduleDetail('schedule-one', 'Daily recurring scan'),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules/schedule-one');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Daily recurring scan' })).toBeTruthy();
+    // A persisted `hidden` is honored on a direct detail visit: the sidebar list
+    // is not mounted (contrast with the sidebar-default direct-visit test above).
+    expect(screen.queryByRole('complementary', { name: 'Recurring schedule navigation' })).toBeNull();
+    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('MM-1145 reseeds the remembered recurring definition and opens it when switching to sidebar', async () => {
+    updateDashboardPreferences({ lastSelectedDefinitionId: 'remembered-schedule' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        // A different first-visible row proves the remembered ID was preferred.
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/remembered-schedule') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => recurringScheduleDetail('remembered-schedule', 'Remembered schedule'),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/remembered-schedule/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules/remembered-schedule');
+    });
+    // The persisted remembered definition was reauthorized before use...
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === '/api/recurring-workflows/remembered-schedule'),
+    ).toBe(true);
+    expect(await screen.findByRole('heading', { name: 'Remembered schedule' })).toBeTruthy();
+    // ...and the mode + remembered definition are persisted for the next reload.
+    expect(readDashboardPreferences().recurringListDisplayMode).toBe('sidebar');
+    expect(readDashboardPreferences().lastSelectedDefinitionId).toBe('remembered-schedule');
+  });
+
+  it('MM-1145 discards an unauthorized persisted remembered definition and opens the first visible schedule', async () => {
+    updateDashboardPreferences({ lastSelectedDefinitionId: 'stale-schedule' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows/stale-schedule') {
+        return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => recurringScheduleDetail('schedule-one', 'Daily recurring scan'),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules/schedule-one');
+    });
+    // The stale remembered definition was reauthorized, found unauthorized, and
+    // silently discarded in favor of the first visible schedule.
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === '/api/recurring-workflows/stale-schedule'),
+    ).toBe(true);
+    expect(window.location.pathname).not.toBe('/schedules/stale-schedule');
+    expect(readDashboardPreferences().lastSelectedDefinitionId).toBe('schedule-one');
+  });
+
+  it('MM-1145 persists the recurring mode and remembered definition when switching modes on a detail visit', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => recurringScheduleDetail('schedule-one', 'Daily recurring scan'),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules/schedule-one');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Daily recurring scan' })).toBeTruthy();
+    // Visiting a detail route remembers the definition for the next reload.
+    expect(readDashboardPreferences().lastSelectedDefinitionId).toBe('schedule-one');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(readDashboardPreferences().recurringListDisplayMode).toBe('hidden');
+    });
+    expect(window.location.pathname).toBe('/schedules/schedule-one');
+    expect(readDashboardPreferences().lastSelectedDefinitionId).toBe('schedule-one');
+  });
+
+  it('MM-1145 refreshes the recurring mode on a preference change so a reset default replaces a stale mode', async () => {
+    // Seed a persisted `hidden` and open a detail route directly so the shell
+    // seeds that stale mode into local state on mount.
+    updateDashboardPreferences({ recurringListDisplayMode: 'hidden' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => recurringScheduleDetail('schedule-one', 'Daily recurring scan'),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules/schedule-one');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Daily recurring scan' })).toBeTruthy();
+    // The persisted `hidden` is honored on load: no sidebar list is mounted.
+    expect(screen.queryByRole('complementary', { name: 'Recurring schedule navigation' })).toBeNull();
+    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+
+    // Resetting preferences (for example from another route in the same SPA
+    // session, or a `storage` event from another tab) fires the change event.
+    // The shell must refresh the recurring mode from storage so the reset default
+    // replaces the stale `hidden` without a full reload; on a detail route the
+    // route-owned default is `sidebar`.
+    act(() => {
+      resetDashboardPreferences();
+    });
+
+    expect(
+      await screen.findByRole('complementary', { name: 'Recurring schedule navigation' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
   });
 
   it('hides the workflow list display control on unsupported routes', async () => {

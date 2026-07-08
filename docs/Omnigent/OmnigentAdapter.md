@@ -209,9 +209,12 @@ OMNIGENT_DEFAULT_HOST_TYPE=managed
 OMNIGENT_DEFAULT_CAPTURE_POLICY=full
 OMNIGENT_REQUEST_TIMEOUT_SECONDS=30
 OMNIGENT_STREAM_HEARTBEAT_TIMEOUT_SECONDS=120
+OMNIGENT_PROXY_FORWARD_HEADERS=
 ```
 
 Security rule: `OMNIGENT_API_TOKEN` is resolved only at the activity boundary. It must not appear in Temporal workflow payloads, request metadata, artifacts, logs, or diagnostics.
+
+Security rule: `OMNIGENT_PROXY_FORWARD_HEADERS` is a comma-separated allowlist of header names the bridge may forward to the upstream Omnigent Server in proxy mode. It is empty (forward nothing) by default; MoonMind internal auth headers (`Authorization`, `Cookie`, `X-MoonMind-*`, and other credential-shaped headers) are never forwarded upstream unless explicitly allowlisted here (OmnigentBridge §16 rule 7).
 
 ### 4.2 External registry
 

@@ -16,6 +16,10 @@
 // without a storage migration.
 
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '../components/PageSizeSelector';
+import {
+  isWorkflowListDisplayMode,
+  type WorkflowListDisplayMode,
+} from '../lib/workflowListDisplayMode';
 
 export const DASHBOARD_PREFERENCES_STORAGE_KEY = 'moonmind.dashboard.preferences';
 export const DASHBOARD_PREFERENCES_CHANGED_EVENT = 'moonmind:dashboard-preferences-changed';
@@ -73,6 +77,14 @@ export type DashboardPreferences = {
   workflowWorkspaceSidebarCollapsed: boolean;
   /** Last workflow explicitly opened by the operator. */
   lastSelectedWorkflowId: string;
+  /**
+   * Persisted Recurring list display mode. Reseeded on load so a direct visit to
+   * `/schedules/{definitionId}` can honor a persisted `hidden`; `/schedules`
+   * always resolves to `table` regardless of this value (route-owned).
+   */
+  recurringListDisplayMode: WorkflowListDisplayMode;
+  /** Last recurring schedule definition explicitly opened by the operator. */
+  lastSelectedDefinitionId: string;
   /** Preferred default workflow detail tab. */
   preferredDetailTab: WorkflowDetailTab;
   /** Preferred runtime default for the create page, where safe. */
@@ -99,6 +111,8 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   debugFieldsVisible: true,
   workflowWorkspaceSidebarCollapsed: false,
   lastSelectedWorkflowId: '',
+  recurringListDisplayMode: 'table',
+  lastSelectedDefinitionId: '',
   preferredDetailTab: 'overview',
   defaultRuntime: '',
   defaultProviderProfile: '',
@@ -162,6 +176,12 @@ function sanitizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function sanitizeRecurringListDisplayMode(value: unknown): WorkflowListDisplayMode {
+  return typeof value === 'string' && isWorkflowListDisplayMode(value)
+    ? value
+    : DEFAULT_DASHBOARD_PREFERENCES.recurringListDisplayMode;
+}
+
 /**
  * Coerce an arbitrary parsed value into a fully-populated, valid preferences
  * object. Unknown, missing, or wrong-typed fields fall back to their defaults
@@ -193,6 +213,8 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
       DEFAULT_DASHBOARD_PREFERENCES.workflowWorkspaceSidebarCollapsed,
     ),
     lastSelectedWorkflowId: sanitizeString(value.lastSelectedWorkflowId),
+    recurringListDisplayMode: sanitizeRecurringListDisplayMode(value.recurringListDisplayMode),
+    lastSelectedDefinitionId: sanitizeString(value.lastSelectedDefinitionId),
     preferredDetailTab: sanitizeDetailTab(value.preferredDetailTab),
     defaultRuntime: sanitizeString(value.defaultRuntime),
     defaultProviderProfile: sanitizeString(value.defaultProviderProfile),

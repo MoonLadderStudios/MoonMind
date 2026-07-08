@@ -312,6 +312,88 @@ def test_session_create_payload_host_id_rules() -> None:
     assert payload["host_id"] == "host_1"
 
 
+def test_session_create_payload_keeps_id_only_labels() -> None:
+    req = _request(
+        parameters={
+            "omnigent": {
+                "session": {
+                    "allowEmptyWorkspace": True,
+                    "labels": {"moonmind.team": "platform"},
+                }
+            }
+        }
+    )
+    selection = build_omnigent_selection(req)
+
+    payload = build_omnigent_session_create_payload(
+        request=req,
+        selection=selection,
+        target=OmnigentResolvedTarget(agent_id="ag_1", source="agent_id"),
+    )
+
+    assert payload["labels"] == {
+        "moonmind.correlation_id": "corr-1",
+        "moonmind.idempotency_key": "idem-1",
+        "moonmind.team": "platform",
+    }
+
+
+def test_session_create_payload_rejects_secret_like_label_value() -> None:
+    """A secret-shaped label value passes the request schema but §16 rejects it."""
+
+    from moonmind.omnigent.bridge_security import OmnigentAuthorizationError
+
+    req = _request(
+        parameters={
+            "omnigent": {
+                "session": {
+                    "allowEmptyWorkspace": True,
+                    "labels": {
+                        "moonmind.note": (
+                            "ghp_0123456789abcdefghijABCDEFGHIJ012345"
+                        )
+                    },
+                }
+            }
+        }
+    )
+    selection = build_omnigent_selection(req)
+
+    with pytest.raises(OmnigentAuthorizationError) as exc:
+        build_omnigent_session_create_payload(
+            request=req,
+            selection=selection,
+            target=OmnigentResolvedTarget(agent_id="ag_1", source="agent_id"),
+        )
+
+    assert exc.value.failure_class == "user_error"
+
+
+def test_session_create_payload_rejects_non_schema_secret_label_key() -> None:
+    """§16 rejects credential-shaped label keys the request schema does not flag."""
+
+    from moonmind.omnigent.bridge_security import OmnigentAuthorizationError
+
+    req = _request(
+        parameters={
+            "omnigent": {
+                "session": {
+                    "allowEmptyWorkspace": True,
+                    "labels": {"session.cookie": "value"},
+                }
+            }
+        }
+    )
+    selection = build_omnigent_selection(req)
+
+    with pytest.raises(OmnigentAuthorizationError):
+        build_omnigent_session_create_payload(
+            request=req,
+            selection=selection,
+            target=OmnigentResolvedTarget(agent_id="ag_1", source="agent_id"),
+        )
+
+
 def test_omnigent_external_adapter_capability_is_streaming_gateway() -> None:
     adapter = OmnigentExternalAdapter()
     cap = adapter.provider_capability

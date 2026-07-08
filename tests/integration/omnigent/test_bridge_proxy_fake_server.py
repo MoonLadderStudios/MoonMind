@@ -18,16 +18,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from api_service.db.models import OmnigentExternalRun
+from api_service.db.models import OmnigentBridgeSession
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
     OmnigentBridgeSessionProxy,
 )
-from moonmind.omnigent.store import (
+from moonmind.omnigent.bridge_store import (
     BRIDGE_EVENT_JOURNAL_KEY,
     SESSION_CREATED_EVENT_TYPE,
-    OmnigentRunStore,
+    OmnigentBridgeSessionStore,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
@@ -90,25 +90,27 @@ async def store():
         connect_args={"check_same_thread": False},
     )
     async with engine.begin() as conn:
-        await conn.run_sync(OmnigentExternalRun.__table__.create)
+        await conn.run_sync(OmnigentBridgeSession.__table__.create)
     session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     try:
-        yield OmnigentRunStore(session_maker), session_maker
+        yield OmnigentBridgeSessionStore(session_maker), session_maker
     finally:
         await engine.dispose()
 
 
-async def _row(session_maker, idempotency_key: str) -> OmnigentExternalRun:
+async def _row(session_maker, idempotency_key: str) -> OmnigentBridgeSession:
     async with session_maker() as session:
         result = await session.execute(
-            select(OmnigentExternalRun).where(
-                OmnigentExternalRun.idempotency_key == idempotency_key
+            select(OmnigentBridgeSession).where(
+                OmnigentBridgeSession.idempotency_key == idempotency_key
             )
         )
         return result.scalar_one()
 
 
-def _proxy(run_store: OmnigentRunStore, base_url: str) -> OmnigentBridgeSessionProxy:
+def _proxy(
+    run_store: OmnigentBridgeSessionStore, base_url: str
+) -> OmnigentBridgeSessionProxy:
     return OmnigentBridgeSessionProxy(
         run_store=run_store,
         client=OmnigentHttpClient(base_url=base_url),
@@ -143,7 +145,7 @@ async def test_bridge_proxy_create_get_and_journal(fake_server, store) -> None:
     # Provider session id persisted + session.created recorded on the row.
     row = await _row(session_maker, "idem-1")
     assert row.omnigent_session_id == "session-1"
-    journal = row.target_metadata[BRIDGE_EVENT_JOURNAL_KEY]
+    journal = row.metadata_[BRIDGE_EVENT_JOURNAL_KEY]
     assert [entry["type"] for entry in journal] == [SESSION_CREATED_EVENT_TYPE]
 
     # GET returns an Omnigent-shaped snapshot.
@@ -160,7 +162,7 @@ async def test_bridge_proxy_create_get_and_journal(fake_server, store) -> None:
     assert reused["id"] == "session-1"
     assert reused["moonmind"]["reused"] is True
     assert len(server.session_ids) == 1
-    journal_after = (await _row(session_maker, "idem-1")).target_metadata[
+    journal_after = (await _row(session_maker, "idem-1")).metadata_[
         BRIDGE_EVENT_JOURNAL_KEY
     ]
     assert len(journal_after) == 1

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -21,7 +22,7 @@ from moonmind.omnigent.execute import (
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
-from moonmind.omnigent.store import OmnigentDigestMismatchError
+from moonmind.omnigent.bridge_store import OmnigentDigestMismatchError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
@@ -847,6 +848,30 @@ async def test_local_omnigent_artifact_gateway_rejects_traversal_refs(tmp_path) 
 
 
 @pytest.mark.asyncio
+async def test_local_omnigent_artifact_gateway_wraps_os_errors(
+    tmp_path, monkeypatch
+) -> None:
+    # §17: a filesystem persistence failure (disk full, permission, missing
+    # directory) must surface as OmnigentArtifactError so the required
+    # artifact-persistence handler classifies it instead of letting a raw
+    # OSError escape the activity.
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", _boom)
+
+    with pytest.raises(OmnigentArtifactError):
+        await gateway.write_bytes(
+            request=_request(),
+            name="output.omnigent.snapshot.final.json",
+            payload=b"evidence",
+            link_type="output.omnigent.snapshot",
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
     monkeypatch,
 ) -> None:
@@ -985,6 +1010,9 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     class Store:
         async def get_or_create(self, **_: object) -> Row:
             return Row()
+
+        async def get_binding(self, *_a: object, **_k: object) -> None:
+            return None
 
         async def mark_prepared(self, *_: object, **__: object) -> Row:
             return Row()
@@ -1149,6 +1177,9 @@ async def test_run_omnigent_execution_reconciles_posting_state_without_duplicate
         async def get_or_create(self, **_: object) -> Row:
             return Row()
 
+        async def get_binding(self, *_a: object, **_k: object) -> None:
+            return None
+
         async def mark_prepared(self, *_: object, **__: object) -> Row:
             marker["value"] = str(__["marker"])
             return Row()
@@ -1243,6 +1274,9 @@ async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_rec
         async def get_or_create(self, **_: object) -> Row:
             return Row()
 
+        async def get_binding(self, *_a: object, **_k: object) -> None:
+            return None
+
         async def mark_prepared(self, *_: object, **__: object) -> Row:
             return Row()
 
@@ -1291,7 +1325,8 @@ async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_rec
         artifact_gateway=artifact_gateway,
     )
 
-    assert result.failure_class == "execution_error"
+    # §17: ambiguous `posting` reconciliation fails closed as integration_error.
+    assert result.failure_class == "integration_error"
     assert result.provider_error_code == "omnigent_first_message_reconcile_failed"
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
     assert "post_event" not in calls
@@ -1318,6 +1353,9 @@ async def test_run_omnigent_execution_digest_mismatch_is_non_retryable_with_diag
     class Store:
         async def get_or_create(self, **_: object) -> Row:
             return Row()
+
+        async def get_binding(self, *_a: object, **_k: object) -> None:
+            return None
 
         async def mark_prepared(self, *_: object, **__: object) -> Row:
             raise OmnigentDigestMismatchError("digest changed")
@@ -1362,7 +1400,9 @@ async def test_run_omnigent_execution_digest_mismatch_is_non_retryable_with_diag
         artifact_gateway=artifact_gateway,
     )
 
-    assert result.failure_class == "execution_error"
+    # §17: first-message digest mismatch is a conflicting replay under the same
+    # idempotency key and maps to user_error, not execution_error.
+    assert result.failure_class == "user_error"
     assert result.provider_error_code == "omnigent_first_message_digest_mismatch"
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
     external_state = json.loads(
@@ -1703,3 +1743,453 @@ async def test_run_omnigent_execution_records_missing_resource_harvest_and_child
     assert "changedFilesUnavailable" in manifest
     assert "workspaceFilesUnavailable" in manifest
     assert "sessionFilesUnavailable" in manifest
+    # §17: optional resource-harvest failure resolves to completed-with-diagnostics
+    # (no failure class) when policy does not require full evidence.
+    assert manifest["optionalResourceHarvest"]["outcome"] == "completed_with_diagnostics"
+    assert manifest["optionalResourceHarvest"]["failureClass"] is None
+
+
+class _HarvestFailureClient:
+    """Fake client that completes a session but fails every resource harvest."""
+
+    def __init__(self, **_: object) -> None:
+        pass
+
+    async def list_agents(self) -> dict[str, object]:
+        return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+    async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+        return {"id": "session-1"}
+
+    async def post_event(
+        self,
+        session_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        return {"pending_id": "pending-1"}
+
+    async def stream_events(self, session_id: str):
+        yield {"type": "response.completed"}
+
+    async def get_session(self, session_id: str) -> dict[str, object]:
+        return {"status": "completed", "summary": "done"}
+
+    async def list_changed_files(self, session_id: str) -> dict[str, object]:
+        raise RuntimeError("changed-file endpoint missing")
+
+    async def list_workspace_files(self, session_id: str) -> dict[str, object]:
+        raise RuntimeError("workspace-file endpoint missing")
+
+    async def list_session_files(self, session_id: str) -> dict[str, object]:
+        raise RuntimeError("session-file endpoint missing")
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_escalates_harvest_failure_when_full_evidence(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient", _HarvestFailureClient
+    )
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                    "capture": {"requireFullEvidence": True},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    # §17: required full evidence turns an optional harvest failure into a
+    # system_error rather than completed-with-diagnostics.
+    assert result.failure_class == "system_error"
+    assert result.provider_error_code == "omnigent_required_resource_evidence_missing"
+    # §17: the escalated failure result must not inherit the provider's
+    # success snapshot summary ("done") and must describe the missing evidence.
+    assert result.summary != "done"
+    assert "evidence" in result.summary.lower()
+    manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["optionalResourceHarvest"]["outcome"] == "required_evidence_missing"
+    assert manifest["optionalResourceHarvest"]["failureClass"] == "system_error"
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_harvest_failure_completes_without_policy(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient", _HarvestFailureClient
+    )
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    # §17: without a full-evidence policy an optional harvest failure stays a
+    # completed run (no failure class).
+    assert result.failure_class is None
+    assert result.provider_error_code is None
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_required_artifact_persistence_is_system_error(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            return {"status": "running"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    # Unresolvable MoonMind artifact ref -> artifact-authority read
+                    # failure raised as OmnigentArtifactError.
+                    "prompt": {"instructionRef": "artifact://omnigent/missing-ref"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    # §17: required artifact-persistence/authority failure -> system_error.
+    assert result.failure_class == "system_error"
+    assert result.provider_error_code == "omnigent_artifact_persistence_failed"
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_invalid_session_payload_is_user_error(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "session": {
+                        "hostType": "managed",
+                        "hostId": "host-1",
+                        "workspace": "https://github.com/o/r",
+                    },
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    # §17: invalid session-create payload (managed hostId) -> user_error.
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "omnigent_invalid_session_payload"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_derived_terminal_status_is_indexed(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A stream that ends non-terminal but a terminal final snapshot must still
+    record a terminal event in the durable event index (OmnigentBridge §7.2)."""
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            return {"pending_id": "pending-1"}
+
+        async def stream_events(self, session_id: str):
+            # Stream ends without ever emitting a terminal normalized status.
+            yield {"session": {"status": "running"}}
+            yield {"session": {"status": "running"}}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            # The provider's final snapshot is terminal.
+            return {"status": "completed", "summary": "done"}
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    store = OmnigentBridgeSessionStore(session_maker)
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    try:
+        result = await run_omnigent_execution(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="corr-1",
+                idempotencyKey="idem-1",
+                parameters={
+                    "omnigent": {
+                        "agent": {"agentName": "codex-native-ui"},
+                        "session": {"allowEmptyWorkspace": True},
+                        "prompt": {"text": "Do the task"},
+                    },
+                },
+            ),
+            run_store=store,
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        )
+        assert result.metadata["normalizedStatus"] == "completed"
+
+        from sqlalchemy import select
+
+        from api_service.db.models import OmnigentBridgeSession
+
+        async with session_maker() as session:
+            row = (
+                await session.execute(
+                    select(OmnigentBridgeSession).where(
+                        OmnigentBridgeSession.idempotency_key == "idem-1"
+                    )
+                )
+            ).scalar_one()
+            bridge_session_id = row.bridge_session_id
+
+        events = await store.list_events(bridge_session_id)
+    finally:
+        await engine.dispose()
+
+    # The event index must contain a terminal completion event even though the
+    # stream itself never emitted one, and sequences must stay unique/monotonic.
+    sequences = [e.sequence for e in events]
+    assert sequences == sorted(sequences)
+    assert len(sequences) == len(set(sequences))
+    assert events[-1].normalized_status == "completed"
+    assert events[-1].event_type == "session.final_snapshot"
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_rejects_cross_owner_bridge_session(
+    monkeypatch,
+) -> None:
+    """§16 rule 1: authorize the bridge session before any provider call."""
+
+    from moonmind.omnigent.bridge_security import BridgeSessionBinding
+
+    class Store:
+        async def get_binding(self, *_a: object, **_k: object) -> BridgeSessionBinding:
+            return BridgeSessionBinding(
+                workflow_id="other-workflow", agent_run_id="other-run"
+            )
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            raise AssertionError("provider call must not happen before authorization")
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        run_store=Store(),
+    )
+
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "omnigent_authorization_denied"
+    assert result.metadata["authorizationDenied"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_rechecks_owner_after_get_or_create(
+    monkeypatch,
+) -> None:
+    """§16 rule 1: reject a concurrently created cross-owner durable row."""
+
+    class Row:
+        moonmind_workflow_id = "other-workflow"
+        moonmind_agent_run_id = "other-run"
+
+    class Store:
+        async def get_binding(self, *_a: object, **_k: object) -> None:
+            return None
+
+        async def get_or_create(self, *_a: object, **_k: object) -> Row:
+            return Row()
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, *_a: object, **_k: object) -> dict[str, object]:
+            raise AssertionError("session attach/create must not use cross-owner row")
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        run_store=Store(),
+    )
+
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "omnigent_authorization_denied"
+    assert result.metadata["authorizationDenied"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_redacts_raw_events_before_persistence(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """§16 rule 5: raw provider events are redacted before artifact write."""
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            return {}
+
+        async def stream_events(self, session_id: str):
+            yield {"type": "host.capabilities", "api_token": "sk-should-not-persist"}
+            yield {"type": "response.completed"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            return {"status": "completed", "summary": "done"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    assert result.failure_class is None
+    raw_path = tmp_path / "corr-1" / "runtime.omnigent.sse.raw.jsonl"
+    raw_text = raw_path.read_text(encoding="utf-8")
+    assert "sk-should-not-persist" not in raw_text
+    assert "[REDACTED]" in raw_text

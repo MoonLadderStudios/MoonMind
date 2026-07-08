@@ -133,3 +133,55 @@ def test_parse_sse_line_redacts_payload_and_rejects_malformed_frames() -> None:
 
     with pytest.raises(OmnigentClientError, match="Malformed Omnigent SSE frame"):
         parse_sse_line("data: not-json")
+
+
+@pytest.mark.asyncio
+async def test_omnigent_client_does_not_leak_moonmind_auth_headers_upstream() -> None:
+    """§16 rule 7: proxy mode must not forward MoonMind internal auth headers."""
+
+    captured: dict[str, str] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(request.headers)
+        return httpx.Response(200, json={"ok": True})
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        api_token="server-token",
+        transport=httpx.MockTransport(handler),
+        forward_headers={
+            "Authorization": "Bearer moonmind-user-token",
+            "Cookie": "session=abc",
+            "X-MoonMind-Auth": "internal",
+            "X-Trace-Id": "trace-1",
+        },
+    )
+
+    await client.create_session({"agent_id": "ag_1"})
+
+    assert "moonmind-user-token" not in captured.get("authorization", "")
+    assert captured["authorization"] == "Bearer server-token"
+    assert "cookie" not in captured
+    assert "x-moonmind-auth" not in captured
+    assert captured["x-trace-id"] == "trace-1"
+
+
+@pytest.mark.asyncio
+async def test_omnigent_client_forwards_explicitly_allowlisted_headers() -> None:
+    captured: dict[str, str] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(request.headers)
+        return httpx.Response(200, json={"ok": True})
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+        forward_headers={"X-MoonMind-Trace": "trace-1", "Cookie": "session=abc"},
+        upstream_header_allowlist=["x-moonmind-trace"],
+    )
+
+    await client.create_session({"agent_id": "ag_1"})
+
+    assert captured["x-moonmind-trace"] == "trace-1"
+    assert "cookie" not in captured

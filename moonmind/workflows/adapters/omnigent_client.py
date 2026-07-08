@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
+from moonmind.omnigent.bridge_security import sanitize_proxy_headers
+from moonmind.omnigent.failure_classification import classify_omnigent_http_status
 from moonmind.utils.logging import (
     SecretRedactor,
     redact_sensitive_payload,
@@ -57,6 +59,8 @@ class OmnigentHttpClient:
         stream_timeout_seconds: float | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         client: httpx.AsyncClient | None = None,
+        forward_headers: Mapping[str, Any] | None = None,
+        upstream_header_allowlist: Iterable[str] | None = None,
     ) -> None:
         self._base = str(base_url).rstrip("/")
         self._api_token = api_token
@@ -67,13 +71,22 @@ class OmnigentHttpClient:
         )
         self._transport = transport
         self._client = client
+        # Proxy mode never leaks MoonMind internal auth headers upstream unless
+        # the operator explicitly allowlists them (OmnigentBridge.md §16 rule 7).
+        self._forward_headers = sanitize_proxy_headers(
+            forward_headers or {},
+            allowed_upstream_headers=upstream_header_allowlist or (),
+        )
         self._redactor = SecretRedactor(
             secrets=[api_token],
             placeholder="[REDACTED]",
         )
 
     def _headers(self, *, accept: str = "application/json") -> dict[str, str]:
-        headers = {"Accept": accept}
+        # Forwarded (already sanitized) headers first, then MoonMind-owned
+        # values so the upstream Omnigent credential always wins.
+        headers = dict(self._forward_headers)
+        headers["Accept"] = accept
         if self._api_token:
             headers["Authorization"] = f"Bearer {self._api_token}"
         return headers
@@ -339,7 +352,7 @@ class OmnigentHttpClient:
             self._redact(f"Omnigent HTTP {status_code}"),
             status_code=status_code,
             response_body=response_body,
-            failure_class=_failure_class_for_status(status_code),
+            failure_class=classify_omnigent_http_status(status_code),
         )
 
     def _redact(self, value: str) -> str:
@@ -383,12 +396,6 @@ def _scrub_payload_with_redactor(payload: Any, *, redactor: SecretRedactor) -> A
             for item in payload
         ]
     return payload
-
-
-def _failure_class_for_status(status_code: int) -> str:
-    if status_code in {400, 404, 409, 422}:
-        return "user_error"
-    return "integration_error"
 
 
 __all__ = [

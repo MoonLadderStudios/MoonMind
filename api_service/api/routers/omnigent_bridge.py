@@ -35,6 +35,7 @@ from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
+from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
@@ -42,7 +43,6 @@ from moonmind.omnigent.settings import (
     resolved_default_agent_name,
     resolved_server_url,
 )
-from moonmind.omnigent.store import OmnigentRunStore
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 # The bridge is exposed at the operator-declared mount path (OB-§6, §21.1). The
@@ -119,7 +119,7 @@ def _get_bridge_proxy(
         api_token=resolved_api_token(),
     )
     return OmnigentBridgeSessionProxy(
-        run_store=OmnigentRunStore(async_session_maker),
+        run_store=OmnigentBridgeSessionStore(async_session_maker),
         client=client,
         config=_config,
         default_agent_name=resolved_default_agent_name(),

@@ -12,9 +12,9 @@ Omnigent-shaped session snapshot.
 
 The proxy deliberately reuses the existing MoonMind Omnigent primitives
 (``build_omnigent_selection`` / ``resolve_omnigent_target`` /
-``build_omnigent_session_create_payload`` and ``OmnigentRunStore``) so the
-create/attach/validate behavior has one canonical path rather than a parallel
-implementation.
+``build_omnigent_session_create_payload`` and ``OmnigentBridgeSessionStore``) so
+the create/attach/validate behavior has one canonical path rather than a
+parallel implementation.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_PROXY,
     OmnigentBridgeConfig,
 )
-from moonmind.omnigent.store import OmnigentRunStore
+from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     OmnigentAdapterError,
@@ -153,7 +153,7 @@ class OmnigentBridgeSessionProxy:
     def __init__(
         self,
         *,
-        run_store: OmnigentRunStore,
+        run_store: OmnigentBridgeSessionStore,
         client: OmnigentHttpClient,
         config: OmnigentBridgeConfig | None = None,
         default_agent_name: str = "",
