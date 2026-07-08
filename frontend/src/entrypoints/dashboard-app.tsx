@@ -755,7 +755,7 @@ function RoutedDashboardPage({
       // `sidebar` whenever a preference change fires (for example when the
       // already-selected "Full screen table" button re-persists preferences),
       // so leave the route-owned `table` mode untouched on this surface.
-      if (location.pathname.replace(/\/$/, '') !== '/workflows') {
+      if (window.location.pathname.replace(/\/$/, '') !== '/workflows') {
         setRequestedMode(prefs.workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar');
       }
       setLastSelectedWorkflowId(prefs.lastSelectedWorkflowId.trim() || null);
@@ -766,7 +766,7 @@ function RoutedDashboardPage({
       window.removeEventListener(DASHBOARD_PREFERENCES_CHANGED_EVENT, syncPreferences);
       window.removeEventListener('storage', syncPreferences);
     };
-  }, [location.pathname]);
+  }, []);
 
   useEffect(() => {
     const normalizedPath = location.pathname.replace(/\/$/, '');
