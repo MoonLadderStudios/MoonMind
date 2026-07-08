@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -54,6 +54,15 @@ _KNOWN_AUTOMATION_USERS = {
     "chatgpt-codex-connector",
     "gemini-code-assist",
     "github-actions",
+}
+_UTC = timezone.utc
+_NON_VISIBLE_COMMENT_REASONS = {
+    "addressed_in_ledger",
+    "command_comment",
+    "empty_body",
+    "stale_bot_comment",
+    "thread_outdated",
+    "thread_resolved",
 }
 
 def _build_subprocess_env() -> dict[str, str]:
@@ -297,7 +306,15 @@ def _is_gemini_code_assist_user(login: str | None) -> bool:
     return _strip_bot_suffix(login) == "gemini-code-assist"
 
 def _utc_now() -> datetime:
-    return datetime.now(UTC)
+    return datetime.now(_UTC)
+
+def _is_gemini_no_feedback_comment(comment: dict, normalized_body: str) -> bool:
+    if not _is_gemini_code_assist_user(comment.get("user")):
+        return False
+    if comment.get("type") not in {"issue_comment", "review"}:
+        return False
+    body = normalized_body.lower()
+    return "no review comments" in body or "no feedback to provide" in body
 
 def _parse_utc_timestamp(value: object) -> datetime | None:
     candidate = str(value or "").strip()
@@ -310,8 +327,8 @@ def _parse_utc_timestamp(value: object) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+        return parsed.replace(tzinfo=_UTC)
+    return parsed.astimezone(_UTC)
 
 def _load_previous_codex_review_grace(snapshot_path: Path) -> dict | None:
     try:
@@ -388,6 +405,15 @@ def _classify_comment_actionability(
         )
     ):
         return False, "command_comment"
+
+    if _is_gemini_no_feedback_comment(comment, normalized_body):
+        return False, "gemini_no_feedback_review"
+
+    if _is_gemini_code_assist_user(comment.get("user")) and comment_type in {
+        "issue_comment",
+        "review",
+    }:
+        return True, "actionable"
 
     if is_bot_user(comment.get("user")):
         return False, "bot_comment_excluded"
@@ -554,14 +580,34 @@ def apply_codex_review_grace(
 ) -> dict:
     """Annotate a Gemini-only review state with a bounded Codex wait window."""
 
-    if comments_summary.get("hasActionableComments") is True or len(comments) != 1:
+    if comments_summary.get("hasActionableComments") is True:
         comments_summary["codexReviewGrace"] = {
             "active": False,
             "reason": "not_gemini_only",
         }
         return comments_summary
 
-    only_comment = comments[0] if isinstance(comments[0], dict) else {}
+    classified_comments = comments_summary.get("classifiedComments")
+    visible_comments: list[dict] = []
+    if isinstance(classified_comments, list) and len(classified_comments) == len(comments):
+        for comment, classified in zip(comments, classified_comments):
+            if not isinstance(comment, dict) or not isinstance(classified, dict):
+                continue
+            reason = str(classified.get("reason") or "").strip()
+            if reason in _NON_VISIBLE_COMMENT_REASONS:
+                continue
+            visible_comments.append(comment)
+    else:
+        visible_comments = [c for c in comments if isinstance(c, dict)]
+
+    if len(visible_comments) != 1:
+        comments_summary["codexReviewGrace"] = {
+            "active": False,
+            "reason": "not_gemini_only",
+        }
+        return comments_summary
+
+    only_comment = visible_comments[0]
     if not _is_gemini_code_assist_user(only_comment.get("user")):
         comments_summary["codexReviewGrace"] = {
             "active": False,
@@ -569,7 +615,7 @@ def apply_codex_review_grace(
         }
         return comments_summary
 
-    now_utc = (now or _utc_now()).astimezone(UTC)
+    now_utc = (now or _utc_now()).astimezone(_UTC)
     key = _comment_identity(only_comment, head_commit_sha=head_commit_sha)
     started_at = None
     if isinstance(previous_grace, dict) and previous_grace.get("key") == key:

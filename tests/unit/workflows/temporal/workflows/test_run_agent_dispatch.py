@@ -1103,6 +1103,10 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
     def test_checkpoint_branch_turn_source_preserves_before_execution_boundary(self) -> None:
         wf = MoonMindRunWorkflow()
 
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
         source = wf._checkpoint_branch_turn_source_checkpoint(
             {
                 "sourceWorkflowId": "source-wf",
@@ -1114,6 +1118,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                 "checkpointBeforeDigest": "sha256:" + "a" * 64,
             },
             node_id="repair",
+            wf_info=MockInfo(),
         )
 
         self.assertEqual(source["checkpointRef"], "artifact://checkpoint/before")

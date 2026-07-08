@@ -338,7 +338,7 @@ def run_orchestration(
                 else base_sleep_seconds
             )
             effective_max_sleep_seconds = (
-                max(60, min(max_sleep_seconds, 60))
+                60
                 if normalized_reason == "codex_review_grace_wait"
                 else max_sleep_seconds
             )

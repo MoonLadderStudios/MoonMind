@@ -539,6 +539,65 @@ def test_second_visible_comment_disables_gemini_grace(
     assert summary["codexReviewGrace"]["active"] is False
     assert summary["codexReviewGrace"]["reason"] == "not_gemini_only"
 
+def test_historical_comments_do_not_disable_gemini_grace(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+    apply_codex_review_grace = pr_resolve_snapshot_module["apply_codex_review_grace"]
+
+    comments = [
+        {
+            "type": "review",
+            "id": 4649647799,
+            "user": "gemini-code-assist",
+            "body": "There are no review comments, so I have no feedback to provide.",
+            "created_at": "2026-07-07T23:21:05Z",
+        },
+        {
+            "type": "review_comment",
+            "id": 3540280148,
+            "user": "human-reviewer",
+            "body": "Please update this old diff.",
+            "thread_resolved": True,
+        },
+        {
+            "type": "issue_comment",
+            "id": 3540280149,
+            "user": "human-reviewer",
+            "body": "@codex review",
+        },
+    ]
+
+    summary = apply_codex_review_grace(
+        summarize_comments(comments, include_bot_review_comments=True),
+        comments,
+        head_commit_sha="0f3c29855026f4da35cbead50bfa2d6f0bde641c",
+        now=datetime(2026, 7, 7, 23, 30, 34, tzinfo=UTC),
+    )
+
+    assert summary["hasActionableComments"] is False
+    assert summary["codexReviewGrace"]["active"] is True
+    assert summary["codexReviewGrace"]["reason"] == "gemini_only_review"
+
+def test_actionable_gemini_review_body_stays_actionable(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+
+    comments = [
+        {
+            "type": "review",
+            "id": 4649647799,
+            "user": "gemini-code-assist",
+            "body": "Please add a regression test before merging.",
+        }
+    ]
+
+    summary = summarize_comments(comments, include_bot_review_comments=True)
+
+    assert summary["hasActionableComments"] is True
+    assert summary["actionableCommentIds"] == [4649647799]
+
 def test_resolved_review_threads_are_not_actionable(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -654,6 +713,26 @@ def test_finalize_blocks_during_codex_review_grace(
     )
 
     assert decision == {"action": "blocked", "reason": "codex_review_grace_wait"}
+
+def test_finalize_reports_ci_before_codex_review_grace(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"},
+            "ci": {"isRunning": False, "hasFailures": True, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+                "codexReviewGrace": {"active": True},
+            },
+        }
+    )
+
+    assert decision == {"action": "blocked", "reason": "ci_failures"}
 
 def test_finalize_merges_after_codex_review_grace_expires(
     pr_resolve_finalize_module: dict[str, Any],
