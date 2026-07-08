@@ -5784,8 +5784,17 @@ class MoonMindRunWorkflow:
         if context:
             self._trusted_issue_context = context
 
+    @staticmethod
+    def _patched_or_false_outside_workflow(patch_id: str) -> bool:
+        try:
+            return workflow.patched(patch_id)
+        except Exception as exc:
+            if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+                return False
+            raise
+
     def _record_assessment_context(self, outputs: Mapping[str, Any]) -> None:
-        record_aliases = workflow.patched(
+        record_aliases = self._patched_or_false_outside_workflow(
             RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_ALIAS_PATCH
         )
         for aliases in (
