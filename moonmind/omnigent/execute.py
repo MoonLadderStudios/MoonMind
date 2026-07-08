@@ -18,6 +18,11 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from temporalio import activity
 
+from moonmind.omnigent.failure_classification import (
+    OmnigentFailureReason,
+    classify_omnigent_failure,
+    failure_class_for_terminal_status,
+)
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
@@ -86,6 +91,8 @@ class OmnigentCaptureBundle:
     capture_manifest_ref: str = ""
     external_state_ref: str = ""
     metadata_refs: dict[str, str] = field(default_factory=dict)
+    optional_harvest_failed: bool = False
+    resource_harvest_failure_class: str | None = None
 
 
 class OmnigentArtifactGateway:
@@ -187,11 +194,9 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
         path = (self._root / safe_correlation / safe_name).resolve()
         if not path.is_relative_to(self._root):
             raise OmnigentArtifactError("Omnigent artifact path escapes artifact root")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
         digest = hashlib.sha256(payload).hexdigest()
         metadata_path = path.with_suffix(f"{path.suffix}.metadata.json")
-        metadata_path.write_text(
+        metadata_payload = (
             json.dumps(
                 {
                     "contentType": content_type,
@@ -202,9 +207,20 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
                 indent=2,
                 sort_keys=True,
             )
-            + "\n",
-            encoding="utf-8",
+            + "\n"
         )
+        # Surface filesystem persistence failures (disk full, permission,
+        # missing directory) as OmnigentArtifactError so the §17 required
+        # artifact-persistence handler classifies them instead of letting a
+        # raw OSError escape the activity.
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+            metadata_path.write_text(metadata_payload, encoding="utf-8")
+        except OSError as exc:
+            raise OmnigentArtifactError(
+                f"Unable to persist Omnigent artifact '{safe_name}': {exc}"
+            ) from exc
         return f"artifact://omnigent/{safe_correlation}/{safe_name}"
 
     async def read_text(self, artifact_ref: str) -> str:
@@ -358,14 +374,36 @@ def normalize_omnigent_observation(payload: dict[str, Any]) -> str | None:
     raise OmnigentContractError(f"Unsupported Omnigent status: {raw}")
 
 
-def _failure_class_for(status: str) -> str | None:
-    if status == "completed":
-        return None
-    if status == "failed":
-        return "execution_error"
-    if status in {"canceled", "timed_out"}:
-        return "system_error"
-    return "integration_error"
+# Diff/patch capture is capability-probed and never fatal on its own (§12.3), so
+# `workspaceDiffsUnavailable`/`patchUnavailable` are intentionally excluded here.
+_HARVEST_UNAVAILABLE_KEYS = (
+    "changedFilesUnavailable",
+    "workspaceFilesUnavailable",
+    "sessionFilesUnavailable",
+)
+
+
+def _capture_requires_full_evidence(capture_policy: dict[str, Any] | None) -> bool:
+    if not capture_policy:
+        return False
+    return bool(capture_policy.get("requireFullEvidence", False))
+
+
+def _optional_resource_harvest_failed(manifest: dict[str, Any]) -> bool:
+    """True when an optional resource-harvest step recorded an unavailable row.
+
+    Diff/patch capability probes are excluded because §12.3 keeps them
+    non-fatal; only changed-file, workspace-file, and session-file harvest
+    failures count toward the §17 optional-resource-harvest outcome.
+    """
+
+    if any(manifest.get(key) for key in _HARVEST_UNAVAILABLE_KEYS):
+        return True
+    return any(
+        isinstance(item, dict) and item.get("unavailable")
+        for group in ("changedFiles", "workspaceFiles", "sessionFiles")
+        for item in (manifest.get(group) or [])
+    )
 
 
 def _session_options(omni: dict[str, Any]) -> dict[str, Any]:
@@ -587,8 +625,16 @@ def build_omnigent_result(
     capture_bundle: OmnigentCaptureBundle,
     failure_summary: str | None = None,
     provider_error_code: str | None = None,
+    failure_reason: OmnigentFailureReason | None = None,
+    require_full_evidence: bool = False,
 ) -> AgentRunResult:
-    """Build compact terminal canonical result for Omnigent."""
+    """Build compact terminal canonical result for Omnigent.
+
+    ``failure_reason`` selects an explicit §17 classifier row (for example a
+    first-message digest mismatch that must map to ``user_error`` even though
+    the terminal status is ``failed``). When omitted, the failure class is
+    derived from the terminal status via the same §17 classifier.
+    """
 
     output_refs = list(capture_bundle.output_refs)
     diagnostics_ref = capture_bundle.diagnostics_ref
@@ -599,7 +645,23 @@ def build_omnigent_result(
     _assert_no_provider_native_refs(
         [*output_refs, diagnostics_ref, *capture_bundle.metadata_refs.values()]
     )
-    summary = final_snapshot.get("summary") or failure_summary
+    failure_class = (
+        classify_omnigent_failure(
+            failure_reason,
+            require_full_evidence=require_full_evidence,
+        )
+        if failure_reason is not None
+        else failure_class_for_terminal_status(terminal_status)
+    )
+
+    # A classified failure must never be summarized with the provider's
+    # success snapshot text (for example a full-evidence harvest escalation on
+    # a "completed" session whose snapshot summary still says "done"). Prefer an
+    # explicit failure summary so operators are not told a failed run succeeded.
+    if failure_class is not None and failure_summary:
+        summary = failure_summary
+    else:
+        summary = final_snapshot.get("summary") or failure_summary
     if not summary:
         summary = (
             "Omnigent session completed"
@@ -642,7 +704,7 @@ def build_omnigent_result(
             fallback="Omnigent session reached a terminal status",
         ),
         diagnosticsRef=str(diagnostics_ref),
-        failureClass=_failure_class_for(terminal_status),
+        failureClass=failure_class,
         providerErrorCode=provider_error_code,
         metadata=metadata,
     )
@@ -1277,6 +1339,24 @@ async def _build_capture_bundle(
                 manifest=manifest,
                 refs=refs,
             )
+    optional_harvest_failed = _optional_resource_harvest_failed(manifest)
+    require_full_evidence = _capture_requires_full_evidence(capture_policy)
+    resource_harvest_failure_class: str | None = None
+    if optional_harvest_failed:
+        resource_harvest_failure_class = classify_omnigent_failure(
+            OmnigentFailureReason.OPTIONAL_RESOURCE_HARVEST_FAILED,
+            require_full_evidence=require_full_evidence,
+        )
+        manifest["optionalResourceHarvest"] = {
+            "failed": True,
+            "requireFullEvidence": require_full_evidence,
+            "outcome": (
+                "required_evidence_missing"
+                if resource_harvest_failure_class
+                else "completed_with_diagnostics"
+            ),
+            "failureClass": resource_harvest_failure_class,
+        }
     diagnostics_payload = {
         "provider": "omnigent",
         "omnigentSessionId": session_id,
@@ -1412,6 +1492,8 @@ async def _build_capture_bundle(
         capture_manifest_ref=manifest_ref,
         external_state_ref=refs.get("externalStateRef", ""),
         metadata_refs=metadata_refs,
+        optional_harvest_failed=optional_harvest_failed,
+        resource_harvest_failure_class=resource_harvest_failure_class,
     )
 
 
@@ -1676,7 +1758,9 @@ async def run_omnigent_execution(
                         diagnostics={
                             "error": str(exc),
                             "nonRetryable": True,
-                            "failureClass": "integration_error",
+                            "failureClass": classify_omnigent_failure(
+                                OmnigentFailureReason.FIRST_MESSAGE_DIGEST_MISMATCH
+                            ),
                         },
                         harvest_resources=False,
                         external_state=external_state,
@@ -1694,6 +1778,9 @@ async def run_omnigent_execution(
                         capture_bundle=bundle,
                         failure_summary="First-message digest mismatch",
                         provider_error_code="omnigent_first_message_digest_mismatch",
+                        failure_reason=(
+                            OmnigentFailureReason.FIRST_MESSAGE_DIGEST_MISMATCH
+                        ),
                     )
             stream_queue: asyncio.Queue[dict[str, Any] | BaseException | None] | None = None
             if first_message_reconcile_required:
@@ -1728,7 +1815,9 @@ async def run_omnigent_execution(
                         terminal_status="failed",
                         diagnostics={
                             "error": "Unable to reconcile first-message posting state",
-                            "failureClass": "integration_error",
+                            "failureClass": classify_omnigent_failure(
+                                OmnigentFailureReason.AMBIGUOUS_POSTING_RECONCILIATION
+                            ),
                         },
                         harvest_resources=False,
                         external_state=external_state,
@@ -1746,6 +1835,9 @@ async def run_omnigent_execution(
                         capture_bundle=bundle,
                         failure_summary="Unable to reconcile first-message posting state",
                         provider_error_code="omnigent_first_message_reconcile_failed",
+                        failure_reason=(
+                            OmnigentFailureReason.AMBIGUOUS_POSTING_RECONCILIATION
+                        ),
                     )
                 if run_store is not None:
                     await run_store.mark_posted(request.idempotency_key)
@@ -1907,7 +1999,9 @@ async def run_omnigent_execution(
                 raw_events=raw_events,
                 normalized_events=normalized_events,
                 terminal_status=terminal_status,
-                diagnostics={"failureClass": _failure_class_for(terminal_status)},
+                diagnostics={
+                    "failureClass": failure_class_for_terminal_status(terminal_status)
+                },
                 harvest_resources=True,
                 external_state=external_state,
                 capture_policy=capture_policy,
@@ -1925,6 +2019,17 @@ async def run_omnigent_execution(
                     # the durable event index (OmnigentBridge §7.2).
                     events=normalized_events,
                 )
+            # §17: an optional resource-harvest failure resolves to
+            # completed-with-diagnostics unless policy requires full evidence,
+            # in which case the missing required evidence escalates.
+            harvest_failure_reason: OmnigentFailureReason | None = None
+            if (
+                terminal_status == "completed"
+                and bundle.resource_harvest_failure_class
+            ):
+                harvest_failure_reason = (
+                    OmnigentFailureReason.OPTIONAL_RESOURCE_HARVEST_FAILED
+                )
             return build_omnigent_result(
                 request=request,
                 terminal_status=terminal_status,
@@ -1933,6 +2038,19 @@ async def run_omnigent_execution(
                 final_snapshot=final_snapshot,
                 event_count=event_count["value"],
                 capture_bundle=bundle,
+                failure_reason=harvest_failure_reason,
+                require_full_evidence=harvest_failure_reason is not None,
+                failure_summary=(
+                    "Required Omnigent resource evidence was missing after "
+                    "session completion"
+                    if harvest_failure_reason is not None
+                    else None
+                ),
+                provider_error_code=(
+                    "omnigent_required_resource_evidence_missing"
+                    if harvest_failure_reason is not None
+                    else None
+                ),
             )
     except asyncio.CancelledError:
         await _cancel_task(heartbeat_task)
@@ -1965,14 +2083,88 @@ async def run_omnigent_execution(
                     with suppress(Exception):
                         await cleanup_client.delete_session(session_id)
         raise
+    except OmnigentArtifactError as exc:
+        # §17: required artifact-persistence failure -> system_error
+        # (MoonMind artifact authority failed).
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
+        failure_class = classify_omnigent_failure(
+            OmnigentFailureReason.REQUIRED_ARTIFACT_PERSISTENCE_FAILED
+        )
+        final_snapshot = {"status": "failed", "summary": str(exc)}
+        try:
+            bundle = await _build_capture_bundle(
+                client=client,
+                artifact_gateway=artifact_gateway,
+                request=request,
+                session_id=session_id,
+                agent_id=target_agent_id,
+                initial_snapshot=initial_snapshot,
+                final_snapshot=final_snapshot,
+                first_message_request=first_message,
+                first_message_response=first_message_response,
+                first_message_posted=first_message_posted,
+                first_message_response_identifiers=first_message_response_identifiers,
+                raw_events=raw_events,
+                normalized_events=normalized_events,
+                terminal_status="failed",
+                diagnostics={
+                    "error": str(exc),
+                    "failureClass": failure_class,
+                    "artifactAuthorityFailed": True,
+                },
+                harvest_resources=False,
+                external_state=external_state,
+                capture_policy=capture_policy,
+            )
+        except OmnigentArtifactError:
+            # Artifact authority is unavailable even for evidence capture;
+            # still surface the system_error terminal outcome.
+            return AgentRunResult(
+                summary=_compact_summary(
+                    exc, fallback="Omnigent artifact persistence failed"
+                ),
+                failureClass=failure_class,
+                providerErrorCode="omnigent_artifact_persistence_failed",
+                metadata={
+                    "normalizedStatus": "failed",
+                    "providerName": "omnigent",
+                    "artifactAuthorityFailed": True,
+                },
+            )
+        return AgentRunResult(
+            outputRefs=bundle.output_refs,
+            summary=_compact_summary(
+                exc, fallback="Omnigent artifact persistence failed"
+            ),
+            diagnosticsRef=bundle.diagnostics_ref,
+            failureClass=failure_class,
+            providerErrorCode="omnigent_artifact_persistence_failed",
+            metadata={
+                "normalizedStatus": "failed",
+                "providerName": "omnigent",
+                **bundle.metadata_refs,
+            },
+        )
     except (
-        OmnigentArtifactError,
         OmnigentContractError,
         OmnigentAdapterError,
         ValueError,
     ) as exc:
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
+        if isinstance(exc, OmnigentAdapterError) and exc.failure_class == classify_omnigent_failure(
+            OmnigentFailureReason.INVALID_SESSION_PAYLOAD
+        ):
+            # §17: invalid session-create payload -> user_error.
+            failure_reason = OmnigentFailureReason.INVALID_SESSION_PAYLOAD
+            provider_error_code = "omnigent_invalid_session_payload"
+        else:
+            # Contract/adapter integration faults surface as the §17
+            # integration rows (upstream/host register/connect).
+            failure_reason = OmnigentFailureReason.HOST_REGISTER_CONNECT
+            provider_error_code = "omnigent_contract_error"
+        failure_class = classify_omnigent_failure(failure_reason)
         final_snapshot = {"status": "failed", "summary": str(exc)}
         bundle = await _build_capture_bundle(
             client=client,
@@ -1991,7 +2183,7 @@ async def run_omnigent_execution(
             terminal_status="failed",
             diagnostics={
                 "error": str(exc),
-                "failureClass": "integration_error",
+                "failureClass": failure_class,
             },
             harvest_resources=bool(client and session_id),
             external_state=external_state,
@@ -2001,8 +2193,8 @@ async def run_omnigent_execution(
             outputRefs=bundle.output_refs,
             summary=_compact_summary(exc, fallback="Omnigent contract error"),
             diagnosticsRef=bundle.diagnostics_ref,
-            failureClass="integration_error",
-            providerErrorCode="omnigent_contract_error",
+            failureClass=failure_class,
+            providerErrorCode=provider_error_code,
             metadata={
                 "normalizedStatus": "failed",
                 "providerName": "omnigent",
@@ -2012,14 +2204,27 @@ async def run_omnigent_execution(
     except OmnigentSessionStillRunningError:
         raise
     except (OmnigentClientError, httpx.HTTPError) as exc:
+        # §17 transport rows: upstream unreachable / host register-connect /
+        # auth failure map to integration_error, while 4xx client-input
+        # failures (invalid session payload) map to user_error. The client
+        # already classified this via the shared §17 classifier and preserves
+        # redacted host/server diagnostics through OmnigentClientError.
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
         status_code = exc.status_code if isinstance(exc, OmnigentClientError) else None
+        transport_failure_class = classify_omnigent_failure(
+            OmnigentFailureReason.HOST_REGISTER_CONNECT
+        )
+        failure_class = (
+            exc.failure_class
+            if isinstance(exc, OmnigentClientError)
+            else transport_failure_class
+        )
         final_snapshot = {"status": "failed", "summary": str(exc)}
         diagnostics = (
             exc.diagnostics()
             if isinstance(exc, OmnigentClientError)
-            else {"error": str(exc), "failureClass": "integration_error"}
+            else {"error": str(exc), "failureClass": transport_failure_class}
         )
         bundle = await _build_capture_bundle(
             client=client,
@@ -2045,7 +2250,7 @@ async def run_omnigent_execution(
             outputRefs=bundle.output_refs,
             summary=_compact_summary(exc, fallback="Omnigent integration error"),
             diagnosticsRef=bundle.diagnostics_ref,
-            failureClass="integration_error",
+            failureClass=failure_class,
             providerErrorCode=str(status_code or "omnigent_http_error"),
             metadata={
                 "normalizedStatus": "failed",
