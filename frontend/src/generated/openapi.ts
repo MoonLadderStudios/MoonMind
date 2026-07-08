@@ -2637,6 +2637,16 @@ export interface paths {
         /**
          * Get Omnigent Session
          * @description Return an Omnigent-shaped session snapshot (OB-§4.1, §8.2).
+         *
+         *     Enforces the §16 rule-1 authorization boundary on direct reads: unlike the
+         *     create path, the raw provider ``session_id`` is caller-supplied, so the
+         *     facade must confirm the caller owns the workflow that owns the session
+         *     before proxying the read with the service credential. This closes the IDOR
+         *     where any authenticated user could read any session snapshot by id.
+         *
+         *     Ownership is resolved against the durable bridge binding (not caller-
+         *     supplied task-identity headers), so the read requires no header parameters:
+         *     the authenticated user must own the workflow that owns the session.
          */
         get: operations["get_omnigent_session_api_omnigent_v1_sessions__session_id__get"];
         put?: never;

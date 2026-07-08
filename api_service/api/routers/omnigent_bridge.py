@@ -235,7 +235,6 @@ async def get_omnigent_session(
     session_id: str,
     _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
-    principal_context: dict[str, Any] = Depends(execution_principal_dependency),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
 ) -> dict[str, Any]:
@@ -246,6 +245,10 @@ async def get_omnigent_session(
     facade must confirm the caller owns the workflow that owns the session
     before proxying the read with the service credential. This closes the IDOR
     where any authenticated user could read any session snapshot by id.
+
+    Ownership is resolved against the durable bridge binding (not caller-
+    supplied task-identity headers), so the read requires no header parameters:
+    the authenticated user must own the workflow that owns the session.
     """
 
     owner = await proxy.get_session_owner(session_id)
@@ -266,10 +269,7 @@ async def get_omnigent_session(
     principal = await resolve_execution_principal(
         user=user,
         service=service,
-        request=principal_context.get("request"),
         workflow_id_header=owner.workflow_id,
-        run_id_header=principal_context.get("run_id_header"),
-        agent_run_id_header=principal_context.get("agent_run_id_header"),
     )
     if not principal.workflow_id:
         raise HTTPException(
