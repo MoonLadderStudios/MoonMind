@@ -1009,7 +1009,7 @@ async def test_update_jira_issue_status_accepts_markdown_heading_previous_verdic
                 "summary": (
                     "Both handoff artifacts are written and valid. "
                     "Here is the assessment result.\n\n"
-                    "## Verdict: NOT_IMPLEMENTED\n\n"
+                    "  ## Verdict: NOT_IMPLEMENTED\n\n"
                     "Evidence follows."
                 ),
             },
@@ -3488,7 +3488,7 @@ async def test_check_jira_blockers_preserves_markdown_heading_previous_assessmen
                 "summary": (
                     "Both handoff artifacts are written and valid. "
                     "Here is the assessment result.\n\n"
-                    "## Verdict: NOT_IMPLEMENTED\n\n"
+                    "  ## Verdict: NOT_IMPLEMENTED\n\n"
                     "Evidence follows."
                 ),
             },
