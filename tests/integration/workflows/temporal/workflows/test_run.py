@@ -525,10 +525,12 @@ class TestMoonMindUserWorkflow(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(
                     exc_info.exception.cause, exceptions.ApplicationError
                 )
+                failure_message = exc_info.exception.cause.message
                 self.assertIn(
-                    "plan node execution returned status FAILED",
-                    exc_info.exception.cause.message,
+                    "Plan step 'step-1' (repo.run_tests) returned status FAILED",
+                    failure_message,
                 )
+                self.assertIn("forced skill failure", failure_message)
                 
                 handle = env.client.get_workflow_handle("test-workflow-id-failed-skill-status")
                 desc = await handle.describe()
