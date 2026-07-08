@@ -288,6 +288,7 @@ publicApi:
     streamEvents: /v1/sessions/{session_id}/stream
     changedFiles: /v1/sessions/{session_id}/resources/environments/default/changes
     workspaceFiles: /v1/sessions/{session_id}/resources/environments/default/filesystem
+    workspaceDiffs: /v1/sessions/{session_id}/resources/environments/default/diff/{path}
     sessionFiles: /v1/sessions/{session_id}/resources/files
 
 hostConnection:
@@ -628,10 +629,12 @@ Diff capture is capability-probed. If unavailable, store diagnostics instead of 
 Store:
 
 ```text
-output.omnigent.workspace_diffs/<path>.before
-output.omnigent.workspace_diffs/<path>.after
+output.omnigent.workspace_diffs/<path>.diff
 output.omnigent.patch_unavailable.json
 ```
+
+Each `<path>.diff` holds the unified diff returned by the host, matching the
+single-file `.diff` layout already produced by `moonmind/omnigent/execute.py`.
 
 ### 12.4 Session files
 
@@ -826,17 +829,23 @@ In proxy mode, the host still authenticates to stock Omnigent Server. In embedde
 
 ### Phase 1 — Bridge config, schemas, and store
 
-Add:
+Add these to the existing `moonmind/omnigent/` package rather than a new
+`moonmind/omnigent_bridge/` package, keeping bridge code alongside the current
+`moonmind/omnigent/store.py` (`OmnigentRunStore`) and
+`moonmind/omnigent/execute.py`:
 
 ```text
-moonmind/omnigent_bridge/config.py
-moonmind/omnigent_bridge/store.py
+moonmind/omnigent/bridge_config.py
+moonmind/omnigent/bridge_store.py
 moonmind/schemas/omnigent_bridge_models.py
 api_service/db/models.py: OmnigentBridgeSession / OmnigentBridgeSessionEvent
 api_service/migrations/versions/*_omnigent_bridge_sessions.py
 ```
 
-This phase may wrap or migrate the existing `omnigent_external_runs` mapping.
+`bridge_store.py` supersedes the existing `omnigent_external_runs` mapping in
+`moonmind/omnigent/store.py`: migrate that mapping into
+`omnigent_bridge_sessions` and remove the superseded store in the same change
+rather than aliasing or wrapping it.
 
 ### Phase 2 — Proxy mode
 
@@ -844,9 +853,9 @@ Implement:
 
 ```text
 api_service/api/routers/omnigent_bridge.py
-moonmind/omnigent_bridge/proxy.py
-moonmind/omnigent_bridge/events.py
-moonmind/omnigent_bridge/artifacts.py
+moonmind/omnigent/bridge_proxy.py
+moonmind/omnigent/bridge_events.py
+moonmind/omnigent/bridge_artifacts.py
 ```
 
 Behavior:
@@ -963,10 +972,9 @@ Run against a real, unchanged Omnigent host:
 
 1. Should proxy mode mount under `/api/omnigent/*`, a dedicated bridge hostname, or both?
 2. Which upstream Omnigent host auth modes should MoonMind support in embedded mode?
-3. Should `omnigent_external_runs` be migrated into `omnigent_bridge_sessions`, or should the bridge store initially wrap it?
-4. Should direct Codex compatibility emit only normalized bridge events, or both normalized and raw Codex rollout events?
-5. What is the minimum host/runner conformance suite required before embedded mode can be enabled?
-6. Should clear/reset be represented as a bridge-local policy or an Omnigent extension event?
+3. Should direct Codex compatibility emit only normalized bridge events, or both normalized and raw Codex rollout events?
+4. What is the minimum host/runner conformance suite required before embedded mode can be enabled?
+5. Should clear/reset be represented as a bridge-local policy or an Omnigent extension event?
 
 ---
 
