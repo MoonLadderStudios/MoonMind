@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Help
+    url: https://github.com/MoonLadderStudios/MoonMind/discussions
+    about: Ask questions, share workflows, and get help from the community. Issues are for actionable bugs and feature requests.
