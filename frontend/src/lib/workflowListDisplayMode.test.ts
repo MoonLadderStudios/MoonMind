@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   WORKFLOW_LIST_DISPLAY_MODES,
+  resolveRecurringListDisplay,
   resolveWorkflowListDisplay,
   workflowListDisplayModeByValue,
   type WorkflowListDisplayMode,
@@ -207,5 +208,110 @@ describe('resolveWorkflowListDisplay', () => {
 
   it('returns null for unsupported dashboard routes', () => {
     expect(resolveWorkflowListDisplay({ pathname: '/settings', requestedMode: 'table' })).toBeNull();
+  });
+});
+
+describe('resolveRecurringListDisplay', () => {
+  it('keeps /schedules as the recurring table surface in table mode', () => {
+    expect(resolveRecurringListDisplay({
+      pathname: '/schedules',
+      requestedMode: 'table',
+      search: '?scope=personal',
+    })).toEqual({
+      requestedMode: 'table',
+      effectiveMode: 'table',
+      surface: 'recurring-table',
+      routeAction: 'none',
+      primarySurface: 'recurring-table',
+      listSurface: 'table',
+      selection: { definitionId: null, source: 'none' },
+      targetPath: '/schedules?scope=personal',
+      status: null,
+    });
+  });
+
+  it('opens the selected recurring schedule from /schedules for sidebar and hidden modes', () => {
+    for (const requestedMode of ['sidebar', 'hidden'] as const) {
+      expect(resolveRecurringListDisplay({
+        pathname: '/schedules',
+        requestedMode,
+        selectedDefinitionId: 'daily:scan',
+      })).toMatchObject({
+        requestedMode,
+        effectiveMode: requestedMode,
+        surface: 'recurring-table',
+        routeAction: 'navigate-selected-detail',
+        primarySurface: 'recurring-detail',
+        listSurface: requestedMode === 'hidden' ? 'none' : 'sidebar',
+        selection: { definitionId: 'daily:scan', source: 'last-selected' },
+        targetPath: '/schedules/daily%3Ascan',
+      });
+    }
+  });
+
+  it('uses the first visible recurring schedule when no selected schedule exists', () => {
+    expect(resolveRecurringListDisplay({
+      pathname: '/schedules',
+      requestedMode: 'sidebar',
+      firstVisibleDefinitionId: 'first:recurring',
+    })).toMatchObject({
+      effectiveMode: 'sidebar',
+      routeAction: 'resolve-first-workflow',
+      primarySurface: 'recurring-detail',
+      listSurface: 'sidebar',
+      selection: { definitionId: 'first:recurring', source: 'first-visible-row' },
+      targetPath: '/schedules/first%3Arecurring',
+    });
+  });
+
+  it('keeps an empty /schedules route in table mode when no recurring schedule can be opened', () => {
+    expect(resolveRecurringListDisplay({ pathname: '/schedules', requestedMode: 'hidden' })).toEqual({
+      requestedMode: 'hidden',
+      effectiveMode: 'table',
+      surface: 'recurring-table',
+      routeAction: 'none',
+      primarySurface: 'empty-recurring',
+      listSurface: 'table',
+      selection: { definitionId: null, source: 'none' },
+      targetPath: '/schedules',
+      status: 'No recurring schedule can be opened from the current list.',
+    });
+  });
+
+  it('keeps detail routes on hidden and sidebar modes and returns to /schedules for table mode', () => {
+    expect(resolveRecurringListDisplay({
+      pathname: '/schedules/daily%3Ascan',
+      search: '?scope=personal',
+      requestedMode: 'hidden',
+    })).toMatchObject({
+      effectiveMode: 'hidden',
+      surface: 'recurring-detail',
+      routeAction: 'none',
+      primarySurface: 'recurring-detail',
+      listSurface: 'none',
+      selection: { definitionId: 'daily:scan', source: 'route' },
+      targetPath: '/schedules/daily%3Ascan?scope=personal',
+    });
+
+    expect(resolveRecurringListDisplay({
+      pathname: '/schedules/daily%3Ascan',
+      requestedMode: 'sidebar',
+    })).toMatchObject({
+      effectiveMode: 'sidebar',
+      routeAction: 'none',
+      listSurface: 'sidebar',
+      targetPath: '/schedules/daily%3Ascan',
+    });
+
+    expect(resolveRecurringListDisplay({
+      pathname: '/schedules/daily%3Ascan',
+      requestedMode: 'table',
+    })).toMatchObject({
+      effectiveMode: 'table',
+      routeAction: 'navigate-workflows',
+      primarySurface: 'recurring-table',
+      listSurface: 'table',
+      targetPath: '/schedules',
+    });
   });
 });

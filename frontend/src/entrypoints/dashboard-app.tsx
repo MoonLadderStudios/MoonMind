@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type ComponentType,
+  type KeyboardEvent,
   type Ref,
   type ReactNode,
 } from 'react';
@@ -535,24 +536,58 @@ function WorkflowListDisplayModeControl({
   status?: string | null | undefined;
   onSelect: (mode: WorkflowListDisplayMode) => void;
 }) {
+  const selectByKey = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    currentIndex: number,
+  ) => {
+    const lastIndex = WORKFLOW_LIST_DISPLAY_MODES.length - 1;
+    let nextIndex: number | null = null;
+
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = currentIndex === lastIndex ? 0 : currentIndex + 1;
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = currentIndex === 0 ? lastIndex : currentIndex - 1;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = lastIndex;
+    }
+
+    if (nextIndex === null) {
+      return;
+    }
+
+    event.preventDefault();
+    const nextMode = WORKFLOW_LIST_DISPLAY_MODES[nextIndex];
+    onSelect(nextMode.value);
+    const nextRadio = event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(
+      `[data-list-display-mode="${nextMode.value}"]`,
+    );
+    nextRadio?.focus();
+  };
+
   return (
     <div
       className="workflow-list-display-control"
       role="radiogroup"
       aria-label={accessibleName}
     >
-      {WORKFLOW_LIST_DISPLAY_MODES.map((mode) => {
+      {WORKFLOW_LIST_DISPLAY_MODES.map((mode, index) => {
         const Icon = iconForWorkflowListMode(mode.icon);
         const checked = effectiveMode === mode.value;
         return (
           <button
             key={mode.value}
             type="button"
-            aria-pressed={checked}
+            role="radio"
+            aria-checked={checked}
             aria-label={mode.label}
+            tabIndex={checked ? 0 : -1}
             title={mode.label}
+            data-list-display-mode={mode.value}
             className={`workflow-list-display-option${checked ? ' workflow-list-display-option--selected' : ''}`}
             onClick={() => onSelect(mode.value)}
+            onKeyDown={(event) => selectByKey(event, index)}
           >
             <Icon size={LIST_MODE_ICON_SIZE} aria-hidden="true" />
           </button>
