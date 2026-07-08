@@ -35,6 +35,10 @@ The task is not complete until the target PR is merged or is proven already merg
   non-retryable blocker is reached first.
 - `ci_running` finalize waits use at least 60 seconds before the next check,
   even when `finalizeBackoffSeconds` is lower.
+- If the only visible PR comment/review is from `gemini-code-assist`, the
+  resolver treats that as a Codex-review grace window and polls for up to 10
+  minutes before merging. Any additional visible comment/review ends the grace
+  wait immediately.
 
 ## Primary Command (mandatory first action)
 Run the orchestration entrypoint before making manual changes. **You MUST provide the `--pr` argument** (using either the PR number or the branch name) to ensure the script targets the correct PR, even if you are on a different branch or detached HEAD:
@@ -126,6 +130,7 @@ Repeat this state machine until a terminal success or manual blocker:
   - `merge_conflicts`
 - Finalize-only retry reasons:
   - `ci_running`
+  - `codex_review_grace_wait`
   - `comments_unavailable`
   - `ci_signal_degraded`
   - `merge_not_ready` (limited grace retries)
@@ -133,6 +138,8 @@ Repeat this state machine until a terminal success or manual blocker:
   queued or running checks can reach a terminal state; if they then become
   `ci_failures`, continue into `run_fix_ci_skill` instead of stopping early.
 - `ci_running` should not poll faster than once per minute.
+- `codex_review_grace_wait` polls once per minute and should be allowed to
+  expire naturally before finalizing the merge.
 - If retries transition from transient CI states into actionable `ci_failures`, continue into `run_fix_ci_skill` instead of stopping at manual review.
 - If `merge_not_ready` resolves into an actionable blocker such as `merge_conflicts`, continue into the matching remediation skill instead of stopping at manual review.
 - Non-retryable stop reasons:

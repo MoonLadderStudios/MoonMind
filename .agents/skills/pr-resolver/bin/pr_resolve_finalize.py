@@ -125,6 +125,9 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
         return {"action": "blocked", "reason": "ci_failures"}
     if bool(ci.get("isRunning")):
         return {"action": "blocked", "reason": "ci_running"}
+    codex_review_grace = comments_summary.get("codexReviewGrace")
+    if isinstance(codex_review_grace, dict) and codex_review_grace.get("active") is True:
+        return {"action": "blocked", "reason": "codex_review_grace_wait"}
 
     merge_state = normalize_text(pr.get("mergeStateStatus")).upper()
     if merge_state in DIRECT_MERGE_STATE:

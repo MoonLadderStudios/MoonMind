@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -47,6 +48,22 @@ _MENTION_COMMAND_ONLY_COMMENT_PATTERN = re.compile(
     r"(review|address\s+that\s+feedback)\.?$",
     re.IGNORECASE,
 )
+_CODEX_REVIEW_GRACE_TIMEOUT_SECONDS = 600
+_CODEX_REVIEW_GRACE_POLL_SECONDS = 60
+_KNOWN_AUTOMATION_USERS = {
+    "chatgpt-codex-connector",
+    "gemini-code-assist",
+    "github-actions",
+}
+_UTC = timezone.utc
+_NON_VISIBLE_COMMENT_REASONS = {
+    "addressed_in_ledger",
+    "command_comment",
+    "empty_body",
+    "stale_bot_comment",
+    "thread_outdated",
+    "thread_resolved",
+}
 
 def _build_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
@@ -276,7 +293,65 @@ def normalize_user(login: str | None) -> str:
 
 def is_bot_user(login: str | None) -> bool:
     user = normalize_user(login)
-    return user.endswith("[bot]") or user == "github-actions[bot]"
+    stripped = user[: -len("[bot]")] if user.endswith("[bot]") else user
+    return user.endswith("[bot]") or stripped in _KNOWN_AUTOMATION_USERS
+
+def _strip_bot_suffix(login: str | None) -> str:
+    user = normalize_user(login)
+    if user.endswith("[bot]"):
+        return user[: -len("[bot]")]
+    return user
+
+def _is_gemini_code_assist_user(login: str | None) -> bool:
+    return _strip_bot_suffix(login) == "gemini-code-assist"
+
+def _utc_now() -> datetime:
+    return datetime.now(_UTC)
+
+def _is_gemini_no_feedback_comment(comment: dict, normalized_body: str) -> bool:
+    if not _is_gemini_code_assist_user(comment.get("user")):
+        return False
+    if comment.get("type") not in {"issue_comment", "review"}:
+        return False
+    body = normalized_body.lower()
+    return "no review comments" in body or "no feedback to provide" in body
+
+def _parse_utc_timestamp(value: object) -> datetime | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=_UTC)
+    return parsed.astimezone(_UTC)
+
+def _load_previous_codex_review_grace(snapshot_path: Path) -> dict | None:
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    comments_summary = payload.get("commentsSummary")
+    if not isinstance(comments_summary, dict):
+        return None
+    grace = comments_summary.get("codexReviewGrace")
+    return grace if isinstance(grace, dict) else None
+
+def _comment_identity(comment: dict, *, head_commit_sha: str | None) -> str:
+    parts = [
+        str(head_commit_sha or "").strip(),
+        str(comment.get("id") or "").strip(),
+        str(comment.get("created_at") or comment.get("updated_at") or "").strip(),
+        str(comment.get("user") or "").strip(),
+        str(comment.get("type") or "").strip(),
+    ]
+    return "|".join(parts)
 
 def _classify_comment_actionability(
     comment: dict,
@@ -330,6 +405,15 @@ def _classify_comment_actionability(
         )
     ):
         return False, "command_comment"
+
+    if _is_gemini_no_feedback_comment(comment, normalized_body):
+        return False, "gemini_no_feedback_review"
+
+    if _is_gemini_code_assist_user(comment.get("user")) and comment_type in {
+        "issue_comment",
+        "review",
+    }:
+        return True, "actionable"
 
     if is_bot_user(comment.get("user")):
         return False, "bot_comment_excluded"
@@ -485,6 +569,78 @@ def summarize_comments(
         "nonActionableReasonCounts": non_actionable_reason_counts,
         "classifiedComments": classified_comments,
     }
+
+def apply_codex_review_grace(
+    comments_summary: dict,
+    comments: list[dict],
+    *,
+    head_commit_sha: str | None,
+    previous_grace: dict | None = None,
+    now: datetime | None = None,
+) -> dict:
+    """Annotate a Gemini-only review state with a bounded Codex wait window."""
+
+    if comments_summary.get("hasActionableComments") is True:
+        comments_summary["codexReviewGrace"] = {
+            "active": False,
+            "reason": "not_gemini_only",
+        }
+        return comments_summary
+
+    classified_comments = comments_summary.get("classifiedComments")
+    visible_comments: list[dict] = []
+    if isinstance(classified_comments, list) and len(classified_comments) == len(comments):
+        for comment, classified in zip(comments, classified_comments):
+            if not isinstance(comment, dict) or not isinstance(classified, dict):
+                continue
+            reason = str(classified.get("reason") or "").strip()
+            if reason in _NON_VISIBLE_COMMENT_REASONS:
+                continue
+            visible_comments.append(comment)
+    else:
+        visible_comments = [c for c in comments if isinstance(c, dict)]
+
+    if len(visible_comments) != 1:
+        comments_summary["codexReviewGrace"] = {
+            "active": False,
+            "reason": "not_gemini_only",
+        }
+        return comments_summary
+
+    only_comment = visible_comments[0]
+    if not _is_gemini_code_assist_user(only_comment.get("user")):
+        comments_summary["codexReviewGrace"] = {
+            "active": False,
+            "reason": "not_gemini_only",
+        }
+        return comments_summary
+
+    now_utc = (now or _utc_now()).astimezone(_UTC)
+    key = _comment_identity(only_comment, head_commit_sha=head_commit_sha)
+    started_at = None
+    if isinstance(previous_grace, dict) and previous_grace.get("key") == key:
+        started_at = _parse_utc_timestamp(previous_grace.get("startedAt"))
+    if started_at is None:
+        started_at = now_utc
+    expires_at = started_at + timedelta(
+        seconds=_CODEX_REVIEW_GRACE_TIMEOUT_SECONDS
+    )
+    remaining_seconds = max(0, int((expires_at - now_utc).total_seconds()))
+    active = remaining_seconds > 0
+    comments_summary["codexReviewGrace"] = {
+        "active": active,
+        "expired": not active,
+        "reason": "gemini_only_review",
+        "key": key,
+        "startedAt": started_at.isoformat(),
+        "expiresAt": expires_at.isoformat(),
+        "timeoutSeconds": _CODEX_REVIEW_GRACE_TIMEOUT_SECONDS,
+        "pollSeconds": _CODEX_REVIEW_GRACE_POLL_SECONDS,
+        "remainingSeconds": remaining_seconds,
+        "commentUser": only_comment.get("user"),
+        "commentType": only_comment.get("type"),
+    }
+    return comments_summary
 
 def _check_name(check: dict) -> str:
     return str(check.get("name") or check.get("context") or "Unknown Check").strip()
@@ -672,6 +828,7 @@ def main():
         help="Snapshot path to write",
     )
     args = parser.parse_args()
+    snapshot_path = Path(args.snapshot_path)
 
     # 1. Fetch PR metadata with resilient selector fallback.
     pr_data, resolved_selector, pr_errors = fetch_pr_data(args.pr)
@@ -832,6 +989,12 @@ def main():
         addressed_comment_ids=addressed_ids,
         head_commit_sha=head_sha,
     )
+    comments_summary = apply_codex_review_grace(
+        comments_summary,
+        comments,
+        head_commit_sha=head_sha,
+        previous_grace=_load_previous_codex_review_grace(snapshot_path),
+    )
 
     # 4. Construct Snapshot
     snapshot = {
@@ -845,7 +1008,6 @@ def main():
         "commentsSummary": comments_summary,
     }
 
-    snapshot_path = Path(args.snapshot_path)
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_text(json.dumps(snapshot, indent=2))
 
