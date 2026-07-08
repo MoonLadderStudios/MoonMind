@@ -2,7 +2,7 @@
 
 **Document Class:** Canonical declarative
 **Status:** Current
-**Updated:** 2026-06-28
+**Updated:** 2026-07-08
 **Audience:** Local and self-hosted MoonMind operators
 **Authority:** Operator-facing startup, validation, rollback, and troubleshooting behavior for the combined MoonMind plus Omnigent Docker Compose stack
 **Owning Surface:** Docker Compose deployment with MoonMind and Omnigent services
@@ -204,3 +204,38 @@ A file mounted where a directory is expected, or a directory mounted where a fil
 Built-in accounts mode is the documented default for the combined local stack. Operators should create the first admin account in the Omnigent web UI unless they have deliberately configured an external OIDC provider.
 
 OIDC is a future or operator-provided configuration path for this combined stack documentation. If sign-in behavior looks inconsistent, confirm whether the running environment is using built-in accounts or an explicit OIDC configuration before resetting credentials or deleting volumes.
+
+## DOC-REQ-012 Omnigent Host Codex Subscription Auth
+
+The optional `omnigent-host` service reuses MoonMind's Codex OAuth credentials so that Codex-backed Omnigent sessions authenticate with a personal ChatGPT/Codex subscription rather than an OpenAI Platform API key. MoonMind remains the single owner of Codex OAuth enrollment and refresh through its existing UI OAuth terminal flow (see [OAuth Terminal](../ManagedAgents/OAuthTerminal.md)); this behavior only lets `omnigent-host` read the credentials MoonMind already manages.
+
+That flow persists Codex CLI auth material into the MoonMind-managed `codex_auth_volume`. The combined stack mounts the same volume into `omnigent-host` at the container Codex home:
+
+```bash
+codex_auth_volume:/root/.codex
+```
+
+`omnigent-host` runs with `/root` as its home directory — it already persists Omnigent host state at `/root/.omnigent` — so `/root/.codex` is the default Codex home for that container. The service also sets `CODEX_HOME=/root/.codex` as an explicit guardrail that keeps the intended path unambiguous even if the host image's default home changes later.
+
+The mount is read-write on purpose. Codex subscription auth uses refresh tokens, and Codex may rewrite `auth.json` when it refreshes short-lived access tokens; a read-write mount lets those refreshes propagate back to the durable MoonMind-managed volume. Do not mount it read-only.
+
+To keep subscription login as the credential path, `omnigent-host` clears `OPENAI_API_KEY` (sets it to empty) so that an API key inherited from `.env` cannot take precedence and trigger OpenAI Platform API billing. A Codex-backed Omnigent session started on this host therefore requires neither `OPENAI_API_KEY` nor `CODEX_ACCESS_TOKEN`. `CODEX_ACCESS_TOKEN` is intentionally not used here because it is only available for ChatGPT Business/Enterprise workspaces, not personal Pro accounts.
+
+Operator flow:
+
+1. Complete Codex OAuth once through MoonMind's existing UI OAuth flow, which populates `codex_auth_volume`.
+2. Start or recreate the host:
+
+   ```bash
+   docker compose --profile omnigent-host up -d --force-recreate omnigent-host
+   ```
+
+3. Confirm the mounted credential is visible inside the container:
+
+   ```bash
+   docker compose --profile omnigent-host exec omnigent-host sh -lc 'echo "CODEX_HOME=${CODEX_HOME:-unset}"; ls -la /root/.codex; test -f /root/.codex/auth.json && echo "auth.json present"'
+   ```
+
+If the Codex OAuth refresh token later expires or is revoked, re-run MoonMind's Codex OAuth UI flow. Because Omnigent reads the same mounted volume, it then sees the refreshed `auth.json` automatically; restart `omnigent-host` only if a long-running process cached a failed auth state. To roll this behavior back, remove the `codex_auth_volume:/root/.codex` mount and the `CODEX_HOME=/root/.codex` variable from `omnigent-host` and recreate the service; this does not delete `codex_auth_volume` or affect MoonMind's managed agents.
+
+`codex_auth_volume` holds sensitive credential material, including refresh-token data. Treat it as a credential store: mount it only where Codex authentication is required, never expose the contents of `/root/.codex/auth.json` in logs, artifacts, or screenshots, and restrict `omnigent-host` access to trusted operators. If the Omnigent host image later runs as a non-root user, mount the volume at that user's real Codex home and set `CODEX_HOME` accordingly.

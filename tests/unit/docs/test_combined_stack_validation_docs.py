@@ -74,3 +74,20 @@ def test_readme_links_to_combined_stack_guide_and_host_urls() -> None:
     assert "http://localhost:7000" in text
     assert "http://localhost:8000" not in text
     assert "docs/Omnigent/CombinedStackValidationAndRollback.md" in text
+
+
+def test_combined_stack_doc_documents_omnigent_host_codex_auth_volume() -> None:
+    text = _doc_text()
+
+    assert "## DOC-REQ-012 Omnigent Host Codex Subscription Auth" in text
+
+    # omnigent-host mounts the MoonMind-managed Codex OAuth volume at the
+    # container Codex home and pins CODEX_HOME to it.
+    assert "codex_auth_volume:/root/.codex" in text
+    assert "CODEX_HOME=/root/.codex" in text
+
+    # Subscription auth must not depend on API-key or CODEX_ACCESS_TOKEN paths,
+    # and the mount must stay read-write so token refreshes persist.
+    assert "CODEX_ACCESS_TOKEN" in text
+    assert "read-write" in text
+    assert "read-only" in text
