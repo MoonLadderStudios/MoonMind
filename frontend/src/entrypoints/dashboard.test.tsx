@@ -1389,14 +1389,17 @@ describe('Dashboard shared entry', () => {
     expect(quietBlock).toContain('padding: 0.25rem');
     expect(quietBlock).toContain('width: 100%');
 
-    // Loud tier: high-energy create/settings look (glass blur + count-driven,
-    // animated neon thumb positioned from the checked radio via :has()).
+    // Loud tier: high-energy create/settings look (glass blur + count-driven
+    // neon thumb positioned from the checked radio via :has()). MM-1138 Q3/B2
+    // calmed the tier: the thumb keeps its springy interaction slide but no
+    // longer runs the perpetual shimmer animation.
     const loudBlock = cssRuleBlock(dashboardCss, '.segmented-control[data-intensity="loud"]');
     expect(loudBlock).toContain('backdrop-filter: blur(14px) saturate(140%)');
 
     const loudThumbBlock = cssRuleBlock(dashboardCss, '.segmented-control[data-intensity="loud"]::before');
     expect(loudThumbBlock).toContain('width: calc(100% / var(--segmented-control-count))');
-    expect(loudThumbBlock).toContain('animation: segmented-control-thumb-shimmer 5.5s ease-in-out infinite');
+    expect(loudThumbBlock).toContain('transition: transform 360ms cubic-bezier(0.34, 1.3, 0.5, 1)');
+    expect(loudThumbBlock).not.toContain('animation:');
 
     const loudActiveIndexBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
       rule.selector.includes('data-intensity="loud"') &&
@@ -1405,6 +1408,30 @@ describe('Dashboard shared entry', () => {
       !rule.parent?.parent
     ));
     expect(loudActiveIndexBlock).toContain('--segmented-control-active-index: 1');
+
+    // MM-1138 Q3/B3: the quiet thumb echoes the loud accent gradient plus one
+    // soft glow (was a flat fill) so both tiers read as the same family, while
+    // keeping the calmer 180ms slide.
+    const quietThumbBlock = cssRuleBlock(dashboardCss, '.segmented-control[data-intensity="quiet"]::before');
+    expect(quietThumbBlock).toContain('background: linear-gradient(');
+    expect(quietThumbBlock).toContain('0 0 10px rgb(var(--mm-accent) / 0.22)');
+    expect(quietThumbBlock).toContain('transition: transform 180ms ease');
+
+    // MM-1138 Q3/B2: no perpetual motion survives — the scan border and both
+    // shimmer/scan keyframes are removed; motion is interaction-only.
+    expect(dashboardCss).not.toContain('@keyframes segmented-control-thumb-shimmer');
+    expect(dashboardCss).not.toContain('@keyframes segmented-control-scan');
+    expect(dashboardCss).not.toContain('data-intensity="loud"]::after');
+
+    // MM-1138 Q3/B4: the detail "More" overflow trigger is aligned to the quiet
+    // tab height (2.15rem) so it sits flush with the tabs it overflows from.
+    const moreTriggerBlock = cssRuleBlock(dashboardCss, '.td-subroute-more-trigger');
+    expect(moreTriggerBlock).toContain('min-height: 2.15rem');
+    const quietItemBlock = cssRuleBlock(
+      dashboardCss,
+      '.segmented-control[data-intensity="quiet"] .segmented-control-item',
+    );
+    expect(quietItemBlock).toContain('min-height: 2.15rem');
 
     // The badge (quiet detail-tab affordance) rides the shared system.
     const badgeBlock = cssRuleBlock(dashboardCss, '.segmented-control-badge');
@@ -1524,14 +1551,6 @@ describe('Dashboard shared entry', () => {
         rule.parent.params.includes('max-width: 640px')
       );
     });
-    const reducedMotionSettingsActiveBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
-      return (
-        normalizeCssSelector(rule.selector) === `${settingsLoudItemSelector}:has(input:checked)` &&
-        rule.parent?.type === 'atrule' &&
-        rule.parent.name === 'media' &&
-        rule.parent.params.includes('prefers-reduced-motion: reduce')
-      );
-    });
 
     expect(mobileSettingsNavBlock).toContain('display: grid');
     expect(mobileSettingsNavBlock).toContain('grid-template-columns: minmax(0, 1fr)');
@@ -1545,10 +1564,9 @@ describe('Dashboard shared entry', () => {
     expect(mobileLastSettingsOptionBlock).toContain('border-bottom-right-radius: 9px');
     expect(mobileSettingsActiveBlock).toContain('0 0 18px rgb(var(--mm-accent) / 0.55)');
     expect(mobileSettingsActiveBlock).toContain('0 0 32px rgb(var(--mm-accent-2) / 0.22)');
-    expect(mobileSettingsActiveBlock).toContain(
-      'animation: segmented-control-thumb-shimmer 5.5s ease-in-out infinite',
-    );
-    expect(reducedMotionSettingsActiveBlock).toContain('animation: none');
+    // MM-1138 Q3/B2: the active pill keeps its neon glow but no longer runs the
+    // perpetual shimmer animation, so no reduced-motion override is needed.
+    expect(mobileSettingsActiveBlock).not.toContain('animation');
     expect(mobileSettingsLabelBlock).toContain('white-space: normal');
     expect(mobileSettingsLabelBlock).toContain('overflow-wrap: anywhere');
   });

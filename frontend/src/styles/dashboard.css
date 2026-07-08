@@ -5563,9 +5563,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   bottom: 0.25rem;
   left: 0.25rem;
   width: calc((100% - 0.5rem) / var(--segmented-control-count));
-  background: rgb(var(--mm-accent) / 0.16);
+  /* MM-1138 Q3: echo the loud tier's accent gradient thumb (at a lower
+   * intensity) plus one soft glow so both tiers read as the same family. */
+  background: linear-gradient(
+    135deg,
+    rgb(var(--mm-accent) / 0.22),
+    rgb(var(--mm-accent-2) / 0.12)
+  );
   box-shadow:
     0 0 0 1px rgb(var(--mm-accent) / 0.32),
+    0 0 10px rgb(var(--mm-accent) / 0.22),
     inset 0 1px 0 rgb(255 255 255 / 0.16);
   transition: transform 180ms ease;
 }
@@ -5574,7 +5581,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   opacity: 0;
 }
 
-/* Loud tier: gradient fill, glossy highlight, neon halo. */
+/* Loud tier: gradient fill, glossy highlight, neon halo. Motion is
+ * interaction-only (the springy thumb slide); MM-1138 Q3 dropped the two
+ * perpetual animations (thumb shimmer + scanning border) so the control reads
+ * as emphatic without ambient movement. */
 .segmented-control[data-intensity="loud"]::before {
   inset: 0;
   width: calc(100% / var(--segmented-control-count));
@@ -5598,7 +5608,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     0 0 32px rgb(var(--mm-accent-2) / 0.22),
     inset 0 1px 0 rgb(255 255 255 / 0.22);
   transition: transform 360ms cubic-bezier(0.34, 1.3, 0.5, 1);
-  animation: segmented-control-thumb-shimmer 5.5s ease-in-out infinite;
   z-index: 1;
 }
 
@@ -5615,63 +5624,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   --segmented-control-active-index: 2;
 }
 
-@keyframes segmented-control-thumb-shimmer {
-  0%,
-  100% {
-    background-position:
-      -60% 0,
-      0 0;
-  }
-  50% {
-    background-position:
-      160% 0,
-      0 0;
-  }
-}
-
-/* Loud tier: animated cyberpunk scan border. */
-.segmented-control[data-intensity="loud"]::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(
-    120deg,
-    rgb(var(--mm-accent) / 0) 0%,
-    rgb(var(--mm-accent) / 0.55) 30%,
-    rgb(var(--mm-accent-2) / 0.65) 50%,
-    rgb(var(--mm-accent) / 0.55) 70%,
-    rgb(var(--mm-accent) / 0) 100%
-  );
-  background-size: 220% 100%;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: segmented-control-scan 6s linear infinite;
-  opacity: 0.6;
-  pointer-events: none;
-  z-index: 2;
-}
-
-@keyframes segmented-control-scan {
-  0% {
-    background-position: 0% 0;
-  }
-  100% {
-    background-position: 220% 0;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .segmented-control::before,
-  .segmented-control[data-intensity="loud"]::after {
-    animation: none;
+  .segmented-control::before {
     transition: none;
   }
 }
@@ -5814,8 +5768,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     padding: 0;
   }
 
-  .settings-page .segmented-control[data-intensity="loud"]::before,
-  .settings-page .segmented-control[data-intensity="loud"]::after {
+  .settings-page .segmented-control[data-intensity="loud"]::before {
     display: none;
   }
 
@@ -5858,19 +5811,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
       0 0 18px rgb(var(--mm-accent) / 0.55),
       0 0 32px rgb(var(--mm-accent-2) / 0.22),
       inset 0 1px 0 rgb(255 255 255 / 0.22);
-    animation: segmented-control-thumb-shimmer 5.5s ease-in-out infinite;
   }
 
   .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item-label {
     white-space: normal;
     overflow-wrap: anywhere;
     line-height: 1.2;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item:has(input:checked) {
-    animation: none;
   }
 }
 
@@ -7776,7 +7722,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .td-subroute-more-trigger {
-  min-height: 2.65rem;
+  /* MM-1138 Q3/B4: match the quiet-tier tab height so the "More" trigger sits
+   * flush with the detail segmented tabs it overflows from. */
+  min-height: 2.15rem;
   padding-inline: 0.9rem;
   border-radius: 10px;
   white-space: nowrap;
