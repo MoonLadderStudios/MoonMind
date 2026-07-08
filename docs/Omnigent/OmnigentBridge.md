@@ -356,7 +356,7 @@ omnigent_bridge_sessions
 
   host_type text not null                        # managed | external
   workspace text null
-  status text not null                           # declared | creating | active | completed | failed | canceled
+  status text not null                           # declared | creating | active | completed | failed | canceled | timed_out
 
   first_message_state text not null              # not_prepared | prepared | posting | posted | terminal
   first_message_digest text null
@@ -381,7 +381,20 @@ omnigent_bridge_sessions
   updated_at timestamptz not null
 ```
 
-This model generalizes the existing Omnigent external-run idempotency mapping and should eventually replace or wrap it.
+`omnigent_bridge_sessions` is the single canonical Omnigent session and
+idempotency store. It replaces the existing `omnigent_external_runs` mapping
+owned by `OmnigentRunStore` in `moonmind/omnigent/store.py`: that mapping is
+migrated into `omnigent_bridge_sessions` and the superseded store is removed in
+the same cohesive change, with no parallel table, alias, or compatibility
+wrapper. This guarantees that retries and Workflow Chat always read one durable
+store rather than diverging depending on which table a caller reads.
+
+`status` is a terminal-safe superset of the normalized statuses already produced
+by `moonmind/omnigent/execute.py`. `timed_out` is preserved as a distinct
+terminal status (mapped to the `system_error` failure class, matching the
+existing normalization) so timeouts are never collapsed into `failed`; this
+keeps retry, operator, and Workflow Chat/diagnostics decisions non-lossy across
+the provider path. See §17 for the full failure-class mapping.
 
 ### 7.2 `omnigent_bridge_session_events`
 
@@ -717,16 +730,28 @@ MoonMind workflows can select the bridge with:
 }
 ```
 
-If a direct managed runtime uses the bridge event model during migration, it should declare:
+If a direct managed runtime uses the bridge event model during migration, it
+declares the mode under the supported `parameters` field. `AgentExecutionRequest`
+in `moonmind/schemas/agent_runtime_models.py` sets `extra="forbid"` and has no
+top-level `communication` field, so the mode must live inside `parameters`
+(a free-form mapping) rather than as a new top-level key:
 
 ```json
 {
-  "communication": {
-    "mode": "omnigent_bridge",
-    "compatibilityProfile": "moonmind.codex_direct_compat.v1"
+  "agentKind": "managed",
+  "agentId": "codex_cli",
+  "parameters": {
+    "communication": {
+      "mode": "omnigent_bridge",
+      "compatibilityProfile": "moonmind.codex_direct_compat.v1"
+    }
   }
 }
 ```
+
+Introducing a first-class top-level `communication` field would instead require
+an explicit `AgentExecutionRequest` schema change with worker-boundary tests; it
+must not be assumed by the contract until that change lands.
 
 ### 14.2 Terminal result
 
@@ -820,79 +845,53 @@ In proxy mode, the host still authenticates to stock Omnigent Server. In embedde
 | Ambiguous `posting` reconciliation | `integration_error` | Fail closed instead of duplicate post. |
 | Stream disconnect, terminal snapshot says active | `integration_error` | Retry/reconcile depending on policy. |
 | Runtime/harness failure | `execution_error` | The host ran the task and failed. |
+| Session/host timeout | `system_error` | Terminal `timed_out` status, kept distinct from `failed`, matching `moonmind/omnigent/execute.py` normalization. |
 | Optional resource harvest failed | completed with diagnostics | Unless policy requires full evidence. |
 | Required artifact persistence failed | `system_error` | MoonMind artifact authority failed. |
 
 ---
 
-## 18. Implementation sequence
+## 18. Target module boundaries
 
-### Phase 1 — Bridge config, schemas, and store
+This section states the durable desired-state module ownership for the bridge.
+It is intentionally declarative: it defines where each responsibility lives and
+which existing patterns it supersedes, not an ordered delivery checklist. The
+disposable phase-by-phase rollout sequence lives in
+[`docs/tmp/OmnigentBridgeRollout.md`](../tmp/OmnigentBridgeRollout.md).
 
-Add these to the existing `moonmind/omnigent/` package rather than a new
-`moonmind/omnigent_bridge/` package, keeping bridge code alongside the current
-`moonmind/omnigent/store.py` (`OmnigentRunStore`) and
-`moonmind/omnigent/execute.py`:
+### 18.1 Canonical package placement
 
-```text
-moonmind/omnigent/bridge_config.py
-moonmind/omnigent/bridge_store.py
-moonmind/schemas/omnigent_bridge_models.py
-api_service/db/models.py: OmnigentBridgeSession / OmnigentBridgeSessionEvent
-api_service/migrations/versions/*_omnigent_bridge_sessions.py
-```
+All bridge code lives in the existing `moonmind/omnigent/` package alongside the
+current `moonmind/omnigent/store.py` and `moonmind/omnigent/execute.py`. There is
+no separate `moonmind/omnigent_bridge/` package; a parallel package would
+duplicate the active Omnigent code and split ownership.
 
-`bridge_store.py` supersedes the existing `omnigent_external_runs` mapping in
-`moonmind/omnigent/store.py`: migrate that mapping into
-`omnigent_bridge_sessions` and remove the superseded store in the same change
-rather than aliasing or wrapping it.
+### 18.2 Component-to-module ownership
 
-### Phase 2 — Proxy mode
+| Bridge component (§5) | Owning module | Notes |
+|---|---|---|
+| Bridge configuration | `moonmind/omnigent/bridge_config.py` | Parses and validates the §6 declarative config. |
+| Bridge Session Store | `moonmind/omnigent/bridge_store.py` | Canonical `omnigent_bridge_sessions` store (§18.3). |
+| Bridge schemas | `moonmind/schemas/omnigent_bridge_models.py` | Session/event/config models. |
+| Durable ORM/migration | `api_service/db/models.py` (`OmnigentBridgeSession` / `OmnigentBridgeSessionEvent`) + `api_service/migrations/versions/*` | Tables in §7. |
+| Session API Facade / Host Protocol Facade | `api_service/api/routers/omnigent_bridge.py`, `moonmind/omnigent/bridge_proxy.py` | Proxy and embedded surfaces. |
+| Event Normalizer | `moonmind/omnigent/bridge_events.py` | Normalizes host/provider events (§10). |
+| Artifact Publisher / Resource Harvester | `moonmind/omnigent/bridge_artifacts.py` | Publishes evidence as MoonMind artifact refs (§13). |
+| Workflow Chat projection | API + UI bridge-session event surfaces | Prefers bridge events over legacy logs (§15). |
 
-Implement:
+### 18.3 Superseded patterns
 
-```text
-api_service/api/routers/omnigent_bridge.py
-moonmind/omnigent/bridge_proxy.py
-moonmind/omnigent/bridge_events.py
-moonmind/omnigent/bridge_artifacts.py
-```
+`bridge_store.py` and `omnigent_bridge_sessions` supersede the existing
+`omnigent_external_runs` mapping owned by `OmnigentRunStore` in
+`moonmind/omnigent/store.py`. Per the repository Compatibility Policy, that
+mapping is migrated into `omnigent_bridge_sessions` and the superseded store is
+removed in the same cohesive change — no alias, wrapper, or parallel table.
 
-Behavior:
-
-```text
-MoonMind receives Omnigent-shaped requests.
-MoonMind persists bridge state.
-MoonMind forwards to stock Omnigent Server.
-MoonMind captures streams/resources/artifacts.
-Stock Omnigent Server talks to unchanged host.
-```
-
-### Phase 3 — Workflow Chat projection
-
-Add API and UI support for bridge-session events:
-
-```text
-GET /api/omnigent/bridge-sessions/{bridge_session_id}/events
-GET /api/omnigent/bridge-sessions/{bridge_session_id}/stream
-```
-
-Update Workflow Chat to prefer bridge session events.
-
-### Phase 4 — Direct Codex compatibility producer
-
-Update direct Codex managed sessions to emit bridge-compatible session events before and during launch.
-
-This phase fixes the class of failures where direct Codex launch can end before a managed runtime observability record is created.
-
-### Phase 5 — Embedded compatibility mode
-
-Implement direct host-facing compatibility only after proxy mode passes conformance and live smoke tests.
-
-```text
-MoonMind API becomes the Omnigent-compatible server surface.
-Unchanged host points directly at MoonMind bridge URL.
-```
+The direct Codex managed-session producer is a temporary compatibility path
+(§3.3): it emits bridge-shaped events during migration and is retired once Codex
+execution runs behind the bridge. Embedded compatibility mode (§3.2) is a valid
+target module surface, but it is only enabled after proxy mode has conformance
+and live-smoke evidence, as stated in its own design principles (§2.4).
 
 ---
 
