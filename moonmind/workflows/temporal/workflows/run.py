@@ -472,6 +472,9 @@ RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH = (
     "run-stop-on-publish-handoff-failure-v1"
 )
 RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
+RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = (
+    "run-assessment-parameter-injection-v1"
+)
 # Assert the producing Step Execution reached the `accepted` terminal
 # disposition before an external handoff runs, in addition to the existing
 # MoonSpec gate verdict block. Guarded for replay safety so in-flight runs keep
@@ -1141,6 +1144,7 @@ class MoonMindRunWorkflow:
             str | tuple[str, int]
         ] = set()
         self._trusted_issue_context: dict[str, Any] | None = None
+        self._assessment_context: dict[str, Any] = {}
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
         self._progress_snapshot: dict[str, Any] = {
@@ -5771,15 +5775,35 @@ class MoonMindRunWorkflow:
         if context:
             self._trusted_issue_context = context
 
+    def _record_assessment_context(self, outputs: Mapping[str, Any]) -> None:
+        for key in (
+            "assessmentArtifactRef",
+            "assessment_artifact_ref",
+            "assessmentVerdict",
+            "assessment_verdict",
+        ):
+            value = outputs.get(key)
+            if value not in (None, "", {}, []):
+                self._assessment_context[key] = value
+
     def _merge_trusted_issue_context(
         self,
         previous_outputs: Mapping[str, Any],
     ) -> Mapping[str, Any]:
-        if not self._trusted_issue_context:
-            return previous_outputs
-        if self._trusted_previous_outputs_context(previous_outputs):
-            return previous_outputs
         merged = dict(previous_outputs)
+        for key in (
+            "assessmentArtifactRef",
+            "assessment_artifact_ref",
+            "assessmentVerdict",
+            "assessment_verdict",
+        ):
+            value = self._assessment_context.get(key)
+            if value not in (None, "", {}, []):
+                merged.setdefault(key, value)
+        if not self._trusted_issue_context:
+            return merged if merged != previous_outputs else previous_outputs
+        if self._trusted_previous_outputs_context(previous_outputs):
+            return merged if merged != previous_outputs else previous_outputs
         for key, value in self._trusted_issue_context.items():
             merged.setdefault(key, value)
         return merged
@@ -8741,6 +8765,7 @@ class MoonMindRunWorkflow:
                 execution_result, "outputs"
             )
             if isinstance(outputs_for_story_output, Mapping):
+                self._record_assessment_context(outputs_for_story_output)
                 self._record_trusted_issue_context(outputs_for_story_output)
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
@@ -13621,9 +13646,27 @@ class MoonMindRunWorkflow:
                     node_inputs=node_inputs,
                     node_id=node_id,
                 )
+        assessment_parameter_injection_needed = False
+        nested_inputs = node_inputs.get("inputs")
+        skill_inputs = nested_inputs if isinstance(nested_inputs, Mapping) else {}
+        for source in (node_inputs, skill_inputs):
+            for key in ("assessment_artifact_path", "assessmentArtifactPath"):
+                value = source.get(key)
+                if isinstance(value, str) and value.strip():
+                    assessment_parameter_injection_needed = True
+                    break
+            if assessment_parameter_injection_needed:
+                break
         # The initial-assessment step (skill: auto) writes the verdict artifact;
         # moonspec-verify steps only read it, so exclude them from publication.
-        if str(selected_skill or "").strip().lower() != "moonspec-verify":
+        # Guard the parameter injection so in-flight histories that already
+        # scheduled an agent step keep replaying with their recorded command
+        # arguments.
+        if (
+            assessment_parameter_injection_needed
+            and workflow.patched(RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH)
+            and str(selected_skill or "").strip().lower() != "moonspec-verify"
+        ):
             self._ensure_assessment_parameters(
                 parameters=parameters,
                 node_inputs=node_inputs,

@@ -4585,6 +4585,18 @@ class _FakeAssessmentArtifactService:
         return object(), json.dumps(payload).encode("utf-8")
 
 
+class _FakeMappingAssessmentArtifactService(_FakeAssessmentArtifactService):
+    async def read(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        allow_restricted_raw: bool = False,
+    ) -> tuple[object, dict[str, Any]]:
+        self.read_calls.append(artifact_id)
+        return object(), self._payloads[artifact_id]
+
+
 @pytest.mark.asyncio
 async def test_update_jira_issue_status_resolves_verdict_by_artifact_ref() -> None:
     # No local file and no in-payload verdict: the durable artifact ref is the
@@ -4763,6 +4775,49 @@ async def test_update_github_issue_status_resolves_verdict_by_artifact_ref() -> 
     assert result.outputs["decision"] == "skipped"
     assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
     assert artifact_service.read_calls == ["art_gh_assessment"]
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_resolves_mapping_artifact_ref() -> None:
+    artifact_service = _FakeMappingAssessmentArtifactService(
+        {"art_gh_assessment_mapping": {"verdict": "FULLY_IMPLEMENTED"}}
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "start",
+            "assessmentArtifactRef": "art_gh_assessment_mapping",
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "skipped"
+    assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+    assert artifact_service.read_calls == ["art_gh_assessment_mapping"]
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_blocks_unavailable_artifact_ref() -> None:
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "start",
+            "assessmentArtifactRef": "art_gh_assessment_missing_service",
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert service.create_issue_requests == []
 
 
 @pytest.mark.asyncio

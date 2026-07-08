@@ -23,6 +23,7 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet,
 )
 from moonmind.workflows.temporal.workflows.run import (
+    RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
@@ -114,6 +115,23 @@ class TestSlotContinuityMetadata(unittest.TestCase):
         )
 
         self.assertLess(guard_index, write_complete_index)
+
+    def test_assessment_parameter_injection_is_replay_patch_guarded(self) -> None:
+        source = inspect.getsource(MoonMindRunWorkflow._build_agent_execution_request)
+        self.assertEqual(
+            RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
+            "run-assessment-parameter-injection-v1",
+        )
+
+        guard_index = source.index(
+            "workflow.patched(RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH)"
+        )
+        injection_index = source.index(
+            "self._ensure_assessment_parameters(",
+            guard_index,
+        )
+
+        self.assertLess(guard_index, injection_index)
 
     def test_omnigent_checkpoint_branch_turn_request_shape_is_replay_patch_guarded(
         self,
@@ -2469,3 +2487,18 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
             node_inputs={"assessment_artifact_path": "artifacts/new.json"},
         )
         self.assertEqual(parameters["assessment_artifact_path"], "existing.json")
+
+    def test_preserves_assessment_ref_across_intervening_outputs(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._record_assessment_context(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+            }
+        )
+
+        merged = wf._merge_trusted_issue_context({"summary": "classification done"})
+
+        self.assertEqual(merged["assessmentArtifactRef"], "art_assessment_1")
+        self.assertEqual(merged["assessmentVerdict"], "FULLY_IMPLEMENTED")
+        self.assertEqual(merged["summary"], "classification done")

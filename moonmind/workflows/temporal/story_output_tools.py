@@ -4672,6 +4672,8 @@ async def _read_json_artifact_by_ref(
         )
     except Exception:
         return None
+    if isinstance(payload, Mapping):
+        return payload
     try:
         if isinstance(payload, (bytes, bytearray)):
             payload = payload.decode("utf-8")
@@ -4701,6 +4703,8 @@ async def _augment_assessment_verdict_with_ref(
     ref = _assessment_artifact_ref(inputs, context)
     if ref:
         payload = await _read_json_artifact_by_ref(ref, context)
+        if payload is None:
+            return verdict, False
         if payload is not None:
             ref_verdict = _normalize_assessment_verdict(payload.get("verdict"))
             if ref_verdict:
@@ -4888,6 +4892,7 @@ async def update_github_issue_status(
     require_verification = _github_status_requires_verification(inputs)
     if mode in {"start", "in_progress"} and (
         inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path")
+        or _assessment_artifact_ref(inputs, _context)
     ):
         if not assessment_available:
             return ToolResult(

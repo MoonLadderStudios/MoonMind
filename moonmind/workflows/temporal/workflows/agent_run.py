@@ -1271,7 +1271,7 @@ class MoonMindAgentRun:
         for key in ("assessment_artifact_path", "assessmentArtifactPath"):
             value = request_params.get(key)
             if isinstance(value, str) and value.strip():
-                metadata.setdefault("assessment_artifact_path", value.strip())
+                metadata["assessment_artifact_path"] = value.strip()
                 break
         request_metadata = request_params.get("metadata")
         request_moonmind = (
