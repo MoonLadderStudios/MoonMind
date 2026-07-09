@@ -8,7 +8,7 @@ contract-drift split from ``docs/Omnigent/OmnigentBridge.md`` section 10.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from moonmind.omnigent.bridge_artifacts import OmnigentContractError
@@ -224,7 +224,7 @@ def _timestamp(payload: dict[str, Any]) -> str:
     raw = payload.get("timestamp") or payload.get("created_at") or payload.get("createdAt")
     if raw:
         return str(raw)
-    return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _direction(payload: dict[str, Any]) -> str:
