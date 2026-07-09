@@ -105,7 +105,9 @@ from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
 )
+from moonmind.workflows.executions.title_derivation import synthesize_execution_title
 from moonmind.workflows.temporal.remediation_context import RemediationContextBuilder
+from moonmind.workflows.temporal.title_search import tokenize_title
 
 TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
 SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
@@ -1341,10 +1343,24 @@ class TemporalExecutionService:
         if "workflow" not in params and task_params:
             params["workflow"] = task_params
 
-        resolved_title = title or self._default_title_for_type(workflow_type_enum)
+        title_result = synthesize_execution_title(
+            requested_title=title,
+            workflow_type=workflow_type_enum.value,
+            parameters=params,
+            repository=repository,
+            integration=integration,
+            summary=summary,
+        )
+        resolved_title = (
+            title_result.display_title
+            or title
+            or self._default_title_for_type(workflow_type_enum)
+        )
         memo = {
             "title": resolved_title,
-            "summary": summary or "Execution initialized.",
+            "summary": title_result.summary or summary or "Execution initialized.",
+            "titleSource": title_result.source,
+            "titleConfidence": title_result.confidence,
         }
         if input_artifact_ref:
             memo["input_ref"] = input_artifact_ref
@@ -1384,6 +1400,10 @@ class TemporalExecutionService:
         target_skill = _visibility_skill_from_parameters(params)
         if target_skill:
             search_attributes["mm_target_skill"] = target_skill
+        if resolved_title:
+            title_tokens = tokenize_title(resolved_title)
+            if title_tokens:
+                search_attributes["mm_title"] = title_tokens
 
         artifact_refs = [
             ref

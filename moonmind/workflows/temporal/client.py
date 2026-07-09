@@ -64,6 +64,7 @@ _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES = frozenset(
     {
         "mm_target_runtime",
         "mm_target_skill",
+        "mm_title",
     }
 )
 
