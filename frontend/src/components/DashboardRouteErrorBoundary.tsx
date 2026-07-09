@@ -1,9 +1,14 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 import { DashboardErrorState } from './DashboardErrorState';
+import {
+  isDynamicImportLoadError,
+  reloadOnceForDynamicImportError,
+} from '../lib/dynamicImportRecovery';
 
 type Props = {
   children: ReactNode;
+  buildId?: string | null;
   /**
    * Called when the user asks to retry after a route error. Used to clear any
    * React Query error state (via QueryErrorResetBoundary) before re-rendering.
@@ -32,6 +37,9 @@ export class DashboardRouteErrorBoundary extends Component<Props, State> {
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error('Dashboard route error:', error, info);
+    if (isDynamicImportLoadError(error)) {
+      reloadOnceForDynamicImportError(this.props.buildId);
+    }
   }
 
   handleReset = (): void => {

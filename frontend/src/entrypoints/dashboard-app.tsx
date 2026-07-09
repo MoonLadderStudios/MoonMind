@@ -314,7 +314,15 @@ function ConfigurationErrorPage({ page, message }: { page: string; message: stri
   );
 }
 
-function LazyPageView({ page, payload }: { page: DashboardPage; payload: BootPayload }) {
+function LazyPageView({
+  page,
+  payload,
+  buildId,
+}: {
+  page: DashboardPage;
+  payload: BootPayload;
+  buildId?: string | null;
+}) {
   const [reloadKey, setReloadKey] = useState(0);
   const LazyPage = useMemo(() => lazy(PAGE_IMPORTS[page]), [page, reloadKey]);
 
@@ -323,6 +331,7 @@ function LazyPageView({ page, payload }: { page: DashboardPage; payload: BootPay
       {({ reset }) => (
         <DashboardRouteErrorBoundary
           key={reloadKey}
+          buildId={buildId ?? null}
           onReset={() => {
             reset();
             setReloadKey((value) => value + 1);
@@ -337,7 +346,13 @@ function LazyPageView({ page, payload }: { page: DashboardPage; payload: BootPay
   );
 }
 
-function PageContent({ payload }: { payload: BootPayload }) {
+function PageContent({
+  payload,
+  buildId,
+}: {
+  payload: BootPayload;
+  buildId?: string | null;
+}) {
   if (!isSupportedPage(payload.page)) {
     return <UnknownPage page={payload.page} />;
   }
@@ -347,7 +362,9 @@ function PageContent({ payload }: { payload: BootPayload }) {
     return <ConfigurationErrorPage page={payload.page} message={validation.message} />;
   }
 
-  return <LazyPageView page={payload.page} payload={payload} />;
+  return (
+    <LazyPageView page={payload.page} payload={payload} buildId={buildId ?? null} />
+  );
 }
 
 function useDashboardUiInfo() {
@@ -1109,7 +1126,11 @@ function RoutedDashboardPage({
       workflowListDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
       onWorkflowListModeSelect={handleWorkflowListModeSelect}
     >
-      <PageContent key={routeKey} payload={routedPayload} />
+      <PageContent
+        key={routeKey}
+        payload={routedPayload}
+        buildId={uiInfo?.buildId ?? null}
+      />
     </AppShell>
   );
 }
