@@ -16,6 +16,7 @@ from moonmind.omnigent.bridge_config import parse_bridge_config
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
+    BridgeSessionEventRequest,
     OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
     validate_bridge_host_fields,
@@ -117,6 +118,8 @@ class _FakeClient:
         self.created_payloads: list[dict[str, Any]] = []
         self.create_error = create_error
         self.get_calls: list[str] = []
+        self.posted_events: list[tuple[str, dict[str, Any]]] = []
+        self.resolved_elicitations: list[tuple[str, str, dict[str, Any]]] = []
         self.list_agents_calls = 0
 
     async def list_agents(self) -> list[dict[str, Any]]:
@@ -132,6 +135,27 @@ class _FakeClient:
     async def get_session(self, session_id: str) -> dict[str, Any]:
         self.get_calls.append(session_id)
         return {"id": session_id, "status": "running", "summary": "ok"}
+
+    async def post_event(
+        self, session_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.posted_events.append((session_id, payload))
+        return {"ok": True, "type": payload["type"]}
+
+    async def resolve_elicitation(
+        self, session_id: str, elicitation_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.resolved_elicitations.append((session_id, elicitation_id, payload))
+        return {"ok": True, "elicitationId": elicitation_id}
+
+    async def list_changed_files(self, session_id: str) -> dict[str, Any]:
+        return {"items": [{"path": "src/app.py"}]}
+
+    async def list_workspace_files(self, session_id: str) -> dict[str, Any]:
+        return {"items": [{"path": "README.md"}]}
+
+    async def list_session_files(self, session_id: str) -> dict[str, Any]:
+        return {"items": [{"id": "file-1", "filename": "session.log"}]}
 
 
 def _binding(key: str = "idem-1") -> BridgePrincipalBinding:
@@ -426,6 +450,70 @@ async def test_list_agents_proxies() -> None:
     proxy = _proxy(_FakeStore(), _FakeClient())
     agents = await proxy.list_agents()
     assert agents == [{"id": "agent-1", "name": "codex"}]
+
+
+async def test_post_event_forwards_native_control() -> None:
+    client = _FakeClient()
+    proxy = _proxy(_FakeStore(), client)
+
+    response = await proxy.post_event(
+        session_id="sess-1",
+        event=BridgeSessionEventRequest(type="interrupt"),
+    )
+
+    assert response == {"ok": True, "type": "interrupt"}
+    assert client.posted_events == [("sess-1", {"type": "interrupt"})]
+
+
+async def test_harvest_session_is_bridge_local_policy() -> None:
+    client = _FakeClient()
+    proxy = _proxy(_FakeStore(), client)
+
+    response = await proxy.post_event(
+        session_id="sess-1",
+        event=BridgeSessionEventRequest(type="harvest_session"),
+    )
+
+    assert response["status"] == "completed"
+    assert response["moonmind"]["bridgeLocal"] is True
+    assert response["moonmind"]["hostNativeEquivalent"] is False
+    assert response["resources"]["changedFiles"]["items"][0]["path"] == "src/app.py"
+    assert client.posted_events == []
+
+
+async def test_clear_session_returns_explicit_new_session_policy() -> None:
+    client = _FakeClient()
+    proxy = _proxy(_FakeStore(), client)
+
+    response = await proxy.post_event(
+        session_id="sess-1",
+        event=BridgeSessionEventRequest(type="clear_session"),
+    )
+
+    assert response["status"] == "requires_new_session"
+    assert response["moonmind"]["bridgeLocal"] is True
+    assert response["moonmind"]["hostNativeEquivalent"] is False
+    assert (
+        response["moonmind"]["diagnostics"][0]["code"]
+        == "host_native_clear_session_unavailable"
+    )
+    assert client.posted_events == []
+
+
+async def test_resolve_elicitation_proxies_compatibility_route() -> None:
+    client = _FakeClient()
+    proxy = _proxy(_FakeStore(), client)
+
+    response = await proxy.resolve_elicitation(
+        session_id="sess-1",
+        elicitation_id="el-1",
+        payload={"answer": "yes"},
+    )
+
+    assert response == {"ok": True, "elicitationId": "el-1"}
+    assert client.resolved_elicitations == [
+        ("sess-1", "el-1", {"answer": "yes"})
+    ]
 
 
 async def test_non_proxy_mode_fails_fast() -> None:

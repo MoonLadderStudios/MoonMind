@@ -79,6 +79,14 @@ class BridgeSessionCreateRequest(BaseModel):
     endpoint_ref: str | None = None
 
 
+class BridgeSessionEventRequest(BaseModel):
+    """Omnigent-shaped ``POST /v1/sessions/{id}/events`` request body."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    type: str = Field(..., min_length=1)
+
+
 @dataclass(frozen=True, slots=True)
 class BridgePrincipalBinding:
     """Verified MoonMind identity for one bridge session-create request."""
@@ -368,6 +376,120 @@ class OmnigentBridgeSessionProxy:
 
         return await self._run_store.get_session_owner(session_id)
 
+    async def post_event(
+        self,
+        *,
+        session_id: str,
+        event: BridgeSessionEventRequest,
+    ) -> dict[str, Any]:
+        """Apply an Omnigent control event at the bridge boundary (OB-§11)."""
+
+        self._require_proxy_mode()
+        event_payload = event.model_dump(by_alias=True, exclude_none=True)
+        event_type = str(event_payload.get("type") or "").strip()
+        if event_type == "harvest_session":
+            return await self.harvest_session(session_id)
+        if event_type in {"clear_session", "reset_session"}:
+            return self.clear_session_policy(session_id)
+        try:
+            return await self._client.post_event(session_id, event_payload)
+        except OmnigentClientError as exc:
+            raise OmnigentBridgeError(
+                str(exc),
+                failure_class=exc.failure_class,
+                status_code=exc.status_code,
+            ) from exc
+
+    async def resolve_elicitation(
+        self,
+        *,
+        session_id: str,
+        elicitation_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Resolve a pending Omnigent elicitation through the compatibility API."""
+
+        self._require_proxy_mode()
+        try:
+            return await self._client.resolve_elicitation(
+                session_id,
+                elicitation_id,
+                payload,
+            )
+        except OmnigentClientError as exc:
+            raise OmnigentBridgeError(
+                str(exc),
+                failure_class=exc.failure_class,
+                status_code=exc.status_code,
+            ) from exc
+
+    async def harvest_session(self, session_id: str) -> dict[str, Any]:
+        """Run a bridge-local resource harvest probe without pretending it is native."""
+
+        self._require_proxy_mode()
+        diagnostics: list[dict[str, Any]] = []
+        resources: dict[str, Any] = {}
+        probes = (
+            ("changedFiles", self._client.list_changed_files),
+            ("workspaceFiles", self._client.list_workspace_files),
+            ("sessionFiles", self._client.list_session_files),
+        )
+        for key, func in probes:
+            try:
+                resources[key] = await func(session_id)
+            except OmnigentClientError as exc:
+                diagnostics.append(
+                    {
+                        "code": f"{key}_unavailable",
+                        "message": str(exc),
+                        "failureClass": exc.failure_class,
+                        "statusCode": exc.status_code,
+                    }
+                )
+        return {
+            "type": "harvest_session",
+            "status": "completed_with_diagnostics" if diagnostics else "completed",
+            "moonmind": {
+                "bridgeLocal": True,
+                "hostNativeEquivalent": False,
+                "policy": (
+                    "Resource harvest is a MoonMind bridge-local artifact action; "
+                    "the unchanged host is queried through resource APIs rather "
+                    "than sent a fake native control."
+                ),
+                "diagnostics": diagnostics,
+            },
+            "resources": resources,
+        }
+
+    def clear_session_policy(self, session_id: str) -> dict[str, Any]:
+        """Return the explicit clear/reset policy for unchanged Omnigent hosts."""
+
+        self._require_proxy_mode()
+        return {
+            "type": "clear_session",
+            "status": "requires_new_session",
+            "sessionId": session_id,
+            "moonmind": {
+                "bridgeLocal": True,
+                "hostNativeEquivalent": False,
+                "policy": (
+                    "The compatibility profile does not expose a Codex-like "
+                    "clear_session control for an unchanged host. Clear/reset "
+                    "must be represented by creating a new Omnigent session with "
+                    "a new idempotency key and carrying forward MoonMind evidence "
+                    "refs as needed."
+                ),
+                "diagnostics": [
+                    {
+                        "code": "host_native_clear_session_unavailable",
+                        "failureClass": "user_error",
+                        "recommendedAction": "create_new_session",
+                    }
+                ],
+            },
+        }
+
     async def list_agents(self) -> list[dict[str, Any]]:
         """Proxy ``GET /api/agents`` to the stock Omnigent Server (OB-§4.1)."""
 
@@ -504,6 +626,7 @@ async def _unsupported_bundle_upload(bundle_ref: str) -> dict[str, Any]:
 __all__ = [
     "SOURCE_ISSUE",
     "BridgePrincipalBinding",
+    "BridgeSessionEventRequest",
     "BridgeSessionCreateRequest",
     "OmnigentBridgeError",
     "OmnigentBridgeSessionProxy",

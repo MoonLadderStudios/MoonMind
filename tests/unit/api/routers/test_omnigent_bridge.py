@@ -27,6 +27,10 @@ _USER_ID = uuid4()
 
 _CREATE_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions"
 _AGENTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/agents"
+_EVENTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/events"
+_ELICITATION_RESOLVE_PATH = (
+    f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/elicitations/el-1/resolve"
+)
 
 # Sentinel so ``_FakeProxy(session_owner=None)`` can distinguish "no owner
 # bound" from "use the default mm:w1 owner".
@@ -48,6 +52,8 @@ class _FakeService:
 class _FakeProxy:
     def __init__(self, *, session_owner: Any | None = _UNSET) -> None:
         self.created: list[dict[str, Any]] = []
+        self.posted_events: list[dict[str, Any]] = []
+        self.resolved_elicitations: list[dict[str, Any]] = []
         self.create_error: OmnigentBridgeError | None = None
         # By default a read resolves to the mm:w1 owner used across the tests;
         # pass ``session_owner=None`` to simulate a session the bridge does not
@@ -69,6 +75,26 @@ class _FakeProxy:
 
     async def get_session(self, session_id: str):
         return {"id": session_id, "status": "completed"}
+
+    async def post_event(self, *, session_id: str, event):
+        self.posted_events.append({"session_id": session_id, "event": event})
+        return {"ok": True, "type": event.type}
+
+    async def resolve_elicitation(
+        self,
+        *,
+        session_id: str,
+        elicitation_id: str,
+        payload,
+    ):
+        self.resolved_elicitations.append(
+            {
+                "session_id": session_id,
+                "elicitation_id": elicitation_id,
+                "payload": payload,
+            }
+        )
+        return {"ok": True, "elicitationId": elicitation_id}
 
     async def list_agents(self):
         return [{"id": "agent-1", "name": "codex"}]
@@ -186,10 +212,44 @@ def test_list_agents_returns_catalog() -> None:
     assert resp.json() == [{"id": "agent-1", "name": "codex"}]
 
 
+def test_post_event_authorizes_and_delegates() -> None:
+    client, proxy = _build()
+    resp = client.post(_EVENTS_PATH, json={"type": "interrupt"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "type": "interrupt"}
+    assert proxy.posted_events[0]["session_id"] == "sess-77"
+    assert proxy.posted_events[0]["event"].type == "interrupt"
+
+
+def test_post_event_unknown_session_is_not_found() -> None:
+    proxy = _FakeProxy(session_owner=None)
+    client, _ = _build(proxy=proxy)
+    resp = client.post(_EVENTS_PATH, json={"type": "interrupt"})
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "omnigent_bridge_session_unknown"
+    assert not proxy.posted_events
+
+
+def test_resolve_elicitation_authorizes_and_delegates() -> None:
+    client, proxy = _build()
+    resp = client.post(_ELICITATION_RESOLVE_PATH, json={"answer": "yes"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "elicitationId": "el-1"}
+    assert proxy.resolved_elicitations == [
+        {
+            "session_id": "sess-77",
+            "elicitation_id": "el-1",
+            "payload": {"answer": "yes"},
+        }
+    ]
+
+
 def test_routes_registered_under_configured_mount_path() -> None:
     paths = {route.path for route in router.routes}
     assert "/v1/sessions" in paths
     assert "/v1/sessions/{session_id}" in paths
+    assert "/v1/sessions/{session_id}/events" in paths
+    assert "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve" in paths
     assert "/api/agents" in paths
     assert OMNIGENT_BRIDGE_MOUNT_PATH == "/api/omnigent"
 
