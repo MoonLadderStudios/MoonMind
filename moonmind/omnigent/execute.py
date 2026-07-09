@@ -573,7 +573,7 @@ async def run_omnigent_execution(
                         "sessionResolution": "attached",
                         "attached": True,
                         "attachSource": (
-                            "durable_idempotency_mapping"
+                            "bridge_session_store"
                             if durable_session_id
                             else "activity_heartbeat"
                         ),

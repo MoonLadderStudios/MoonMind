@@ -1082,7 +1082,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     )
     assert external_state["retry"]["sessionResolution"] == "attached"
     assert external_state["retry"]["attached"] is True
-    assert external_state["retry"]["attachSource"] == "durable_idempotency_mapping"
+    assert external_state["retry"]["attachSource"] == "bridge_session_store"
     assert external_state["retry"]["firstMessageOutcome"] == "already_posted"
     assert external_state["firstMessage"]["state"] == "posted"
     assert external_state["firstMessage"]["posted"] is True
