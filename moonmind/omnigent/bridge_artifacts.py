@@ -225,6 +225,27 @@ async def _capture_artifact_json(
     return ref
 
 
+async def capture_artifact_json(
+    gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
+    refs: dict[str, str],
+    *,
+    key: str,
+    name: str,
+    payload: Any,
+    link_type: str,
+) -> str:
+    return await _capture_artifact_json(
+        gateway,
+        request,
+        refs,
+        key=key,
+        name=name,
+        payload=payload,
+        link_type=link_type,
+    )
+
+
 def _compact_summary(value: object | None, *, fallback: str) -> str:
     text = str(value or fallback).strip() or fallback
     return text[:4096]
@@ -382,6 +403,309 @@ def _assert_no_provider_native_refs(refs: list[str]) -> None:
         raise OmnigentContractError(
             "Omnigent terminal result cannot expose provider-native refs"
         )
+
+
+class BridgeResourceHarvester:
+    """Harvest Omnigent resources into MoonMind-owned artifact refs."""
+
+    def __init__(
+        self,
+        *,
+        client: Any,
+        artifact_gateway: OmnigentArtifactGateway,
+        request: AgentExecutionRequest,
+        session_id: str,
+        manifest: dict[str, Any],
+        refs: dict[str, str],
+    ) -> None:
+        self._client = client
+        self._artifact_gateway = artifact_gateway
+        self._request = request
+        self._session_id = session_id
+        self._manifest = manifest
+        self._refs = refs
+
+    async def harvest_child_sessions(self, raw_events: list[dict[str, Any]]) -> None:
+        child_session_ids = _child_session_ids(
+            raw_events,
+            parent_session_id=self._session_id,
+        )
+        self._manifest["childSessions"] = len(child_session_ids)
+        if not child_session_ids:
+            return
+        child_ref = await self._artifact_gateway.write_text(
+            request=self._request,
+            name="runtime.omnigent.child_sessions.jsonl",
+            payload=_jsonl(
+                [
+                    {"childSessionId": child_session_id}
+                    for child_session_id in child_session_ids
+                ]
+            ),
+            link_type="runtime.omnigent.child_sessions",
+            content_type="application/x-ndjson",
+        )
+        self._refs["childSessionsRef"] = child_ref
+        self._manifest["childSessionsRef"] = child_ref
+        child_snapshots: list[dict[str, str]] = []
+        if self._client is not None:
+            for child_session_id in child_session_ids:
+                try:
+                    child_snapshot = await self._client.get_session(child_session_id)
+                except Exception as exc:
+                    child_snapshots.append(
+                        {
+                            "childSessionId": child_session_id,
+                            "unavailable": _compact_summary(
+                                exc,
+                                fallback="child session snapshot unavailable",
+                            ),
+                        }
+                    )
+                    continue
+                child_snapshot_ref = await capture_artifact_json(
+                    self._artifact_gateway,
+                    self._request,
+                    self._refs,
+                    key=f"childSessionSnapshotRef:{child_session_id}",
+                    name=f"runtime.omnigent.child_sessions/{child_session_id}.json",
+                    payload=child_snapshot,
+                    link_type="runtime.omnigent.child_session.snapshot",
+                )
+                child_snapshots.append(
+                    {
+                        "childSessionId": child_session_id,
+                        "snapshotRef": child_snapshot_ref,
+                    }
+                )
+        self._manifest["childSessionEvidence"] = child_snapshots
+
+    async def harvest_resources(
+        self,
+        *,
+        capture_policy: dict[str, Any] | None,
+    ) -> None:
+        changed_items: list[dict[str, Any]] = []
+        if _capture_enabled(capture_policy, "changedFiles"):
+            changed_items = await self.harvest_changed_files()
+        if _capture_enabled(capture_policy, "workspaceFiles"):
+            await self.harvest_workspace_files()
+        await self.harvest_workspace_diffs(changed_items=changed_items)
+        if _capture_enabled(capture_policy, "sessionFiles"):
+            await self.harvest_session_files()
+
+    async def harvest_changed_files(self) -> list[dict[str, Any]]:
+        try:
+            changed = await self._client.list_changed_files(self._session_id)
+        except Exception as exc:
+            self._manifest["changedFilesUnavailable"] = _compact_summary(
+                exc,
+                fallback="changed files unavailable",
+            )
+            return []
+        index_ref = await capture_artifact_json(
+            self._artifact_gateway,
+            self._request,
+            self._refs,
+            key="changedFilesIndexRef",
+            name="output.omnigent.changed_files.index.json",
+            payload=changed,
+            link_type="output.omnigent.changed_files.index",
+        )
+        self._manifest["changedFilesIndexRef"] = index_ref
+        file_items = _resource_items(changed)[:_MAX_OMNIGENT_HARVEST_ITEMS]
+        harvested: list[dict[str, Any]] = []
+        for item in file_items:
+            path = str(
+                item.get("path")
+                or item.get("file_path")
+                or item.get("filePath")
+                or item.get("name")
+                or ""
+            ).strip()
+            if not path:
+                continue
+            try:
+                content = await self._client.get_workspace_file(self._session_id, path)
+            except Exception as exc:
+                harvested.append(
+                    {
+                        "path": path,
+                        "unavailable": _compact_summary(
+                            exc,
+                            fallback="changed file content unavailable",
+                        ),
+                    }
+                )
+                continue
+            ref = await self._artifact_gateway.write_bytes(
+                request=self._request,
+                name=f"output.omnigent.changed_files/{path}",
+                payload=content,
+                link_type="output.omnigent.changed_file",
+            )
+            harvested.append({"path": path, "artifactRef": ref})
+        self._manifest["changedFiles"] = harvested
+        self._manifest.setdefault("patchUnavailable", True)
+        return file_items
+
+    async def harvest_workspace_files(self) -> None:
+        try:
+            files = await self._client.list_workspace_files(self._session_id)
+        except Exception as exc:
+            self._manifest["workspaceFilesUnavailable"] = _compact_summary(
+                exc,
+                fallback="workspace files unavailable",
+            )
+            return
+        index_ref = await capture_artifact_json(
+            self._artifact_gateway,
+            self._request,
+            self._refs,
+            key="workspaceFilesIndexRef",
+            name="output.omnigent.workspace_files.index.json",
+            payload=files,
+            link_type="output.omnigent.workspace_files.index",
+        )
+        self._manifest["workspaceFilesIndexRef"] = index_ref
+        harvested: list[dict[str, Any]] = []
+        for item in _resource_items(files)[:_MAX_OMNIGENT_HARVEST_ITEMS]:
+            path = _resource_path(item)
+            if not path:
+                continue
+            if str(item.get("type") or item.get("kind") or "").strip().lower() in {
+                "dir",
+                "directory",
+                "folder",
+            }:
+                harvested.append({"path": path, "skipped": "directory"})
+                continue
+            try:
+                content = await self._client.get_workspace_file(self._session_id, path)
+            except Exception as exc:
+                harvested.append(
+                    {
+                        "path": path,
+                        "unavailable": _compact_summary(
+                            exc,
+                            fallback="workspace file content unavailable",
+                        ),
+                    }
+                )
+                continue
+            ref = await self._artifact_gateway.write_bytes(
+                request=self._request,
+                name=f"output.omnigent.workspace_files/{path}",
+                payload=content,
+                link_type="output.omnigent.workspace_file",
+            )
+            harvested.append({"path": path, "artifactRef": ref})
+        self._manifest["workspaceFiles"] = harvested
+
+    async def harvest_workspace_diffs(
+        self,
+        *,
+        changed_items: list[dict[str, Any]],
+    ) -> None:
+        paths = [
+            path
+            for path in (_resource_path(item) for item in changed_items)
+            if path
+        ][:_MAX_OMNIGENT_HARVEST_ITEMS]
+        if not paths:
+            self._manifest["workspaceDiffs"] = []
+            self._manifest["patchUnavailable"] = True
+            return
+        harvested: list[dict[str, Any]] = []
+        for path in paths:
+            try:
+                diff = await self._client.get_workspace_diff(self._session_id, path)
+            except Exception as exc:
+                self._manifest["workspaceDiffsUnavailable"] = _compact_summary(
+                    exc,
+                    fallback="workspace diff capability unavailable",
+                )
+                self._manifest["patchUnavailable"] = True
+                return
+            ref = await self._artifact_gateway.write_bytes(
+                request=self._request,
+                name=f"output.omnigent.workspace_diffs/{path}.diff",
+                payload=diff,
+                link_type="output.omnigent.workspace_diff",
+                content_type="text/x-diff",
+            )
+            harvested.append({"path": path, "artifactRef": ref})
+        self._manifest["workspaceDiffs"] = harvested
+        self._manifest["patchUnavailable"] = not bool(harvested)
+
+    async def harvest_session_files(self) -> None:
+        try:
+            files = await self._client.list_session_files(self._session_id)
+        except Exception as exc:
+            self._manifest["sessionFilesUnavailable"] = _compact_summary(
+                exc,
+                fallback="session files unavailable",
+            )
+            return
+        index_ref = await capture_artifact_json(
+            self._artifact_gateway,
+            self._request,
+            self._refs,
+            key="sessionFilesIndexRef",
+            name="output.omnigent.session_files.index.json",
+            payload=files,
+            link_type="output.omnigent.session_files.index",
+        )
+        self._manifest["sessionFilesIndexRef"] = index_ref
+        harvested: list[dict[str, Any]] = []
+        for item in _resource_items(files)[:_MAX_OMNIGENT_HARVEST_ITEMS]:
+            file_id = str(
+                item.get("id") or item.get("file_id") or item.get("fileId") or ""
+            ).strip()
+            filename = str(item.get("filename") or item.get("name") or file_id).strip()
+            if not file_id:
+                continue
+            try:
+                content = await self._client.get_session_file_content(
+                    self._session_id,
+                    file_id,
+                )
+            except Exception as exc:
+                harvested.append(
+                    {
+                        "fileId": file_id,
+                        "filename": filename,
+                        "unavailable": _compact_summary(
+                            exc,
+                            fallback="session file content unavailable",
+                        ),
+                    }
+                )
+                continue
+            ref = await self._artifact_gateway.write_bytes(
+                request=self._request,
+                name=f"output.omnigent.session_files/{file_id}/{filename}",
+                payload=content,
+                link_type="output.omnigent.session_file",
+            )
+            metadata_ref = await capture_artifact_json(
+                self._artifact_gateway,
+                self._request,
+                self._refs,
+                key=f"sessionFileMetadataRef:{file_id}",
+                name=f"output.omnigent.session_files/{file_id}/metadata.json",
+                payload=item,
+                link_type="output.omnigent.session_file.metadata",
+            )
+            harvested.append(
+                {
+                    "fileId": file_id,
+                    "filename": filename,
+                    "artifactRef": ref,
+                    "metadataRef": metadata_ref,
+                }
+            )
+        self._manifest["sessionFiles"] = harvested
 
 
 def _capture_enabled(capture_policy: dict[str, Any] | None, key: str) -> bool:
@@ -1113,6 +1437,7 @@ def _jsonl(events: list[dict[str, Any]]) -> str:
 
 
 __all__ = [
+    "BridgeResourceHarvester",
     "LocalOmnigentArtifactGateway",
     "OmnigentArtifactError",
     "OmnigentArtifactGateway",
@@ -1120,6 +1445,7 @@ __all__ = [
     "OmnigentContractError",
     "build_omnigent_terminal_refs",
     "build_omnigent_result",
+    "capture_artifact_json",
     "_build_capture_bundle",
     "_compact_summary",
 ]

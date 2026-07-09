@@ -248,6 +248,18 @@ function appendScheduleListParams(
     sortDir: RecurringSortDirection;
   },
 ): string {
+  const activeFilters = activeRecurringFilterEntries(filters);
+  if (
+    activeFilters.length === 0
+    && !cursor
+    && pageSize === 50
+    && sort === 'updatedAt'
+    && sortDir === 'desc'
+    && hasActiveScheduleListFilters(endpoint)
+  ) {
+    return endpoint;
+  }
+
   const [base, hash = ''] = endpoint.split('#', 2);
   const [path, query = ''] = (base || '').split('?', 2);
   const params = new URLSearchParams(query);
@@ -259,13 +271,8 @@ function appendScheduleListParams(
   } else {
     params.delete('cursor');
   }
-  for (const [key, value] of activeRecurringFilterEntries(filters)) {
+  for (const [key, value] of activeFilters) {
     params.set(key, value);
-  }
-  for (const key of Object.keys(RECURRING_FILTER_LABELS)) {
-    if (!filters[key as RecurringFilterKey].trim()) {
-      params.delete(key);
-    }
   }
   const serialized = params.toString();
   return `${path}${serialized ? `?${serialized}` : ''}${hash ? `#${hash}` : ''}`;
@@ -341,7 +348,14 @@ function hasActiveScheduleListFilters(endpoint: string): boolean {
     for (const [key, value] of parsed.searchParams.entries()) {
       const normalizedKey = key.trim().toLowerCase().replace(/_/g, '');
       const normalizedValue = value.trim();
-      if (!normalizedValue || normalizedKey === 'scope') {
+      if (
+        !normalizedValue
+        || normalizedKey === 'scope'
+        || normalizedKey === 'limit'
+        || normalizedKey === 'cursor'
+        || normalizedKey === 'sort'
+        || normalizedKey === 'sortdir'
+      ) {
         continue;
       }
       if (
@@ -1835,7 +1849,10 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     [baseListEndpoint, cursor, filters, pageSize, sort, sortDir],
   );
   const sources = useMemo(() => scheduleSources(payload), [payload]);
-  const hasActiveFilters = useMemo(() => hasActiveScheduleListFilters(listEndpoint), [listEndpoint]);
+  const hasActiveFilters = useMemo(
+    () => activeRecurringFilterEntries(filters).length > 0 || hasActiveScheduleListFilters(baseListEndpoint),
+    [baseListEndpoint, filters],
+  );
   const emptyMessage = hasActiveFilters
     ? 'No recurring schedules match the current filters.'
     : 'No recurring schedules yet. Create one from the workflow page.';

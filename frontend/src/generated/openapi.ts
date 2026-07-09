@@ -2657,6 +2657,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/v1/sessions/{session_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Omnigent Session Event
+         * @description Apply Omnigent controls, including bridge-local harvest/clear policy.
+         */
+        post: operations["post_omnigent_session_event_api_omnigent_v1_sessions__session_id__events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Omnigent Elicitation
+         * @description Resolve a pending Omnigent elicitation through the bridge surface.
+         */
+        post: operations["resolve_omnigent_elicitation_api_omnigent_v1_sessions__session_id__elicitations__elicitation_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/api/agents": {
         parameters: {
             query?: never;
@@ -4026,6 +4066,16 @@ export interface components {
             terminal_launch_args?: string[];
             /** Endpoint Ref */
             endpoint_ref?: string | null;
+        };
+        /**
+         * BridgeSessionEventRequest
+         * @description Omnigent-shaped ``POST /v1/sessions/{id}/events`` request body.
+         */
+        BridgeSessionEventRequest: {
+            /** Type */
+            type: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * CancelExecutionRequest
@@ -16026,6 +16076,83 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_omnigent_session_event_api_omnigent_v1_sessions__session_id__events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BridgeSessionEventRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_omnigent_elicitation_api_omnigent_v1_sessions__session_id__elicitations__elicitation_id__resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                elicitation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

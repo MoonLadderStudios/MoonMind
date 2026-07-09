@@ -33,6 +33,7 @@ from moonmind.omnigent.bridge_config import (
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
+    BridgeSessionEventRequest,
     OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
@@ -285,6 +286,98 @@ async def get_omnigent_session(
 
     try:
         return await proxy.get_session(session_id)
+    except OmnigentBridgeError as exc:
+        raise _http_error_from_bridge(exc) from exc
+
+
+async def _authorize_session_control(
+    *,
+    session_id: str,
+    user: User,
+    service: Any,
+    proxy: OmnigentBridgeSessionProxy,
+) -> None:
+    owner = await proxy.get_session_owner(session_id)
+    if owner is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "omnigent_bridge_session_unknown",
+                "message": (
+                    "No Omnigent bridge session is bound to the requested "
+                    "session id."
+                ),
+            },
+        )
+    principal = await resolve_execution_principal(
+        user=user,
+        service=service,
+        workflow_id_header=owner.workflow_id,
+        agent_run_id_header=owner.agent_run_id,
+    )
+    if not principal.workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "workflow_ownership_denied",
+                "message": (
+                    "The authenticated principal does not own the workflow "
+                    "that owns this Omnigent session."
+                ),
+            },
+        )
+
+
+@router.post(_ROUTES.post_event, response_model=dict)
+async def post_omnigent_session_event(
+    session_id: str,
+    payload: BridgeSessionEventRequest,
+    _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+) -> dict[str, Any]:
+    """Apply Omnigent controls, including bridge-local harvest/clear policy."""
+
+    await _authorize_session_control(
+        session_id=session_id,
+        user=user,
+        service=service,
+        proxy=proxy,
+    )
+    try:
+        return await proxy.post_event(session_id=session_id, event=payload)
+    except OmnigentBridgeError as exc:
+        raise _http_error_from_bridge(exc) from exc
+
+
+@router.post(
+    _ROUTES.resolve_elicitation,
+    response_model=dict,
+)
+async def resolve_omnigent_elicitation(
+    session_id: str,
+    elicitation_id: str,
+    payload: dict[str, Any],
+    _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+) -> dict[str, Any]:
+    """Resolve a pending Omnigent elicitation through the bridge surface."""
+
+    await _authorize_session_control(
+        session_id=session_id,
+        user=user,
+        service=service,
+        proxy=proxy,
+    )
+    try:
+        return await proxy.resolve_elicitation(
+            session_id=session_id,
+            elicitation_id=elicitation_id,
+            payload=payload,
+        )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
 
