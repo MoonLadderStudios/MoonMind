@@ -108,6 +108,12 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 | **Qdrant & MinIO** | Vector database for RAG/memory, and S3-compatible artifact storage. |
 | **Docker Proxy** | Restricted Docker socket access for control-plane workload workers; ordinary managed sessions use their private sidecar daemon instead of the host socket. |
 
+## Contributing
+
+Contributions are welcome, including high-quality AI-assisted pull requests.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, validation commands, testing expectations, and pull request guidelines. If you are using an AI coding agent, also read [AGENTS.md](AGENTS.md) before making changes.
+
 ## License
 
 MIT — free for personal and commercial use.
