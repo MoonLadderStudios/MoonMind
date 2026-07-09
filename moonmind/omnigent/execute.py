@@ -24,6 +24,10 @@ from moonmind.omnigent.bridge_artifacts import (
     build_omnigent_result,
     build_omnigent_terminal_refs,
 )
+from moonmind.omnigent.bridge_events import (
+    build_omnigent_bridge_event,
+    normalize_omnigent_observation,
+)
 from moonmind.omnigent.bridge_security import (
     BridgeSessionBinding,
     OmnigentAuthorizationError,
@@ -62,14 +66,6 @@ from moonmind.workflows.adapters.omnigent_client import (
     OmnigentHttpClient,
 )
 
-_TERMINAL_STATUSES = {
-    "completed",
-    "failed",
-    "canceled",
-    "cancelled",
-    "timed_out",
-    "timeout",
-}
 _NON_TERMINAL_STATUSES = {
     "created",
     "launching",
@@ -119,67 +115,6 @@ def _resolve_agent_id(*, agents_payload: dict[str, Any], requested_name: str | N
     if not raw:
         raise OmnigentContractError("Omnigent agent target is missing an id")
     return str(raw)
-
-
-def _has_active_elicitation(payload: dict[str, Any]) -> bool:
-    pending = payload.get("pending_inputs") or payload.get("pendingInputs") or []
-    if isinstance(pending, list) and pending:
-        return True
-    return bool(payload.get("elicitation") or payload.get("elicitation_request"))
-
-
-def normalize_omnigent_observation(payload: dict[str, Any]) -> str | None:
-    """Normalize Omnigent observations; unknown values are contract errors."""
-
-    event_type = str(payload.get("type") or "").strip()
-    if event_type in {"stream.done"}:
-        return None
-    if event_type in {"response.completed", "completed"}:
-        return "completed"
-    if event_type in {"response.failed", "failed"}:
-        return "failed"
-    if event_type in {"response.elicitation_request", "elicitation_request"}:
-        return "awaiting_approval"
-    if event_type.startswith("response.") or event_type.startswith("session."):
-        known_prefixes = (
-            "response.output",
-            "response.delta",
-            "session.child",
-            "session.input",
-            "session.item",
-        )
-        if not event_type.startswith(known_prefixes):
-            raise OmnigentContractError(f"Unsupported Omnigent event type: {event_type}")
-
-    status = payload.get("status")
-    session = payload.get("session")
-    if isinstance(session, dict) and status is None:
-        status = session.get("status")
-    response = payload.get("response")
-    if isinstance(response, dict) and status is None:
-        status = response.get("status")
-    data = payload.get("data")
-    if isinstance(data, dict) and status is None:
-        data_response = data.get("response")
-        if isinstance(data_response, dict):
-            status = data_response.get("status")
-    if status is None:
-        return None
-
-    raw = str(status).strip().lower()
-    if raw in {"cancelled", "timeout"}:
-        return {"cancelled": "canceled", "timeout": "timed_out"}[raw]
-    if raw in _TERMINAL_STATUSES:
-        return raw
-    if raw == "waiting":
-        return (
-            "awaiting_approval"
-            if _has_active_elicitation(payload)
-            else "intervention_requested"
-        )
-    if raw in _NON_TERMINAL_STATUSES:
-        return raw
-    raise OmnigentContractError(f"Unsupported Omnigent status: {raw}")
 
 
 def _session_options(omni: dict[str, Any]) -> dict[str, Any]:
@@ -510,6 +445,7 @@ async def run_omnigent_execution(
     initial_snapshot: dict[str, Any] | None = None
     raw_events: list[dict[str, Any]] = []
     normalized_events: list[dict[str, Any]] = []
+    event_diagnostics: list[dict[str, Any]] = []
     target_agent_id: str | None = None
     delete_after_harvest = False
     capture_policy: dict[str, Any] | None = None
@@ -569,6 +505,7 @@ async def run_omnigent_execution(
                 labels.setdefault("moonmind.issue", "MM-1059")
 
             durable_row = None
+            bridge_session_id: str | None = None
             if run_store is not None:
                 durable_row = await run_store.get_or_create(
                     request=request,
@@ -579,6 +516,9 @@ async def run_omnigent_execution(
                         "hostType": selection.session.host_type,
                         "workspace": selection.session.workspace,
                     },
+                )
+                bridge_session_id = str(
+                    getattr(durable_row, "bridge_session_id", "") or ""
                 )
                 assert_bridge_session_binding(
                     authorization,
@@ -886,21 +826,24 @@ async def run_omnigent_execution(
                 async for event in stream_events:
                     event_count["value"] += 1
                     raw_events.append(dict(event))
-                    normalized = normalize_omnigent_observation(event)
-                    normalized_events.append(
-                        {
-                            "eventType": str(event.get("type") or "").strip(),
-                            "normalizedStatus": normalized or "running",
-                            "sequence": event_count["value"],
-                        }
+                    normalized_bridge_event = build_omnigent_bridge_event(
+                        payload=event,
+                        sequence=event_count["value"],
+                        request=request,
+                        omnigent_session_id=session_id,
+                        bridge_session_id=bridge_session_id,
                     )
+                    if normalized_bridge_event.diagnostic is not None:
+                        event_diagnostics.append(normalized_bridge_event.diagnostic)
+                    normalized_events.append(normalized_bridge_event.event)
+                    normalized = normalized_bridge_event.event["normalizedStatus"]
                     _safe_heartbeat(
                         {
                             "omnigentSessionId": session_id,
-                            "normalizedStatus": normalized or "running",
+                            "normalizedStatus": normalized,
                             "eventsCaptured": event_count["value"],
                             "firstMessagePosted": True,
-                            "eventType": str(event.get("type") or "").strip(),
+                            "eventType": normalized_bridge_event.event["type"],
                         }
                     )
                     if normalized in {"awaiting_approval", "intervention_requested"}:
@@ -922,7 +865,7 @@ async def run_omnigent_execution(
                         _safe_heartbeat(
                             {
                                 "omnigentSessionId": session_id,
-                                "normalizedStatus": normalized or "running",
+                                "normalizedStatus": normalized,
                                 "eventsCaptured": event_count["value"],
                                 "firstMessagePosted": True,
                             }
@@ -946,13 +889,17 @@ async def run_omnigent_execution(
                     # derived from the snapshot so the durable event index records
                     # how the run ended; otherwise diagnostics/Workflow Chat would
                     # see a terminal session row with no terminal event (§7.2).
-                    normalized_events.append(
-                        {
-                            "eventType": "session.final_snapshot",
-                            "normalizedStatus": normalized_snapshot,
-                            "sequence": len(normalized_events) + 1,
-                        }
+                    normalized_bridge_event = build_omnigent_bridge_event(
+                        payload={
+                            "type": "session.final_snapshot",
+                            "session": final_snapshot,
+                        },
+                        sequence=len(normalized_events) + 1,
+                        request=request,
+                        omnigent_session_id=session_id,
+                        bridge_session_id=bridge_session_id,
                     )
+                    normalized_events.append(normalized_bridge_event.event)
                 elif normalized_snapshot in _NON_TERMINAL_STATUSES:
                     raise OmnigentSessionStillRunningError(
                         "Omnigent stream ended while the provider session is still running"
@@ -977,7 +924,8 @@ async def run_omnigent_execution(
                 normalized_events=normalized_events,
                 terminal_status=terminal_status,
                 diagnostics={
-                    "failureClass": failure_class_for_terminal_status(terminal_status)
+                    "failureClass": failure_class_for_terminal_status(terminal_status),
+                    "eventDiagnostics": event_diagnostics,
                 },
                 harvest_resources=True,
                 external_state=external_state,
