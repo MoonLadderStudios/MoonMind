@@ -172,6 +172,14 @@ steps:
     skill:
       id: moonspec-specify
       args: {}
+  - title: Assess source acceptance coverage
+    instructions: |-
+      Run moonspec-assess after moonspec-specify when artifacts/moonspec/source-acceptance.json exists or when the spec preserves source-backed requirements.
+      Verify artifacts/moonspec/acceptance-assessment.json exists before planning continues.
+      Treat the assessment bounded backlog as the authoritative bridge from source acceptance rows into planning, tasks, implementation, and verification.
+    skill:
+      id: moonspec-assess
+      args: {}
   - title: Plan selected spec
     instructions: |-
       Run moonspec-plan when plan.md or required design artifacts are missing or stale.

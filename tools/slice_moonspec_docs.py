@@ -286,6 +286,7 @@ def build_doc_slice_payload(
                     artifactRole="temporary implementation packet",
                     downstreamStages=[
                         "moonspec-specify",
+                        "moonspec-assess",
                         "moonspec-plan",
                         "moonspec-tasks",
                         "moonspec-implement",

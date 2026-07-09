@@ -72,10 +72,16 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "routed through moonspec-breakdown" in specify_step["instructions"]
         assert "source-acceptance.json" in specify_step["instructions"]
         assess_step = next(
-            step
-            for step in template.steps
-            if step["title"] == "Assess source acceptance coverage"
+            (
+                step
+                for step in template.steps
+                if step["title"] == "Assess source acceptance coverage"
+            ),
+            None,
         )
+        assert (
+            assess_step is not None
+        ), "Step 'Assess source acceptance coverage' not found in template steps"
         assert assess_step["skill"]["id"] == "moonspec-assess"
         assert "acceptance-assessment.json" in assess_step["instructions"]
         assert "bounded backlog" in assess_step["instructions"]
@@ -155,7 +161,8 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "moonspec-implement" in jira_orchestrate_steps
         assert "moonspec-verify" in jira_orchestrate_steps
         assert jira_orchestrate_steps[-1] == "jira-issue-updater"
-        assert len(jira_orchestrate_steps) == 25
+        assert "moonspec-assess" in jira_orchestrate_steps
+        assert len(jira_orchestrate_steps) == 26
         assert jira_orchestrate_steps.count("moonspec-implement") == 7
         assert jira_orchestrate_steps.count("moonspec-verify") == 7
         assert jira_orchestrate_steps.count("moonspec-doc-reconcile") == 1

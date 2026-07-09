@@ -56,7 +56,7 @@ def test_mm1135_assess_skill_defines_verdicts_statuses_and_backlog() -> None:
 
 
 def test_mm1135_orchestrate_preset_runs_assessment_without_new_inputs() -> None:
-    preset = yaml.safe_load(PRESET_PATH.read_text(encoding="utf-8"))
+    preset = yaml.safe_load(_read(PRESET_PATH))
 
     input_names = {item["name"] for item in preset["inputs"]}
     assert input_names == {
@@ -72,8 +72,12 @@ def test_mm1135_orchestrate_preset_runs_assessment_without_new_inputs() -> None:
     assert skill_ids.index("moonspec-assess") < skill_ids.index("moonspec-plan")
 
     assess_step = next(
-        step for step in preset["steps"] if step["skill"]["id"] == "moonspec-assess"
+        (step for step in preset["steps"] if step["skill"]["id"] == "moonspec-assess"),
+        None,
     )
+    assert (
+        assess_step is not None
+    ), "Step with skill ID 'moonspec-assess' not found in preset steps"
     assert "source-acceptance.json" in assess_step["instructions"]
     assert "acceptance-assessment.json" in assess_step["instructions"]
     assert "bounded backlog" in assess_step["instructions"]
@@ -111,11 +115,11 @@ def test_mm1135_downstream_skills_consume_assessment_artifacts() -> None:
     for skill, snippets in expected.items():
         text = _read(SKILLS_DIR / skill / "SKILL.md")
         for snippet in snippets:
-            assert snippet in text
+            assert snippet in text, f"Snippet '{snippet}' not found in {skill}/SKILL.md"
 
 
 def test_mm1135_bundle_manifest_exports_assessment_assets() -> None:
-    manifest = yaml.safe_load((BUNDLE_DIR / "moonspec.bundle.yaml").read_text())
+    manifest = yaml.safe_load(_read(BUNDLE_DIR / "moonspec.bundle.yaml"))
 
     skill_ids = {item["id"] for item in manifest["exports"]["skills"]}
     command_ids = {item["id"] for item in manifest["exports"]["commands"]}
