@@ -110,6 +110,6 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 
 ## License
 
-MoonMind is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+MoonMind is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license text and [NOTICE](NOTICE) for the copyright and attribution notice.
 
 MoonMind includes Omnigent as a Git submodule at `omnigent/`. Omnigent is separately licensed by the Omnigent project under Apache License 2.0; after running `git submodule update --init --recursive`, see `omnigent/LICENSE` and `omnigent/NOTICE` for its license and attribution notices. Other submodules retain their own upstream licenses.
