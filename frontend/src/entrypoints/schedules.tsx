@@ -7,6 +7,10 @@ import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
+import {
+  clearRecurringScheduleFocusRequest,
+  readRecurringScheduleFocusRequest,
+} from '../lib/recurringScheduleFocus';
 import { formatStatusLabel } from '../utils/formatters';
 
 const ScheduleSchema = z.object({
@@ -188,6 +192,25 @@ function displayValue(value: string | null | undefined): string {
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : String(error || fallback);
+}
+
+function focusRecurringElement(element: HTMLElement | null | undefined): boolean {
+  if (!element) {
+    return false;
+  }
+  element.focus({ preventScroll: true });
+  clearRecurringScheduleFocusRequest();
+  return true;
+}
+
+function findRecurringScheduleFocusElement(attribute: string, definitionId: string): HTMLElement | null {
+  const candidates = document.querySelectorAll<HTMLElement>(`[${attribute}]`);
+  for (const candidate of candidates) {
+    if (candidate.getAttribute(attribute) === definitionId) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 class ScheduleRequestError extends Error {
@@ -636,6 +659,7 @@ function RecurringScheduleSidebar({
                 key={schedule.id}
                 href={`/schedules/${encodeURIComponent(schedule.id)}`}
                 aria-current={active ? 'page' : undefined}
+                data-recurring-sidebar-row-focus={schedule.id}
                 className={`recurring-schedule-sidebar-row${active ? ' recurring-schedule-sidebar-row--active' : ''}`}
               >
                 <span className="recurring-schedule-sidebar-name">{schedule.name}</span>
@@ -841,6 +865,20 @@ function ScheduleDetailPage({
   const actions = schedule ? scheduleActionAvailability(schedule, sources) : null;
   const visibleFormErrors = submitErrors;
 
+  useEffect(() => {
+    const request = readRecurringScheduleFocusRequest();
+    if (!request || (request.definitionId && request.definitionId !== definitionId)) {
+      return;
+    }
+    if (request.target === 'detail-heading' && schedule) {
+      focusRecurringElement(document.querySelector<HTMLElement>('[data-recurring-detail-heading]'));
+    } else if (request.target === 'sidebar-row' && listDisplayMode === 'sidebar') {
+      focusRecurringElement(
+        findRecurringScheduleFocusElement('data-recurring-sidebar-row-focus', definitionId),
+      );
+    }
+  }, [definitionId, listDisplayMode, schedule, sidebarSchedules]);
+
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (currentForm && schedule && actions?.canEdit) {
@@ -908,7 +946,7 @@ function ScheduleDetailPage({
             <span>/</span>
             <span>{schedule.name}</span>
           </nav>
-          <h2 className="page-title">{schedule.name}</h2>
+          <h2 className="page-title" tabIndex={-1} data-recurring-detail-heading>{schedule.name}</h2>
           <p className="page-meta">{displayValue(schedule.description)}</p>
           <p className="page-meta" title={definitionId}>Definition ID: {definitionId}</p>
         </div>
@@ -1439,6 +1477,28 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     return { active, attention, dueSoon, total: schedules.length };
   }, [schedules]);
 
+  useEffect(() => {
+    if (routeDefinitionId) {
+      return;
+    }
+    const request = readRecurringScheduleFocusRequest();
+    if (!request || (request.target !== 'table-row' && request.target !== 'table-title')) {
+      return;
+    }
+    if (request.target === 'table-row' && request.definitionId) {
+      const rowLink = findRecurringScheduleFocusElement(
+        'data-recurring-table-row-focus',
+        request.definitionId,
+      );
+      if (focusRecurringElement(rowLink)) {
+        return;
+      }
+    }
+    if (!isLoading) {
+      focusRecurringElement(document.querySelector<HTMLElement>('[data-recurring-table-title]'));
+    }
+  }, [isLoading, routeDefinitionId, schedules]);
+
   if (routeDefinitionId) {
     return (
       <ScheduleDetailPage
@@ -1456,7 +1516,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     <div className="schedules-page stack">
       <header className="toolbar schedules-toolbar">
         <div>
-          <h2 className="page-title">Recurring Schedules</h2>
+          <h2 className="page-title" tabIndex={-1} data-recurring-table-title>Recurring Schedules</h2>
           <p className="page-meta">Managed recurring schedules for queue and manifest targets.</p>
         </div>
         <div className="toolbar-controls">
@@ -1525,7 +1585,12 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
                 header: 'Schedule',
                 render: (item) => (
                   <div className="schedules-primary-cell">
-                    <a href={`/schedules/${encodeURIComponent(item.id)}`}>{item.name}</a>
+                    <a
+                      href={`/schedules/${encodeURIComponent(item.id)}`}
+                      data-recurring-table-row-focus={item.id}
+                    >
+                      {item.name}
+                    </a>
                     <span title={item.id}>{compactId(item.id)}</span>
                   </div>
                 ),

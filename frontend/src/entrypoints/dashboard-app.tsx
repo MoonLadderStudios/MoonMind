@@ -50,6 +50,7 @@ import {
   resolveWorkflowListDisplay,
   type WorkflowListDisplayMode,
 } from '../lib/workflowListDisplayMode';
+import { requestRecurringScheduleFocus } from '../lib/recurringScheduleFocus';
 import {
   DASHBOARD_PREFERENCES_CHANGED_EVENT,
   readDashboardPreferences,
@@ -90,6 +91,29 @@ type SharedLayoutConfig = {
 type NavIconProps = {
   className?: string | undefined;
 };
+
+function requestRecurringFocusForMode(
+  mode: WorkflowListDisplayMode,
+  definitionId: string | null | undefined,
+): void {
+  if (mode === 'table') {
+    requestRecurringScheduleFocus(
+      definitionId
+        ? { target: 'table-row', definitionId }
+        : { target: 'table-title' },
+    );
+    return;
+  }
+  if (mode === 'sidebar' && definitionId) {
+    requestRecurringScheduleFocus({ target: 'sidebar-row', definitionId });
+    return;
+  }
+  requestRecurringScheduleFocus(
+    definitionId
+      ? { target: 'detail-heading', definitionId }
+      : { target: 'table-title' },
+  );
+}
 
 type AnimatedNavIconHandle =
   | MoonIconHandle
@@ -961,6 +985,7 @@ function RoutedDashboardPage({
           setLastSelectedDefinitionId(targetDefinitionId);
           updateDashboardPreferences({ lastSelectedDefinitionId: targetDefinitionId });
           setResolutionStatus(null);
+          requestRecurringFocusForMode(selectedMode, targetDefinitionId);
           navigate(`/schedules/${encodeURIComponent(targetDefinitionId)}`);
         } catch {
           if (pendingRequestRef.current === requestId) {
@@ -991,6 +1016,7 @@ function RoutedDashboardPage({
         patch.lastSelectedDefinitionId = resolved.selection.definitionId;
       }
       updateDashboardPreferences(patch);
+      requestRecurringFocusForMode(selectedMode, resolved.selection.definitionId);
       const current = `${location.pathname}${location.search}`;
       if (resolved.targetPath !== current) {
         navigate(resolved.targetPath);
