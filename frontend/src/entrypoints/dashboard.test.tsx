@@ -473,7 +473,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -553,7 +553,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -602,7 +602,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/recurring-workflows/stale-schedule') {
         return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -666,7 +666,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -735,7 +735,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -857,7 +857,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
@@ -892,7 +892,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         // A different first-visible row proves the remembered ID was preferred.
         return Promise.resolve({
           ok: true,
@@ -941,7 +941,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/recurring-workflows/stale-schedule') {
         return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
@@ -984,7 +984,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
@@ -1027,7 +1027,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),

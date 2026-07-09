@@ -8450,6 +8450,19 @@ export interface components {
         RecurringWorkflowDefinitionListResponse: {
             /** Items */
             items?: components["schemas"]["RecurringWorkflowDefinitionModel"][];
+            /**
+             * Count
+             * @default 0
+             */
+            count: number;
+            /** Nextpagetoken */
+            nextPageToken?: string | null;
+            /** Activecount */
+            activeCount?: number | null;
+            /** Next24Hcount */
+            next24hCount?: number | null;
+            /** Attentioncount */
+            attentionCount?: number | null;
         };
         /**
          * RecurringWorkflowDefinitionModel
@@ -15040,6 +15053,18 @@ export interface operations {
             query?: {
                 scope?: "personal" | "global";
                 limit?: number;
+                cursor?: string | null;
+                sort?: "updatedAt" | "name" | "state" | "target" | "repository" | "cron" | "timezone" | "nextRunAt" | "lastScheduledFor" | "dispatch";
+                sortDir?: "asc" | "desc";
+                schedule?: string;
+                state?: string;
+                target?: string;
+                repository?: string;
+                cadence?: string;
+                nextRun?: string;
+                lastScheduled?: string;
+                dispatch?: string;
+                updated?: string;
             };
             header?: never;
             path?: never;
