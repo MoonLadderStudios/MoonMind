@@ -9380,33 +9380,27 @@ class TemporalAgentRuntimeActivities:
                     },
                 }
             )
+        terminal_status = str(
+            payload.get("terminalStatus")
+            or ("completed" if turn_response.status == "completed" else "failed")
+        ).strip()
+        if terminal_status not in {"completed", "failed"}:
+            raise TemporalActivityRuntimeError(
+                "payload.terminalStatus must be 'completed' or 'failed'"
+            )
         terminal_type = (
-            "response.completed"
-            if turn_response.status == "completed"
-            else "response.failed"
+            "response.completed" if terminal_status == "completed" else "response.failed"
         )
-        terminal_status = (
-            "completed" if turn_response.status == "completed" else "failed"
-        )
-        event_payloads.extend(
-            [
-                {
-                    "type": terminal_type,
-                    "status": terminal_status,
-                    "data": {
-                        "turnId": turn_response.turn_id,
-                        "outputRefs": list(turn_response.output_refs),
-                        "publishedArtifactRefs": list(
-                            publication.published_artifact_refs
-                        ),
-                    },
+        event_payloads.append(
+            {
+                "type": terminal_type,
+                "status": terminal_status,
+                "data": {
+                    "turnId": turn_response.turn_id,
+                    "outputRefs": list(turn_response.output_refs),
+                    "publishedArtifactRefs": list(publication.published_artifact_refs),
                 },
-                {
-                    "type": "stream.done",
-                    "status": terminal_status,
-                    "data": {"turnId": turn_response.turn_id},
-                },
-            ]
+            }
         )
         events = [
             build_omnigent_bridge_event(

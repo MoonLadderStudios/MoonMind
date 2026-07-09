@@ -903,6 +903,23 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     managed_run_id=binding.agent_run_id,
                     run_id=run_id,
                 )
+                if publication is not None:
+                    summary = CodexManagedSessionSummary(
+                        session_state=publication.session_state,
+                        latest_summary_ref=publication.latest_summary_ref,
+                        latest_checkpoint_ref=publication.latest_checkpoint_ref,
+                        latest_control_event_ref=publication.latest_control_event_ref,
+                        latest_reset_boundary_ref=publication.latest_reset_boundary_ref,
+                    )
+                    await self._publish_direct_codex_bridge_events(
+                        request=request,
+                        binding=binding,
+                        locator=current_locator,
+                        turn_response=turn_response,
+                        summary=summary,
+                        publication=publication,
+                        terminal_status="failed",
+                    )
                 failure_result = self._persist_failed_run_state(
                     run_id=run_id,
                     agent_id=request.agent_id,
@@ -962,15 +979,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         )
                     )
                 )
-                await self._publish_direct_codex_bridge_events(
-                    request=request,
-                    binding=binding,
-                    locator=current_locator,
-                    turn_response=turn_response,
-                    summary=summary,
-                    publication=publication,
-                )
-
                 disposition = turn_response.metadata.get("disposition")
                 disposition_reason = turn_response.metadata.get("reason")
                 if disposition == "no_op":
@@ -1027,6 +1035,17 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             "failure_class": "execution_error",
                         }
                     )
+                await self._publish_direct_codex_bridge_events(
+                    request=request,
+                    binding=binding,
+                    locator=current_locator,
+                    turn_response=turn_response,
+                    summary=summary,
+                    publication=publication,
+                    terminal_status=(
+                        "failed" if result.failure_class is not None else "completed"
+                    ),
+                )
             except Exception as exc:
                 failure_result = self._persist_failed_run_state(
                     run_id=run_id,
@@ -1512,6 +1531,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         turn_response: CodexManagedSessionTurnResponse,
         summary: CodexManagedSessionSummary,
         publication: CodexManagedSessionArtifactsPublication,
+        terminal_status: str | None = None,
     ) -> None:
         if self._publish_bridge_events is None:
             return
@@ -1529,6 +1549,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 "turnResponse": turn_response.model_dump(mode="json", by_alias=True),
                 "summary": summary.model_dump(mode="json", by_alias=True),
                 "publication": publication.model_dump(mode="json", by_alias=True),
+                "terminalStatus": terminal_status,
                 "compatibilityProfile": "moonmind.codex_direct_compat.v1",
                 "producer": "direct_codex_managed_session",
             }

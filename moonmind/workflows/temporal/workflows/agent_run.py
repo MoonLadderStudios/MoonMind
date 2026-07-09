@@ -354,6 +354,9 @@ MANAGED_SESSION_TURN_DEADLINE_PATCH_ID = (
 MANAGED_SESSION_PR_PUBLISH_BASE_BRANCH_PATCH_ID = (
     "agent-run-managed-session-pr-publish-base-branch-v1"
 )
+MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID = (
+    "agent-run-managed-session-bridge-events-activity-v1"
+)
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.UserWorkflow (run.py:50).
@@ -3460,6 +3463,9 @@ class MoonMindAgentRun:
                         defer_turn_instructions_until_session_launch = workflow.patched(
                             MANAGED_SESSION_DEFER_TURN_INSTRUCTIONS_UNTIL_LAUNCH_PATCH_ID
                         )
+                        use_publish_bridge_events_activity = workflow.patched(
+                            MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID
+                        )
                         if request.managed_session is None:
                             raise ApplicationError(
                                 "managedSession is required for Codex session-backed runs",
@@ -3595,7 +3601,11 @@ class MoonMindAgentRun:
                             terminate_remote_session=_terminate_session,
                             fetch_remote_summary=_fetch_session_summary,
                             publish_remote_artifacts=_publish_session_artifacts,
-                            publish_bridge_events=_publish_bridge_events,
+                            publish_bridge_events=(
+                                _publish_bridge_events
+                                if use_publish_bridge_events_activity
+                                else None
+                            ),
                             attach_runtime_handles=_attach_runtime_handles,
                             apply_session_control_action=_apply_session_control_action,
                             workspace_root=_MANAGED_RUNTIME_STORE_ROOT,
