@@ -352,7 +352,7 @@ async def post_omnigent_session_event(
 
 
 @router.post(
-    "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
+    _ROUTES.resolve_elicitation,
     response_model=dict,
 )
 async def resolve_omnigent_elicitation(

@@ -154,8 +154,17 @@ class _FakeClient:
     async def list_workspace_files(self, session_id: str) -> dict[str, Any]:
         return {"items": [{"path": "README.md"}]}
 
+    async def get_workspace_file(self, session_id: str, path: str) -> bytes:
+        return f"contents:{path}\n".encode()
+
+    async def get_workspace_diff(self, session_id: str, path: str) -> bytes:
+        return f"diff -- {path}\n".encode()
+
     async def list_session_files(self, session_id: str) -> dict[str, Any]:
         return {"items": [{"id": "file-1", "filename": "session.log"}]}
+
+    async def get_session_file_content(self, session_id: str, file_id: str) -> bytes:
+        return f"session:{file_id}\n".encode()
 
 
 def _binding(key: str = "idem-1") -> BridgePrincipalBinding:
@@ -477,7 +486,21 @@ async def test_harvest_session_is_bridge_local_policy() -> None:
     assert response["status"] == "completed"
     assert response["moonmind"]["bridgeLocal"] is True
     assert response["moonmind"]["hostNativeEquivalent"] is False
-    assert response["resources"]["changedFiles"]["items"][0]["path"] == "src/app.py"
+    assert response["resources"]["changedFiles"][0]["path"] == "src/app.py"
+    assert (
+        response["resources"]["changedFiles"][0]["content"]["text"]
+        == "contents:src/app.py\n"
+    )
+    assert response["resources"]["workspaceFiles"][0]["path"] == "README.md"
+    assert (
+        response["resources"]["workspaceDiffs"][0]["content"]["text"]
+        == "diff -- src/app.py\n"
+    )
+    assert response["resources"]["sessionFiles"][0]["filename"] == "session.log"
+    assert (
+        response["resources"]["sessionFiles"][0]["content"]["text"]
+        == "session:file-1\n"
+    )
     assert client.posted_events == []
 
 

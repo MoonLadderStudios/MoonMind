@@ -19,6 +19,7 @@ parallel implementation.
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from typing import Any
 
@@ -45,6 +46,7 @@ from moonmind.workflows.adapters.omnigent_client import (
 )
 
 SOURCE_ISSUE = "MM-1155"
+_MAX_BRIDGE_HARVEST_ITEMS = 25
 
 
 class OmnigentBridgeError(RuntimeError):
@@ -429,23 +431,27 @@ class OmnigentBridgeSessionProxy:
         self._require_proxy_mode()
         diagnostics: list[dict[str, Any]] = []
         resources: dict[str, Any] = {}
-        probes = (
-            ("changedFiles", self._client.list_changed_files),
-            ("workspaceFiles", self._client.list_workspace_files),
-            ("sessionFiles", self._client.list_session_files),
+        changed_items = await self._harvest_changed_files(
+            session_id=session_id,
+            resources=resources,
+            diagnostics=diagnostics,
         )
-        for key, func in probes:
-            try:
-                resources[key] = await func(session_id)
-            except OmnigentClientError as exc:
-                diagnostics.append(
-                    {
-                        "code": f"{key}_unavailable",
-                        "message": str(exc),
-                        "failureClass": exc.failure_class,
-                        "statusCode": exc.status_code,
-                    }
-                )
+        await self._harvest_workspace_files(
+            session_id=session_id,
+            resources=resources,
+            diagnostics=diagnostics,
+        )
+        await self._harvest_workspace_diffs(
+            session_id=session_id,
+            changed_items=changed_items,
+            resources=resources,
+            diagnostics=diagnostics,
+        )
+        await self._harvest_session_files(
+            session_id=session_id,
+            resources=resources,
+            diagnostics=diagnostics,
+        )
         return {
             "type": "harvest_session",
             "status": "completed_with_diagnostics" if diagnostics else "completed",
@@ -461,6 +467,127 @@ class OmnigentBridgeSessionProxy:
             },
             "resources": resources,
         }
+
+    async def _harvest_changed_files(
+        self,
+        *,
+        session_id: str,
+        resources: dict[str, Any],
+        diagnostics: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        try:
+            index = await self._client.list_changed_files(session_id)
+        except OmnigentClientError as exc:
+            diagnostics.append(_harvest_diagnostic("changedFiles", exc))
+            return []
+        resources["changedFilesIndex"] = index
+        harvested: list[dict[str, Any]] = []
+        items = _resource_items(index)[:_MAX_BRIDGE_HARVEST_ITEMS]
+        for item in items:
+            path = _resource_path(item)
+            if not path:
+                continue
+            entry = {"path": path}
+            try:
+                entry["content"] = _content_payload(
+                    await self._client.get_workspace_file(session_id, path)
+                )
+            except OmnigentClientError as exc:
+                entry["unavailable"] = _harvest_error_payload(exc)
+            harvested.append(entry)
+        resources["changedFiles"] = harvested
+        return items
+
+    async def _harvest_workspace_files(
+        self,
+        *,
+        session_id: str,
+        resources: dict[str, Any],
+        diagnostics: list[dict[str, Any]],
+    ) -> None:
+        try:
+            index = await self._client.list_workspace_files(session_id)
+        except OmnigentClientError as exc:
+            diagnostics.append(_harvest_diagnostic("workspaceFiles", exc))
+            return
+        resources["workspaceFilesIndex"] = index
+        harvested: list[dict[str, Any]] = []
+        for item in _resource_items(index)[:_MAX_BRIDGE_HARVEST_ITEMS]:
+            path = _resource_path(item)
+            if not path:
+                continue
+            if str(item.get("type") or item.get("kind") or "").strip().lower() in {
+                "dir",
+                "directory",
+                "folder",
+            }:
+                harvested.append({"path": path, "skipped": "directory"})
+                continue
+            entry = {"path": path}
+            try:
+                entry["content"] = _content_payload(
+                    await self._client.get_workspace_file(session_id, path)
+                )
+            except OmnigentClientError as exc:
+                entry["unavailable"] = _harvest_error_payload(exc)
+            harvested.append(entry)
+        resources["workspaceFiles"] = harvested
+
+    async def _harvest_workspace_diffs(
+        self,
+        *,
+        session_id: str,
+        changed_items: list[dict[str, Any]],
+        resources: dict[str, Any],
+        diagnostics: list[dict[str, Any]],
+    ) -> None:
+        diffs: list[dict[str, Any]] = []
+        for path in [
+            path
+            for path in (_resource_path(item) for item in changed_items)
+            if path
+        ][:_MAX_BRIDGE_HARVEST_ITEMS]:
+            entry = {"path": path}
+            try:
+                entry["content"] = _content_payload(
+                    await self._client.get_workspace_diff(session_id, path)
+                )
+            except OmnigentClientError as exc:
+                entry["unavailable"] = _harvest_error_payload(exc)
+                diagnostics.append(_harvest_diagnostic("workspaceDiffs", exc))
+            diffs.append(entry)
+        resources["workspaceDiffs"] = diffs
+
+    async def _harvest_session_files(
+        self,
+        *,
+        session_id: str,
+        resources: dict[str, Any],
+        diagnostics: list[dict[str, Any]],
+    ) -> None:
+        try:
+            index = await self._client.list_session_files(session_id)
+        except OmnigentClientError as exc:
+            diagnostics.append(_harvest_diagnostic("sessionFiles", exc))
+            return
+        resources["sessionFilesIndex"] = index
+        harvested: list[dict[str, Any]] = []
+        for item in _resource_items(index)[:_MAX_BRIDGE_HARVEST_ITEMS]:
+            file_id = str(
+                item.get("id") or item.get("file_id") or item.get("fileId") or ""
+            ).strip()
+            if not file_id:
+                continue
+            filename = str(item.get("filename") or item.get("name") or file_id).strip()
+            entry = {"fileId": file_id, "filename": filename}
+            try:
+                entry["content"] = _content_payload(
+                    await self._client.get_session_file_content(session_id, file_id)
+                )
+            except OmnigentClientError as exc:
+                entry["unavailable"] = _harvest_error_payload(exc)
+            harvested.append(entry)
+        resources["sessionFiles"] = harvested
 
     def clear_session_policy(self, session_id: str) -> dict[str, Any]:
         """Return the explicit clear/reset policy for unchanged Omnigent hosts."""
@@ -603,6 +730,59 @@ def _selection(exec_request: AgentExecutionRequest) -> OmnigentExecutionSelectio
         return build_omnigent_selection(exec_request)
     except OmnigentAdapterError as exc:
         raise OmnigentBridgeError(str(exc), failure_class=exc.failure_class) from exc
+
+
+def _resource_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    for key in ("items", "files", "changes", "data"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            nested = _resource_items(value)
+            if nested:
+                return nested
+    return []
+
+
+def _resource_path(item: dict[str, Any]) -> str:
+    return str(
+        item.get("path")
+        or item.get("file_path")
+        or item.get("filePath")
+        or item.get("relativePath")
+        or item.get("name")
+        or ""
+    ).strip().strip("/")
+
+
+def _content_payload(content: bytes) -> dict[str, Any]:
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return {
+            "encoding": "base64",
+            "bytes": len(content),
+            "data": base64.b64encode(content).decode("ascii"),
+        }
+    return {
+        "encoding": "utf-8",
+        "bytes": len(content),
+        "text": text,
+    }
+
+
+def _harvest_error_payload(exc: OmnigentClientError) -> dict[str, Any]:
+    return {
+        "message": str(exc),
+        "failureClass": exc.failure_class,
+        "statusCode": exc.status_code,
+    }
+
+
+def _harvest_diagnostic(key: str, exc: OmnigentClientError) -> dict[str, Any]:
+    payload = _harvest_error_payload(exc)
+    payload["code"] = f"{key}_unavailable"
+    return payload
 
 
 def _session_id(payload: dict[str, Any]) -> str:

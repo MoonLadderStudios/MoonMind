@@ -46,6 +46,7 @@ publicApi:
     createSession: /v1/sessions
     getSession: /v1/sessions/{session_id}
     postEvent: /v1/sessions/{session_id}/events
+    resolveElicitation: /v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve
     streamEvents: /v1/sessions/{session_id}/stream
     changedFiles: /v1/sessions/{session_id}/resources/environments/default/changes
     workspaceFiles: /v1/sessions/{session_id}/resources/environments/default/filesystem
@@ -110,6 +111,10 @@ def test_section_6_document_parses_and_validates() -> None:
     assert config.compatibility.profile == "omnigent.server.v1"
     assert config.public_api.mount_path == "/api/omnigent"
     assert config.public_api.routes.create_session == "/v1/sessions"
+    assert (
+        config.public_api.routes.resolve_elicitation
+        == "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve"
+    )
     assert config.host_connection.upstream_server_url_ref == "default"
     assert config.host_connection.embedded.port == 8000
     assert config.session_defaults.host_type == "managed"
@@ -131,6 +136,10 @@ def test_minimal_document_uses_safe_defaults() -> None:
     assert config.compatibility.host_unchanged is True
     assert config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
     assert config.public_api.routes.agents == "/api/agents"
+    assert (
+        config.public_api.routes.resolve_elicitation
+        == "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve"
+    )
     assert config.session_defaults.capture.stream is True
 
 
