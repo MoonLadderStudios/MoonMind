@@ -141,10 +141,20 @@ def _require_embedded_mode(
 
 
 def _get_bridge_proxy(
-    _config: OmnigentBridgeConfig = Depends(_require_proxy_mode),
-) -> OmnigentBridgeSessionProxy:
+    _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+) -> OmnigentBridgeSessionProxy | None:
     """Build the proxy-mode bridge over the configured stock Omnigent Server."""
 
+    if _config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+        return None
+    if _config.host_protocol_mode != HOST_PROTOCOL_MODE_PROXY:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "code": "omnigent_bridge_mode_unsupported",
+                "message": "Unsupported Omnigent bridge host protocol mode.",
+            },
+        )
     gate = build_omnigent_gate()
     if not gate.enabled:
         raise HTTPException(
@@ -183,6 +193,16 @@ def _get_embedded_host_facade(
         config=_config,
     )
 
+
+def _get_create_embedded_facade(
+    _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+) -> OmnigentEmbeddedHostProtocolFacade | None:
+    if _config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+        return None
+    return OmnigentEmbeddedHostProtocolFacade(
+        run_store=OmnigentBridgeSessionStore(async_session_maker),
+        config=_config,
+    )
 
 def _http_error_from_bridge(exc: OmnigentBridgeError) -> HTTPException:
     status_code = exc.status_code or _FAILURE_CLASS_STATUS.get(
@@ -280,13 +300,16 @@ async def _resolve_bridge_binding(
 @router.post(_ROUTES.create_session, response_model=dict)
 async def create_omnigent_session(
     payload: BridgeSessionCreateRequest,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> dict[str, Any]:
-    """Create or reuse an Omnigent-shaped session in proxy mode (OB-§8)."""
+    """Create or reuse an Omnigent-shaped session in the configured bridge mode."""
 
     binding = await _resolve_bridge_binding(
         user=user,
@@ -295,6 +318,20 @@ async def create_omnigent_session(
         payload=payload,
     )
     try:
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+            if embedded_facade is None:
+                raise OmnigentBridgeError(
+                    "Embedded Omnigent bridge facade is unavailable",
+                    failure_class="system_error",
+                    status_code=501,
+                )
+            return await embedded_facade.create_session(request=payload, binding=binding)
+        if proxy is None:
+            raise OmnigentBridgeError(
+                "Omnigent proxy is unavailable for the configured bridge mode",
+                failure_class="system_error",
+                status_code=501,
+            )
         return await proxy.create_session(request=payload, binding=binding)
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc

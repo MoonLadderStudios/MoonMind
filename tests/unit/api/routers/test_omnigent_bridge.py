@@ -18,10 +18,16 @@ from api_service.api.routers.omnigent_bridge import (
     OMNIGENT_BRIDGE_MOUNT_PATH,
     _get_bridge_store,
     _get_bridge_proxy,
+    _get_create_embedded_facade,
     _get_execution_service,
+    _require_bridge_enabled,
     router,
 )
 from api_service.auth_providers import get_current_user
+from moonmind.omnigent.bridge_config import (
+    HOST_PROTOCOL_MODE_EMBEDDED,
+    parse_bridge_config,
+)
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeError
 
 _USER_ID = uuid4()
@@ -139,6 +145,23 @@ class _FakeStore:
             idempotency_key="idem-1",
             status="active",
         )
+
+
+class _FakeEmbeddedFacade:
+    def __init__(self) -> None:
+        self.created: list[dict[str, Any]] = []
+
+    async def create_session(self, *, request, binding):
+        self.created.append({"request": request, "binding": binding})
+        return {
+            "id": "emb_brs_1",
+            "status": "creating",
+            "moonmind": {
+                "bridgeLocal": True,
+                "hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED,
+                "workflowId": binding.workflow_id,
+            },
+        }
 
 
 def _build(
@@ -433,3 +456,38 @@ def test_superuser_owns_any_workflow() -> None:
     resp = client.post(_CREATE_PATH, json=_create_body())
     assert resp.status_code == 200
     assert len(proxy.created) == 1
+
+
+def test_create_session_available_in_embedded_mode() -> None:
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    facade = _FakeEmbeddedFacade()
+    embedded_config = parse_bridge_config(
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+                }
+            },
+        }
+    )
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    client = TestClient(app)
+
+    resp = client.post(
+        _CREATE_PATH,
+        json=_create_body(host_type="external", host_id="host-1", workspace="/repo"),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["id"] == "emb_brs_1"
+    assert resp.json()["moonmind"]["bridgeLocal"] is True
+    assert len(facade.created) == 1
+    assert facade.created[0]["binding"].workflow_id == "mm:w1"

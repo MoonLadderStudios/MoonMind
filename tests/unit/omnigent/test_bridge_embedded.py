@@ -20,7 +20,11 @@ from moonmind.omnigent.bridge_embedded import (
     OmnigentEmbeddedHostProtocolFacade,
     verify_embedded_host_auth,
 )
-from moonmind.omnigent.bridge_proxy import OmnigentBridgeError
+from moonmind.omnigent.bridge_proxy import (
+    BridgePrincipalBinding,
+    BridgeSessionCreateRequest,
+    OmnigentBridgeError,
+)
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
@@ -144,3 +148,90 @@ async def test_embedded_session_events_append_to_same_bridge_event_model(store) 
     assert events[0].event_type == "response.delta"
     assert events[0].normalized_status == "running"
     assert events[0].metadata_["moonmind"]["source"] == "omnigent_stream"
+
+
+@pytest.mark.asyncio
+async def test_embedded_create_session_creates_local_bridge_session(store) -> None:
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store,
+        config=_embedded_config(),
+    )
+
+    response = await facade.create_session(
+        request=BridgeSessionCreateRequest(
+            agent_id="agent-1",
+            host_type="external",
+            host_id="host-1",
+            workspace="/workspace/repo",
+            labels={
+                "moonmind.workflow_id": "mm:wf-embedded",
+                "moonmind.idempotency_key": "idem-create",
+            },
+        ),
+        binding=BridgePrincipalBinding(
+            workflow_id="mm:wf-embedded",
+            correlation_id="corr-create",
+            idempotency_key="idem-create",
+            agent_run_id="run-embedded",
+        ),
+    )
+
+    assert response["id"].startswith("emb_brs_")
+    assert response["moonmind"]["bridgeLocal"] is True
+    assert response["moonmind"]["reused"] is False
+    row = await store.get_session_by_provider_session_id(response["id"])
+    assert row is not None
+    assert row.moonmind_workflow_id == "mm:wf-embedded"
+
+
+@pytest.mark.asyncio
+async def test_embedded_session_events_preserve_full_payload_and_errors(
+    store,
+) -> None:
+    row = await store.get_or_create(
+        request=_request(),
+        endpoint_ref="embedded",
+        agent_id="agent-1",
+        agent_name="Codex",
+        target_metadata={"hostType": "external", "workspace": "/workspace/repo"},
+        workflow_id="mm:wf-embedded",
+        agent_run_id="run-embedded",
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store,
+        config=_embedded_config(),
+    )
+    auth = EmbeddedHostAuthContext(
+        auth_mode="header_or_token",
+        protocol_profile="omnigent.host_runner.v1",
+    )
+
+    await facade.ingest_session_event(
+        host_id="host-1",
+        session_id="sess-embedded",
+        request=EmbeddedHostSessionEventRequest(
+            type="response.delta",
+            data={"text": "hello", "nested": {"answer": 42}},
+        ),
+        auth=auth,
+    )
+    events = await store.list_events(row.bridge_session_id)
+    assert events[0].metadata_["embeddedRawEvent"]["data"]["nested"] == {"answer": 42}
+    assert (
+        events[0].metadata_["embeddedNormalizedEvent"]["eventType"]
+        == "response.delta"
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.ingest_session_event(
+            host_id="host-1",
+            session_id="sess-embedded",
+            request=EmbeddedHostSessionEventRequest(
+                type="response.delta",
+                data={"response": {"status": "mystery"}},
+            ),
+            auth=auth,
+        )
+    assert excinfo.value.status_code == 502
+    assert excinfo.value.failure_class == "integration_error"

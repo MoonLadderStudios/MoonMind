@@ -535,6 +535,7 @@ class OmnigentBridgeSessionStore:
             result = await session.execute(
                 select(OmnigentBridgeSession)
                 .where(OmnigentBridgeSession.bridge_session_id == key)
+                .with_for_update()
                 .limit(1)
             )
             row = result.scalars().first()
@@ -554,13 +555,19 @@ class OmnigentBridgeSessionStore:
             rows = _build_event_rows(key, prepared_events)
             for event_row in rows:
                 session.add(event_row)
-            terminal_status = None
+            next_status = None
             for event in prepared_events:
                 normalized = _string_or_none(event.get("normalizedStatus"))
-                if normalized is not None:
-                    terminal_status = coalesce_bridge_status(normalized)
-            if terminal_status is not None:
-                row.status = terminal_status
+                if normalized is None:
+                    continue
+                coalesced = coalesce_bridge_status(normalized)
+                if next_status in _TERMINAL_STATUSES and coalesced not in _TERMINAL_STATUSES:
+                    continue
+                next_status = coalesced
+            if next_status is not None and not (
+                row.status in _TERMINAL_STATUSES and next_status not in _TERMINAL_STATUSES
+            ):
+                row.status = next_status
             await session.commit()
             for event_row in rows:
                 await session.refresh(event_row)
