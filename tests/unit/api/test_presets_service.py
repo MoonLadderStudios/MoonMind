@@ -3598,6 +3598,7 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "Classify request and resume point",
         "Mark GitHub issue In Progress",
         "Create or select MoonSpec",
+        "Assess source acceptance coverage",
         "Plan selected spec",
         "Generate TDD task breakdown",
         "Align MoonSpec artifacts",
@@ -3997,6 +3998,7 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
             )
             assert [step["title"] for step in no_verify["steps"]] == [
                 "Create or select MoonSpec",
+                "Assess source acceptance coverage",
                 "Plan selected spec",
                 "Generate TDD task breakdown",
                 "Align MoonSpec artifacts",
