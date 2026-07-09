@@ -2195,3 +2195,20 @@ async def test_run_omnigent_execution_redacts_raw_events_before_persistence(
     raw_text = raw_path.read_text(encoding="utf-8")
     assert "sk-should-not-persist" not in raw_text
     assert "[REDACTED]" in raw_text
+    normalized_path = tmp_path / "corr-1" / "runtime.omnigent.sse.normalized.jsonl"
+    normalized_events = [
+        json.loads(line)
+        for line in normalized_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert normalized_events[0]["schemaVersion"] == "moonmind.omnigent_bridge.event.v1"
+    assert normalized_events[0]["sequence"] == 1
+    assert normalized_events[0]["type"] == "host.capabilities"
+    assert normalized_events[0]["normalizedStatus"] == "running"
+    assert normalized_events[0]["data"] == {}
+    assert normalized_events[0]["metadata"]["moonmind"] == {
+        "workflowChatVisible": False,
+        "source": "omnigent_stream",
+    }
+    assert normalized_events[-1]["type"] == "response.completed"
+    assert normalized_events[-1]["normalizedStatus"] == "completed"
