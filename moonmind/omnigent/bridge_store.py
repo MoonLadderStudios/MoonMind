@@ -29,8 +29,9 @@ from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEv
 from moonmind.omnigent.bridge_security import BridgeSessionBinding
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
-# Traceability: MM-1152 canonical store, migrated off the MM-1140 source design.
-BRIDGE_STORE_TRACEABILITY_ISSUES = ("MM-1152", "MM-1140")
+# Traceability: MM-1152 created the canonical store; MM-1156 moved the
+# first-message idempotency state machine onto it from the superseded mapping.
+BRIDGE_STORE_TRACEABILITY_ISSUES = ("MM-1152", "MM-1156", "MM-1140")
 
 FIRST_MESSAGE_NOT_PREPARED = "not_prepared"
 FIRST_MESSAGE_PREPARED = "prepared"
