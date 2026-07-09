@@ -122,6 +122,10 @@ PublishArtifactsFunc = Callable[
     [PublishCodexManagedSessionArtifactsRequest],
     Awaitable[CodexManagedSessionArtifactsPublication | Mapping[str, Any]],
 ]
+PublishBridgeEventsFunc = Callable[
+    [dict[str, Any]],
+    Awaitable[Mapping[str, Any] | None],
+]
 
 _MAX_AGENT_RUN_RESULT_SUMMARY_CHARS = 4096
 _COMPACT_METADATA_TEXT_CHARS = 1024
@@ -335,6 +339,18 @@ def _merge_durable_retrieval_metadata(
         elif isinstance(value, int) and not isinstance(value, bool):
             moonmind_metadata[key] = value
 
+
+def _uses_omnigent_bridge_communication(
+    parameters: Mapping[str, Any] | None,
+) -> bool:
+    if not isinstance(parameters, Mapping):
+        return False
+    communication = parameters.get("communication")
+    if not isinstance(communication, Mapping):
+        return False
+    return str(communication.get("mode") or "").strip() == "omnigent_bridge"
+
+
 def _clamp_agent_run_result_summary(summary: Any, *, default: str) -> str:
     normalized = str(summary or "").strip() or default
     if len(normalized) <= _MAX_AGENT_RUN_RESULT_SUMMARY_CHARS:
@@ -486,6 +502,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         terminate_remote_session: TerminateSessionFunc,
         fetch_remote_summary: FetchSummaryFunc,
         publish_remote_artifacts: PublishArtifactsFunc,
+        publish_bridge_events: PublishBridgeEventsFunc | None = None,
         attach_runtime_handles: SessionHandleSignaler,
         apply_session_control_action: SessionControlSignaler,
         workspace_root: str,
@@ -505,6 +522,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._terminate_remote_session = terminate_remote_session
         self._fetch_remote_summary = fetch_remote_summary
         self._publish_remote_artifacts = publish_remote_artifacts
+        self._publish_bridge_events = publish_bridge_events
         self._attach_runtime_handles = attach_runtime_handles
         self._apply_session_control_action = apply_session_control_action
         self._workspace_root = Path(workspace_root).resolve()
@@ -943,6 +961,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             metadata={"runId": run_id, "workflowId": self._workflow_id},
                         )
                     )
+                )
+                await self._publish_direct_codex_bridge_events(
+                    request=request,
+                    binding=binding,
+                    locator=current_locator,
+                    turn_response=turn_response,
+                    summary=summary,
+                    publication=publication,
                 )
 
                 disposition = turn_response.metadata.get("disposition")
@@ -1475,6 +1501,37 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             )
         raise ValueError(
             "Managed session adapter requires instructionRef or parameters.instructions"
+        )
+
+    async def _publish_direct_codex_bridge_events(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        binding: CodexManagedSessionBinding,
+        locator: CodexManagedSessionLocator,
+        turn_response: CodexManagedSessionTurnResponse,
+        summary: CodexManagedSessionSummary,
+        publication: CodexManagedSessionArtifactsPublication,
+    ) -> None:
+        if self._publish_bridge_events is None:
+            return
+        if not _uses_omnigent_bridge_communication(request.parameters):
+            return
+        await self._publish_bridge_events(
+            {
+                "request": request.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude_none=True,
+                ),
+                "binding": binding.model_dump(mode="json", by_alias=True),
+                "locator": locator.model_dump(mode="json", by_alias=True),
+                "turnResponse": turn_response.model_dump(mode="json", by_alias=True),
+                "summary": summary.model_dump(mode="json", by_alias=True),
+                "publication": publication.model_dump(mode="json", by_alias=True),
+                "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+                "producer": "direct_codex_managed_session",
+            }
         )
 
     def _require_binding(self, request: AgentExecutionRequest) -> CodexManagedSessionBinding:

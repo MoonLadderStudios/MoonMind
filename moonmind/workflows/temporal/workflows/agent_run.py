@@ -3566,6 +3566,13 @@ class MoonMindAgentRun:
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
 
+                        async def _publish_bridge_events(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.publish_bridge_events",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
                         adapter = CodexSessionAdapter(
                             profile_fetcher=_profile_fetcher,
                             slot_requester=_slot_requester,
@@ -3588,6 +3595,7 @@ class MoonMindAgentRun:
                             terminate_remote_session=_terminate_session,
                             fetch_remote_summary=_fetch_session_summary,
                             publish_remote_artifacts=_publish_session_artifacts,
+                            publish_bridge_events=_publish_bridge_events,
                             attach_runtime_handles=_attach_runtime_handles,
                             apply_session_control_action=_apply_session_control_action,
                             workspace_root=_MANAGED_RUNTIME_STORE_ROOT,
