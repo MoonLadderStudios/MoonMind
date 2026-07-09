@@ -196,6 +196,39 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : String(error || fallback);
 }
 
+function hasActiveScheduleListFilters(endpoint: string): boolean {
+  try {
+    const parsed = new URL(endpoint, 'http://moonmind.local');
+    for (const [key, value] of parsed.searchParams.entries()) {
+      const normalizedKey = key.trim().toLowerCase();
+      const normalizedValue = value.trim();
+      if (!normalizedValue || normalizedKey === 'scope') {
+        continue;
+      }
+      if (
+        normalizedKey === 'q'
+        || normalizedKey === 'search'
+        || normalizedKey === 'state'
+        || normalizedKey === 'target'
+        || normalizedKey === 'repository'
+        || normalizedKey === 'repo'
+        || normalizedKey === 'cadence'
+        || normalizedKey === 'timezone'
+        || normalizedKey === 'dispatch'
+        || normalizedKey === 'updated'
+        || normalizedKey.startsWith('filter')
+        || normalizedKey.startsWith('next')
+        || normalizedKey.startsWith('lastscheduled')
+      ) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function focusRecurringElement(element: HTMLElement | null | undefined): boolean {
   if (!element) {
     return false;
@@ -224,6 +257,15 @@ class ScheduleRequestError extends Error {
   }
 }
 
+class ScheduleListRequestError extends Error {
+  status: number;
+
+  constructor(status: number, statusText: string) {
+    super(scheduleListErrorMessage(status, statusText));
+    this.status = status;
+  }
+}
+
 function scheduleDetailErrorMessage(status: number, statusText: string): string {
   if (status === 403) {
     return 'You do not have access to this recurring schedule.';
@@ -232,6 +274,13 @@ function scheduleDetailErrorMessage(status: number, statusText: string): string 
     return 'Recurring schedule not found.';
   }
   return `Failed to fetch schedule: ${statusText || status}`;
+}
+
+function scheduleListErrorMessage(status: number, statusText: string): string {
+  if (status === 403) {
+    return 'You do not have access to recurring schedules.';
+  }
+  return `Failed to fetch schedules: ${statusText || status}`;
 }
 
 function titleCaseLabel(value: string): string {
@@ -1377,11 +1426,13 @@ function RecurringScheduleMobileList({
   isLoading,
   isError,
   error,
+  emptyMessage,
 }: {
   schedules: Schedule[];
   isLoading: boolean;
   isError: boolean;
   error: unknown;
+  emptyMessage: string;
 }) {
   if (isLoading) {
     return (
@@ -1406,7 +1457,7 @@ function RecurringScheduleMobileList({
   if (schedules.length === 0) {
     return (
       <div className="schedules-mobile-card-list schedules-mobile-card-list-state">
-        No recurring schedules yet. Create one from the workflow page.
+        {emptyMessage}
       </div>
     );
   }
@@ -1565,13 +1616,17 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
 
   const listEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
   const sources = useMemo(() => scheduleSources(payload), [payload]);
+  const hasActiveFilters = useMemo(() => hasActiveScheduleListFilters(listEndpoint), [listEndpoint]);
+  const emptyMessage = hasActiveFilters
+    ? 'No recurring schedules match the current filters.'
+    : 'No recurring schedules yet. Create one from the workflow page.';
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
     queryKey: ['schedules', listEndpoint],
     enabled: !routeDefinitionId || listDisplayMode === 'sidebar',
     queryFn: async () => {
       const response = await fetch(listEndpoint, { credentials: 'include' });
       if (!response.ok) {
-        throw new Error(`Failed to fetch: ${response.statusText}`);
+        throw new ScheduleListRequestError(response.status, response.statusText);
       }
       return SchedulesResponseSchema.parse(await response.json());
     },
@@ -1681,6 +1736,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             isLoading={isLoading}
             isError={isError}
             error={error}
+            emptyMessage={emptyMessage}
           />
         ) : null}
         <DataTable
@@ -1781,7 +1837,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
                 listEndpoint={listEndpoint}
               />
             )}
-            emptyMessage="No recurring schedules yet. Create one from the workflow page."
+            emptyMessage={emptyMessage}
             getRowKey={(item) => item.id}
             ariaLabel="Recurring schedules"
           />

@@ -533,6 +533,56 @@ describe("SchedulesPage", () => {
     expect(screen.queryByRole("button", { name: "Create Schedule" })).toBeNull();
   });
 
+  it("shows a filtered-empty state when the configured list query has active filters", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response);
+
+    renderWithClient(
+      <SchedulesPage
+        payload={{
+          page: "schedules",
+          apiBase: "/api",
+          initialData: {
+            dashboardConfig: {
+              sources: {
+                schedules: {
+                  list: "/console/schedules?scope=personal&state=paused",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("No recurring schedules match the current filters.")).not.toBeNull();
+    expect(screen.queryByText("No recurring schedules yet. Create one from the workflow page.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Refresh" })).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Create recurring schedule" })).not.toBeNull();
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal&state=paused");
+  });
+
+  it("uses a non-disclosing table-level access message for forbidden schedule lists", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      statusText: "Forbidden",
+      json: async () => ({
+        detail: "Forbidden for Daily repository sweep and schedule-alpha",
+      }),
+    } as Response);
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("You do not have access to recurring schedules.")).not.toBeNull();
+    expect(screen.queryByText(/Daily repository sweep/)).toBeNull();
+    expect(screen.queryByText(/schedule-alpha/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Refresh" })).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Create recurring schedule" })).not.toBeNull();
+  });
+
   it("honors dashboard schedule list sources from the boot payload", async () => {
     fetchSpy.mockResolvedValueOnce({
       ok: true,
