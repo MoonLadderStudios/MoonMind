@@ -519,7 +519,10 @@ def _is_generated_step_title(
     if not _preset_slug(task_payload):
         return False
     first_step_title = _first_step_title(task_payload, normalized_steps)
-    return bool(first_step_title and title.strip() == first_step_title)
+    return bool(
+        first_step_title
+        and title.strip().casefold() == first_step_title.strip().casefold()
+    )
 
 
 def _first_step_title(

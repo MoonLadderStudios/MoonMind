@@ -8565,24 +8565,8 @@ def _derive_task_title(
     normalized_steps: Sequence[Mapping[str, Any]] = (),
 ) -> str | None:
     current_title = str(task_payload.get("title") or "").strip()
-    synthesized = synthesize_workflow_title(
-        current_title=current_title,
-        task_payload=task_payload,
-        normalized_tool=normalized_tool,
-        normalized_steps=normalized_steps,
-    )
-    if synthesized:
-        return synthesized
     if current_title and not is_generic_title(current_title):
         return current_title[:_MAX_TASK_TITLE_LENGTH]
-    raw_steps = task_payload.get("steps")
-    if isinstance(raw_steps, list):
-        for item in raw_steps:
-            if not isinstance(item, Mapping):
-                continue
-            step_title = str(item.get("title") or "").strip()
-            if step_title:
-                return step_title[:_MAX_TASK_TITLE_LENGTH]
     instructions = str(task_payload.get("instructions") or "").strip()
     has_tool_context = normalized_tool is not None or any(
         isinstance(task_payload.get(key), Mapping)
@@ -8592,6 +8576,22 @@ def _derive_task_title(
         normalized = " ".join(instructions[: _MAX_TASK_TITLE_LENGTH * 2].split())
         if normalized:
             return normalized[:_MAX_TASK_TITLE_LENGTH]
+    synthesized = synthesize_workflow_title(
+        current_title=current_title,
+        task_payload=task_payload,
+        normalized_tool=normalized_tool,
+        normalized_steps=normalized_steps,
+    )
+    if synthesized:
+        return synthesized
+    raw_steps = task_payload.get("steps")
+    if isinstance(raw_steps, list):
+        for item in raw_steps:
+            if not isinstance(item, Mapping):
+                continue
+            step_title = str(item.get("title") or "").strip()
+            if step_title:
+                return step_title[:_MAX_TASK_TITLE_LENGTH]
     if not instructions:
         return None
     normalized = " ".join(instructions[: _MAX_TASK_TITLE_LENGTH * 2].split())

@@ -415,6 +415,26 @@ def test_jira_implement_ignores_load_brief_step_title() -> None:
     assert result.confidence == "high"
 
 
+def test_jira_implement_generated_step_title_match_is_case_insensitive() -> None:
+    result = synthesize_execution_title(
+        requested_title="load jira preset brief",
+        parameters={
+            "workflow": {
+                "title": "load jira preset brief",
+                "taskTemplate": {"slug": "jira-implement"},
+                "inputs": {"jira_issue_key": "MM-123"},
+                "steps": [
+                    {"title": "Load Jira Preset Brief"},
+                    {"title": "Implement issue"},
+                ],
+            }
+        },
+        integration="jira",
+    )
+
+    assert result.display_title == "Jira Implement: MM-123"
+    assert result.source == "integration_target"
+
 def test_jira_implement_uses_issue_summary_when_available() -> None:
     result = synthesize_execution_title(
         requested_title="Load Jira preset brief",

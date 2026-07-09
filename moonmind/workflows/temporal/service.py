@@ -1400,9 +1400,10 @@ class TemporalExecutionService:
         target_skill = _visibility_skill_from_parameters(params)
         if target_skill:
             search_attributes["mm_target_skill"] = target_skill
-        title_tokens = tokenize_title(resolved_title)
-        if title_tokens:
-            search_attributes["mm_title"] = title_tokens
+        if resolved_title:
+            title_tokens = tokenize_title(resolved_title)
+            if title_tokens:
+                search_attributes["mm_title"] = title_tokens
 
         artifact_refs = [
             ref

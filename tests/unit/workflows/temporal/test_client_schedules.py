@@ -79,6 +79,16 @@ def test_build_typed_search_attributes_encodes_target_facets_as_keyword_lists() 
     ) == ["pr-resolver"]
 
 
+def test_build_typed_search_attributes_encodes_single_title_token_as_keyword_list() -> None:
+    typed_search_attributes = _build_typed_search_attributes({"mm_title": ["run"]})
+
+    assert typed_search_attributes is not None
+    assert typed_search_attributes.get(
+        SearchAttributeKey.for_keyword_list("mm_title")
+    ) == ["run"]
+    assert typed_search_attributes.get(SearchAttributeKey.for_keyword("mm_title")) is None
+
+
 # ---------------------------------------------------------------------------
 # T010: create_schedule
 # ---------------------------------------------------------------------------
