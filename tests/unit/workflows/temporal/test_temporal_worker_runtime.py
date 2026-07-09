@@ -2084,8 +2084,8 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
             )
 
     task = expanded_parameters["task"]
-    assert expanded_parameters["stepCount"] == 25
-    assert len(task["steps"]) == 25
+    assert expanded_parameters["stepCount"] == 26
+    assert len(task["steps"]) == 26
     assert task["steps"][0]["title"] == "Check Jira blockers before implementation"
     assert task["steps"][0]["tool"]["id"] == "jira.check_blockers"
     assert task["steps"][1]["title"] == "Load Jira preset brief"
@@ -2095,25 +2095,26 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
     assert task["steps"][3]["type"] == "tool"
     assert task["steps"][3]["tool"]["id"] == "jira.update_issue_status"
     assert "MM-501" in task["steps"][3]["instructions"]
-    assert task["steps"][6]["skill"]["id"] == "moonspec-tasks"
-    assert task["steps"][8]["skill"]["id"] == "moonspec-implement"
-    assert task["steps"][9]["skill"]["id"] == "moonspec-verify"
-    assert task["steps"][9]["skill"]["args"]["verify_artifact_path"] == (
+    assert task["steps"][6]["skill"]["id"] == "moonspec-plan"
+    assert task["steps"][7]["skill"]["id"] == "moonspec-tasks"
+    assert task["steps"][9]["skill"]["id"] == "moonspec-implement"
+    assert task["steps"][10]["skill"]["id"] == "moonspec-verify"
+    assert task["steps"][10]["skill"]["args"]["verify_artifact_path"] == (
         "var/artifacts/moonspec-verify/jira-orchestrate.json"
     )
-    assert task["steps"][10]["title"] == "Remediate verification gaps — attempt 1 of 6"
-    assert task["steps"][10]["skill"]["id"] == "moonspec-implement"
-    assert task["steps"][21]["title"] == "Verify remediation attempt 6 of 6"
-    assert task["steps"][21]["skill"]["id"] == "moonspec-verify"
-    assert task["steps"][21]["skill"]["args"]["verify_artifact_path"] == (
+    assert task["steps"][11]["title"] == "Remediate verification gaps — attempt 1 of 6"
+    assert task["steps"][11]["skill"]["id"] == "moonspec-implement"
+    assert task["steps"][22]["title"] == "Verify remediation attempt 6 of 6"
+    assert task["steps"][22]["skill"]["id"] == "moonspec-verify"
+    assert task["steps"][22]["skill"]["args"]["verify_artifact_path"] == (
         "var/artifacts/moonspec-verify/jira-orchestrate.json"
     )
-    assert task["steps"][22]["title"] == "Reconcile declarative docs"
-    assert task["steps"][22]["skill"]["id"] == "moonspec-doc-reconcile"
-    assert task["steps"][23]["title"] == "Create pull request"
-    assert task["steps"][24]["title"] == "Move Jira issue to Review"
+    assert task["steps"][23]["title"] == "Reconcile declarative docs"
+    assert task["steps"][23]["skill"]["id"] == "moonspec-doc-reconcile"
+    assert task["steps"][24]["title"] == "Create pull request"
+    assert task["steps"][25]["title"] == "Move Jira issue to Review"
     assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
-    assert len(task["appliedStepTemplates"][0]["stepIds"]) == 25
+    assert len(task["appliedStepTemplates"][0]["stepIds"]) == 26
     assert task["authoredPresets"][0]["presetSlug"] == "jira-orchestrate"
     assert "authoredPresets" not in task["appliedStepTemplates"][0]
     assert task["appliedStepTemplates"][0]["composition"]["slug"] == "jira-orchestrate"
@@ -2160,8 +2161,8 @@ async def test_child_jira_orchestrate_workflow_payload_expands_seeded_template_s
 
     task = expanded_parameters["workflow"]
     assert "task" not in expanded_parameters
-    assert expanded_parameters["stepCount"] == 25
-    assert len(task["steps"]) == 25
+    assert expanded_parameters["stepCount"] == 26
+    assert len(task["steps"]) == 26
     assert task["steps"][0]["tool"]["id"] == "jira.check_blockers"
     assert task["steps"][0]["type"] == "tool"
     assert task["steps"][3]["tool"]["id"] == "jira.update_issue_status"
@@ -2229,7 +2230,7 @@ async def test_child_preset_expansion_prefers_workflow_payload_over_legacy_task(
 
     assert expanded_parameters["task"] == legacy_task
     task = expanded_parameters["workflow"]
-    assert expanded_parameters["stepCount"] == 25
+    assert expanded_parameters["stepCount"] == 26
     assert task["steps"][0]["tool"]["id"] == "jira.check_blockers"
     assert task["steps"][3]["tool"]["id"] == "jira.update_issue_status"
     assert "MM-821" in task["steps"][3]["instructions"]

@@ -143,6 +143,7 @@ def test_implementation_packets_preserve_source_packet_traceability() -> None:
     assert packet["docSliceId"] == slices["docSlices"][0]["id"]
     assert packet["downstreamStages"] == [
         "moonspec-specify",
+        "moonspec-assess",
         "moonspec-plan",
         "moonspec-tasks",
         "moonspec-implement",
