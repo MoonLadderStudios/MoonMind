@@ -1526,6 +1526,7 @@ describe('Dashboard shared entry', () => {
     // The rail stays fixed to the shared workflow-column width and bleeds left
     // by the same amount as the data slab, so its painted edge reaches x:0.
     const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
+    expect(sidebarBlock).toContain('width: calc(var(--mm-rail-width) + var(--mm-rail-bleed))');
     expect(sidebarBlock).toContain('margin-left: calc(var(--mm-rail-bleed) * -1)');
     expect(sidebarBlock).toContain('padding: 0');
     const sidebarPlacementBlock = cssRuleBlock(
@@ -1533,7 +1534,9 @@ describe('Dashboard shared entry', () => {
       '.workflow-workspace-sidebar,\n.workflow-workspace-sidebar-slot',
     );
     expect(sidebarPlacementBlock).toContain('grid-column: rail-start / content-start');
-    expect(sidebarPlacementBlock).toContain('width: var(--mm-rail-width)');
+    const sidebarSlotBlock = cssRuleBlocks(dashboardCss, '.workflow-workspace-sidebar-slot')
+      .find((block) => block.includes('width: var(--mm-rail-width)')) ?? '';
+    expect(sidebarSlotBlock).toContain('width: var(--mm-rail-width)');
 
     // Header and rows re-inset the left padding by the bleed so titles land at
     // the same 1rem inset as the list table's first column.
@@ -2014,6 +2017,10 @@ describe('Dashboard shared entry', () => {
       dashboardCss,
       isMobileWorkflowRule('.workflow-list-view-options-popover'),
     );
+    const mobileWorkspaceSidebarBlock = cssRuleBlockMatching(
+      dashboardCss,
+      isMobileWorkflowRule('.workflow-workspace-sidebar, .workflow-workspace-sidebar-slot'),
+    );
 
     expect(mobileSlabBlock).toContain('border: 0');
     expect(mobileSlabBlock).toContain('border-radius: 0');
@@ -2027,6 +2034,8 @@ describe('Dashboard shared entry', () => {
     expect(mobileFooterBlock).toContain('border-top: 0');
     expect(mobileFooterBlock).toContain('padding-left: 0');
     expect(mobileFooterBlock).toContain('padding-right: 0');
+
+    expect(mobileWorkspaceSidebarBlock).toContain('width: 100%');
 
     expect(mobileViewOptionsPopoverBlock).toContain('right: auto');
     expect(mobileViewOptionsPopoverBlock).toContain('left: 0');

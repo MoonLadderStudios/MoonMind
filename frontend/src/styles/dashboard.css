@@ -7441,7 +7441,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
    * table's first column. The right edge stays on the grid-column boundary, so
    * only the left side widens; inner content is re-inset by the same amount
    * (below) so titles stay aligned with the table cell text. */
-  width: calc(100% + var(--mm-rail-bleed));
+  width: calc(var(--mm-rail-width) + var(--mm-rail-bleed));
   margin-left: calc(var(--mm-rail-bleed) * -1);
 }
 
@@ -7449,6 +7449,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .workflow-workspace-sidebar-slot {
   grid-column: rail-start / content-start;
   justify-self: start;
+}
+
+.workflow-workspace-sidebar-slot {
   width: var(--mm-rail-width);
 }
 
@@ -7781,6 +7784,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   .workflow-start-workspace {
     --workflow-start-primary-offset: 0rem;
     --workflow-start-primary-available-width: calc(100% - 2rem);
+  }
+
+  .workflow-workspace-sidebar,
+  .workflow-workspace-sidebar-slot {
+    width: 100%;
   }
 
   .workflow-workspace-detail {
