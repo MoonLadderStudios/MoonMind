@@ -10,15 +10,17 @@ from typing import Any
 import httpx
 import pytest
 
-from moonmind.omnigent.execute import (
+from moonmind.omnigent.bridge_artifacts import (
     LocalOmnigentArtifactGateway,
     OmnigentArtifactError,
-    OmnigentContractError,
     OmnigentCaptureBundle,
+    build_omnigent_result,
+)
+from moonmind.omnigent.execute import (
+    OmnigentContractError,
     OmnigentSessionStillRunningError,
     _agent_items,
     _resolve_agent_id,
-    build_omnigent_result,
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
