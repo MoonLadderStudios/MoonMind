@@ -1,0 +1,1 @@
+../../../moonspec/bundle/skills/moonspec-assess/SKILL.md

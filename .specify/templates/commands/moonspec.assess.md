@@ -1,0 +1,1 @@
+../../../moonspec/bundle/commands/markdown/moonspec.assess.md

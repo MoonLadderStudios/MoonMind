@@ -50,6 +50,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         ]
         assert seeded_skill_ids == [
             "moonspec-specify",
+            "moonspec-assess",
             "moonspec-plan",
             "moonspec-tasks",
             "moonspec-align",
@@ -69,6 +70,15 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         ]
         assert "stop immediately" in specify_step["instructions"]
         assert "routed through moonspec-breakdown" in specify_step["instructions"]
+        assert "source-acceptance.json" in specify_step["instructions"]
+        assess_step = next(
+            step
+            for step in template.steps
+            if step["title"] == "Assess source acceptance coverage"
+        )
+        assert assess_step["skill"]["id"] == "moonspec-assess"
+        assert "acceptance-assessment.json" in assess_step["instructions"]
+        assert "bounded backlog" in assess_step["instructions"]
         tasks_step = next(
             step
             for step in template.steps
