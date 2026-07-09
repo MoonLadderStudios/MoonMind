@@ -570,7 +570,9 @@ describe("SchedulesPage", () => {
     expect(screen.queryByText("No recurring schedules yet. Create one from the workflow page.")).toBeNull();
     expect(screen.getByRole("button", { name: "Refresh" })).not.toBeNull();
     expect(screen.getByRole("link", { name: "Create recurring schedule" })).not.toBeNull();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal&state=paused");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      "/console/schedules?scope=personal&state=paused&limit=50&sort=updatedAt&sortDir=desc",
+    );
   });
 
   it("detects snake_case schedule list filter keys in configured list queries", async () => {
@@ -600,7 +602,7 @@ describe("SchedulesPage", () => {
     expect(await screen.findByText("No recurring schedules match the current filters.")).not.toBeNull();
     expect(screen.queryByText("No recurring schedules yet. Create one from the workflow page.")).toBeNull();
     expect(fetchSpy.mock.calls[0]?.[0]).toBe(
-      "/console/schedules?scope=personal&last_scheduled_for=2026-07-09",
+      "/console/schedules?scope=personal&last_scheduled_for=2026-07-09&limit=50&sort=updatedAt&sortDir=desc",
     );
   });
 

@@ -274,11 +274,6 @@ function appendScheduleListParams(
   for (const [key, value] of activeFilters) {
     params.set(key, value);
   }
-  for (const key of Object.keys(RECURRING_FILTER_LABELS)) {
-    if (!filters[key as RecurringFilterKey].trim()) {
-      params.delete(key);
-    }
-  }
   const serialized = params.toString();
   return `${path}${serialized ? `?${serialized}` : ''}${hash ? `#${hash}` : ''}`;
 }
@@ -353,7 +348,14 @@ function hasActiveScheduleListFilters(endpoint: string): boolean {
     for (const [key, value] of parsed.searchParams.entries()) {
       const normalizedKey = key.trim().toLowerCase().replace(/_/g, '');
       const normalizedValue = value.trim();
-      if (!normalizedValue || normalizedKey === 'scope') {
+      if (
+        !normalizedValue
+        || normalizedKey === 'scope'
+        || normalizedKey === 'limit'
+        || normalizedKey === 'cursor'
+        || normalizedKey === 'sort'
+        || normalizedKey === 'sortdir'
+      ) {
         continue;
       }
       if (

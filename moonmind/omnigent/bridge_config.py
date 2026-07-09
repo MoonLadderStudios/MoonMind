@@ -314,6 +314,10 @@ class BridgePublicApiRoutes(BaseModel):
     create_session: str = Field("/v1/sessions", alias="createSession")
     get_session: str = Field("/v1/sessions/{session_id}", alias="getSession")
     post_event: str = Field("/v1/sessions/{session_id}/events", alias="postEvent")
+    resolve_elicitation: str = Field(
+        "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
+        alias="resolveElicitation",
+    )
     stream_events: str = Field(
         "/v1/sessions/{session_id}/stream", alias="streamEvents"
     )
