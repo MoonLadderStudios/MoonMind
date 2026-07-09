@@ -873,6 +873,12 @@ const ExecutionDetailSchema = z
     closedAt: z.string().nullable().optional(),
     agentRunId: z.string().nullable().optional(),
     agent_run_id: z.string().nullable().optional(),
+    bridgeSessionId: z.string().nullable().optional(),
+    bridge_session_id: z.string().nullable().optional(),
+    omnigentBridgeSessionId: z.string().nullable().optional(),
+    omnigent_bridge_session_id: z.string().nullable().optional(),
+    idempotencyKey: z.string().nullable().optional(),
+    idempotency_key: z.string().nullable().optional(),
     stepsHref: z.string().nullable().optional(),
     debugFields: z
       .object({
@@ -1421,11 +1427,23 @@ const StepLedgerRefsSchema = z
     childWorkflowId: z.string().nullable().optional(),
     childRunId: z.string().nullable().optional(),
     agentRunId: z.string().nullable().optional(),
+    bridgeSessionId: z.string().nullable().optional(),
+    bridge_session_id: z.string().nullable().optional(),
+    omnigentBridgeSessionId: z.string().nullable().optional(),
+    omnigent_bridge_session_id: z.string().nullable().optional(),
+    idempotencyKey: z.string().nullable().optional(),
+    idempotency_key: z.string().nullable().optional(),
   })
   .default({
     childWorkflowId: null,
     childRunId: null,
     agentRunId: null,
+    bridgeSessionId: null,
+    bridge_session_id: null,
+    omnigentBridgeSessionId: null,
+    omnigent_bridge_session_id: null,
+    idempotencyKey: null,
+    idempotency_key: null,
   });
 
 const StepLedgerArtifactsSchema = z
@@ -2334,6 +2352,72 @@ async function fetchObservabilityEvents(
     ),
     { credentials: 'include' },
   );
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw buildObservabilityRequestError(resp.status);
+  }
+  return ObservabilityEventsResponseSchema.parse(await resp.json());
+}
+
+type BridgeSessionProjection = {
+  bridgeSessionId: string;
+  workflowId?: string | undefined;
+  agentRunId?: string | undefined;
+  idempotencyKey?: string | undefined;
+  status?: string | undefined;
+};
+
+function bridgeSessionRoute(apiBase: string, bridgeSessionId: string, suffix: 'events' | 'stream'): string {
+  return joinApiBasePath(
+    apiBase,
+    `/omnigent/bridge-sessions/${encodeURIComponent(bridgeSessionId)}/${suffix}`,
+  );
+}
+
+async function resolveBridgeSessionProjection({
+  apiBase,
+  workflowId,
+  agentRunId,
+  idempotencyKey,
+}: {
+  apiBase: string;
+  workflowId?: string | null;
+  agentRunId?: string | null;
+  idempotencyKey?: string | null;
+}): Promise<BridgeSessionProjection | null> {
+  const params = new URLSearchParams();
+  if (workflowId) params.set('workflowId', workflowId);
+  if (agentRunId) params.set('agentRunId', agentRunId);
+  if (idempotencyKey) params.set('idempotencyKey', idempotencyKey);
+  if (!params.toString()) return null;
+
+  const resp = await fetch(
+    joinApiBasePath(apiBase, `/omnigent/bridge-sessions/resolve?${params.toString()}`),
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw buildObservabilityRequestError(resp.status);
+  }
+  const body = (await resp.json()) as Record<string, unknown>;
+  const bridgeSessionId = typeof body.bridgeSessionId === 'string' ? body.bridgeSessionId.trim() : '';
+  if (!bridgeSessionId) return null;
+  return {
+    bridgeSessionId,
+    workflowId: typeof body.workflowId === 'string' ? body.workflowId : undefined,
+    agentRunId: typeof body.agentRunId === 'string' ? body.agentRunId : undefined,
+    idempotencyKey: typeof body.idempotencyKey === 'string' ? body.idempotencyKey : undefined,
+    status: typeof body.status === 'string' ? body.status : undefined,
+  };
+}
+
+async function fetchBridgeSessionEvents(
+  apiBase: string,
+  bridgeSessionId: string,
+): Promise<z.infer<typeof ObservabilityEventsResponseSchema> | null> {
+  const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'events'), {
+    credentials: 'include',
+  });
   if (!resp.ok) {
     if (resp.status === 404) return null;
     throw buildObservabilityRequestError(resp.status);
@@ -3793,14 +3877,53 @@ function StepObservabilityGroup({
   row: z.infer<typeof StepLedgerRowSchema>;
   routes: AgentRunRouteTemplates;
 }) {
+  const agentRunId = row.refs.agentRunId;
+  const explicitBridgeSessionId =
+    row.refs.bridgeSessionId ||
+    row.refs.bridge_session_id ||
+    row.refs.omnigentBridgeSessionId ||
+    row.refs.omnigent_bridge_session_id ||
+    '';
+  const bridgeIdempotencyKey = row.refs.idempotencyKey || row.refs.idempotency_key || '';
+  const bridgeResolutionQuery = useQuery({
+    queryKey: [
+      'omnigent-bridge-step-projection',
+      row.workflowId,
+      row.logicalStepId,
+      row.executionOrdinal,
+      bridgeIdempotencyKey,
+    ],
+    queryFn: () =>
+      resolveBridgeSessionProjection({
+        apiBase,
+        workflowId: row.workflowId,
+        idempotencyKey: bridgeIdempotencyKey,
+      }),
+    enabled: Boolean(logStreamingEnabled && !agentRunId && !explicitBridgeSessionId && row.workflowId),
+    staleTime: stepTerminal(row.status) ? Infinity : 2000,
+    retry: false,
+  });
+  const bridgeSessionId = explicitBridgeSessionId || bridgeResolutionQuery.data?.bridgeSessionId || '';
+
   if (!logStreamingEnabled) {
     return (
       <p className="small">Live log streaming is disabled in the server dashboard config.</p>
     );
   }
 
-  const agentRunId = row.refs.agentRunId;
   if (!agentRunId) {
+    if (bridgeSessionId) {
+      return (
+        <BridgeSessionLogsPanel
+          apiBase={apiBase}
+          bridgeSessionId={bridgeSessionId}
+          isTerminal={stepTerminal(row.status)}
+        />
+      );
+    }
+    if (bridgeResolutionQuery.isLoading) {
+      return <p className="small">Checking bridge session evidence.</p>;
+    }
     return (
       <p className="small">
         {renderMissingAgentRunCopy(
@@ -5343,6 +5466,141 @@ function LiveLogsPanel({
       </summary>
       {panelBody}
     </details>
+  );
+}
+
+function BridgeSessionLogsPanel({
+  apiBase,
+  bridgeSessionId,
+  isTerminal,
+}: {
+  apiBase: string;
+  bridgeSessionId: string;
+  isTerminal: boolean;
+}) {
+  const [logContent, setLogContent] = useState<TimelineRow[]>([]);
+  const [viewerState, setViewerState] = useState<LogViewerState>('starting');
+  const [wrapLines, setWrapLines] = useState(true);
+  const lastSeqRef = useRef<number | null>(null);
+  const esRef = useRef<EventSource | null>(null);
+  const isVisible = usePageVisibility();
+  const chatBlocks = useMemo(
+    () => reduceTimelineRowsToChatBlocks(logContent, bridgeSessionId),
+    [bridgeSessionId, logContent],
+  );
+
+  const eventsQuery = useQuery({
+    queryKey: ['omnigent-bridge-session-events', bridgeSessionId],
+    queryFn: () => fetchBridgeSessionEvents(apiBase, bridgeSessionId),
+    enabled: Boolean(bridgeSessionId),
+    staleTime: Infinity,
+    retry: false,
+  });
+  const historyRows = useMemo(() => mapEventsToTimelineRows(eventsQuery.data), [eventsQuery.data]);
+
+  useEffect(() => {
+    setLogContent([]);
+    lastSeqRef.current = null;
+    setViewerState('starting');
+  }, [bridgeSessionId]);
+
+  useEffect(() => {
+    if (!eventsQuery.isSuccess) return;
+    const sequences = eventsQuery.data?.events
+      .map((event) => event.sequence)
+      .filter((sequence) => Number.isFinite(sequence));
+    setLogContent(historyRows);
+    lastSeqRef.current = sequences && sequences.length > 0 ? Math.max(...sequences) : null;
+    setViewerState(isTerminal ? 'ended' : 'live');
+  }, [eventsQuery.data, eventsQuery.isSuccess, historyRows, isTerminal]);
+
+  useEffect(() => {
+    if (!bridgeSessionId || !eventsQuery.isSuccess || isTerminal || !isVisible) return;
+    let cancelled = false;
+    const since = lastSeqRef.current != null ? `?since=${lastSeqRef.current}` : '';
+    const es = new EventSource(`${bridgeSessionRoute(apiBase, bridgeSessionId, 'stream')}${since}`, {
+      withCredentials: true,
+    });
+    esRef.current = es;
+
+    const handleBridgeEvent = (event: MessageEvent) => {
+      if (cancelled) return;
+      try {
+        const data = ObservabilityEventSchema.parse(JSON.parse(event.data));
+        lastSeqRef.current = data.sequence;
+        setLogContent((prev) => [...prev, ...eventToTimelineRows(data)]);
+      } catch {
+        // Ignore malformed bridge events; the fetched event index remains visible.
+      }
+    };
+
+    es.onopen = () => {
+      if (!cancelled) setViewerState('live');
+    };
+    es.onmessage = handleBridgeEvent;
+    es.addEventListener('bridge_event', handleBridgeEvent);
+    es.onerror = () => {
+      es.close();
+      esRef.current = null;
+      if (!cancelled) setViewerState(isTerminal ? 'ended' : 'error');
+    };
+    return () => {
+      cancelled = true;
+      if (esRef.current) {
+        esRef.current.close();
+        esRef.current = null;
+      }
+    };
+  }, [apiBase, bridgeSessionId, eventsQuery.isSuccess, isTerminal, isVisible]);
+
+  const statusLabel =
+    viewerState === 'live'
+      ? 'Connected'
+      : viewerState === 'ended'
+        ? 'Stream ended'
+        : viewerState === 'error'
+          ? 'Disconnected - showing bridge event index'
+          : 'Loading...';
+
+  const handleCopy = () => {
+    if (logContent.length === 0) return;
+    copyTextToClipboard(logContent.map((line) => getCopyableRowText(line)).join('\n'));
+  };
+
+  return (
+    <div className="stack live-logs-panel">
+      {eventsQuery.isError ? <div className="notice error">{(eventsQuery.error as Error).message}</div> : null}
+      <div className="button-group live-logs-toolbar">
+        <label className="live-logs-wrap-toggle">
+          <input type="checkbox" checked={wrapLines} onChange={(event) => setWrapLines(event.target.checked)} />
+          <span className="small">Wrap lines</span>
+        </label>
+        <button className="secondary small" onClick={handleCopy}>Copy</button>
+      </div>
+      <p className="small">
+        Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
+      </p>
+      <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
+        {logContent.length === 0 ? (
+          <div className="live-logs-empty">(waiting for bridge session events...)</div>
+        ) : (
+          <div data-testid="chat-session-viewer" className="chat-session-viewer">
+            <ChatSessionView apiBase={apiBase} chatBlocks={chatBlocks} rows={logContent} wrapLines={wrapLines} />
+            <details className="raw-timeline-escape-hatch">
+              <summary>Raw Timeline</summary>
+              <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">
+                <Virtuoso
+                  style={{ height: 400 }}
+                  data={logContent}
+                  computeItemKey={(_, row) => row.id}
+                  itemContent={(_, row) => renderTimelineRow(row, wrapLines, true, apiBase)}
+                />
+              </div>
+            </details>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -6980,6 +7238,34 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const summaryArtifactRef = execution?.summaryArtifactRef || execution?.summary_artifact_ref || '';
   const explicitAgentRunId = execution?.agentRunId || execution?.agent_run_id || '';
   const resolvedAgentRunId = explicitAgentRunId;
+  const explicitBridgeSessionId =
+    execution?.bridgeSessionId ||
+    execution?.bridge_session_id ||
+    execution?.omnigentBridgeSessionId ||
+    execution?.omnigent_bridge_session_id ||
+    '';
+  const executionIdempotencyKey = execution?.idempotencyKey || execution?.idempotency_key || '';
+  const shouldResolveBridgeSession = Boolean(
+    execution &&
+      detailSubroute === 'chat' &&
+      !resolvedAgentRunId &&
+      !explicitBridgeSessionId &&
+      workflowId,
+  );
+  const bridgeResolutionQuery = useQuery({
+    queryKey: ['omnigent-bridge-session-projection', workflowId, executionIdempotencyKey],
+    queryFn: () =>
+      resolveBridgeSessionProjection({
+        apiBase: payload.apiBase,
+        workflowId,
+        idempotencyKey: executionIdempotencyKey,
+      }),
+    enabled: shouldResolveBridgeSession,
+    staleTime: isTerminalExecution ? Infinity : detailPoll,
+    retry: false,
+  });
+  const resolvedBridgeSessionId =
+    explicitBridgeSessionId || bridgeResolutionQuery.data?.bridgeSessionId || '';
   const shouldFetchRemediationLinks = Boolean(execution && workflowId);
   const sessionTimelineEnabled = shouldEnableSessionTimelineViewer({
     config: cfg,
@@ -7026,7 +7312,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     return undefined;
   }, [execution, resolvedAgentRunId]);
 
-  const missingAgentRunState = execution && !resolvedAgentRunId ? inferMissingAgentRunState(execution) : null;
+  const missingAgentRunState =
+    execution && !resolvedAgentRunId && !resolvedBridgeSessionId && !bridgeResolutionQuery.isLoading
+      ? inferMissingAgentRunState(execution)
+      : null;
 
   const chatTabActive = detailSubroute === 'chat';
   const executionTabActive = detailSubroute === 'execution';
@@ -8015,6 +8304,14 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                       optimisticMessages={chatOptimisticMessages}
                     />
                   </>
+                ) : resolvedBridgeSessionId ? (
+                  <BridgeSessionLogsPanel
+                    apiBase={payload.apiBase}
+                    bridgeSessionId={resolvedBridgeSessionId}
+                    isTerminal={isTerminalExecution}
+                  />
+                ) : bridgeResolutionQuery.isLoading ? (
+                  <p className="small">Checking bridge session evidence.</p>
                 ) : (
                   <p className="small">{missingAgentRunState ? renderMissingAgentRunCopy(missingAgentRunState) : 'Waiting for managed runtime launch to create live logs.'}</p>
                 )

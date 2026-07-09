@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -128,6 +129,12 @@ def _get_bridge_proxy(
         config=_config,
         default_agent_name=resolved_default_agent_name(),
     )
+
+
+def _get_bridge_store(
+    _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+) -> OmnigentBridgeSessionStore:
+    return OmnigentBridgeSessionStore(async_session_maker)
 
 
 def _http_error_from_bridge(exc: OmnigentBridgeError) -> HTTPException:
@@ -326,6 +333,205 @@ async def _authorize_session_control(
                 ),
             },
         )
+
+
+async def _authorize_bridge_session_projection(
+    *,
+    bridge_session_id: str,
+    user: User,
+    service: Any,
+    store: OmnigentBridgeSessionStore,
+) -> None:
+    owner = await store.get_bridge_session_owner(bridge_session_id)
+    if owner is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "omnigent_bridge_session_unknown",
+                "message": (
+                    "No Omnigent bridge session is bound to the requested "
+                    "bridge session id."
+                ),
+            },
+        )
+    principal = await resolve_execution_principal(
+        user=user,
+        service=service,
+        workflow_id_header=owner.workflow_id,
+        agent_run_id_header=owner.agent_run_id,
+    )
+    if not principal.workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "workflow_ownership_denied",
+                "message": (
+                    "The authenticated principal does not own the workflow "
+                    "that owns this Omnigent bridge session."
+                ),
+            },
+        )
+
+
+def _bridge_event_kind(event_type: str) -> str:
+    raw = str(event_type or "").strip()
+    if raw in {"session.created", "session.started"}:
+        return "session_started"
+    if raw.startswith("session.input") or raw in {"message.sent", "input.message"}:
+        return "user_message_submitted"
+    if raw in {"response.delta", "response.output.delta"}:
+        return "assistant_message_delta"
+    if raw.startswith("response.output") or raw in {"response.message", "message.received"}:
+        return "assistant_message"
+    if raw in {"response.completed", "completed", "stream.done"}:
+        return "response_completed"
+    if raw in {"response.failed", "failed"}:
+        return "response_failed"
+    if raw in {"response.elicitation_request", "elicitation_request"}:
+        return "approval_requested"
+    if "approval" in raw or "elicitation" in raw:
+        return "approval_requested"
+    if "interrupt" in raw or "stop" in raw:
+        return "turn_interrupted"
+    if raw.startswith("session.item") or raw.startswith("tool."):
+        if "failed" in raw:
+            return "tool_call_failed"
+        if "output" in raw or "result" in raw or "completed" in raw:
+            return "tool_call_output"
+        return "tool_call_started"
+    if raw.startswith("resource."):
+        return "summary_published"
+    return raw.replace(".", "_") or "system_annotation"
+
+
+def _bridge_event_stream(direction: str, event_type: str) -> str:
+    if str(direction or "").strip() == "moonmind_to_host":
+        return "stdout"
+    if event_type.startswith("session.") or event_type.startswith("resource."):
+        return "session"
+    return "stdout"
+
+
+def _bridge_event_text(row: Any) -> str:
+    if row.text_preview:
+        return row.text_preview
+    if row.artifact_ref:
+        return "Bridge artifact available."
+    return row.event_type.replace(".", " ") or "Bridge session event."
+
+
+def _bridge_event_payload(row: Any) -> dict[str, Any]:
+    metadata = dict(row.metadata_ or {})
+    if row.artifact_ref:
+        metadata.setdefault("artifactRef", row.artifact_ref)
+    metadata.setdefault("source", "omnigent_bridge")
+    metadata.setdefault("sourceKind", row.event_type)
+    return {
+        "id": row.event_id,
+        "sequence": row.sequence,
+        "timestamp": row.timestamp.isoformat(),
+        "stream": _bridge_event_stream(row.direction, row.event_type),
+        "text": _bridge_event_text(row),
+        "kind": _bridge_event_kind(row.event_type),
+        "bridgeSessionId": row.bridge_session_id,
+        "sessionId": row.bridge_session_id,
+        "session_id": row.bridge_session_id,
+        "normalizedStatus": row.normalized_status,
+        "artifactRef": row.artifact_ref,
+        "metadata": metadata,
+    }
+
+
+@router.get("/bridge-sessions/resolve", response_model=dict)
+async def resolve_omnigent_bridge_session_projection(
+    workflow_id: str | None = Query(default=None, alias="workflowId"),
+    agent_run_id: str | None = Query(default=None, alias="agentRunId"),
+    idempotency_key: str | None = Query(default=None, alias="idempotencyKey"),
+    _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> dict[str, Any]:
+    """Resolve the bridge session Workflow Chat should read before legacy logs."""
+
+    row = await store.resolve_projection_session(
+        workflow_id=workflow_id,
+        agent_run_id=agent_run_id,
+        idempotency_key=idempotency_key,
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "omnigent_bridge_session_unknown"},
+        )
+    await _authorize_bridge_session_projection(
+        bridge_session_id=row.bridge_session_id,
+        user=user,
+        service=service,
+        store=store,
+    )
+    return {
+        "bridgeSessionId": row.bridge_session_id,
+        "workflowId": row.moonmind_workflow_id,
+        "agentRunId": row.moonmind_agent_run_id,
+        "idempotencyKey": row.idempotency_key,
+        "status": row.status,
+    }
+
+
+@router.get("/bridge-sessions/{bridge_session_id}/events", response_model=dict)
+async def list_omnigent_bridge_session_events(
+    bridge_session_id: str,
+    _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> dict[str, Any]:
+    """List Workflow Chat projection events for one bridge session (§15)."""
+
+    await _authorize_bridge_session_projection(
+        bridge_session_id=bridge_session_id,
+        user=user,
+        service=service,
+        store=store,
+    )
+    events = await store.list_events(bridge_session_id)
+    return {
+        "bridgeSessionId": bridge_session_id,
+        "events": [_bridge_event_payload(row) for row in events],
+        "truncated": False,
+    }
+
+
+@router.get("/bridge-sessions/{bridge_session_id}/stream")
+async def stream_omnigent_bridge_session_events(
+    bridge_session_id: str,
+    since: int | None = Query(default=None),
+    _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> StreamingResponse:
+    """Stream bridge session projection events as server-sent events (§15)."""
+
+    await _authorize_bridge_session_projection(
+        bridge_session_id=bridge_session_id,
+        user=user,
+        service=service,
+        store=store,
+    )
+    rows = await store.list_events(bridge_session_id)
+    if since is not None:
+        rows = [row for row in rows if row.sequence > since]
+
+    async def _event_stream():
+        import json
+
+        for row in rows:
+            payload = json.dumps(_bridge_event_payload(row), separators=(",", ":"))
+            yield f"event: bridge_event\ndata: {payload}\n\n"
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
 
 
 @router.post(_ROUTES.post_event, response_model=dict)

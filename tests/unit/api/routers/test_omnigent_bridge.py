@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from api_service.api.routers.omnigent_bridge import (
     OMNIGENT_BRIDGE_MOUNT_PATH,
+    _get_bridge_store,
     _get_bridge_proxy,
     _get_execution_service,
     router,
@@ -100,16 +101,61 @@ class _FakeProxy:
         return [{"id": "agent-1", "name": "codex"}]
 
 
+class _FakeStore:
+    def __init__(self, *, owner: Any | None = _UNSET, rows: list[Any] | None = None) -> None:
+        self._owner = (
+            SimpleNamespace(workflow_id="mm:w1", agent_run_id="ar-1")
+            if owner is _UNSET
+            else owner
+        )
+        self._rows = rows or [
+            SimpleNamespace(
+                event_id="evt-1",
+                bridge_session_id="brs-1",
+                sequence=1,
+                timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+                direction="host_to_moonmind",
+                event_type="response.delta",
+                normalized_status="running",
+                text_preview="hello from bridge",
+                artifact_ref=None,
+                metadata_={"responseId": "resp-1"},
+            )
+        ]
+
+    async def get_bridge_session_owner(self, bridge_session_id: str):
+        return self._owner
+
+    async def list_events(self, bridge_session_id: str):
+        return self._rows
+
+    async def resolve_projection_session(self, **kwargs):
+        if self._owner is None:
+            return None
+        return SimpleNamespace(
+            bridge_session_id="brs-1",
+            moonmind_workflow_id=self._owner.workflow_id,
+            moonmind_agent_run_id=self._owner.agent_run_id,
+            idempotency_key="idem-1",
+            status="active",
+        )
+
+
 def _build(
-    *, owner_id: Any = _USER_ID, proxy: _FakeProxy | None = None
-) -> tuple[TestClient, _FakeProxy]:
+    *,
+    owner_id: Any = _USER_ID,
+    proxy: _FakeProxy | None = None,
+    store: _FakeStore | None = None,
+) -> tuple[TestClient, _FakeProxy, _FakeStore]:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     proxy = proxy or _FakeProxy()
+    store = store or _FakeStore()
     app.dependency_overrides[get_current_user()] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(owner_id)
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
-    return TestClient(app), proxy
+    app.dependency_overrides[_get_bridge_store] = lambda: store
+    return TestClient(app), proxy, store
 
 
 def _create_body(**overrides: Any) -> dict[str, Any]:
@@ -128,7 +174,7 @@ def _create_body(**overrides: Any) -> dict[str, Any]:
 
 
 def test_create_session_success_at_mount_path() -> None:
-    client, proxy = _build()
+    client, proxy, _ = _build()
     resp = client.post(_CREATE_PATH, json=_create_body())
     assert resp.status_code == 200
     assert resp.json()["id"] == "sess-1"
@@ -140,7 +186,7 @@ def test_create_session_success_at_mount_path() -> None:
 
 
 def test_create_session_requires_idempotency_label() -> None:
-    client, _ = _build()
+    client, _, _ = _build()
     body = _create_body(labels={"moonmind.workflow_id": "mm:w1"})
     resp = client.post(_CREATE_PATH, json=body)
     assert resp.status_code == 400
@@ -148,14 +194,14 @@ def test_create_session_requires_idempotency_label() -> None:
 
 
 def test_create_session_requires_workflow_label() -> None:
-    client, _ = _build()
+    client, _, _ = _build()
     body = _create_body(labels={"moonmind.idempotency_key": "idem-1"})
     resp = client.post(_CREATE_PATH, json=body)
     assert resp.status_code == 400
 
 
 def test_create_session_denies_non_owner() -> None:
-    client, proxy = _build(owner_id=uuid4())  # different owner
+    client, proxy, _ = _build(owner_id=uuid4())  # different owner
     resp = client.post(_CREATE_PATH, json=_create_body())
     assert resp.status_code == 403
     assert resp.json()["detail"]["code"] == "workflow_ownership_denied"
@@ -165,7 +211,7 @@ def test_create_session_denies_non_owner() -> None:
 def test_create_session_maps_user_error_to_400() -> None:
     proxy = _FakeProxy()
     proxy.create_error = OmnigentBridgeError("bad host", failure_class="user_error")
-    client, _ = _build(proxy=proxy)
+    client, _, _ = _build(proxy=proxy)
     resp = client.post(_CREATE_PATH, json=_create_body())
     assert resp.status_code == 400
     assert resp.json()["detail"]["message"] == "bad host"
@@ -176,13 +222,13 @@ def test_create_session_maps_integration_error_to_502() -> None:
     proxy.create_error = OmnigentBridgeError(
         "upstream down", failure_class="integration_error"
     )
-    client, _ = _build(proxy=proxy)
+    client, _, _ = _build(proxy=proxy)
     resp = client.post(_CREATE_PATH, json=_create_body())
     assert resp.status_code == 502
 
 
 def test_get_session_returns_snapshot_for_owner() -> None:
-    client, _ = _build()  # user owns mm:w1 (the session owner)
+    client, _, _ = _build()  # user owns mm:w1 (the session owner)
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77")
     assert resp.status_code == 200
     assert resp.json() == {"id": "sess-77", "status": "completed"}
@@ -191,7 +237,7 @@ def test_get_session_returns_snapshot_for_owner() -> None:
 def test_get_session_unknown_session_is_not_found() -> None:
     # A provider session id the bridge does not own is never proxied upstream.
     proxy = _FakeProxy(session_owner=None)
-    client, _ = _build(proxy=proxy)
+    client, _, _ = _build(proxy=proxy)
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-unknown")
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "omnigent_bridge_session_unknown"
@@ -199,21 +245,21 @@ def test_get_session_unknown_session_is_not_found() -> None:
 
 def test_get_session_denies_non_owner() -> None:
     # The session is owned by mm:w1, but the caller does not own that workflow.
-    client, _ = _build(owner_id=uuid4())
+    client, _, _ = _build(owner_id=uuid4())
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77")
     assert resp.status_code == 403
     assert resp.json()["detail"]["code"] == "workflow_ownership_denied"
 
 
 def test_list_agents_returns_catalog() -> None:
-    client, _ = _build()
+    client, _, _ = _build()
     resp = client.get(_AGENTS_PATH)
     assert resp.status_code == 200
     assert resp.json() == [{"id": "agent-1", "name": "codex"}]
 
 
 def test_post_event_authorizes_and_delegates() -> None:
-    client, proxy = _build()
+    client, proxy, _ = _build()
     resp = client.post(_EVENTS_PATH, json={"type": "interrupt"})
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "type": "interrupt"}
@@ -223,7 +269,7 @@ def test_post_event_authorizes_and_delegates() -> None:
 
 def test_post_event_unknown_session_is_not_found() -> None:
     proxy = _FakeProxy(session_owner=None)
-    client, _ = _build(proxy=proxy)
+    client, _, _ = _build(proxy=proxy)
     resp = client.post(_EVENTS_PATH, json={"type": "interrupt"})
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "omnigent_bridge_session_unknown"
@@ -231,7 +277,7 @@ def test_post_event_unknown_session_is_not_found() -> None:
 
 
 def test_resolve_elicitation_authorizes_and_delegates() -> None:
-    client, proxy = _build()
+    client, proxy, _ = _build()
     resp = client.post(_ELICITATION_RESOLVE_PATH, json={"answer": "yes"})
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "elicitationId": "el-1"}
@@ -244,12 +290,48 @@ def test_resolve_elicitation_authorizes_and_delegates() -> None:
     ]
 
 
+def test_resolve_bridge_session_projection_returns_latest_binding() -> None:
+    client, _, _ = _build()
+    resp = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/resolve?workflowId=mm%3Aw1"
+    )
+    assert resp.status_code == 200
+    assert resp.json()["bridgeSessionId"] == "brs-1"
+    assert resp.json()["workflowId"] == "mm:w1"
+
+
+def test_list_bridge_session_events_returns_chat_projection_shape() -> None:
+    client, _, _ = _build()
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bridgeSessionId"] == "brs-1"
+    assert body["truncated"] is False
+    event = body["events"][0]
+    assert event["sequence"] == 1
+    assert event["stream"] == "stdout"
+    assert event["text"] == "hello from bridge"
+    assert event["kind"] == "assistant_message_delta"
+    assert event["sessionId"] == "brs-1"
+    assert event["metadata"]["source"] == "omnigent_bridge"
+
+
+def test_list_bridge_session_events_denies_non_owner() -> None:
+    client, _, _ = _build(owner_id=uuid4())
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "workflow_ownership_denied"
+
+
 def test_routes_registered_under_configured_mount_path() -> None:
     paths = {route.path for route in router.routes}
     assert "/v1/sessions" in paths
     assert "/v1/sessions/{session_id}" in paths
     assert "/v1/sessions/{session_id}/events" in paths
     assert "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve" in paths
+    assert "/bridge-sessions/resolve" in paths
+    assert "/bridge-sessions/{bridge_session_id}/events" in paths
+    assert "/bridge-sessions/{bridge_session_id}/stream" in paths
     assert "/api/agents" in paths
     assert OMNIGENT_BRIDGE_MOUNT_PATH == "/api/omnigent"
 
