@@ -346,6 +346,17 @@ function policySummary(schedule: Schedule): string {
   return [overlapMode, catchupMode].filter(Boolean).map((value) => titleCaseLabel(formatStatusLabel(value))).join(' / ') || '-';
 }
 
+function dispatchAttentionLabel(schedule: Schedule): string {
+  if (scheduleState(schedule) === 'attention') {
+    return schedule.lastDispatchError
+      ? `Needs attention: ${schedule.lastDispatchError}`
+      : 'Needs attention';
+  }
+  return schedule.lastDispatchStatus
+    ? titleCaseLabel(formatStatusLabel(schedule.lastDispatchStatus))
+    : 'No dispatch attention';
+}
+
 function formatJsonValue(value: unknown): string {
   if (!value || (typeof value === 'object' && Object.keys(value as Record<string, unknown>).length === 0)) {
     return '-';
@@ -1320,6 +1331,84 @@ function ScheduleDetailPage({
   );
 }
 
+function RecurringScheduleMobileList({
+  schedules,
+  isLoading,
+  isError,
+  error,
+}: {
+  schedules: Schedule[];
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+}) {
+  if (isLoading) {
+    return (
+      <div className="schedules-mobile-card-list" aria-busy="true">
+        <LoadingPlaceholder
+          surface="schedules"
+          region="mobile-list"
+          variant="table"
+          density="compact"
+          preserveContext
+        />
+      </div>
+    );
+  }
+  if (isError) {
+    return (
+      <div className="schedules-mobile-card-list schedules-mobile-card-list-state" role="alert">
+        {errorMessage(error, 'Failed to fetch schedules')}
+      </div>
+    );
+  }
+  if (schedules.length === 0) {
+    return (
+      <div className="schedules-mobile-card-list schedules-mobile-card-list-state">
+        No recurring schedules yet. Create one from the workflow page.
+      </div>
+    );
+  }
+  return (
+    <ul className="schedules-mobile-card-list" aria-label="Recurring schedule cards">
+      {schedules.map((schedule) => (
+        <li key={schedule.id} className="schedules-mobile-card">
+          <a className="schedules-mobile-card-link" href={`/schedules/${encodeURIComponent(schedule.id)}`}>
+            <span className="schedules-mobile-card-title">{schedule.name}</span>
+            <span className={`schedules-state schedules-state--${scheduleState(schedule)}`}>
+              {stateLabel(schedule)}
+            </span>
+          </a>
+          <dl className="schedules-mobile-card-facts">
+            <div>
+              <dt>Cadence</dt>
+              <dd>
+                <code>{schedule.cron}</code>
+                <span>{displayValue(schedule.timezone)}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>Next run</dt>
+              <dd>{formatWhen(schedule.nextRunAt)}</dd>
+            </div>
+            <div>
+              <dt>Target</dt>
+              <dd>
+                <strong>{targetKind(schedule)}</strong>
+                <span>{targetRepository(schedule)}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>Dispatch</dt>
+              <dd>{dispatchAttentionLabel(schedule)}</dd>
+            </div>
+          </dl>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function ScheduleRowActions({
   schedule,
   payload,
@@ -1505,6 +1594,12 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
       </section>
 
       <section className="schedules-table-panel" aria-label="Recurring schedule list">
+        <RecurringScheduleMobileList
+          schedules={schedules}
+          isLoading={isLoading}
+          isError={isError}
+          error={error}
+        />
         <DataTable
             data={schedules}
             isLoading={isLoading}

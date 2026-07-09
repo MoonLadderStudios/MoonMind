@@ -527,6 +527,52 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
   });
 
+  it('MM-1149 renders mobile recurring schedule cards with standalone detail links and required facts', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 'schedule-one',
+              name: 'Daily recurring scan',
+              enabled: true,
+              cron: '0 9 * * *',
+              timezone: 'UTC',
+              nextRunAt: '2026-07-09T09:00:00Z',
+              lastDispatchStatus: 'failed',
+              lastDispatchError: 'Provider queue rejected the run',
+              target: {
+                kind: 'queue_task',
+                job: { payload: { repository: 'MoonLadderStudios/MoonMind' } },
+              },
+              policy: {},
+            }],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    const cardList = await screen.findByRole('list', { name: 'Recurring schedule cards' });
+    expect(cardList.textContent).toContain('Daily recurring scan');
+    expect(cardList.textContent).toContain('Needs attention');
+    expect(cardList.textContent).toContain('0 9 * * *');
+    expect(cardList.textContent).toContain('UTC');
+    expect(cardList.textContent).toContain('Queue Task');
+    expect(cardList.textContent).toContain('MoonLadderStudios/MoonMind');
+    expect(cardList.textContent).toContain('Provider queue rejected the run');
+    expect(cardList.querySelector('a')?.getAttribute('href')).toBe('/schedules/schedule-one');
+  });
+
   it('verifies remembered recurring IDs before opening sidebar mode from the schedules table', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -2046,6 +2092,42 @@ describe('Dashboard shared entry', () => {
     expect(cardBlock).toContain('border: 1px solid rgb(var(--mm-border) / 0.8)');
     expect(cardBlock).toContain('border-radius: 1rem');
     expect(cardBlock).toContain('background: rgb(var(--mm-panel) / 0.78)');
+  });
+
+  it('MM-1149 switches recurring schedules from reduced tablet columns to mobile cards', async () => {
+    const recurringMediaRule = (selector: string, maxWidth: string) => (rule: Rule) =>
+      rule.selector.split(',').map(normalizeCssSelector).includes(selector) &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes(`max-width: ${maxWidth}`);
+
+    const tabletPolicyHeaderBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table th:nth-child(8)', '1180px'),
+    );
+    const tabletUpdatedCellBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table td:nth-child(9)', '1180px'),
+    );
+    const narrowLastScheduledBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table th:nth-child(6)', '980px'),
+    );
+    const mobileTableBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table-slab', '720px'),
+    );
+    const mobileCardListBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-mobile-card-list', '720px'),
+    );
+
+    expect(cssRuleBlock(dashboardCss, '.schedules-mobile-card-list')).toContain('display: none');
+    expect(tabletPolicyHeaderBlock).toContain('display: none');
+    expect(tabletUpdatedCellBlock).toContain('display: none');
+    expect(narrowLastScheduledBlock).toContain('display: none');
+    expect(mobileTableBlock).toContain('display: none');
+    expect(mobileCardListBlock).toContain('display: grid');
   });
 
   it('stacks Settings section radio controls on mobile viewports', async () => {
