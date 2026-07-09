@@ -445,6 +445,26 @@ def test_dashboard_static_files_revalidate_manifest_and_non_asset_dist_files(
     assert manifest_response.headers["Cache-Control"] == "no-cache, must-revalidate"
     assert favicon_response.headers["Cache-Control"] == "no-cache, must-revalidate"
 
+def test_dashboard_static_files_ignores_asset_prefix_outside_mount(
+    tmp_path: Path,
+) -> None:
+    dist_root = tmp_path / "dist"
+    dist_root.mkdir()
+    (dist_root / "index.html").write_text("<!doctype html>", encoding="utf-8")
+
+    app = FastAPI()
+    app.mount(
+        "/assets/app/static/workflow_console/dist",
+        DashboardStaticFiles(directory=str(dist_root), html=True),
+        name="workflow-console-dist",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/assets/app/static/workflow_console/dist/index.html")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-cache, must-revalidate"
+
 def test_ui_assets_strict_raises_when_imported_chunk_file_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

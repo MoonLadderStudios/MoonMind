@@ -26,6 +26,9 @@ def test_tasks_list_returns_503_when_manifest_entry_missing(
     assert "shared dashboard entrypoint" in response.text
     assert "dashboard" in response.text
     assert "workflow-list" in response.text
+    assert "Dashboard asset bundle is missing or invalid" in response.text
+    assert "manifest.json" not in response.text
+    assert "entrypoints/dashboard.tsx" not in response.text
     assert response.headers["Cache-Control"] == "no-store"
 
 def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_missing(

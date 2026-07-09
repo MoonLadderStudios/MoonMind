@@ -24,8 +24,8 @@ class DashboardStaticFiles(StaticFiles):
         status_code: int = 200,
     ) -> Response:
         response = super().file_response(full_path, stat_result, scope, status_code)
-        request_path = str(scope.get("path", ""))
-        if "/assets/" in request_path:
+        relative_path = self.get_path(scope).replace("\\", "/")
+        if relative_path.startswith("assets/"):
             response.headers["Cache-Control"] = DASHBOARD_IMMUTABLE_ASSET_CACHE_CONTROL
         else:
             response.headers["Cache-Control"] = DASHBOARD_DIST_CACHE_CONTROL
