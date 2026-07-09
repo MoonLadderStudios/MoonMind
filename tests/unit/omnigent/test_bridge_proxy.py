@@ -541,7 +541,16 @@ async def test_resolve_elicitation_proxies_compatibility_route() -> None:
 
 async def test_non_proxy_mode_fails_fast() -> None:
     embedded = parse_bridge_config(
-        {"compatibility": {"hostProtocolMode": "embedded_omnigent_compatible_server"}}
+        {
+            "compatibility": {"hostProtocolMode": "embedded_omnigent_compatible_server"},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy-conformance",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/live-smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/host-auth",
+                }
+            },
+        }
     )
     proxy = _proxy(_FakeStore(), _FakeClient(), config=embedded)
     req = BridgeSessionCreateRequest(

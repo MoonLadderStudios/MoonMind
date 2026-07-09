@@ -378,6 +378,15 @@ class BridgeEmbeddedHostConnection(BaseModel):
     protocol_profile: str = Field(
         "omnigent.host_runner.v1", alias="protocolProfile"
     )
+    proxy_conformance_evidence_ref: str | None = Field(
+        None, alias="proxyConformanceEvidenceRef"
+    )
+    live_smoke_evidence_ref: str | None = Field(
+        None, alias="liveSmokeEvidenceRef"
+    )
+    host_auth_conformance_evidence_ref: str | None = Field(
+        None, alias="hostAuthConformanceEvidenceRef"
+    )
 
     @field_validator("protocol_profile")
     @classmethod
@@ -385,6 +394,20 @@ class BridgeEmbeddedHostConnection(BaseModel):
         return _require_omnigent_profile(
             "hostConnection.embedded.protocolProfile", value
         )
+
+    @field_validator(
+        "proxy_conformance_evidence_ref",
+        "live_smoke_evidence_ref",
+        "host_auth_conformance_evidence_ref",
+    )
+    @classmethod
+    def _evidence_ref_must_be_non_empty(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        if not candidate:
+            raise BridgeConfigError("embedded enablement evidence refs must not be empty")
+        return candidate
 
 
 class BridgeHostConnection(BaseModel):
@@ -514,6 +537,33 @@ class OmnigentBridgeConfig(BaseModel):
                 f"compatibility.hostProtocolMode '{compat_mode}': the bridge has a "
                 f"single active host protocol mode (§2.4)."
             )
+        if self.enabled and compat_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+            embedded = self.host_connection.embedded
+            missing = [
+                field_name
+                for field_name, value in (
+                    (
+                        "hostConnection.embedded.proxyConformanceEvidenceRef",
+                        embedded.proxy_conformance_evidence_ref,
+                    ),
+                    (
+                        "hostConnection.embedded.liveSmokeEvidenceRef",
+                        embedded.live_smoke_evidence_ref,
+                    ),
+                    (
+                        "hostConnection.embedded.hostAuthConformanceEvidenceRef",
+                        embedded.host_auth_conformance_evidence_ref,
+                    ),
+                )
+                if not value
+            ]
+            if missing:
+                raise BridgeConfigError(
+                    "embedded_omnigent_compatible_server mode cannot be enabled "
+                    "without proxy conformance, live smoke-test, and upstream host "
+                    "auth conformance evidence refs (§2.4, §16 rule 8). Missing: "
+                    + ", ".join(missing)
+                )
         return self
 
     @property

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from moonmind.omnigent.settings import build_omnigent_gate, resolved_server_url
+from moonmind.omnigent.settings import (
+    build_omnigent_gate,
+    resolved_host_runner_token,
+    resolved_server_url,
+)
 
 
 def test_omnigent_gate_disabled_when_env_missing() -> None:
@@ -39,6 +43,15 @@ def test_omnigent_gate_enabled_with_flag_and_server_url() -> None:
     assert gate.enabled is True
     assert gate.missing == ()
     assert resolved_server_url(env=env) == "https://omnigent.example.test"
+
+
+def test_host_runner_token_resolves_service_side_secret() -> None:
+    assert (
+        resolved_host_runner_token(
+            env={"OMNIGENT_HOST_RUNNER_TOKEN": " embedded-host-token "}
+        )
+        == "embedded-host-token"
+    )
 
 
 def test_proxy_forward_headers_empty_by_default() -> None:

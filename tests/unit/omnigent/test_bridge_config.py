@@ -209,12 +209,44 @@ def test_host_protocol_mode_defaults_to_proxy_first() -> None:
 
 def test_host_protocol_mode_accepts_embedded() -> None:
     config = parse_bridge_config(
-        {"compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}}
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy-conformance",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/live-smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/host-auth",
+                }
+            },
+        }
     )
 
     assert config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
     # hostConnection.mode is resolved from the compatibility mode.
     assert config.host_connection.mode == HOST_PROTOCOL_MODE_EMBEDDED
+    assert (
+        config.host_connection.embedded.host_auth_conformance_evidence_ref
+        == "artifact://omnigent/host-auth"
+    )
+
+
+def test_embedded_mode_requires_conformance_and_smoke_evidence() -> None:
+    with pytest.raises(BridgeConfigError, match="proxy conformance"):
+        parse_bridge_config(
+            {"compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}}
+        )
+
+
+def test_disabled_embedded_mode_can_be_declared_without_evidence() -> None:
+    config = parse_bridge_config(
+        {
+            "enabled": False,
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+        }
+    )
+
+    assert config.enabled is False
+    assert config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
 
 
 def test_unknown_host_protocol_mode_is_rejected() -> None:
