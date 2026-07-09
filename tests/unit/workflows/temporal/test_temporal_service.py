@@ -133,6 +133,58 @@ def _valid_user_workflow_parameters() -> dict[str, object]:
     return {"workflow": {"instructions": "Test workflow fixture."}}
 
 
+@pytest.mark.asyncio
+async def test_create_execution_synthesizes_jira_implement_title_metadata(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Load Jira preset brief",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "instructions": "Implement Jira issue MM-123.",
+                    "taskTemplate": {"slug": "jira-implement"},
+                    "inputs": {
+                        "jira_issue": {
+                            "key": "MM-123",
+                            "summary": "Fix OAuth redirect handling",
+                        }
+                    },
+                    "steps": [
+                        {"title": "Load Jira preset brief"},
+                        {"title": "Implement issue"},
+                    ],
+                }
+            },
+            idempotency_key=None,
+            integration="jira",
+        )
+
+        assert created.memo["title"] == (
+            "Jira Implement: MM-123 — Fix OAuth redirect handling"
+        )
+        assert created.memo["titleSource"] == "integration_target"
+        assert created.memo["titleConfidence"] == "high"
+        assert created.search_attributes["mm_title"] == [
+            "jira",
+            "implement",
+            "mm",
+            "123",
+            "fix",
+            "oauth",
+            "redirect",
+            "handling",
+        ]
+
+
 def _write_mm730_cutover_files(tmp_path):
     release_notes = tmp_path / "MM-730-release-notes.md"
     release_notes.write_text(

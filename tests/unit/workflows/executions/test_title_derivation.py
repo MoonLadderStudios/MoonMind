@@ -7,6 +7,7 @@ import pytest
 
 from moonmind.workflows.executions.title_derivation import (
     is_generic_title,
+    synthesize_execution_title,
     synthesize_workflow_title,
 )
 
@@ -390,6 +391,75 @@ def test_preserves_meaningful_explicit_title() -> None:
         )
         == "Verify auth redirect fix"
     )
+
+
+def test_jira_implement_ignores_load_brief_step_title() -> None:
+    result = synthesize_execution_title(
+        requested_title="Load Jira preset brief",
+        parameters={
+            "workflow": {
+                "title": "Load Jira preset brief",
+                "taskTemplate": {"slug": "jira-implement"},
+                "inputs": {"jira_issue_key": "MM-123"},
+                "steps": [
+                    {"title": "Load Jira preset brief"},
+                    {"title": "Implement issue"},
+                ],
+            }
+        },
+        integration="jira",
+    )
+
+    assert result.display_title == "Jira Implement: MM-123"
+    assert result.source == "integration_target"
+    assert result.confidence == "high"
+
+
+def test_jira_implement_uses_issue_summary_when_available() -> None:
+    result = synthesize_execution_title(
+        requested_title="Load Jira preset brief",
+        parameters={
+            "workflow": {
+                "taskTemplate": {"slug": "jira-implement"},
+                "inputs": {
+                    "jira_issue": {
+                        "key": "MM-123",
+                        "summary": "Fix OAuth redirect handling",
+                        "url": "https://example.atlassian.net/browse/MM-123",
+                    }
+                },
+                "steps": [
+                    {"title": "Load Jira preset brief"},
+                    {"title": "Implement issue"},
+                ],
+            }
+        },
+    )
+
+    assert result.display_title == (
+        "Jira Implement: MM-123 — Fix OAuth redirect handling"
+    )
+    assert result.targets[0].key == "MM-123"
+    assert result.targets[0].summary == "Fix OAuth redirect handling"
+
+
+def test_jira_implement_missing_issue_key_falls_back_to_preset_label() -> None:
+    result = synthesize_execution_title(
+        requested_title="Load Jira preset brief",
+        parameters={
+            "workflow": {
+                "taskTemplate": {"slug": "jira-implement"},
+                "steps": [
+                    {"title": "Load Jira preset brief"},
+                    {"title": "Implement issue"},
+                ],
+            }
+        },
+    )
+
+    assert result.display_title == "Jira Implement"
+    assert result.source == "preset_template"
+    assert result.confidence == "medium"
 
 
 def test_excludes_repository_fields_and_caps_synthesized_title() -> None:

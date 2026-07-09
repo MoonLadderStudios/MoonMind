@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 _MAX_TASK_TITLE_LENGTH = 150
 _MAX_TRAVERSAL_DEPTH = 6
@@ -19,6 +19,13 @@ _GENERIC_TITLES = {
     "untitled run",
     "workflow",
     "new workflow",
+}
+_GENERATED_STEP_TITLES = {
+    "load jira preset brief",
+    "check jira blockers before implementation",
+    "move jira issue to in progress",
+    "run preset",
+    "run workflow",
 }
 
 _ACRONYMS = {
@@ -52,6 +59,7 @@ _ISSUE_KEYS = {
     "jiraissue",
     "jiraissuekey",
     "jiraissueurl",
+    "sourceissuekey",
 }
 _PR_KEYS = {
     "pr",
@@ -95,11 +103,31 @@ _MAX_PR_NUMBER_DIGITS = 10
 
 
 @dataclass(frozen=True)
-class _TitleTarget:
+class TitleTarget:
     kind: str
     value: str
     priority: int
     path: str
+    provider: str | None = None
+    key: str | None = None
+    summary: str | None = None
+    url: str | None = None
+
+
+@dataclass(frozen=True)
+class SynthesizedWorkflowTitle:
+    display_title: str | None
+    summary: str | None
+    source: Literal[
+        "user_explicit",
+        "preset_template",
+        "integration_target",
+        "capability_target",
+        "fallback",
+    ]
+    confidence: Literal["high", "medium", "low"]
+    targets: tuple[TitleTarget, ...] = ()
+    search_tokens: tuple[str, ...] = ()
 
 
 def is_generic_title(title: str | None) -> bool:
@@ -115,24 +143,85 @@ def synthesize_workflow_title(
     normalized_tool: Mapping[str, Any] | None,
     normalized_steps: Sequence[Mapping[str, Any]] = (),
 ) -> str | None:
-    explicit = str(current_title or "").strip()
-    if explicit and not is_generic_title(explicit):
-        return explicit
+    result = synthesize_execution_title(
+        requested_title=current_title,
+        workflow_type=None,
+        parameters=task_payload,
+        normalized_tool=normalized_tool,
+        normalized_steps=normalized_steps,
+    )
+    return result.display_title
+
+
+def synthesize_execution_title(
+    *,
+    requested_title: str | None,
+    workflow_type: str | None = None,
+    parameters: Mapping[str, Any] | None = None,
+    repository: str | None = None,
+    integration: str | None = None,
+    summary: str | None = None,
+    normalized_tool: Mapping[str, Any] | None = None,
+    normalized_steps: Sequence[Mapping[str, Any]] = (),
+) -> SynthesizedWorkflowTitle:
+    task_payload = parameters or {}
+    explicit = str(requested_title or "").strip()
+    generated_explicit = _is_generated_step_title(
+        explicit,
+        task_payload=task_payload,
+        normalized_steps=normalized_steps,
+    )
 
     label = _capability_label(task_payload, normalized_tool, normalized_steps)
     targets = _collect_structured_targets(task_payload)
-    fallback_targets = _collect_text_fallback_targets(current_title, task_payload)
+    fallback_targets = _collect_text_fallback_targets(requested_title, task_payload)
     if not targets:
         targets = fallback_targets
     elif fallback_targets and not any(
         target.kind in {"issue", "pull_request"} for target in targets
     ):
         targets = _rank_targets([*targets, *fallback_targets])
-    if not targets:
-        return None
+    synthesized_title = _render_title(label, targets)
 
-    rendered_targets = " — ".join(target.value for target in targets[:2])
-    return f"{label}: {rendered_targets}"[:_MAX_TASK_TITLE_LENGTH]
+    if (
+        explicit
+        and not is_generic_title(explicit)
+        and not generated_explicit
+        and explicit != synthesized_title
+    ):
+        return SynthesizedWorkflowTitle(
+            display_title=explicit[:_MAX_TASK_TITLE_LENGTH],
+            summary=summary,
+            source="user_explicit",
+            confidence="high",
+            targets=tuple(targets),
+        )
+
+    if synthesized_title:
+        return SynthesizedWorkflowTitle(
+            display_title=synthesized_title,
+            summary=summary,
+            source=_target_source(targets, integration=integration),
+            confidence="high",
+            targets=tuple(targets),
+        )
+
+    fallback_title = _preset_fallback_title(label=label, task_payload=task_payload)
+    if fallback_title:
+        return SynthesizedWorkflowTitle(
+            display_title=fallback_title,
+            summary=summary,
+            source="preset_template",
+            confidence="medium",
+        )
+
+    workflow_fallback = _workflow_type_fallback(workflow_type)
+    return SynthesizedWorkflowTitle(
+        display_title=workflow_fallback,
+        summary=summary,
+        source="fallback",
+        confidence="low",
+    )
 
 
 def _capability_label(
@@ -159,9 +248,27 @@ def _capability_label(
             if payload is not None
         )
 
+    template_payloads = [
+        payload
+        for payload in (
+            _mapping(task_payload.get("taskTemplate")),
+            _mapping(task_payload.get("task_template")),
+            (
+                _mapping(workflow_payload.get("taskTemplate"))
+                if workflow_payload
+                else None
+            ),
+            (
+                _mapping(workflow_payload.get("task_template"))
+                if workflow_payload
+                else None
+            ),
+        )
+        if payload is not None
+    ]
     tool_payloads = [
         payload
-        for payload in (normalized_tool, *raw_tool_payloads)
+        for payload in (normalized_tool, *raw_tool_payloads, *template_payloads)
         if payload is not None
     ]
 
@@ -208,8 +315,8 @@ def _identifier_to_label(value: str) -> str:
     return " ".join(rendered) or "Workflow"
 
 
-def _collect_structured_targets(task_payload: Mapping[str, Any]) -> list[_TitleTarget]:
-    targets: list[_TitleTarget] = []
+def _collect_structured_targets(task_payload: Mapping[str, Any]) -> list[TitleTarget]:
+    targets: list[TitleTarget] = []
     visited = 0
 
     def walk(value: Any, path: str, depth: int, parent_key: str = "") -> None:
@@ -222,7 +329,10 @@ def _collect_structured_targets(task_payload: Mapping[str, Any]) -> list[_TitleT
             for raw_key, raw_child in value.items():
                 key = str(raw_key)
                 normalized_key = _normalize_key(key)
-                if normalized_key in _REPOSITORY_KEYS or normalized_key in _IGNORED_VALUE_KEYS:
+                if (
+                    normalized_key in _REPOSITORY_KEYS
+                    or normalized_key in _IGNORED_VALUE_KEYS
+                ):
                     continue
                 child_path = f"{path}.{key}" if path else key
                 if normalized_key in {"instructions", "title"}:
@@ -246,11 +356,21 @@ def _collect_structured_targets(task_payload: Mapping[str, Any]) -> list[_TitleT
 
 def _append_targets_for_value(
     *,
-    targets: list[_TitleTarget],
+    targets: list[TitleTarget],
     key: str,
     value: Any,
     path: str,
 ) -> None:
+    if key in _ISSUE_KEYS and isinstance(value, Mapping):
+        issue = _extract_issue_from_mapping(
+            value,
+            path=path,
+            provider="jira" if "jira" in key else None,
+        )
+        if issue is not None:
+            targets.append(issue)
+            return
+
     text = _clean_text(value)
     if not text:
         return
@@ -258,64 +378,78 @@ def _append_targets_for_value(
     if key in _ISSUE_KEYS:
         issue = _extract_issue(text)
         if issue:
-            targets.append(_TitleTarget("issue", issue, 0, path))
+            targets.append(
+                TitleTarget(
+                    "issue",
+                    issue,
+                    0,
+                    path,
+                    provider="jira" if "jira" in key else None,
+                    key=issue,
+                )
+            )
             return
         pr = _extract_pr(text)
         if pr:
-            targets.append(_TitleTarget("pull_request", pr, 1, path))
+            targets.append(TitleTarget("pull_request", pr, 1, path, key=pr))
             return
         return
     if key in _PR_KEYS:
         pr = _extract_pr(text, allow_bare_number=True, allow_shorthand=True)
         if pr:
-            targets.append(_TitleTarget("pull_request", pr, 1, path))
+            targets.append(TitleTarget("pull_request", pr, 1, path, key=pr))
             return
         issue = _extract_issue(text)
         if issue:
-            targets.append(_TitleTarget("issue", issue, 0, path))
+            targets.append(TitleTarget("issue", issue, 0, path, key=issue))
             return
         return
     if key in _BRANCH_KEYS and _looks_like_branch(text):
-        targets.append(_TitleTarget("branch", text, 2, path))
+        targets.append(TitleTarget("branch", text, 2, path, key=text))
         return
     if key in _CHECK_KEYS:
-        targets.append(_TitleTarget("check", f"failing check: {text}", 3, path))
+        targets.append(
+            TitleTarget("check", f"failing check: {text}", 3, path, key=text)
+        )
         return
 
     issue = _extract_issue(text)
     if issue:
-        targets.append(_TitleTarget("issue", issue, 0, path))
+        targets.append(TitleTarget("issue", issue, 0, path, key=issue))
         return
     pr = _extract_pr(text)
     if pr:
-        targets.append(_TitleTarget("pull_request", pr, 1, path))
+        targets.append(TitleTarget("pull_request", pr, 1, path, key=pr))
         return
 
 
 def _collect_text_fallback_targets(
     current_title: str | None,
     task_payload: Mapping[str, Any],
-) -> list[_TitleTarget]:
-    candidates = [_clean_text(current_title), _clean_text(task_payload.get("instructions"))]
+) -> list[TitleTarget]:
+    candidates = [
+        _clean_text(current_title),
+        _clean_text(task_payload.get("instructions")),
+    ]
     workflow = _mapping(task_payload.get("workflow"))
     if workflow is not None:
         candidates.append(_clean_text(workflow.get("instructions")))
 
-    targets: list[_TitleTarget] = []
+    targets: list[TitleTarget] = []
     for index, text in enumerate(candidate for candidate in candidates if candidate):
         issue = _extract_issue(text)
         if issue:
-            targets.append(_TitleTarget("issue", issue, 0, f"text[{index}]"))
+            targets.append(TitleTarget("issue", issue, 0, f"text[{index}]", key=issue))
         pr = _extract_pr(text, allow_shorthand=True)
         if pr:
-            targets.append(_TitleTarget("pull_request", pr, 1, f"text[{index}]"))
+            targets.append(TitleTarget("pull_request", pr, 1, f"text[{index}]", key=pr))
     return _rank_targets(targets)
 
 
-def _rank_targets(targets: list[_TitleTarget]) -> list[_TitleTarget]:
+def _rank_targets(targets: list[TitleTarget]) -> list[TitleTarget]:
     seen: set[tuple[str, str]] = set()
     seen_kinds: set[str] = set()
-    unique: list[_TitleTarget] = []
+    unique: list[TitleTarget] = []
     for target in sorted(targets, key=lambda item: item.priority):
         key = (target.kind, target.value)
         if key in seen or target.kind in seen_kinds:
@@ -324,6 +458,150 @@ def _rank_targets(targets: list[_TitleTarget]) -> list[_TitleTarget]:
         seen_kinds.add(target.kind)
         unique.append(target)
     return unique
+
+
+def _render_title(label: str, targets: Sequence[TitleTarget]) -> str | None:
+    if not targets:
+        return None
+    rendered_targets = " — ".join(_render_target(target) for target in targets[:2])
+    return f"{label}: {rendered_targets}"[:_MAX_TASK_TITLE_LENGTH]
+
+
+def _render_target(target: TitleTarget) -> str:
+    if target.kind == "issue" and target.summary:
+        return f"{target.key or target.value} — {target.summary}"
+    return target.value
+
+
+def _target_source(
+    targets: Sequence[TitleTarget],
+    *,
+    integration: str | None,
+) -> Literal["integration_target", "capability_target"]:
+    normalized_integration = str(integration or "").strip().casefold()
+    if normalized_integration or any(target.provider for target in targets):
+        return "integration_target"
+    if any(target.kind in {"issue", "pull_request"} for target in targets):
+        return "integration_target"
+    return "capability_target"
+
+
+def _preset_fallback_title(
+    *,
+    label: str,
+    task_payload: Mapping[str, Any],
+) -> str | None:
+    if _preset_slug(task_payload):
+        return label[:_MAX_TASK_TITLE_LENGTH]
+    return None
+
+
+def _workflow_type_fallback(workflow_type: str | None) -> str | None:
+    value = _clean_text(workflow_type)
+    if not value:
+        return None
+    if value.endswith(".UserWorkflow"):
+        return "Run"
+    return _identifier_to_label(value.rsplit(".", 1)[-1])
+
+
+def _is_generated_step_title(
+    title: str,
+    *,
+    task_payload: Mapping[str, Any],
+    normalized_steps: Sequence[Mapping[str, Any]],
+) -> bool:
+    if not title:
+        return False
+    normalized = " ".join(re.sub(r"[\W_]+", " ", title.casefold()).split())
+    if normalized in _GENERATED_STEP_TITLES:
+        return True
+    if not _preset_slug(task_payload):
+        return False
+    first_step_title = _first_step_title(task_payload, normalized_steps)
+    return bool(first_step_title and title.strip() == first_step_title)
+
+
+def _first_step_title(
+    task_payload: Mapping[str, Any],
+    normalized_steps: Sequence[Mapping[str, Any]],
+) -> str | None:
+    if len(normalized_steps) > 1:
+        value = _clean_text(normalized_steps[0].get("title"))
+        if value:
+            return value
+    raw_steps = task_payload.get("steps")
+    if isinstance(raw_steps, list) and len(raw_steps) > 1:
+        step = _mapping(raw_steps[0])
+        value = _clean_text(step.get("title") if step else None)
+        if value:
+            return value
+    workflow = _mapping(task_payload.get("workflow"))
+    if workflow is not None:
+        workflow_steps = workflow.get("steps")
+        if isinstance(workflow_steps, list) and len(workflow_steps) > 1:
+            step = _mapping(workflow_steps[0])
+            value = _clean_text(step.get("title") if step else None)
+            if value:
+                return value
+    return None
+
+
+def _preset_slug(task_payload: Mapping[str, Any]) -> str | None:
+    candidates: list[Any] = []
+    for payload in (task_payload, _mapping(task_payload.get("workflow"))):
+        if payload is None:
+            continue
+        template = _mapping(payload.get("taskTemplate")) or _mapping(
+            payload.get("task_template")
+        )
+        if template is not None:
+            candidates.extend(
+                template.get(key) for key in ("slug", "name", "id") if template.get(key)
+            )
+    for candidate in candidates:
+        value = _clean_text(candidate)
+        if value:
+            return value
+    return None
+
+
+def _extract_issue_from_mapping(
+    value: Mapping[str, Any],
+    *,
+    path: str,
+    provider: str | None,
+) -> TitleTarget | None:
+    key = _first_clean_mapping_value(value, "key", "issueKey", "issue_key")
+    if key:
+        issue_key = _extract_issue(key)
+    else:
+        issue_key = None
+    if not issue_key:
+        return None
+    issue_summary = _first_clean_mapping_value(value, "summary", "title")
+    issue_url = _first_clean_mapping_value(value, "url", "self")
+    display_value = issue_key
+    if issue_summary:
+        display_value = f"{issue_key} — {issue_summary}"
+    return TitleTarget(
+        "issue",
+        display_value,
+        0,
+        path,
+        provider=provider,
+        key=issue_key,
+        summary=issue_summary,
+        url=issue_url,
+    )
+
+
+def _first_clean_mapping_value(value: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        text = _clean_text(value.get(key))
+        if text:
+            return text
+    return None
 
 
 def _extract_issue(text: str) -> str | None:
