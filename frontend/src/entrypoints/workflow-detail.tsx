@@ -3885,10 +3885,11 @@ function StepObservabilityGroup({
     row.refs.omnigent_bridge_session_id ||
     '';
   const bridgeIdempotencyKey = row.refs.idempotencyKey || row.refs.idempotency_key || '';
+  const bridgeWorkflowId = typeof row.workflowId === 'string' ? row.workflowId : '';
   const bridgeResolutionQuery = useQuery({
     queryKey: [
       'omnigent-bridge-step-projection',
-      row.workflowId,
+      bridgeWorkflowId,
       row.logicalStepId,
       row.executionOrdinal,
       bridgeIdempotencyKey,
@@ -3896,14 +3897,14 @@ function StepObservabilityGroup({
     queryFn: () =>
       resolveBridgeSessionProjection({
         apiBase,
-        workflowId: row.workflowId,
+        workflowId: bridgeWorkflowId,
         idempotencyKey: bridgeIdempotencyKey,
       }),
     enabled: Boolean(
-      logStreamingEnabled &&
+        logStreamingEnabled &&
         !agentRunId &&
         !explicitBridgeSessionId &&
-        row.workflowId &&
+        bridgeWorkflowId &&
         bridgeIdempotencyKey,
     ),
     staleTime: stepTerminal(row.status) ? Infinity : 2000,
