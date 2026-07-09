@@ -613,10 +613,12 @@ describe("SchedulesPage", () => {
       expect(latest).not.toContain("cursor=opaque-cursor");
     });
     expect(screen.getAllByRole("button", { name: "Schedule filter: nightly" }).length).toBeGreaterThanOrEqual(1);
-    expect(window.location.search).toContain("schedule=nightly");
-    expect(window.location.search).not.toContain("unsafe=");
-    expect(window.location.search).not.toContain("targetPayload=");
-    expect(window.location.search).not.toContain("prompt=");
+    await waitFor(() => {
+      expect(window.location.search).toContain("schedule=nightly");
+      expect(window.location.search).not.toContain("unsafe=");
+      expect(window.location.search).not.toContain("targetPayload=");
+      expect(window.location.search).not.toContain("prompt=");
+    });
   });
 
   it("exposes a mobile filter sheet with the full recurring filter set", async () => {

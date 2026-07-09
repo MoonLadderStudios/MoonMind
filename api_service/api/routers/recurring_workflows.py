@@ -85,6 +85,9 @@ class RecurringWorkflowDefinitionListResponse(BaseModel):
     )
     count: int = Field(0, alias="count")
     next_page_token: Optional[str] = Field(None, alias="nextPageToken")
+    active_count: Optional[int] = Field(None, alias="activeCount")
+    next_24h_count: Optional[int] = Field(None, alias="next24hCount")
+    attention_count: Optional[int] = Field(None, alias="attentionCount")
 
 class RecurringWorkflowRunModel(BaseModel):
     """Serialized recurring run history record."""
@@ -360,6 +363,16 @@ def _definition_target_kind(definition: RecurringWorkflowDefinition) -> str:
     raw = target.get("kind") or target.get("workflowType") or target.get("workflow_type")
     return str(raw or "")
 
+def _definition_target_label(definition: RecurringWorkflowDefinition) -> str:
+    target = dict(definition.target or {})
+    if not str(target.get("kind") or "").strip():
+        return "Queue task"
+    raw = _definition_target_kind(definition)
+    if not raw:
+        return "Queue task"
+    short = raw.rsplit(".", maxsplit=1)[-1]
+    return " ".join(part for part in short.replace("_", " ").split() if part).title()
+
 def _definition_state(
     definition: RecurringWorkflowDefinition,
     runtime_summary: RecurringScheduleRuntimeSummary | None,
@@ -373,6 +386,15 @@ def _definition_state(
     )
     raw = str(status_value or "").lower()
     return "attention" if "error" in raw or "failed" in raw else "active"
+
+def _definition_state_label(
+    definition: RecurringWorkflowDefinition,
+    runtime_summary: RecurringScheduleRuntimeSummary | None,
+) -> str:
+    state = _definition_state(definition, runtime_summary)
+    if state == "attention":
+        return "Needs attention"
+    return "Active" if state == "active" else "Paused"
 
 def _runtime_value(
     definition: RecurringWorkflowDefinition,
@@ -403,8 +425,15 @@ def _matches_recurring_filters(
 ) -> bool:
     return (
         _contains(f"{definition.name} {definition.id} {definition.description or ''}", schedule)
-        and _contains(_definition_state(definition, runtime_summary), state)
-        and _contains(_definition_target_kind(definition), target)
+        and _contains(
+            f"{_definition_state(definition, runtime_summary)} "
+            f"{_definition_state_label(definition, runtime_summary)}",
+            state,
+        )
+        and _contains(
+            f"{_definition_target_kind(definition)} {_definition_target_label(definition)}",
+            target,
+        )
         and _contains(_definition_repository(definition), repository)
         and _contains(f"{definition.cron} {definition.timezone}", cadence)
         and _contains(_runtime_value(definition, runtime_summary, "next_run_at"), next_run)
@@ -416,6 +445,49 @@ def _matches_recurring_filters(
         )
         and _contains(definition.updated_at, updated)
     )
+
+async def _list_all_definitions(
+    service: RecurringWorkflowsService,
+    *,
+    scope: str,
+    user_id: UUID | None,
+) -> list[RecurringWorkflowDefinition]:
+    definitions: list[RecurringWorkflowDefinition] = []
+    offset = 0
+    page_size = 500
+    while True:
+        page = await service.list_definitions(
+            scope=scope,
+            user_id=user_id,
+            limit=page_size,
+            offset=offset,
+        )
+        definitions.extend(page)
+        if len(page) < page_size:
+            return definitions
+        offset += page_size
+
+def _recurring_metrics(
+    definitions: list[RecurringWorkflowDefinition],
+    runtime_summaries: dict[UUID, RecurringScheduleRuntimeSummary],
+) -> tuple[int, int, int]:
+    now = datetime.now(UTC)
+    next_24h_end = now.timestamp() + 24 * 60 * 60
+    active = 0
+    next_24h = 0
+    attention = 0
+    for definition in definitions:
+        state = _definition_state(definition, runtime_summaries.get(definition.id))
+        if definition.enabled:
+            active += 1
+        if state == "attention":
+            attention += 1
+        next_run = _runtime_value(definition, runtime_summaries.get(definition.id), "next_run_at")
+        if definition.enabled and isinstance(next_run, datetime):
+            next_run_ts = next_run.timestamp()
+            if now.timestamp() <= next_run_ts <= next_24h_end:
+                next_24h += 1
+    return active, next_24h, attention
 
 def _recurring_sort_value(
     definition: RecurringWorkflowDefinition,
@@ -510,45 +582,93 @@ async def list_recurring_workflows(
     _require_operator_for_global_scope(scope=requested_scope, user=user)
     user_id = getattr(user, "id", None)
 
-    definitions = await service.list_definitions(
-        scope=scope,
-        user_id=user_id if isinstance(user_id, UUID) else None,
-        limit=500,
-    )
-    runtime_summaries = await service.runtime_summaries_for_definitions(definitions)
-    filtered_definitions = [
-        item
-        for item in definitions
-        if _matches_recurring_filters(
-            item,
-            runtime_summaries.get(item.id),
-            schedule=schedule,
-            state=state,
-            target=target,
-            repository=repository,
-            cadence=cadence,
-            next_run=next_run,
-            last_scheduled=last_scheduled,
-            dispatch=dispatch,
-            updated=updated,
-        )
-    ]
-    filtered_definitions.sort(
-        key=lambda item: (
-            _recurring_sort_value(item, runtime_summaries.get(item.id), sort),
-            str(item.id),
-        ),
-        reverse=sort_dir == "desc",
-    )
     offset = _offset_from_cursor(cursor)
     page_size = max(1, min(int(limit), 500))
-    page_items = filtered_definitions[offset : offset + page_size]
+    user_uuid = user_id if isinstance(user_id, UUID) else None
+    requires_derived_list = any(
+        value.strip()
+        for value in (
+            schedule,
+            state,
+            target,
+            repository,
+            cadence,
+            next_run,
+            last_scheduled,
+            dispatch,
+            updated,
+        )
+    ) or sort != "updatedAt"
+
+    if requires_derived_list:
+        definitions = await _list_all_definitions(
+            service,
+            scope=scope,
+            user_id=user_uuid,
+        )
+        runtime_summaries = await service.runtime_summaries_for_definitions(definitions)
+        filtered_definitions = [
+            item
+            for item in definitions
+            if _matches_recurring_filters(
+                item,
+                runtime_summaries.get(item.id),
+                schedule=schedule,
+                state=state,
+                target=target,
+                repository=repository,
+                cadence=cadence,
+                next_run=next_run,
+                last_scheduled=last_scheduled,
+                dispatch=dispatch,
+                updated=updated,
+            )
+        ]
+        filtered_definitions.sort(
+            key=lambda item: (
+                _recurring_sort_value(item, runtime_summaries.get(item.id), sort),
+                str(item.id),
+            ),
+            reverse=sort_dir == "desc",
+        )
+        page_items = filtered_definitions[offset : offset + page_size]
+        count = len(filtered_definitions)
+        active_count, next_24h_count, attention_count = _recurring_metrics(
+            filtered_definitions,
+            runtime_summaries,
+        )
+    else:
+        page_items = await service.list_definitions(
+            scope=scope,
+            user_id=user_uuid,
+            limit=page_size,
+            offset=offset,
+        )
+        runtime_summaries = await service.runtime_summaries_for_definitions(page_items)
+        count = await service.count_definitions(
+            scope=scope,
+            user_id=user_uuid,
+        )
+        metric_definitions = await _list_all_definitions(
+            service,
+            scope=scope,
+            user_id=user_uuid,
+        )
+        active_count, next_24h_count, attention_count = _recurring_metrics(
+            metric_definitions,
+            {},
+        )
+
     next_offset = offset + page_size
-    next_page_token = (
-        _cursor_from_offset(next_offset)
-        if next_offset < len(filtered_definitions)
-        else None
-    )
+    next_page_token = _cursor_from_offset(next_offset) if next_offset < count else None
+    active_count_value = active_count
+    next_24h_count_value = next_24h_count
+    attention_count_value = attention_count
+    if active_count_value is None or next_24h_count_value is None or attention_count_value is None:
+        active_count_value, next_24h_count_value, attention_count_value = _recurring_metrics(
+            page_items,
+            runtime_summaries,
+        )
     return RecurringWorkflowDefinitionListResponse(
         items=[
             _serialize_definition(
@@ -561,8 +681,11 @@ async def list_recurring_workflows(
             )
             for item in page_items
         ],
-        count=len(filtered_definitions),
+        count=count,
         next_page_token=next_page_token,
+        active_count=active_count_value,
+        next_24h_count=next_24h_count_value,
+        attention_count=attention_count_value,
     )
 
 @router.post(

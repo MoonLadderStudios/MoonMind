@@ -126,6 +126,7 @@ async def test_list_recurring_workflows_uses_runtime_schedule_summary() -> None:
     last_scheduled_for = datetime(2026, 6, 23, 13, tzinfo=UTC)
     definition = _definition(next_run_at=stale_next_run)
     service.list_definitions.return_value = [definition]
+    service.count_definitions.return_value = 1
     service.runtime_summaries_for_definitions.return_value = {
         definition.id: RecurringScheduleRuntimeSummary(
             next_run_at=live_next_run,
@@ -153,7 +154,20 @@ async def test_list_recurring_workflows_uses_runtime_schedule_summary() -> None:
     assert response.items[0].actions == response.items[0].permissions
     assert response.count == 1
     assert response.next_page_token is None
+    assert response.active_count == 1
     service.runtime_summaries_for_definitions.assert_awaited_once_with([definition])
+    service.list_definitions.assert_any_await(
+        scope="personal",
+        user_id=definition.owner_user_id,
+        limit=50,
+        offset=0,
+    )
+    service.list_definitions.assert_any_await(
+        scope="personal",
+        user_id=definition.owner_user_id,
+        limit=500,
+        offset=0,
+    )
 
 @pytest.mark.asyncio
 async def test_list_recurring_workflows_filters_sorts_and_returns_opaque_cursor() -> None:

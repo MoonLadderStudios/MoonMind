@@ -41,6 +41,9 @@ const SchedulesResponseSchema = z.object({
   items: z.array(ScheduleSchema),
   count: z.number().optional(),
   nextPageToken: z.string().nullable().optional(),
+  activeCount: z.number().optional(),
+  next24hCount: z.number().optional(),
+  attentionCount: z.number().optional(),
 });
 
 const ScheduleRunSchema = z.object({
@@ -1607,12 +1610,10 @@ function ScheduleRowActions({
   schedule,
   payload,
   sources,
-  listEndpoint,
 }: {
   schedule: Schedule;
   payload: BootPayload;
   sources: ScheduleSources | undefined;
-  listEndpoint: string;
 }) {
   const queryClient = useQueryClient();
   const availability = scheduleActionAvailability(schedule, sources);
@@ -1620,7 +1621,7 @@ function ScheduleRowActions({
   const updateEndpoint = scheduleEndpoint(payload, 'update', schedule.id);
 
   const invalidateList = () =>
-    queryClient.invalidateQueries({ queryKey: ['schedules', listEndpoint] });
+    queryClient.invalidateQueries({ queryKey: ['schedules'] });
 
   const runNowMutation = useMutation({
     mutationFn: async () => {
@@ -1805,14 +1806,20 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     const active = schedules.filter((schedule) => schedule.enabled).length;
     const attention = schedules.filter((schedule) => scheduleState(schedule) === 'attention').length;
     const dueSoon = schedules.filter((schedule) => isDueSoon(schedule, now)).length;
-    return { active, attention, dueSoon, total: schedules.length };
-  }, [schedules]);
+    return {
+      active: typeof data?.activeCount === 'number' ? data.activeCount : active,
+      attention: typeof data?.attentionCount === 'number' ? data.attentionCount : attention,
+      dueSoon: typeof data?.next24hCount === 'number' ? data.next24hCount : dueSoon,
+      total: totalCount,
+    };
+  }, [data?.activeCount, data?.attentionCount, data?.next24hCount, schedules, totalCount]);
   const isMobileLayout = useSchedulesMobileLayout();
 
   useEffect(() => {
     if (typeof window === 'undefined' || routeDefinitionId) {
       return;
     }
+    const timer = window.setTimeout(() => {
     const params = new URLSearchParams();
     params.set('limit', String(pageSize));
     params.set('sort', sort);
@@ -1828,6 +1835,8 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
       window.history.replaceState(window.history.state, '', nextUrl);
     }
+    }, 250);
+    return () => window.clearTimeout(timer);
   }, [cursor, filters, pageSize, routeDefinitionId, sort, sortDir]);
 
   const setFilter = (key: RecurringFilterKey, value: string) => {
@@ -2173,7 +2182,6 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
                 schedule={item}
                 payload={payload}
                 sources={sources}
-                listEndpoint={listEndpoint}
               />
             )}
             emptyMessage="No recurring schedules yet. Create one from the workflow page."

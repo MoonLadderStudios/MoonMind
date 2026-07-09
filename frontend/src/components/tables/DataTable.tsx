@@ -136,6 +136,9 @@ export function DataTable<T>({
   const renderHeaderCell = (column: Column<T>) => {
     const key = column.key as string;
     const isSorted = sort?.key === key;
+    const sortLabel = column.sortLabel ?? (
+      typeof column.header === 'string' ? column.header : key
+    );
     const ariaSort: React.AriaAttributes['aria-sort'] = column.sortable
       ? isSorted
         ? sort?.direction === 'asc'
@@ -159,7 +162,7 @@ export function DataTable<T>({
             type="button"
             className="data-table__sort"
             onClick={() => handleSort(key)}
-            aria-label={`Sort by ${column.sortLabel ?? String(column.header)}${
+            aria-label={`Sort by ${sortLabel}${
               isSorted
                 ? sort?.direction === 'asc'
                   ? ' (ascending)'
