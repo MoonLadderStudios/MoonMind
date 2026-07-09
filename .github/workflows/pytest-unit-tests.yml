@@ -159,12 +159,11 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Check MoonSpec submodule projection
+      - name: Check vendored MoonSpec projection
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip PyYAML
-          test -f moonspec/bundle/moonspec.bundle.yaml
-          python3 tools/link_moonspec_submodule.py --check --prune
+          python3 tools/sync_moonspec.py --check
 
   api-component:
     needs: select-test-suites

@@ -2607,6 +2607,116 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/v1/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Omnigent Session
+         * @description Create or reuse an Omnigent-shaped session in proxy mode (OB-§8).
+         */
+        post: operations["create_omnigent_session_api_omnigent_v1_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/v1/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Omnigent Session
+         * @description Return an Omnigent-shaped session snapshot (OB-§4.1, §8.2).
+         *
+         *     Enforces the §16 rule-1 authorization boundary on direct reads: unlike the
+         *     create path, the raw provider ``session_id`` is caller-supplied, so the
+         *     facade must confirm the caller owns the workflow that owns the session
+         *     before proxying the read with the service credential. This closes the IDOR
+         *     where any authenticated user could read any session snapshot by id.
+         *
+         *     Ownership is resolved against the durable bridge binding (not caller-
+         *     supplied task-identity headers), so the read requires no header parameters:
+         *     the authenticated user must own the workflow that owns the session.
+         */
+        get: operations["get_omnigent_session_api_omnigent_v1_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/v1/sessions/{session_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Omnigent Session Event
+         * @description Apply Omnigent controls, including bridge-local harvest/clear policy.
+         */
+        post: operations["post_omnigent_session_event_api_omnigent_v1_sessions__session_id__events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Omnigent Elicitation
+         * @description Resolve a pending Omnigent elicitation through the bridge surface.
+         */
+        post: operations["resolve_omnigent_elicitation_api_omnigent_v1_sessions__session_id__elicitations__elicitation_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/api/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Omnigent Agents
+         * @description Proxy the Omnigent agent catalog (OB-§4.1).
+         */
+        get: operations["list_omnigent_agents_api_omnigent_api_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/secrets": {
         parameters: {
             query?: never;
@@ -3925,6 +4035,47 @@ export interface components {
         Body_verify_verify_api_v1_auth_verify_post: {
             /** Token */
             token: string;
+        };
+        /**
+         * BridgeSessionCreateRequest
+         * @description Omnigent-shaped ``POST /v1/sessions`` request body (OB-§8.1).
+         */
+        BridgeSessionCreateRequest: {
+            /** Agent Id */
+            agent_id?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Labels */
+            labels?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Host Type
+             * @default managed
+             */
+            host_type: string;
+            /** Host Id */
+            host_id?: string | null;
+            /** Workspace */
+            workspace?: string | null;
+            /** Model Override */
+            model_override?: string | null;
+            /** Reasoning Effort */
+            reasoning_effort?: string | null;
+            /** Terminal Launch Args */
+            terminal_launch_args?: string[];
+            /** Endpoint Ref */
+            endpoint_ref?: string | null;
+        };
+        /**
+         * BridgeSessionEventRequest
+         * @description Omnigent-shaped ``POST /v1/sessions/{id}/events`` request body.
+         */
+        BridgeSessionEventRequest: {
+            /** Type */
+            type: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * CancelExecutionRequest
@@ -8349,6 +8500,19 @@ export interface components {
         RecurringWorkflowDefinitionListResponse: {
             /** Items */
             items?: components["schemas"]["RecurringWorkflowDefinitionModel"][];
+            /**
+             * Count
+             * @default 0
+             */
+            count: number;
+            /** Nextpagetoken */
+            nextPageToken?: string | null;
+            /** Activecount */
+            activeCount?: number | null;
+            /** Next24Hcount */
+            next24hCount?: number | null;
+            /** Attentioncount */
+            attentionCount?: number | null;
         };
         /**
          * RecurringWorkflowDefinitionModel
@@ -14939,6 +15103,18 @@ export interface operations {
             query?: {
                 scope?: "personal" | "global";
                 limit?: number;
+                cursor?: string | null;
+                sort?: "updatedAt" | "name" | "state" | "target" | "repository" | "cron" | "timezone" | "nextRunAt" | "lastScheduledFor" | "dispatch";
+                sortDir?: "asc" | "desc";
+                schedule?: string;
+                state?: string;
+                target?: string;
+                repository?: string;
+                cadence?: string;
+                nextRun?: string;
+                lastScheduled?: string;
+                dispatch?: string;
+                updated?: string;
             };
             header?: never;
             path?: never;
@@ -15847,6 +16023,175 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_omnigent_session_api_omnigent_v1_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-MoonMind-Task-Workflow-Id"?: string | null;
+                "X-MoonMind-Agent-Run-Id"?: string | null;
+                "X-MoonMind-Agent-Run-Identifier"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BridgeSessionCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_omnigent_session_api_omnigent_v1_sessions__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_omnigent_session_event_api_omnigent_v1_sessions__session_id__events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BridgeSessionEventRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_omnigent_elicitation_api_omnigent_v1_sessions__session_id__elicitations__elicitation_id__resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                elicitation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_omnigent_agents_api_omnigent_api_agents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown[];
                 };
             };
         };

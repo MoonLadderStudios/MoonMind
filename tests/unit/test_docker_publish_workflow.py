@@ -41,7 +41,9 @@ def test_docker_publish_generates_version_before_platform_builds() -> None:
     assert build_job["needs"] == "metadata"
 
 
-def test_docker_publish_checks_out_moonspec_submodule() -> None:
+def test_docker_publish_does_not_require_submodules() -> None:
+    # MoonSpec skills are vendored real files under .agents/skills, so the
+    # image build must not depend on submodule checkout state.
     workflow = _load_workflow()
 
     checkout = next(
@@ -54,18 +56,14 @@ def test_docker_publish_checks_out_moonspec_submodule() -> None:
     )
 
     assert checkout is not None, "Checkout step not found"
-    assert checkout["with"]["submodules"] == "recursive"
+    assert "submodules" not in checkout.get("with", {})
 
 
-def test_app_image_build_validates_moonspec_bundle_content() -> None:
+def test_app_image_ships_vendored_skills_without_moonspec_submodule() -> None:
     dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
 
-    copy_index = dockerfile.index("COPY moonspec /app/moonspec/")
-    guard_index = dockerfile.index("/app/moonspec/bundle/moonspec.bundle.yaml")
-
-    assert copy_index < guard_index
-    assert "/app/moonspec/bundle/skills/moonspec-verify/SKILL.md" in dockerfile
-    assert "/app/.agents/skills/moonspec-verify/SKILL.md" in dockerfile
+    assert "COPY .agents /app/.agents/" in dockerfile
+    assert "moonspec" not in dockerfile
 
 
 def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
@@ -234,7 +232,6 @@ def test_runtime_project_install_precedes_non_package_asset_copies() -> None:
         "COPY config /app/config/",
         "COPY docs/ReleaseNotes /app/docs/ReleaseNotes/",
         "COPY .agents /app/.agents/",
-        "COPY moonspec /app/moonspec/",
     ):
         assert project_install_index < dockerfile.index(copied_path)
 

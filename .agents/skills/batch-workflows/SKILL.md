@@ -82,6 +82,7 @@ Progress" with a single batch run.
      --publish-mode <none|branch|pr|pr_with_merge_automation> \
      --constraints-file <optional path to shared constraints> \
      --run-verify | --no-run-verify \
+     --update-status | --no-update-status \
      --max-workflows <cap>
    ```
 

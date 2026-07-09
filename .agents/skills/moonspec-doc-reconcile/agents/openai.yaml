@@ -1,1 +1,4 @@
-../../../../moonspec/bundle/skills/moonspec-doc-reconcile/agents/openai.yaml
+interface:
+  display_name: "MoonSpec Doc Reconcile"
+  short_description: "Reconcile canonical docs after verified MoonSpec implementation."
+  default_prompt: "Use $moonspec-doc-reconcile to reconcile canonical documentation after MoonSpec verification."

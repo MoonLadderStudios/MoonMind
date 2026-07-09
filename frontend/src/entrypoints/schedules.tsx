@@ -1,13 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
+import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import { DataTable } from '../components/tables/DataTable';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
+import { WorkflowColumnFilterButton, WorkflowColumnHeader } from '../components/WorkflowColumnHeader';
 
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
+import {
+  clearRecurringScheduleFocusRequest,
+  readRecurringScheduleFocusRequest,
+} from '../lib/recurringScheduleFocus';
 import { formatStatusLabel } from '../utils/formatters';
+
+const SCHEDULES_MOBILE_MEDIA_QUERY = '(max-width: 720px)';
 
 const ScheduleSchema = z.object({
   id: z.string(),
@@ -31,6 +39,11 @@ const ScheduleSchema = z.object({
 
 const SchedulesResponseSchema = z.object({
   items: z.array(ScheduleSchema),
+  count: z.number().optional(),
+  nextPageToken: z.string().nullable().optional(),
+  activeCount: z.number().optional(),
+  next24hCount: z.number().optional(),
+  attentionCount: z.number().optional(),
 });
 
 const ScheduleRunSchema = z.object({
@@ -55,6 +68,45 @@ const ScheduleRunsResponseSchema = z.object({
 
 type Schedule = z.infer<typeof ScheduleSchema>;
 type ScheduleRun = z.infer<typeof ScheduleRunSchema>;
+type RecurringSortKey = 'updatedAt' | 'name' | 'state' | 'target' | 'repository' | 'cron' | 'timezone' | 'nextRunAt' | 'lastScheduledFor' | 'dispatch';
+type RecurringSortDirection = 'asc' | 'desc';
+type RecurringFilterKey = 'schedule' | 'state' | 'target' | 'repository' | 'cadence' | 'nextRun' | 'lastScheduled' | 'dispatch' | 'updated';
+
+type RecurringFilters = {
+  schedule: string;
+  state: string;
+  target: string;
+  repository: string;
+  cadence: string;
+  nextRun: string;
+  lastScheduled: string;
+  dispatch: string;
+  updated: string;
+};
+
+const EMPTY_RECURRING_FILTERS: RecurringFilters = {
+  schedule: '',
+  state: '',
+  target: '',
+  repository: '',
+  cadence: '',
+  nextRun: '',
+  lastScheduled: '',
+  dispatch: '',
+  updated: '',
+};
+
+const RECURRING_FILTER_LABELS: Record<RecurringFilterKey, string> = {
+  schedule: 'Schedule',
+  state: 'State',
+  target: 'Target',
+  repository: 'Repository',
+  cadence: 'Cadence / Timezone',
+  nextRun: 'Next run',
+  lastScheduled: 'Last scheduled',
+  dispatch: 'Dispatch',
+  updated: 'Updated',
+};
 
 type ScheduleSources = {
   list?: string | undefined;
@@ -126,6 +178,106 @@ function scheduleListEndpoint(payload: BootPayload): string {
   return schedules?.list || `${payload.apiBase || '/api'}/recurring-workflows?scope=personal`;
 }
 
+function safeRecurringSearchParams(): URLSearchParams {
+  if (typeof window === 'undefined') {
+    return new URLSearchParams();
+  }
+  return new URLSearchParams(window.location.search);
+}
+
+function cleanQueryText(value: string | null): string {
+  return String(value || '').trim().slice(0, 160);
+}
+
+function cleanCursor(value: string | null): string {
+  return String(value || '').trim().slice(0, 512);
+}
+
+function parseRecurringFilters(params: URLSearchParams): RecurringFilters {
+  return {
+    schedule: cleanQueryText(params.get('schedule')),
+    state: cleanQueryText(params.get('state')),
+    target: cleanQueryText(params.get('target')),
+    repository: cleanQueryText(params.get('repository')),
+    cadence: cleanQueryText(params.get('cadence')),
+    nextRun: cleanQueryText(params.get('nextRun')),
+    lastScheduled: cleanQueryText(params.get('lastScheduled')),
+    dispatch: cleanQueryText(params.get('dispatch')),
+    updated: cleanQueryText(params.get('updated')),
+  };
+}
+
+function parseRecurringSortKey(raw: string | null): RecurringSortKey {
+  const value = String(raw || '').trim();
+  return (
+    value === 'name'
+    || value === 'state'
+    || value === 'target'
+    || value === 'repository'
+    || value === 'cron'
+    || value === 'timezone'
+    || value === 'nextRunAt'
+    || value === 'lastScheduledFor'
+    || value === 'dispatch'
+    || value === 'updatedAt'
+  ) ? value : 'updatedAt';
+}
+
+function parseRecurringSortDirection(raw: string | null): RecurringSortDirection {
+  return String(raw || '').trim() === 'asc' ? 'asc' : 'desc';
+}
+
+function activeRecurringFilterEntries(filters: RecurringFilters): Array<[RecurringFilterKey, string]> {
+  return (Object.keys(RECURRING_FILTER_LABELS) as RecurringFilterKey[])
+    .map((key) => [key, filters[key].trim()] as [RecurringFilterKey, string])
+    .filter(([, value]) => Boolean(value));
+}
+
+function appendScheduleListParams(
+  endpoint: string,
+  filters: RecurringFilters,
+  {
+    pageSize,
+    cursor,
+    sort,
+    sortDir,
+  }: {
+    pageSize: number;
+    cursor: string;
+    sort: RecurringSortKey;
+    sortDir: RecurringSortDirection;
+  },
+): string {
+  const activeFilters = activeRecurringFilterEntries(filters);
+  if (
+    activeFilters.length === 0
+    && !cursor
+    && pageSize === 50
+    && sort === 'updatedAt'
+    && sortDir === 'desc'
+    && hasActiveScheduleListFilters(endpoint)
+  ) {
+    return endpoint;
+  }
+
+  const [base, hash = ''] = endpoint.split('#', 2);
+  const [path, query = ''] = (base || '').split('?', 2);
+  const params = new URLSearchParams(query);
+  params.set('limit', String(pageSize));
+  params.set('sort', sort);
+  params.set('sortDir', sortDir);
+  if (cursor) {
+    params.set('cursor', cursor);
+  } else {
+    params.delete('cursor');
+  }
+  for (const [key, value] of activeFilters) {
+    params.set(key, value);
+  }
+  const serialized = params.toString();
+  return `${path}${serialized ? `?${serialized}` : ''}${hash ? `#${hash}` : ''}`;
+}
+
 function scheduleRouteDefinitionId(payload: BootPayload): string | null {
   const bootData = scheduleBootData(payload);
   const rawPath = bootData?.dashboardConfig?.initialPath || bootData?.initialPath || '';
@@ -190,11 +342,79 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : String(error || fallback);
 }
 
+function hasActiveScheduleListFilters(endpoint: string): boolean {
+  try {
+    const parsed = new URL(endpoint, 'http://moonmind.local');
+    for (const [key, value] of parsed.searchParams.entries()) {
+      const normalizedKey = key.trim().toLowerCase().replace(/_/g, '');
+      const normalizedValue = value.trim();
+      if (
+        !normalizedValue
+        || normalizedKey === 'scope'
+        || normalizedKey === 'limit'
+        || normalizedKey === 'cursor'
+        || normalizedKey === 'sort'
+        || normalizedKey === 'sortdir'
+      ) {
+        continue;
+      }
+      if (
+        normalizedKey === 'q'
+        || normalizedKey === 'search'
+        || normalizedKey === 'state'
+        || normalizedKey === 'target'
+        || normalizedKey === 'repository'
+        || normalizedKey === 'repo'
+        || normalizedKey === 'cadence'
+        || normalizedKey === 'timezone'
+        || normalizedKey === 'dispatch'
+        || normalizedKey === 'updated'
+        || normalizedKey.startsWith('filter')
+        || normalizedKey.startsWith('next')
+        || normalizedKey.startsWith('lastscheduled')
+      ) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function focusRecurringElement(element: HTMLElement | null | undefined): boolean {
+  if (!element) {
+    return false;
+  }
+  element.focus({ preventScroll: true });
+  clearRecurringScheduleFocusRequest();
+  return true;
+}
+
+function findRecurringScheduleFocusElement(attribute: string, definitionId: string): HTMLElement | null {
+  const candidates = document.querySelectorAll<HTMLElement>(`[${attribute}]`);
+  for (const candidate of candidates) {
+    if (candidate.getAttribute(attribute) === definitionId) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 class ScheduleRequestError extends Error {
   status: number;
 
   constructor(status: number, statusText: string) {
     super(scheduleDetailErrorMessage(status, statusText));
+    this.status = status;
+  }
+}
+
+class ScheduleListRequestError extends Error {
+  status: number;
+
+  constructor(status: number, statusText: string) {
+    super(scheduleListErrorMessage(status, statusText));
     this.status = status;
   }
 }
@@ -207,6 +427,13 @@ function scheduleDetailErrorMessage(status: number, statusText: string): string 
     return 'Recurring schedule not found.';
   }
   return `Failed to fetch schedule: ${statusText || status}`;
+}
+
+function scheduleListErrorMessage(status: number, statusText: string): string {
+  if (status === 403) {
+    return 'You do not have access to recurring schedules.';
+  }
+  return `Failed to fetch schedules: ${statusText || status}`;
 }
 
 function titleCaseLabel(value: string): string {
@@ -344,6 +571,18 @@ function policySummary(schedule: Schedule): string {
     ? String((catchup as { mode?: unknown }).mode || '').trim()
     : '';
   return [overlapMode, catchupMode].filter(Boolean).map((value) => titleCaseLabel(formatStatusLabel(value))).join(' / ') || '-';
+}
+
+function dispatchAttentionLabel(schedule: Schedule): string {
+  const error = schedule.lastDispatchError?.trim();
+  const status = schedule.lastDispatchStatus?.trim();
+  if (scheduleState(schedule) === 'attention') {
+    return error
+      ? `Needs attention: ${error}`
+      : 'Needs attention';
+  }
+  const statusLabel = status ? titleCaseLabel(formatStatusLabel(status)) : 'No dispatch attention';
+  return error ? `${statusLabel}: ${error}` : statusLabel;
 }
 
 function formatJsonValue(value: unknown): string {
@@ -636,6 +875,7 @@ function RecurringScheduleSidebar({
                 key={schedule.id}
                 href={`/schedules/${encodeURIComponent(schedule.id)}`}
                 aria-current={active ? 'page' : undefined}
+                data-recurring-sidebar-row-focus={schedule.id}
                 className={`recurring-schedule-sidebar-row${active ? ' recurring-schedule-sidebar-row--active' : ''}`}
               >
                 <span className="recurring-schedule-sidebar-name">{schedule.name}</span>
@@ -841,6 +1081,20 @@ function ScheduleDetailPage({
   const actions = schedule ? scheduleActionAvailability(schedule, sources) : null;
   const visibleFormErrors = submitErrors;
 
+  useEffect(() => {
+    const request = readRecurringScheduleFocusRequest();
+    if (!request || (request.definitionId && request.definitionId !== definitionId)) {
+      return;
+    }
+    if (request.target === 'detail-heading' && schedule) {
+      focusRecurringElement(document.querySelector<HTMLElement>('[data-recurring-detail-heading]'));
+    } else if (request.target === 'sidebar-row' && listDisplayMode === 'sidebar') {
+      focusRecurringElement(
+        findRecurringScheduleFocusElement('data-recurring-sidebar-row-focus', definitionId),
+      );
+    }
+  }, [definitionId, listDisplayMode, schedule, sidebarSchedules]);
+
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (currentForm && schedule && actions?.canEdit) {
@@ -908,7 +1162,7 @@ function ScheduleDetailPage({
             <span>/</span>
             <span>{schedule.name}</span>
           </nav>
-          <h2 className="page-title">{schedule.name}</h2>
+          <h2 className="page-title" tabIndex={-1} data-recurring-detail-heading>{schedule.name}</h2>
           <p className="page-meta">{displayValue(schedule.description)}</p>
           <p className="page-meta" title={definitionId}>Definition ID: {definitionId}</p>
         </div>
@@ -1320,31 +1574,409 @@ function ScheduleDetailPage({
   );
 }
 
+function RecurringScheduleMobileList({
+  schedules,
+  isLoading,
+  isError,
+  error,
+  emptyMessage,
+}: {
+  schedules: Schedule[];
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+  emptyMessage: string;
+}) {
+  if (isLoading) {
+    return (
+      <div className="schedules-mobile-card-list" aria-busy="true">
+        <LoadingPlaceholder
+          surface="schedules"
+          region="mobile-list"
+          variant="table"
+          density="compact"
+          preserveContext
+        />
+      </div>
+    );
+  }
+  if (isError) {
+    return (
+      <div className="schedules-mobile-card-list schedules-mobile-card-list-state" role="alert">
+        {errorMessage(error, 'Failed to fetch schedules')}
+      </div>
+    );
+  }
+  if (schedules.length === 0) {
+    return (
+      <div className="schedules-mobile-card-list schedules-mobile-card-list-state">
+        {emptyMessage}
+      </div>
+    );
+  }
+  return (
+    <ul className="schedules-mobile-card-list" aria-label="Recurring schedule cards">
+      {schedules.map((schedule) => (
+        <li key={schedule.id} className="schedules-mobile-card">
+          <a className="schedules-mobile-card-link" href={`/schedules/${encodeURIComponent(schedule.id)}`}>
+            <span className="schedules-mobile-card-title">{schedule.name}</span>
+            <span className={`schedules-state schedules-state--${scheduleState(schedule)}`}>
+              {stateLabel(schedule)}
+            </span>
+          </a>
+          <dl className="schedules-mobile-card-facts">
+            <div>
+              <dt>Cadence</dt>
+              <dd>
+                <code>{schedule.cron}</code>
+                <span>{displayValue(schedule.timezone)}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>Next run</dt>
+              <dd>{formatWhen(schedule.nextRunAt)}</dd>
+            </div>
+            <div>
+              <dt>Target</dt>
+              <dd>
+                <strong>{targetKind(schedule)}</strong>
+                <span>{targetRepository(schedule)}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>Dispatch</dt>
+              <dd>{dispatchAttentionLabel(schedule)}</dd>
+            </div>
+          </dl>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function useSchedulesMobileLayout(): boolean {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+    const query = window.matchMedia(SCHEDULES_MOBILE_MEDIA_QUERY);
+    const update = (event: MediaQueryList | MediaQueryListEvent) => setIsMobile(event.matches);
+    update(query);
+    query.addEventListener?.('change', update);
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+
+  return isMobile;
+}
+
+function ScheduleRowActions({
+  schedule,
+  payload,
+  sources,
+}: {
+  schedule: Schedule;
+  payload: BootPayload;
+  sources: ScheduleSources | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const availability = scheduleActionAvailability(schedule, sources);
+  const runNowEndpoint = scheduleEndpoint(payload, 'runNow', schedule.id);
+  const updateEndpoint = scheduleEndpoint(payload, 'update', schedule.id);
+
+  const invalidateList = () =>
+    queryClient.invalidateQueries({ queryKey: ['schedules'] });
+
+  const runNowMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(runNowEndpoint, { method: 'POST', credentials: 'include' });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'Failed to run schedule'));
+      }
+      return ScheduleRunSchema.parse(await response.json());
+    },
+    onSuccess: () => invalidateList(),
+  });
+
+  const pauseResumeMutation = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      const response = await fetch(updateEndpoint, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, `Failed to ${enabled ? 'resume' : 'pause'} schedule`),
+        );
+      }
+      return ScheduleSchema.parse(await response.json());
+    },
+    onSuccess: () => invalidateList(),
+  });
+
+  const busy = runNowMutation.isPending || pauseResumeMutation.isPending;
+  const pauseLabel = schedule.enabled ? 'Pause' : 'Resume';
+
+  // Safe, common row actions only. Destructive delete stays on detail
+  // (docs/UI/RecurringSchedulesPage.md#s21) with confirmation + permission handling.
+  return (
+    <div className="schedules-row-actions">
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => runNowMutation.mutate()}
+        disabled={busy || !availability.canRun}
+        {...(runNowMutation.isError
+          ? { title: errorMessage(runNowMutation.error, 'Failed to run schedule') }
+          : availability.canRun
+          ? {}
+          : { title: availability.runReason })}
+        aria-label={`Run ${schedule.name} now`}
+      >
+        {runNowMutation.isPending ? 'Running' : 'Run now'}
+      </button>
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => pauseResumeMutation.mutate(!schedule.enabled)}
+        disabled={busy || !availability.canEdit}
+        {...(pauseResumeMutation.isError
+          ? {
+              title: errorMessage(
+                pauseResumeMutation.error,
+                `Failed to ${schedule.enabled ? 'pause' : 'resume'} schedule`,
+              ),
+            }
+          : availability.canEdit
+          ? {}
+          : { title: availability.editReason })}
+        aria-label={`${pauseLabel} ${schedule.name}`}
+      >
+        {pauseResumeMutation.isPending ? 'Updating' : pauseLabel}
+      </button>
+    </div>
+  );
+}
+
+function RecurringFilterForm({
+  filters,
+  onChange,
+}: {
+  filters: RecurringFilters;
+  onChange: (key: RecurringFilterKey, value: string) => void;
+}) {
+  return (
+    <div className="manifests-filter-grid schedules-filter-grid">
+      {(Object.keys(RECURRING_FILTER_LABELS) as RecurringFilterKey[]).map((key) => (
+        <label className="workflow-list-filter-control" key={key}>
+          <span>{RECURRING_FILTER_LABELS[key]}</span>
+          <input
+            value={filters[key]}
+            onChange={(event) => onChange(key, event.currentTarget.value)}
+            aria-label={`${RECURRING_FILTER_LABELS[key]} filter value`}
+          />
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function RecurringColumnFilter({
+  filterKey,
+  filters,
+  openFilter,
+  setOpenFilter,
+  setFilter,
+}: {
+  filterKey: RecurringFilterKey;
+  filters: RecurringFilters;
+  openFilter: RecurringFilterKey | null;
+  setOpenFilter: (key: RecurringFilterKey | null) => void;
+  setFilter: (key: RecurringFilterKey, value: string) => void;
+}) {
+  const label = RECURRING_FILTER_LABELS[filterKey];
+  const active = Boolean(filters[filterKey].trim());
+  const expanded = openFilter === filterKey;
+  return (
+    <WorkflowColumnHeader
+      label={label}
+      filterButton={
+        <WorkflowColumnFilterButton
+          active={active}
+          expanded={expanded}
+          ariaLabel={active ? `${label} filter: ${filters[filterKey]}` : `${label} filter. No filter applied.`}
+          onClick={() => setOpenFilter(expanded ? null : filterKey)}
+        />
+      }
+    >
+      {expanded ? (
+        <div className="workflow-list-column-filter-popover" role="dialog" aria-label={`${label} filter`}>
+          <div className="workflow-list-column-filter-title">{label} filter</div>
+          <label className="workflow-list-filter-control">
+            <span>{label}</span>
+            <input
+              autoFocus
+              value={filters[filterKey]}
+              onChange={(event) => setFilter(filterKey, event.currentTarget.value)}
+              aria-label={`${label} filter value`}
+            />
+          </label>
+        </div>
+      ) : null}
+    </WorkflowColumnHeader>
+  );
+}
+
 export function SchedulesPage({ payload }: { payload: BootPayload }) {
   const routeDefinitionId = useMemo(() => scheduleRouteDefinitionId(payload), [payload]);
   const listDisplayMode = recurringListDisplayMode(payload, Boolean(routeDefinitionId));
 
-  const listEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
+  const initialParams = useMemo(() => safeRecurringSearchParams(), []);
+  const [filters, setFilters] = useState<RecurringFilters>(() => parseRecurringFilters(initialParams));
+  const [pageSize, setPageSize] = useState(() => parsePageSize(initialParams.get('limit')));
+  const [cursor, setCursor] = useState(() => cleanCursor(initialParams.get('cursor')));
+  const [cursorStack, setCursorStack] = useState<string[]>([]);
+  const [sort, setSort] = useState<RecurringSortKey>(() => parseRecurringSortKey(initialParams.get('sort')));
+  const [sortDir, setSortDir] = useState<RecurringSortDirection>(() => parseRecurringSortDirection(initialParams.get('sortDir')));
+  const [openFilter, setOpenFilter] = useState<RecurringFilterKey | null>(null);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const baseListEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
+  const listEndpoint = useMemo(
+    () => appendScheduleListParams(baseListEndpoint, filters, { pageSize, cursor, sort, sortDir }),
+    [baseListEndpoint, cursor, filters, pageSize, sort, sortDir],
+  );
+  const sources = useMemo(() => scheduleSources(payload), [payload]);
+  const hasActiveFilters = useMemo(
+    () => activeRecurringFilterEntries(filters).length > 0 || hasActiveScheduleListFilters(baseListEndpoint),
+    [baseListEndpoint, filters],
+  );
+  const emptyMessage = hasActiveFilters
+    ? 'No recurring schedules match the current filters.'
+    : 'No recurring schedules yet. Create one from the workflow page.';
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
     queryKey: ['schedules', listEndpoint],
     enabled: !routeDefinitionId || listDisplayMode === 'sidebar',
     queryFn: async () => {
       const response = await fetch(listEndpoint, { credentials: 'include' });
       if (!response.ok) {
-        throw new Error(`Failed to fetch: ${response.statusText}`);
+        throw new ScheduleListRequestError(response.status, response.statusText);
       }
       return SchedulesResponseSchema.parse(await response.json());
     },
   });
 
   const schedules = data?.items || [];
+  const activeFilters = activeRecurringFilterEntries(filters);
+  const nextCursor = cleanCursor(data?.nextPageToken || null);
+  const pageIndex = cursorStack.length;
+  const totalCount = typeof data?.count === 'number' ? data.count : schedules.length;
   const stats = useMemo(() => {
     const now = Date.now();
     const active = schedules.filter((schedule) => schedule.enabled).length;
     const attention = schedules.filter((schedule) => scheduleState(schedule) === 'attention').length;
     const dueSoon = schedules.filter((schedule) => isDueSoon(schedule, now)).length;
-    return { active, attention, dueSoon, total: schedules.length };
-  }, [schedules]);
+    return {
+      active: typeof data?.activeCount === 'number' ? data.activeCount : active,
+      attention: typeof data?.attentionCount === 'number' ? data.attentionCount : attention,
+      dueSoon: typeof data?.next24hCount === 'number' ? data.next24hCount : dueSoon,
+      total: totalCount,
+    };
+  }, [data?.activeCount, data?.attentionCount, data?.next24hCount, schedules, totalCount]);
+  const isMobileLayout = useSchedulesMobileLayout();
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || routeDefinitionId) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+    const params = new URLSearchParams();
+    params.set('limit', String(pageSize));
+    params.set('sort', sort);
+    params.set('sortDir', sortDir);
+    if (cursor) {
+      params.set('cursor', cursor);
+    }
+    for (const [key, value] of activeRecurringFilterEntries(filters)) {
+      params.set(key, value);
+    }
+    const query = params.toString();
+    const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}`;
+    if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
+      window.history.replaceState(window.history.state, '', nextUrl);
+    }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [cursor, filters, pageSize, routeDefinitionId, sort, sortDir]);
+
+  const setFilter = (key: RecurringFilterKey, value: string) => {
+    setFilters((current) => ({ ...current, [key]: value.slice(0, 160) }));
+    setCursor('');
+    setCursorStack([]);
+  };
+
+  const clearFilter = (key: RecurringFilterKey) => {
+    setFilter(key, '');
+    setOpenFilter(key);
+  };
+
+  const changePageSize = (size: number) => {
+    setPageSize(size);
+    setCursor('');
+    setCursorStack([]);
+  };
+
+  const changeSort = (key: RecurringSortKey) => {
+    setSort((current) => {
+      if (current === key) {
+        setSortDir((direction) => (direction === 'asc' ? 'desc' : 'asc'));
+        return current;
+      }
+      setSortDir('asc');
+      return key;
+    });
+    setCursor('');
+    setCursorStack([]);
+  };
+
+  const sortableHeader = (key: RecurringSortKey, label: string) => (
+    <button
+      type="button"
+      className="data-table__sort"
+      onClick={() => changeSort(key)}
+      aria-label={`${label}. Server sorted ${sort === key ? sortDir : 'not active'}.`}
+      title="Sorting is server-authoritative."
+    >
+      <span>{label}</span>
+      <span aria-hidden="true" className="data-table__sort-indicator">
+        {sort === key ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
+      </span>
+    </button>
+  );
+
+  useEffect(() => {
+    if (routeDefinitionId) {
+      return;
+    }
+    const request = readRecurringScheduleFocusRequest();
+    if (!request || (request.target !== 'table-row' && request.target !== 'table-title')) {
+      return;
+    }
+    if (request.target === 'table-row' && request.definitionId) {
+      const rowLink = findRecurringScheduleFocusElement(
+        'data-recurring-table-row-focus',
+        request.definitionId,
+      );
+      if (focusRecurringElement(rowLink)) {
+        return;
+      }
+    }
+    if (!isLoading) {
+      focusRecurringElement(document.querySelector<HTMLElement>('[data-recurring-table-title]'));
+    }
+  }, [isLoading, routeDefinitionId, schedules]);
 
   if (routeDefinitionId) {
     return (
@@ -1363,7 +1995,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     <div className="schedules-page stack">
       <header className="toolbar schedules-toolbar">
         <div>
-          <h2 className="page-title">Recurring Schedules</h2>
+          <h2 className="page-title" tabIndex={-1} data-recurring-table-title>Recurring Schedules</h2>
           <p className="page-meta">Managed recurring schedules for queue and manifest targets.</p>
         </div>
         <div className="toolbar-controls">
@@ -1412,6 +2044,82 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
       </section>
 
       <section className="schedules-table-panel" aria-label="Recurring schedule list">
+        <div className="workflow-list-filter-toolbar">
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => setMobileFiltersOpen(true)}
+            aria-label="Filters"
+          >
+            Filters
+          </button>
+          <span className="page-meta">Sorting is server-authoritative.</span>
+        </div>
+        {activeFilters.length > 0 ? (
+          <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
+            {activeFilters.map(([key, value]) => (
+              <span className="workflow-list-filter-chip" key={key}>
+                <button
+                  type="button"
+                  className="workflow-list-filter-chip-open"
+                  onClick={() => {
+                    setOpenFilter(key);
+                    setMobileFiltersOpen(true);
+                  }}
+                  aria-label={`${RECURRING_FILTER_LABELS[key]} filter: ${value}`}
+                >
+                  <strong>{RECURRING_FILTER_LABELS[key]}</strong>: {value}
+                </button>
+                <button
+                  type="button"
+                  className="workflow-list-filter-chip-remove"
+                  onClick={() => clearFilter(key)}
+                  aria-label={`Remove ${RECURRING_FILTER_LABELS[key]} filter`}
+                >
+                  x
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {mobileFiltersOpen ? (
+          <div className="workflow-list-advanced-filter-backdrop" role="presentation">
+            <div className="workflow-list-advanced-filter-drawer" role="dialog" aria-modal="true" aria-label="Recurring filters">
+              <div className="section-heading-row">
+                <h3>Filters</h3>
+                <button type="button" className="secondary" onClick={() => setMobileFiltersOpen(false)} aria-label="Close filters">
+                  Close
+                </button>
+              </div>
+              <RecurringFilterForm filters={filters} onChange={setFilter} />
+              <div className="workflow-list-filter-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    setFilters(EMPTY_RECURRING_FILTERS);
+                    setCursor('');
+                    setCursorStack([]);
+                  }}
+                >
+                  Reset filters
+                </button>
+                <button type="button" className="button" onClick={() => setMobileFiltersOpen(false)}>
+                  Apply filters
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {isMobileLayout ? (
+          <RecurringScheduleMobileList
+            schedules={schedules}
+            isLoading={isLoading}
+            isError={isError}
+            error={error}
+            emptyMessage={emptyMessage}
+          />
+        ) : null}
         <DataTable
             data={schedules}
             isLoading={isLoading}
@@ -1429,17 +2137,38 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             columns={[
               {
                 key: 'name',
-                header: 'Schedule',
+                header: (
+                  <RecurringColumnFilter
+                    filterKey="schedule"
+                    filters={filters}
+                    openFilter={openFilter}
+                    setOpenFilter={setOpenFilter}
+                    setFilter={setFilter}
+                  />
+                ),
                 render: (item) => (
                   <div className="schedules-primary-cell">
-                    <a href={`/schedules/${encodeURIComponent(item.id)}`}>{item.name}</a>
+                    <a
+                      href={`/schedules/${encodeURIComponent(item.id)}`}
+                      data-recurring-table-row-focus={item.id}
+                    >
+                      {item.name}
+                    </a>
                     <span title={item.id}>{compactId(item.id)}</span>
                   </div>
                 ),
               },
               {
                 key: 'enabled',
-                header: 'State',
+                header: (
+                  <RecurringColumnFilter
+                    filterKey="state"
+                    filters={filters}
+                    openFilter={openFilter}
+                    setOpenFilter={setOpenFilter}
+                    setFilter={setFilter}
+                  />
+                ),
                 render: (item) => (
                   <span className={`schedules-state schedules-state--${scheduleState(item)}`}>
                     {stateLabel(item)}
@@ -1448,7 +2177,15 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
               },
               {
                 key: 'target',
-                header: 'Target',
+                header: (
+                  <RecurringColumnFilter
+                    filterKey="target"
+                    filters={filters}
+                    openFilter={openFilter}
+                    setOpenFilter={setOpenFilter}
+                    setFilter={setFilter}
+                  />
+                ),
                 render: (item) => (
                   <div className="schedules-secondary-cell">
                     <strong>{targetKind(item)}</strong>
@@ -1458,7 +2195,15 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
               },
               {
                 key: 'cron',
-                header: 'Cadence',
+                header: (
+                  <RecurringColumnFilter
+                    filterKey="cadence"
+                    filters={filters}
+                    openFilter={openFilter}
+                    setOpenFilter={setOpenFilter}
+                    setFilter={setFilter}
+                  />
+                ),
                 render: (item) => (
                   <div className="schedules-secondary-cell">
                     <code>{item.cron}</code>
@@ -1468,17 +2213,25 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
               },
               {
                 key: 'nextRunAt',
-                header: 'Next Run',
+                header: sortableHeader('nextRunAt', 'Next Run'),
                 render: (item) => formatWhen(item.nextRunAt),
               },
               {
                 key: 'lastScheduledFor',
-                header: 'Last Scheduled',
+                header: sortableHeader('lastScheduledFor', 'Last Scheduled'),
                 render: (item) => formatWhen(item.lastScheduledFor),
               },
               {
                 key: 'lastDispatchStatus',
-                header: 'Dispatch',
+                header: (
+                  <RecurringColumnFilter
+                    filterKey="dispatch"
+                    filters={filters}
+                    openFilter={openFilter}
+                    setOpenFilter={setOpenFilter}
+                    setFilter={setFilter}
+                  />
+                ),
                 render: (item) => (
                   <div className="schedules-secondary-cell">
                     <strong>{item.lastDispatchStatus ? titleCaseLabel(formatStatusLabel(item.lastDispatchStatus)) : '-'}</strong>
@@ -1491,11 +2244,52 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
                 header: 'Policy',
                 render: (item) => policySummary(item),
               },
+              {
+                key: 'updatedAt',
+                header: sortableHeader('updatedAt', 'Updated'),
+                render: (item) => formatWhen(item.updatedAt),
+              },
             ]}
-            emptyMessage="No recurring schedules yet. Create one from the workflow page."
+            rowActions={(item) => (
+              <ScheduleRowActions
+                schedule={item}
+                payload={payload}
+                sources={sources}
+              />
+            )}
+            emptyMessage={emptyMessage}
             getRowKey={(item) => item.id}
             ariaLabel="Recurring schedules"
           />
+        <div className="queue-pagination workflow-list-footer-pagination">
+          <PageSizeSelector pageSize={pageSize} onPageSizeChange={changePageSize} disabled={isLoading || isFetching} />
+          <span className="workflow-list-footer-page-summary">
+            Page {pageIndex + 1} · {schedules.length} shown{typeof data?.count === 'number' ? ` · ${totalCount} total` : ''}
+          </span>
+          <button
+            type="button"
+            className="secondary queue-pagination-button"
+            disabled={cursorStack.length === 0 || isLoading || isFetching}
+            onClick={() => {
+              const previousStack = cursorStack.slice(0, -1);
+              setCursor(cursorStack[cursorStack.length - 1] || '');
+              setCursorStack(previousStack);
+            }}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className="secondary queue-pagination-button"
+            disabled={!nextCursor || isLoading || isFetching}
+            onClick={() => {
+              setCursorStack((current) => [...current, cursor]);
+              setCursor(nextCursor);
+            }}
+          >
+            Next
+          </button>
+        </div>
       </section>
     </div>
   );

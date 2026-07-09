@@ -26,11 +26,6 @@ from moonmind.services.skill_resolution import (
     SkillResolutionContext,
 )
 from moonmind.services.skill_materialization import AgentSkillMaterializer
-from moonmind.workflows.skills.pointer_files import (
-    SUBMODULE_REMEDIATION_HINT,
-    flattened_symlink_target,
-    resolve_flattened_skill_symlink,
-)
 
 
 class AgentSkillsActivities:
@@ -158,8 +153,7 @@ class AgentSkillsActivities:
             if skill_doc.is_symlink():
                 raise OSError(
                     "skill source SKILL.md symlink target is missing: "
-                    f"{skill_doc} -> {skill_doc.readlink()}; "
-                    f"{SUBMODULE_REMEDIATION_HINT}"
+                    f"{skill_doc} -> {skill_doc.readlink()}"
                 )
             raise OSError(f"skill source path is missing SKILL.md: {skill_dir}")
 
@@ -170,34 +164,13 @@ class AgentSkillsActivities:
                 if path.is_symlink() and not path.exists():
                     raise OSError(
                         "skill bundle symlink target is missing: "
-                        f"{path} -> {path.readlink()}; "
-                        f"{SUBMODULE_REMEDIATION_HINT}"
+                        f"{path} -> {path.readlink()}"
                     )
                 if not path.is_file():
                     continue
                 source_path = path
                 if path.is_symlink():
                     source_path = path.resolve(strict=True)
-                else:
-                    flattened_symlink = resolve_flattened_skill_symlink(
-                        path,
-                        skill_dir=skill_dir,
-                        allowed_root=allowed_root,
-                    )
-                    if flattened_symlink is not None:
-                        source_path = flattened_symlink.target_path
-                        if not source_path.is_file():
-                            raise OSError(
-                                f"skill bundle file {path} contains only the "
-                                f"symlink pointer text {flattened_symlink.target!r} and "
-                                "the target does not exist; "
-                                f"{SUBMODULE_REMEDIATION_HINT}"
-                            )
-                    elif path.name == "SKILL.md" and flattened_symlink_target(path):
-                        raise OSError(
-                            f"skill bundle file {path} contains only untrusted "
-                            "pointer-shaped text instead of skill content"
-                        )
                 if source_path != path:
                     try:
                         source_path.relative_to(allowed_root)

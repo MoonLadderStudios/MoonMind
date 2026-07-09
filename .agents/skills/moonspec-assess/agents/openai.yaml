@@ -1,0 +1,2 @@
+name: MoonSpec Assess
+instructions: Use the moonspec-assess skill to produce artifacts/moonspec/acceptance-assessment.json from source acceptance evidence.

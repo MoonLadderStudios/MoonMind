@@ -73,6 +73,22 @@ describe('DataTable (MM-959)', () => {
     expect(within(bodyRows[0]!).getByText('Gamma')).toBeTruthy();
   });
 
+  it('marks header, data, and action cells with stable column keys', () => {
+    render(
+      <DataTable
+        data={rows.slice(0, 1)}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        rowActions={(r) => <button type="button">Edit {r.name}</button>}
+      />,
+    );
+
+    expect(screen.getByRole('columnheader', { name: 'Name' }).getAttribute('data-column-key')).toBe('name');
+    expect(screen.getByRole('cell', { name: 'Beta' }).getAttribute('data-column-key')).toBe('name');
+    expect(screen.getByRole('columnheader', { name: 'Actions' }).getAttribute('data-column-key')).toBe('actions');
+    expect(screen.getByRole('cell', { name: 'Edit Beta' }).getAttribute('data-column-key')).toBe('actions');
+  });
+
   it('renders a row actions column and responsive card fallback', () => {
     render(
       <DataTable

@@ -330,6 +330,13 @@ observability:
   fallbackToLegacyManagedRunLogs: true
 ```
 
+The Session API Facade resolves this document from `OMNIGENT_BRIDGE_CONFIG_PATH`
+before it registers routes, so the operator-declared `enabled` flag, host
+protocol mode, and `publicApi.mountPath`/routes are honored (a disabled or
+custom-mounted bridge is not overridden by the proxy-first defaults). When the
+variable is unset the safe proxy-first defaults apply; an unreadable path or an
+invalid document fails fast rather than silently mounting the default surface.
+
 ---
 
 ## 7. Durable data model

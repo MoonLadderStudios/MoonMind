@@ -198,6 +198,7 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
     response = client.get("/workflows", follow_redirects=False)
 
     assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
     assert "moonmind-ui-boot" in response.text
     boot_payload = _extract_boot_payload(response.text)
     assert boot_payload["page"] == "dashboard"
@@ -275,13 +276,17 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
 
     for path in (
         "/workflows",
+        "/workflows/new",
         "/manifests",
         "/index-health",
         "/schedules",
+        "/skills",
         "/settings",
+        "/oauth-terminal",
     ):
         response = client.get(path)
         assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "no-store"
         assert "moonmind-ui-boot" in response.text
         assert 'type="module"' in response.text
         assert "/static/workflow_console/dist/assets/" in response.text

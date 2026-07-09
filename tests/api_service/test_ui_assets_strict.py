@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
 import api_service.ui_assets as ui_assets_module
+from api_service.dashboard_static import DashboardStaticFiles
 from api_service.ui_assets import (
     AssetFileMissingError,
     EntrypointMissingError,
@@ -383,7 +384,7 @@ def test_bundled_dist_root_can_serve_static_assets_when_repo_dist_is_missing(
     empty_static.mkdir()
     app.mount(
         "/static/workflow_console/dist",
-        StaticFiles(directory=str(resolve_dashboard_dist_root())),
+        DashboardStaticFiles(directory=str(resolve_dashboard_dist_root())),
         name="workflow-console-dist",
     )
     app.mount("/static", StaticFiles(directory=str(empty_static)), name="static")
@@ -393,6 +394,76 @@ def test_bundled_dist_root_can_serve_static_assets_when_repo_dist_is_missing(
 
     assert response.status_code == 200
     assert "bundled" in response.text
+
+def test_dashboard_static_files_cache_hashed_assets_immutably(tmp_path: Path) -> None:
+    dist_root = tmp_path / "dist"
+    assets_dir = dist_root / "assets"
+    assets_dir.mkdir(parents=True)
+    (assets_dir / "dashboard-abc123.js").write_text(
+        "console.log('hashed');", encoding="utf-8"
+    )
+
+    app = FastAPI()
+    app.mount(
+        "/static/workflow_console/dist",
+        DashboardStaticFiles(directory=str(dist_root)),
+        name="workflow-console-dist",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/static/workflow_console/dist/assets/dashboard-abc123.js"
+        )
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+
+def test_dashboard_static_files_revalidate_manifest_and_non_asset_dist_files(
+    tmp_path: Path,
+) -> None:
+    dist_root = tmp_path / "dist"
+    manifest_dir = dist_root / ".vite"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    (dist_root / "favicon.ico").write_text("icon", encoding="utf-8")
+
+    app = FastAPI()
+    app.mount(
+        "/static/workflow_console/dist",
+        DashboardStaticFiles(directory=str(dist_root)),
+        name="workflow-console-dist",
+    )
+
+    with TestClient(app) as client:
+        manifest_response = client.get(
+            "/static/workflow_console/dist/.vite/manifest.json"
+        )
+        favicon_response = client.get("/static/workflow_console/dist/favicon.ico")
+
+    assert manifest_response.status_code == 200
+    assert favicon_response.status_code == 200
+    assert manifest_response.headers["Cache-Control"] == "no-cache, must-revalidate"
+    assert favicon_response.headers["Cache-Control"] == "no-cache, must-revalidate"
+
+def test_dashboard_static_files_ignores_asset_prefix_outside_mount(
+    tmp_path: Path,
+) -> None:
+    dist_root = tmp_path / "dist"
+    dist_root.mkdir()
+    (dist_root / "index.html").write_text("<!doctype html>", encoding="utf-8")
+
+    app = FastAPI()
+    app.mount(
+        "/assets/app/static/workflow_console/dist",
+        DashboardStaticFiles(directory=str(dist_root), html=True),
+        name="workflow-console-dist",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/assets/app/static/workflow_console/dist/index.html")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-cache, must-revalidate"
 
 def test_ui_assets_strict_raises_when_imported_chunk_file_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

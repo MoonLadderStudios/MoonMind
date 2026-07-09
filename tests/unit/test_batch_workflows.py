@@ -102,6 +102,18 @@ def test_bind_child_inputs_jira_verify_auto_binds_issue_object_and_key():
     assert inputs["constraints"] == "Be careful"
 
 
+def test_bind_child_inputs_jira_verify_honors_update_status_flag():
+    module = _load_module()
+    inputs = module["bind_child_inputs"](
+        _JIRA_TARGET,
+        "skill",
+        "jira-verify",
+        "Be careful",
+        update_status=True,
+    )
+    assert inputs["update_status"] is True
+
+
 def test_bind_child_inputs_jira_verify_uses_fallback_repository_when_missing():
     module = _load_module()
     no_repo_target = dict(_JIRA_TARGET)
@@ -230,6 +242,7 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     assert payload["task"]["publish"] == {"mode": "none"}
     assert payload["repository"] == "MoonLadderStudios/MoonMind"
     assert payload["task"]["inputs"]["jira_issue_key"] == "THOR-123"
+    assert payload["task"]["inputs"]["update_status"] is False
     assert payload["requiredCapabilities"] == ["git", "jira"]
     # The selected skill is authored as a direct skill task.
     assert payload["task"]["tool"] == {"type": "skill", "name": "jira-verify"}
@@ -239,6 +252,20 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     key = payload["idempotencyKey"]
     assert key.startswith("batch-workflows:jira:THOR-123:sha256:")
     assert len(key) <= module["IDEMPOTENCY_KEY_MAX_LENGTH"]
+
+
+def test_build_child_request_passes_update_status_for_jira_verify():
+    module = _load_module()
+    request = module["build_child_request"](
+        _JIRA_TARGET,
+        config=_jira_config(module, update_status=True),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+
+    assert request is not None
+    assert request["payload"]["task"]["inputs"]["update_status"] is True
 
 
 def test_build_child_request_uses_default_repository_when_target_missing():
@@ -320,7 +347,28 @@ def test_parse_args_accepts_run_ref_without_preset_version(tmp_path):
     )
 
     assert args.run_ref == "skill:jira-verify"
+    assert args.update_status is False
     assert not hasattr(args, "target_preset_version")
+
+
+def test_parse_args_accepts_update_status_flag(tmp_path):
+    module = _load_module()
+    targets = tmp_path / "targets.json"
+    targets.write_text("[]", encoding="utf-8")
+
+    args = module["_parse_args"](
+        [
+            "--targets",
+            str(targets),
+            "--run-ref",
+            "skill:jira-verify",
+            "--publish-mode",
+            "none",
+            "--update-status",
+        ]
+    )
+
+    assert args.update_status is True
 
 
 def test_build_child_request_without_caller_omits_inheritance_directive():

@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable, Mapping
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -401,6 +401,7 @@ class RecurringWorkflowsService:
         user_id: UUID | None,
         include_disabled: bool = True,
         limit: int = 200,
+        offset: int = 0,
     ) -> list[RecurringWorkflowDefinition]:
         scope_type = _normalize_scope_type(scope)
         stmt: Select[tuple[RecurringWorkflowDefinition]] = select(RecurringWorkflowDefinition)
@@ -414,9 +415,28 @@ class RecurringWorkflowsService:
         stmt = stmt.order_by(
             RecurringWorkflowDefinition.updated_at.desc(),
             RecurringWorkflowDefinition.id.desc(),
-        ).limit(max(1, min(int(limit), 500)))
+        ).offset(max(0, int(offset))).limit(max(1, min(int(limit), 500)))
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def count_definitions(
+        self,
+        *,
+        scope: str,
+        user_id: UUID | None,
+        include_disabled: bool = True,
+    ) -> int:
+        scope_type = _normalize_scope_type(scope)
+        stmt = select(func.count()).select_from(RecurringWorkflowDefinition)
+        stmt = stmt.where(RecurringWorkflowDefinition.scope_type == scope_type)
+        if scope_type is RecurringWorkflowScopeType.PERSONAL:
+            if user_id is None:
+                return 0
+            stmt = stmt.where(RecurringWorkflowDefinition.owner_user_id == user_id)
+        if not include_disabled:
+            stmt = stmt.where(RecurringWorkflowDefinition.enabled.is_(True))
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one() or 0)
 
     async def get_definition(self, definition_id: UUID) -> RecurringWorkflowDefinition:
         stmt: Select[tuple[RecurringWorkflowDefinition]] = (

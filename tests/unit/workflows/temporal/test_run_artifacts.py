@@ -2491,14 +2491,17 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
 
-    with pytest.raises(
-        ValueError,
-        match="plan node execution returned status FAILED",
-    ):
+    with pytest.raises(ValueError) as exc_info:
         await workflow._run_execution_stage(
             parameters={"repo": "MoonLadderStudios/MoonMind"},
             plan_ref="art_plan_1",
         )
+
+    message = str(exc_info.value)
+    assert "Plan step 'step-1' (codex_cli) returned status FAILED" in message
+    assert "Failed to execute generic LLM handler" in message
+    assert "lastError=gemini CLI command failed" in message
+    assert "childWorkflowId=wf-1:agent:step-1" in message
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_continue_mode_keeps_running_after_failed_status(

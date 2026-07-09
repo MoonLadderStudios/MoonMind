@@ -13,11 +13,13 @@ from moonmind.omnigent.bridge_config import (
     CANONICAL_FIRST_MESSAGE_STATES,
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
+    OMNIGENT_BRIDGE_CONFIG_PATH_ENV,
     OMNIGENT_BRIDGE_CONFIG_SCHEMA_VERSION,
     BridgeConfigError,
     OmnigentBridgeConfig,
     load_bridge_config,
     parse_bridge_config,
+    resolve_bridge_config,
 )
 
 # The exact §6 declarative document from docs/Omnigent/OmnigentBridge.md.
@@ -44,6 +46,7 @@ publicApi:
     createSession: /v1/sessions
     getSession: /v1/sessions/{session_id}
     postEvent: /v1/sessions/{session_id}/events
+    resolveElicitation: /v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve
     streamEvents: /v1/sessions/{session_id}/stream
     changedFiles: /v1/sessions/{session_id}/resources/environments/default/changes
     workspaceFiles: /v1/sessions/{session_id}/resources/environments/default/filesystem
@@ -108,6 +111,10 @@ def test_section_6_document_parses_and_validates() -> None:
     assert config.compatibility.profile == "omnigent.server.v1"
     assert config.public_api.mount_path == "/api/omnigent"
     assert config.public_api.routes.create_session == "/v1/sessions"
+    assert (
+        config.public_api.routes.resolve_elicitation
+        == "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve"
+    )
     assert config.host_connection.upstream_server_url_ref == "default"
     assert config.host_connection.embedded.port == 8000
     assert config.session_defaults.host_type == "managed"
@@ -129,7 +136,48 @@ def test_minimal_document_uses_safe_defaults() -> None:
     assert config.compatibility.host_unchanged is True
     assert config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
     assert config.public_api.routes.agents == "/api/agents"
+    assert (
+        config.public_api.routes.resolve_elicitation
+        == "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve"
+    )
     assert config.session_defaults.capture.stream is True
+
+
+def test_resolve_bridge_config_defaults_without_env() -> None:
+    config = resolve_bridge_config(env={})
+    assert config.enabled is True
+    assert config.public_api.mount_path == "/api/omnigent"
+
+
+def test_resolve_bridge_config_loads_operator_document(tmp_path) -> None:
+    # An operator that disables the bridge and mounts at a custom path must be
+    # honored before routes are registered, not overridden by the default.
+    doc = tmp_path / "bridge.yaml"
+    doc.write_text(
+        "schemaVersion: moonmind.omnigent_bridge.v1\n"
+        "enabled: false\n"
+        "publicApi:\n"
+        "  mountPath: /api/custom-omnigent\n",
+        encoding="utf-8",
+    )
+    config = resolve_bridge_config(
+        env={OMNIGENT_BRIDGE_CONFIG_PATH_ENV: str(doc)}
+    )
+    assert config.enabled is False
+    assert config.public_api.mount_path == "/api/custom-omnigent"
+
+
+def test_resolve_bridge_config_missing_path_fails_fast(tmp_path) -> None:
+    missing = tmp_path / "nope.yaml"
+    with pytest.raises(BridgeConfigError, match="could not be read"):
+        resolve_bridge_config(env={OMNIGENT_BRIDGE_CONFIG_PATH_ENV: str(missing)})
+
+
+def test_resolve_bridge_config_invalid_document_fails_fast(tmp_path) -> None:
+    doc = tmp_path / "bad.yaml"
+    doc.write_text("schemaVersion: moonmind.omnigent_bridge.v2\n", encoding="utf-8")
+    with pytest.raises(BridgeConfigError):
+        resolve_bridge_config(env={OMNIGENT_BRIDGE_CONFIG_PATH_ENV: str(doc)})
 
 
 def test_empty_document_is_rejected_with_actionable_error() -> None:

@@ -135,7 +135,7 @@ function mockScheduleDetailFetch(fetchSpy: MockInstance, overrides: Record<strin
         json: async () => detailRuns,
       } as Response;
     }
-    if (url === "/console/schedules?scope=personal") {
+    if (url.startsWith("/console/schedules?scope=personal")) {
       return {
         ok: true,
         json: async () => ({ items: [schedule] }),
@@ -155,6 +155,7 @@ describe("SchedulesPage", () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
+    window.history.pushState({}, "Test", "/schedules");
     fetchSpy = vi.spyOn(window, "fetch").mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -169,6 +170,7 @@ describe("SchedulesPage", () => {
             lastDispatchError: null,
             nextRunAt: "2026-05-31T12:00:00Z",
             lastScheduledFor: "2026-05-30T12:00:00Z",
+            updatedAt: "2025-01-15T09:30:00Z",
             scopeType: "personal",
             target: {
               kind: "queue_task",
@@ -219,22 +221,31 @@ describe("SchedulesPage", () => {
     vi.mocked(navigateTo).mockReset();
   });
 
-  it("renders page-matched loading placeholders for schedule summary and table regions", () => {
-    fetchSpy.mockReturnValue(new Promise(() => {}) as Promise<Response>);
+  it("renders page-matched loading placeholders for schedule summary and table regions", async () => {
+    let resolveFetch: (value: Response) => void = () => {};
+    fetchSpy.mockReturnValue(new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    }));
 
-    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    renderWithClient(<SchedulesPage payload={{ ...mockPayload, apiBase: "/loading-api" }} />);
 
     expect(screen.getByRole("heading", { name: "Recurring Schedules" })).toBeTruthy();
     expect(screen.getByText("Recurring summary loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByText("Recurring list loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-metric-strip")).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-table")).toBeTruthy();
+    resolveFetch({
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
   });
 
   it("renders streamlined schedule status, target, cadence, and policy columns", async () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
+    expect(screen.getAllByText("Daily repository sweep")).toHaveLength(1);
     expect(await screen.findByText("Sparse schedule")).not.toBeNull();
     expect(screen.getByText("Failing schedule")).not.toBeNull();
     expect(screen.getAllByText("Active").length).toBeGreaterThanOrEqual(1);
@@ -245,6 +256,253 @@ describe("SchedulesPage", () => {
     expect(screen.getByText("Skip / Latest")).not.toBeNull();
     expect(screen.getByText("Adapter rejected schedule")).not.toBeNull();
     expect(screen.getByText("Total").nextElementSibling?.textContent).toBe("3");
+  });
+
+  it("renders mobile schedule cards only at the mobile breakpoint and preserves dispatch errors", async () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === "(max-width: 720px)",
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            id: "schedule-error",
+            name: "Error carrying schedule",
+            enabled: true,
+            cron: "0 12 * * *",
+            timezone: "UTC",
+            lastDispatchStatus: "enqueued",
+            lastDispatchError: "  Last adapter failure  ",
+            nextRunAt: null,
+            lastScheduledFor: null,
+            target: {},
+            policy: {},
+          },
+        ],
+      }),
+    } as Response);
+
+    try {
+      renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+      expect(await screen.findByLabelText("Recurring schedule cards")).not.toBeNull();
+      expect(screen.getByText("Enqueued: Last adapter failure")).not.toBeNull();
+    } finally {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: originalMatchMedia,
+      });
+    }
+  });
+
+  it("renders the documented Updated and Actions columns in the recurring table", async () => {
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
+
+    // Column 9: Updated (updatedAt freshness) after Policy.
+    expect(screen.getByRole("columnheader", { name: "Updated" })).not.toBeNull();
+    const expectedUpdated = new Date("2025-01-15T09:30:00Z").toLocaleString();
+    expect(screen.getByText(expectedUpdated)).not.toBeNull();
+
+    // Column 10: Actions with safe, common row actions only.
+    expect(screen.getByRole("columnheader", { name: "Actions" })).not.toBeNull();
+    // One "Run now" action per schedule definition row.
+    expect(screen.getAllByRole("button", { name: /^Run .+ now$/ })).toHaveLength(3);
+    // Pause for enabled definitions, Resume for the paused one.
+    expect(screen.getAllByRole("button", { name: /^Pause / })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^Resume / })).toHaveLength(1);
+
+    // Destructive delete stays on detail; it is never surfaced in the list Actions.
+    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+
+    // Testing contract item 16: recurring definitions only, no spawned execution content.
+    expect(screen.queryByRole("heading", { name: "Steps" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Artifacts" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Logs" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
+  });
+
+  it("triggers a safe run-now row action without exposing destructive delete", async () => {
+    const listResponse = {
+      items: [
+        {
+          id: "schedule-1",
+          name: "Daily repository sweep",
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC",
+          lastDispatchStatus: "enqueued",
+          lastDispatchError: null,
+          nextRunAt: "2026-05-31T12:00:00Z",
+          lastScheduledFor: "2026-05-30T12:00:00Z",
+          updatedAt: "2025-01-15T09:30:00Z",
+          scopeType: "personal",
+          target: {},
+          policy: {},
+        },
+      ],
+    };
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/api/recurring-workflows/schedule-1/run" && method === "POST") {
+        return {
+          ok: true,
+          json: async () => ({
+            id: "run-manual",
+            definitionId: "schedule-1",
+            scheduledFor: "2025-01-16T09:30:00Z",
+            trigger: "manual",
+            outcome: "enqueued",
+            dispatchAttempts: 1,
+            createdAt: "2025-01-16T09:30:00Z",
+            updatedAt: "2025-01-16T09:30:00Z",
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => listResponse } as Response;
+    });
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    const runNow = await screen.findByRole("button", {
+      name: "Run Daily repository sweep now",
+    });
+
+    fireEvent.click(runNow);
+
+    await waitFor(() =>
+      expect(
+        fetchSpy.mock.calls.some(([url, init]) => {
+          const method = String(init?.method || "GET").toUpperCase();
+          return (
+            String(url) === "/api/recurring-workflows/schedule-1/run" &&
+            method === "POST"
+          );
+        }),
+      ).toBe(true),
+    );
+
+    // The row action set never includes a delete control.
+    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+  });
+
+  it("surfaces a failed run-now row action as a button tooltip", async () => {
+    const listResponse = {
+      items: [
+        {
+          id: "schedule-1",
+          name: "Daily repository sweep",
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC",
+          lastDispatchStatus: "enqueued",
+          lastDispatchError: null,
+          nextRunAt: "2026-05-31T12:00:00Z",
+          lastScheduledFor: "2026-05-30T12:00:00Z",
+          updatedAt: "2025-01-15T09:30:00Z",
+          scopeType: "personal",
+          target: {},
+          policy: {},
+        },
+      ],
+    };
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/api/recurring-workflows/schedule-1/run" && method === "POST") {
+        return {
+          ok: false,
+          status: 403,
+          statusText: "Forbidden",
+          json: async () => ({ detail: "You lost permission to run this schedule." }),
+        } as Response;
+      }
+      return { ok: true, json: async () => listResponse } as Response;
+    });
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    const runNow = await screen.findByRole("button", {
+      name: "Run Daily repository sweep now",
+    });
+
+    fireEvent.click(runNow);
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("button", { name: "Run Daily repository sweep now" })
+          .getAttribute("title"),
+      ).toBe("You lost permission to run this schedule."),
+    );
+  });
+
+  it("surfaces a failed pause row action as a button tooltip", async () => {
+    const listResponse = {
+      items: [
+        {
+          id: "schedule-1",
+          name: "Daily repository sweep",
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC",
+          lastDispatchStatus: "enqueued",
+          lastDispatchError: null,
+          nextRunAt: "2026-05-31T12:00:00Z",
+          lastScheduledFor: "2026-05-30T12:00:00Z",
+          updatedAt: "2025-01-15T09:30:00Z",
+          scopeType: "personal",
+          target: {},
+          policy: {},
+        },
+      ],
+    };
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/api/recurring-workflows/schedule-1" && method === "PATCH") {
+        return {
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+          json: async () => ({ detail: "Adapter rejected the pause request." }),
+        } as Response;
+      }
+      return { ok: true, json: async () => listResponse } as Response;
+    });
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    const pause = await screen.findByRole("button", {
+      name: "Pause Daily repository sweep",
+    });
+
+    fireEvent.click(pause);
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("button", { name: "Pause Daily repository sweep" })
+          .getAttribute("title"),
+      ).toBe("Adapter rejected the pause request."),
+    );
   });
 
   it("routes creation to the workflow create page without local mutations", async () => {
@@ -267,7 +525,7 @@ describe("SchedulesPage", () => {
     });
     expect(mutationCalls).toEqual([]);
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/recurring-workflows?scope=personal"),
+      fetchSpy.mock.calls.some(([url]) => String(url).startsWith("/api/recurring-workflows?scope=personal")),
     ).toBe(true);
   });
 
@@ -282,6 +540,89 @@ describe("SchedulesPage", () => {
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
     expect(screen.getByText("Total").nextElementSibling?.textContent).toBe("0");
     expect(screen.queryByRole("button", { name: "Create Schedule" })).toBeNull();
+  });
+
+  it("shows a filtered-empty state when the configured list query has active filters", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response);
+
+    renderWithClient(
+      <SchedulesPage
+        payload={{
+          page: "schedules",
+          apiBase: "/api",
+          initialData: {
+            dashboardConfig: {
+              sources: {
+                schedules: {
+                  list: "/console/schedules?scope=personal&state=paused",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("No recurring schedules match the current filters.")).not.toBeNull();
+    expect(screen.queryByText("No recurring schedules yet. Create one from the workflow page.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Refresh" })).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Create recurring schedule" })).not.toBeNull();
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      "/console/schedules?scope=personal&state=paused",
+    );
+  });
+
+  it("detects snake_case schedule list filter keys in configured list queries", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response);
+
+    renderWithClient(
+      <SchedulesPage
+        payload={{
+          page: "schedules",
+          apiBase: "/api",
+          initialData: {
+            dashboardConfig: {
+              sources: {
+                schedules: {
+                  list: "/console/schedules?scope=personal&last_scheduled_for=2026-07-09",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("No recurring schedules match the current filters.")).not.toBeNull();
+    expect(screen.queryByText("No recurring schedules yet. Create one from the workflow page.")).toBeNull();
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      "/console/schedules?scope=personal&last_scheduled_for=2026-07-09",
+    );
+  });
+
+  it("uses a non-disclosing table-level access message for forbidden schedule lists", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      statusText: "Forbidden",
+      json: async () => ({
+        detail: "Forbidden for Daily repository sweep and schedule-alpha",
+      }),
+    } as Response);
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("You do not have access to recurring schedules.")).not.toBeNull();
+    expect(screen.queryByText(/Daily repository sweep/)).toBeNull();
+    expect(screen.queryByText(/schedule-alpha/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Refresh" })).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Create recurring schedule" })).not.toBeNull();
   });
 
   it("honors dashboard schedule list sources from the boot payload", async () => {
@@ -309,7 +650,7 @@ describe("SchedulesPage", () => {
     );
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal&limit=50&sort=updatedAt&sortDir=desc");
   });
 
   it("uses apiBase for the default schedule list endpoint", async () => {
@@ -329,7 +670,119 @@ describe("SchedulesPage", () => {
     );
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/tenant/api/recurring-workflows?scope=personal");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/tenant/api/recurring-workflows?scope=personal&limit=50&sort=updatedAt&sortDir=desc");
+  });
+
+  it("renders recurring filters, chips, safe URL state, and resets pagination on filter changes", async () => {
+    window.history.pushState({}, "Test", "/schedules?cursor=opaque-cursor&unsafe=1&targetPayload=%7B%7D&prompt=secret&limit=25");
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], count: 0 }),
+    } as Response);
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toContain("cursor=opaque-cursor");
+
+    fireEvent.click(screen.getByRole("button", { name: "Schedule filter. No filter applied." }));
+    fireEvent.change(screen.getByLabelText("Schedule filter value"), {
+      target: { value: "nightly" },
+    });
+
+    await waitFor(() => {
+      const latest = String(fetchSpy.mock.calls.at(-1)?.[0]);
+      expect(latest).toContain("schedule=nightly");
+      expect(latest).not.toContain("cursor=opaque-cursor");
+    });
+    expect(screen.getAllByRole("button", { name: "Schedule filter: nightly" }).length).toBeGreaterThanOrEqual(1);
+    await waitFor(() => {
+      expect(window.location.search).toContain("schedule=nightly");
+      expect(window.location.search).not.toContain("unsafe=");
+      expect(window.location.search).not.toContain("targetPayload=");
+      expect(window.location.search).not.toContain("prompt=");
+    });
+  });
+
+  it("exposes a mobile filter sheet with the full recurring filter set", async () => {
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Recurring filters" });
+    for (const label of [
+      "Schedule filter value",
+      "State filter value",
+      "Target filter value",
+      "Repository filter value",
+      "Cadence / Timezone filter value",
+      "Next run filter value",
+      "Last scheduled filter value",
+      "Dispatch filter value",
+      "Updated filter value",
+    ]) {
+      expect(within(dialog).getByLabelText(label)).not.toBeNull();
+    }
+  });
+
+  it("uses opaque cursor paging and resets the cursor on page-size changes", async () => {
+    fetchSpy.mockImplementation(async (input) => {
+      const url = String(input);
+      return {
+        ok: true,
+        json: async () => ({
+          items: url.includes("cursor=cursor-2") ? [] : [
+            {
+              id: "schedule-page-1",
+              name: "Page one schedule",
+              enabled: true,
+              cron: "0 9 * * *",
+              timezone: "UTC",
+              lastDispatchStatus: null,
+              lastDispatchError: null,
+              nextRunAt: null,
+              lastScheduledFor: null,
+              target: {},
+              policy: {},
+            },
+          ],
+          count: 2,
+          nextPageToken: url.includes("cursor=cursor-2") ? null : "cursor-2",
+        }),
+      } as Response;
+    });
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("Page one schedule")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    await waitFor(() => {
+      expect(String(fetchSpy.mock.calls.at(-1)?.[0])).toContain("cursor=cursor-2");
+    });
+
+    fireEvent.change(screen.getByLabelText("Show"), { target: { value: "20" } });
+
+    await waitFor(() => {
+      const latest = String(fetchSpy.mock.calls.at(-1)?.[0]);
+      expect(latest).toContain("limit=20");
+      expect(latest).not.toContain("cursor=cursor-2");
+    });
+  });
+
+  it("requests server-authoritative sorting instead of current-page sorting", async () => {
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Next Run. Server sorted not active." }));
+
+    await waitFor(() => {
+      const latest = String(fetchSpy.mock.calls.at(-1)?.[0]);
+      expect(latest).toContain("sort=nextRunAt");
+      expect(latest).toContain("sortDir=asc");
+    });
+    expect(screen.getByText("Sorting is server-authoritative.")).not.toBeNull();
   });
 
   it("loads the recurring schedule detail route by the routed definition id", async () => {
@@ -362,7 +815,7 @@ describe("SchedulesPage", () => {
     expect(screen.queryByRole("heading", { name: "Logs" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules?scope=personal")).toBe(true);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith("/console/schedules?scope=personal"))).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha")).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha/runs?limit=200")).toBe(true);
     expect(screen.getByRole("complementary", { name: "Recurring schedule navigation" })).not.toBeNull();
@@ -397,7 +850,7 @@ describe("SchedulesPage", () => {
       if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
         return { ok: true, json: async () => detailRuns } as Response;
       }
-      if (url === "/console/schedules?scope=personal") {
+      if (url.startsWith("/console/schedules?scope=personal")) {
         return { ok: true, json: async () => ({ items: [] }) } as Response;
       }
       if (url === "/console/schedules/schedule-alpha") {
@@ -599,7 +1052,7 @@ describe("SchedulesPage", () => {
     );
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal&limit=50&sort=updatedAt&sortDir=desc");
   });
 
   it("keeps update requests keyed by the route definition id", async () => {

@@ -96,26 +96,6 @@ async def test_built_in_loader_discovers_packaged_agent_skills():
     assert discovered["moonspec-breakdown"].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
     assert discovered["moonspec-breakdown"].provenance.source_path
 
-async def test_resolver_reports_missing_skill_symlink_target(tmp_path):
-    skills_root = tmp_path / ".agents" / "skills"
-    skill_dir = skills_root / "moonspec-verify"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").symlink_to(
-        "../../../moonspec/bundle/skills/moonspec-verify/SKILL.md"
-    )
-
-    resolver = AgentSkillResolver(loaders=[BuiltInSkillLoader(skills_root=skills_root)])
-    context = SkillResolutionContext(snapshot_id="snap-123")
-    selector = SkillSelector(include=[{"name": "moonspec-verify"}])
-
-    with pytest.raises(ValueError) as excinfo:
-        await resolver.resolve(selector, context)
-
-    message = str(excinfo.value)
-    assert "Could not resolve selected skill" not in message
-    assert "SKILL.md symlink target is missing" in message
-    assert "git submodule update --init" in message
-
 async def test_built_in_loader_resolves_batch_dependabot_resolver_by_name(tmp_path):
     """FR-012: batch-dependabot-resolver MUST be resolvable by name through the
     built-in fallback list so a recurring queue_task schedule can target it.
@@ -587,61 +567,6 @@ async def test_resolver_expands_required_skills_from_strict_metadata(tmp_path):
         {"skill": "helper-skill", "capabilities": ["git"]},
         {"skill": "orchestrator", "capabilities": ["gh", "jira"]},
     ]
-
-async def test_resolver_expands_required_skills_from_flattened_pointer_metadata(
-    tmp_path,
-):
-    skills_dir = tmp_path / ".agents" / "skills"
-    orchestrator = skills_dir / "orchestrator"
-    helper = skills_dir / "helper-skill"
-    target = tmp_path / "moonspec" / "bundle" / "skills" / "orchestrator"
-    (tmp_path / "pyproject.toml").write_text(
-        "[project]\nname='test'\n",
-        encoding="utf-8",
-    )
-    orchestrator.mkdir(parents=True)
-    helper.mkdir()
-    target.mkdir(parents=True)
-    (orchestrator / "SKILL.md").write_text(
-        "../../../moonspec/bundle/skills/orchestrator/SKILL.md",
-        encoding="utf-8",
-    )
-    (target / "SKILL.md").write_text(
-        "---\n"
-        "name: orchestrator\n"
-        "description: Runs orchestration.\n"
-        "metadata:\n"
-        "  required-skills: \"helper-skill\"\n"
-        "  required-capabilities:\n"
-        "    - gh\n"
-        "---\n",
-        encoding="utf-8",
-    )
-    (helper / "SKILL.md").write_text(
-        "---\n"
-        "name: helper-skill\n"
-        "description: Supports orchestration.\n"
-        "---\n",
-        encoding="utf-8",
-    )
-
-    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
-    context = SkillResolutionContext(
-        snapshot_id="snap-123",
-        workspace_root=str(tmp_path),
-        allow_repo_skills=True,
-    )
-    selector = SkillSelector(include=[{"name": "orchestrator"}])
-
-    result = await resolver.resolve(selector, context)
-
-    assert [skill.skill_name for skill in result.skills] == [
-        "helper-skill",
-        "orchestrator",
-    ]
-    by_name = {skill.skill_name: skill for skill in result.skills}
-    assert by_name["helper-skill"].selection_reason == "required"
-    assert by_name["orchestrator"].required_capabilities == ["gh"]
 
 async def test_resolver_allows_underscores_in_required_skill_names(tmp_path):
     skills_dir = tmp_path / ".agents" / "skills"

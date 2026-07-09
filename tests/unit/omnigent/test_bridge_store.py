@@ -17,7 +17,9 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, OmnigentBridgeSession
 from moonmind.omnigent.bridge_store import (
+    BRIDGE_EVENT_JOURNAL_KEY,
     FIRST_MESSAGE_TERMINAL,
+    SESSION_CREATED_EVENT_TYPE,
     STATUS_ACTIVE,
     STATUS_CREATING,
     STATUS_DECLARED,
@@ -148,6 +150,81 @@ async def test_get_or_create_is_idempotent_and_declared(store):
         target_metadata={"hostType": "managed", "workspace": "https://x/y#main"},
     )
     assert again.bridge_session_id == row.bridge_session_id
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_persists_binding_identity_override(store):
+    # The Session API Facade holds a verified workflow id out-of-band and
+    # synthesizes a request with no step_execution (correlation id != workflow
+    # id). The explicit override must be persisted, not the correlation id.
+    request = _request()  # correlationId="corr-1", no step_execution
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-verified",
+        agent_run_id="ar-verified",
+    )
+    assert row.moonmind_workflow_id == "mm:wf-verified"
+    assert row.moonmind_agent_run_id == "ar-verified"
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_without_override_derives_from_request(store):
+    # Managed-execution path behavior is preserved when no override is given.
+    request = _request()  # no step_execution -> falls back to correlation id
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+    )
+    assert row.moonmind_workflow_id == "corr-1"
+    assert row.moonmind_agent_run_id == "corr-1"
+
+
+@pytest.mark.asyncio
+async def test_get_existing_returns_none_then_row(store):
+    request = _request()
+    assert await store.get_existing(request.idempotency_key) is None
+    await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-1",
+    )
+    row = await store.get_existing(request.idempotency_key)
+    assert row is not None
+    assert row.moonmind_workflow_id == "mm:wf-1"
+    assert row.omnigent_agent_id == "ag_1"
+
+
+@pytest.mark.asyncio
+async def test_get_session_owner_resolves_by_session_id(store):
+    request = _request()
+    await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-owner",
+    )
+    await store.attach_session(request.idempotency_key, "sess-abc")
+
+    owner = await store.get_session_owner("sess-abc")
+    assert owner is not None
+    assert owner.workflow_id == "mm:wf-owner"
+    assert owner.agent_run_id == "ar-owner"
+
+    assert await store.get_session_owner("sess-missing") is None
+    assert await store.get_session_owner("") is None
 
 
 @pytest.mark.asyncio
@@ -368,3 +445,65 @@ async def test_unique_idempotency_key_enforced(store):
         )
         with pytest.raises(Exception):
             await session.commit()
+
+
+# --- session.created journal (MM-1155, §8.2 step 6) -------------------------
+
+
+async def _seed_created_session(store) -> None:
+    await store.get_or_create(
+        request=_request(),
+        endpoint_ref="default",
+        agent_id="agent-1",
+        agent_name="codex",
+        target_metadata={"hostType": "managed", "workspace": "https://x/y#main"},
+    )
+    await store.attach_session("idem-1", "sess-1")
+
+
+@pytest.mark.asyncio
+async def test_record_session_created_appends_event(store):
+    await _seed_created_session(store)
+
+    row = await store.record_session_created(
+        "idem-1", session_id="sess-1", agent_id="agent-1", endpoint_ref="default"
+    )
+
+    journal = row.metadata_[BRIDGE_EVENT_JOURNAL_KEY]
+    assert len(journal) == 1
+    event = journal[0]
+    assert event["type"] == SESSION_CREATED_EVENT_TYPE
+    assert event["omnigentSessionId"] == "sess-1"
+    assert event["omnigentAgentId"] == "agent-1"
+    assert event["endpointRef"] == "default"
+    assert event["sequence"] == 1
+    assert event["timestamp"]
+    # Existing session metadata is preserved alongside the journal.
+    assert row.metadata_["hostType"] == "managed"
+
+
+@pytest.mark.asyncio
+async def test_record_session_created_is_idempotent(store):
+    await _seed_created_session(store)
+
+    await store.record_session_created("idem-1", session_id="sess-1")
+    row = await store.record_session_created("idem-1", session_id="sess-1")
+
+    assert len(row.metadata_[BRIDGE_EVENT_JOURNAL_KEY]) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_session_created_persists_across_get_or_create(store):
+    await _seed_created_session(store)
+    await store.record_session_created("idem-1", session_id="sess-1")
+
+    # A subsequent get_or_create (retry) must not clobber the journal.
+    row = await store.get_or_create(
+        request=_request(),
+        endpoint_ref="default",
+        agent_id="agent-1",
+        agent_name="codex",
+        target_metadata={"hostType": "managed", "workspace": "https://x/y#main"},
+    )
+    assert BRIDGE_EVENT_JOURNAL_KEY in row.metadata_
+    assert len(row.metadata_[BRIDGE_EVENT_JOURNAL_KEY]) == 1

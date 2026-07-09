@@ -4,7 +4,7 @@ export type ColumnAlign = 'left' | 'center' | 'right';
 
 export interface Column<T> {
   key: keyof T | string;
-  header: string;
+  header: React.ReactNode;
   render?: (item: T) => React.ReactNode;
   /** Cell + header text alignment. */
   align?: ColumnAlign;
@@ -136,6 +136,9 @@ export function DataTable<T>({
   const renderHeaderCell = (column: Column<T>) => {
     const key = column.key as string;
     const isSorted = sort?.key === key;
+    const sortLabel = column.sortLabel ?? (
+      typeof column.header === 'string' ? column.header : key
+    );
     const ariaSort: React.AriaAttributes['aria-sort'] = column.sortable
       ? isSorted
         ? sort?.direction === 'asc'
@@ -151,6 +154,7 @@ export function DataTable<T>({
         scope="col"
         aria-sort={ariaSort}
         data-align={column.align ?? 'left'}
+        data-column-key={key}
         style={style}
       >
         {column.sortable ? (
@@ -158,7 +162,7 @@ export function DataTable<T>({
             type="button"
             className="data-table__sort"
             onClick={() => handleSort(key)}
-            aria-label={`Sort by ${column.sortLabel ?? column.header}${
+            aria-label={`Sort by ${sortLabel}${
               isSorted
                 ? sort?.direction === 'asc'
                   ? ' (ascending)'
@@ -209,12 +213,16 @@ export function DataTable<T>({
     return sortedData.map((item) => (
       <tr key={getRowKey(item)}>
         {columns.map((col) => (
-          <td key={col.key as string} data-align={col.align ?? 'left'}>
+          <td
+            key={col.key as string}
+            data-align={col.align ?? 'left'}
+            data-column-key={col.key as string}
+          >
             {col.render ? col.render(item) : String(item[col.key as keyof T] ?? '')}
           </td>
         ))}
         {rowActions ? (
-          <td className="data-table__row-actions" data-align="right">
+          <td className="data-table__row-actions" data-align="right" data-column-key="actions">
             {rowActions(item)}
           </td>
         ) : null}
@@ -263,7 +271,7 @@ export function DataTable<T>({
           <tr>
             {columns.map(renderHeaderCell)}
             {rowActions ? (
-              <th scope="col" data-align="right">
+              <th scope="col" data-align="right" data-column-key="actions">
                 {rowActionsHeader}
               </th>
             ) : null}

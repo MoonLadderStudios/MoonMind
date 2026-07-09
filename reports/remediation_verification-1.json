@@ -1,37 +1,92 @@
 {
   "artifact_type": "remediation.verification",
+  "skill": "moonspec-verify",
+  "mode": "issue_brief",
+  "verification_target": "issue_brief",
   "attempt": 1,
   "verifiesRemediationAttempt": 1,
   "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
-  "issue_ref": "MoonLadderStudios/MoonMind#3068",
-  "sourceBriefArtifact": "artifacts/github-issue-implement-brief.json",
-  "sourceAssessmentArtifact": "artifacts/github-issue-implement-assessment.json",
+  "verificationArtifact": "artifacts/jira-implement-verify.json",
+  "sourceBriefArtifact": "artifacts/jira-implement-brief.json",
+  "sourceAssessmentArtifact": "artifacts/jira-implement-assessment.json",
+  "issue_provider": "jira",
+  "issue_ref": "MM-1146",
+  "issue_url": "https://moonladder.atlassian.net/browse/MM-1146",
+  "branch": "run-jira-implement-for-mm-1146-add-the-r-015921e9",
+  "base_ref": "origin/main",
+  "head_commit": "3ae7ae9ed",
   "authoritativeVerdict": "FULLY_IMPLEMENTED",
   "verdict": "FULLY_IMPLEMENTED",
+  "confidence": "HIGH",
   "recommendedNextAction": "advance",
   "recoverableInCurrentRuntime": true,
-  "summary": "Verification attempt 1 confirms remediation attempt 1 satisfies all repo-verifiable issue requirements. The remaining unavailable browser/mobile execution is recorded as a non-blocking environment limitation, not remaining implementation work.",
-  "verificationArtifact": "artifacts/github-issue-implement-verify.json",
-  "testResults": [
+  "brief_truncated": false,
+  "implementation_step_made_code_changes": true,
+  "summary": "Remediation verification attempt 1 of 6 verifies remediation attempt 1 (reports/remediation_attempt-1.json) for Jira issue MM-1146. Remediation commit 3ae7ae9ed added the documented 'Updated' (updatedAt, order 9 after Policy) and 'Actions' (order 10, safe row actions only) columns to the Recurring schedules desktop table in frontend/src/entrypoints/schedules.tsx and extended frontend/src/entrypoints/schedules.test.tsx to cover both. Direct code inspection confirms the full documented column order, that the Actions column surfaces only safe common actions (Run now, Pause/Resume) gated by scheduleActionAvailability with destructive delete remaining detail-only per docs/UI/RecurringSchedulesPage.md#s21 / STORY-011, that the first-column schedule name remains the primary link to /schedules/{definitionId}, and that no per-run fetch or spawned execution content is introduced. The focused frontend unit suite passes 33/33 and the frontend TypeScript typecheck passes cleanly. Every repo-verifiable in-scope requirement and acceptance criterion is VERIFIED. Two out-of-scope items (sort/filter posture, MM-1144 traceability constraint) are disclosed exclusions and the degraded-fallback RAG context is a non-gating NOT RUN environment note. This is the authoritative verdict for the whole MM-1146 target state.",
+  "gapsClosedThisAttempt": [
     {
-      "command": "npm run ui:test -- frontend/src/lib/workflowListDisplayMode.test.ts frontend/src/entrypoints/dashboard.test.tsx frontend/src/entrypoints/schedules.test.tsx frontend/src/styles/dashboardBrand.test.ts",
-      "result": "PASS",
-      "notes": "4 test files passed, 143 tests passed."
+      "requirement": "AC-updated-column: desktop table includes the 'Updated' column (updatedAt) after Policy.",
+      "priorStatus": "MISSING",
+      "postStatus": "VERIFIED",
+      "evidence": "frontend/src/entrypoints/schedules.tsx:1573-1576 column {key:'updatedAt', header:'Updated', render:(item)=>formatWhen(item.updatedAt)}; schedules.test.tsx asserts the 'Updated' columnheader and formatted value."
     },
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/lib/workflowListDisplayMode.test.ts frontend/src/entrypoints/dashboard.test.tsx frontend/src/entrypoints/schedules.test.tsx frontend/src/styles/dashboardBrand.test.ts",
-      "result": "FAIL",
-      "nonBlocking": true,
-      "notes": "Failed before UI execution because Python pytest is unavailable: /usr/local/bin/python: No module named pytest."
+      "requirement": "AC-actions-column: 'Actions' column with safe common row actions; destructive delete stays on detail.",
+      "priorStatus": "MISSING",
+      "postStatus": "VERIFIED",
+      "evidence": "frontend/src/entrypoints/schedules.tsx:1578-1585 rowActions -> ScheduleRowActions (Run now + Pause/Resume, gated by scheduleActionAvailability, no delete); DataTable.tsx:265-269 renders the trailing 'Actions' header; schedules.test.tsx asserts the header, 3 Run now / 2 Pause / 1 Resume, and no delete control."
+    },
+    {
+      "requirement": "AC-testing-contract-item-16 / DESIGN-REQ-016 verification: row rendering tests cover the new columns with no spawned execution content.",
+      "priorStatus": "PARTIAL",
+      "postStatus": "VERIFIED",
+      "evidence": "frontend/src/entrypoints/schedules.test.tsx adds two tests covering both columns, safe actions, run-now trigger, no delete, and continued absence of Steps/Artifacts/Logs/Proposals/Diagnostics headings; suite passes 33/33."
     }
   ],
-  "remainingWork": [],
+  "testResults": [
+    {
+      "command": "npm run ui:test -- frontend/src/entrypoints/schedules.test.tsx (MOONMIND_FORCE_LOCAL_TESTS=1)",
+      "result": "PASS",
+      "notes": "1 test file passed, 33 tests passed (Vitest v4.1.1)."
+    },
+    {
+      "command": "node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json",
+      "result": "PASS",
+      "notes": "Frontend TypeScript typecheck exit 0, no diagnostics."
+    }
+  ],
+  "requirementCoverageSummary": {
+    "DESIGN-REQ-016": "VERIFIED",
+    "DESIGN-REQ-017": "VERIFIED",
+    "DESIGN-REQ-018": "VERIFIED",
+    "AC-first-column-link": "VERIFIED",
+    "AC-updated-column": "VERIFIED",
+    "AC-actions-column": "VERIFIED",
+    "AC-testing-contract-item-16": "VERIFIED"
+  },
+  "workspaceProjectionPreflight": {
+    "result": "CLEAN",
+    "detail": ".agents/skills and .gemini/skills are not projection symlinks; skills_active absent; git status --porcelain empty for those paths."
+  },
+  "disclosedScopeExclusions": [
+    {
+      "item": "Sorting/filtering posture (docs section 9 sort/filter expectations)",
+      "reason": "Not part of MM-1146 acceptance criteria or the assessment backlog; out of scope.",
+      "type": "out_of_scope"
+    },
+    {
+      "item": "Preserve source issue MM-1144 traceability",
+      "reason": "Documentation/traceability constraint on the change; no repository behavior to verify. Honored by the implementing commit/PR body.",
+      "type": "out_of_scope"
+    }
+  ],
   "environmentNotes": [
     {
-      "tooling": "Python pytest / browser e2e harness",
-      "status": "NOT_AVAILABLE",
+      "tooling": "MoonMind RAG retrieved context",
+      "status": "NOT RUN",
       "gatesVerdict": false,
-      "reason": "Advisory browser/mobile checks depend on unavailable Python pytest in this runtime."
+      "reason": "Retrieved context delivered in degraded local fallback mode; non-gating. Verification relied on direct repository inspection, the focused frontend unit suite, and the frontend typecheck."
     }
-  ]
+  ],
+  "remainingWork": []
 }

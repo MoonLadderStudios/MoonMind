@@ -50,6 +50,7 @@ import {
   resolveWorkflowListDisplay,
   type WorkflowListDisplayMode,
 } from '../lib/workflowListDisplayMode';
+import { requestRecurringScheduleFocus } from '../lib/recurringScheduleFocus';
 import {
   DASHBOARD_PREFERENCES_CHANGED_EVENT,
   readDashboardPreferences,
@@ -90,6 +91,29 @@ type SharedLayoutConfig = {
 type NavIconProps = {
   className?: string | undefined;
 };
+
+function requestRecurringFocusForMode(
+  mode: WorkflowListDisplayMode,
+  definitionId: string | null | undefined,
+): void {
+  if (mode === 'table') {
+    requestRecurringScheduleFocus(
+      definitionId
+        ? { target: 'table-row', definitionId }
+        : { target: 'table-title' },
+    );
+    return;
+  }
+  if (mode === 'sidebar' && definitionId) {
+    requestRecurringScheduleFocus({ target: 'sidebar-row', definitionId });
+    return;
+  }
+  requestRecurringScheduleFocus(
+    definitionId
+      ? { target: 'detail-heading', definitionId }
+      : { target: 'table-title' },
+  );
+}
 
 type AnimatedNavIconHandle =
   | MoonIconHandle
@@ -314,7 +338,15 @@ function ConfigurationErrorPage({ page, message }: { page: string; message: stri
   );
 }
 
-function LazyPageView({ page, payload }: { page: DashboardPage; payload: BootPayload }) {
+function LazyPageView({
+  page,
+  payload,
+  buildId,
+}: {
+  page: DashboardPage;
+  payload: BootPayload;
+  buildId?: string | null;
+}) {
   const [reloadKey, setReloadKey] = useState(0);
   const LazyPage = useMemo(() => lazy(PAGE_IMPORTS[page]), [page, reloadKey]);
 
@@ -323,6 +355,7 @@ function LazyPageView({ page, payload }: { page: DashboardPage; payload: BootPay
       {({ reset }) => (
         <DashboardRouteErrorBoundary
           key={reloadKey}
+          buildId={buildId ?? null}
           onReset={() => {
             reset();
             setReloadKey((value) => value + 1);
@@ -337,7 +370,13 @@ function LazyPageView({ page, payload }: { page: DashboardPage; payload: BootPay
   );
 }
 
-function PageContent({ payload }: { payload: BootPayload }) {
+function PageContent({
+  payload,
+  buildId,
+}: {
+  payload: BootPayload;
+  buildId?: string | null;
+}) {
   if (!isSupportedPage(payload.page)) {
     return <UnknownPage page={payload.page} />;
   }
@@ -347,7 +386,9 @@ function PageContent({ payload }: { payload: BootPayload }) {
     return <ConfigurationErrorPage page={payload.page} message={validation.message} />;
   }
 
-  return <LazyPageView page={payload.page} payload={payload} />;
+  return (
+    <LazyPageView page={payload.page} payload={payload} buildId={buildId ?? null} />
+  );
 }
 
 function useDashboardUiInfo() {
@@ -944,6 +985,7 @@ function RoutedDashboardPage({
           setLastSelectedDefinitionId(targetDefinitionId);
           updateDashboardPreferences({ lastSelectedDefinitionId: targetDefinitionId });
           setResolutionStatus(null);
+          requestRecurringFocusForMode(selectedMode, targetDefinitionId);
           navigate(`/schedules/${encodeURIComponent(targetDefinitionId)}`);
         } catch {
           if (pendingRequestRef.current === requestId) {
@@ -974,6 +1016,7 @@ function RoutedDashboardPage({
         patch.lastSelectedDefinitionId = resolved.selection.definitionId;
       }
       updateDashboardPreferences(patch);
+      requestRecurringFocusForMode(selectedMode, resolved.selection.definitionId);
       const current = `${location.pathname}${location.search}`;
       if (resolved.targetPath !== current) {
         navigate(resolved.targetPath);
@@ -1109,7 +1152,11 @@ function RoutedDashboardPage({
       workflowListDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
       onWorkflowListModeSelect={handleWorkflowListModeSelect}
     >
-      <PageContent key={routeKey} payload={routedPayload} />
+      <PageContent
+        key={routeKey}
+        payload={routedPayload}
+        buildId={uiInfo?.buildId ?? null}
+      />
     </AppShell>
   );
 }

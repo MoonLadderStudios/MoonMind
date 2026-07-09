@@ -133,6 +133,58 @@ def _valid_user_workflow_parameters() -> dict[str, object]:
     return {"workflow": {"instructions": "Test workflow fixture."}}
 
 
+@pytest.mark.asyncio
+async def test_create_execution_synthesizes_jira_implement_title_metadata(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Load Jira preset brief",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "instructions": "Implement Jira issue MM-123.",
+                    "taskTemplate": {"slug": "jira-implement"},
+                    "inputs": {
+                        "jira_issue": {
+                            "key": "MM-123",
+                            "summary": "Fix OAuth redirect handling",
+                        }
+                    },
+                    "steps": [
+                        {"title": "Load Jira preset brief"},
+                        {"title": "Implement issue"},
+                    ],
+                }
+            },
+            idempotency_key=None,
+            integration="jira",
+        )
+
+        assert created.memo["title"] == (
+            "Jira Implement: MM-123 — Fix OAuth redirect handling"
+        )
+        assert created.memo["titleSource"] == "integration_target"
+        assert created.memo["titleConfidence"] == "high"
+        assert created.search_attributes["mm_title"] == [
+            "jira",
+            "implement",
+            "mm",
+            "123",
+            "fix",
+            "oauth",
+            "redirect",
+            "handling",
+        ]
+
+
 def _write_mm730_cutover_files(tmp_path):
     release_notes = tmp_path / "MM-730-release-notes.md"
     release_notes.write_text(
@@ -4421,13 +4473,13 @@ async def test_fresh_rerun_expands_unexpanded_jira_orchestrate_template(
         rerun = await service.describe_execution(response["workflow_id"])
 
     workflow_payload = rerun.parameters["workflow"]
-    assert rerun.parameters["stepCount"] == 25
-    assert len(workflow_payload["steps"]) == 25
+    assert rerun.parameters["stepCount"] == 26
+    assert len(workflow_payload["steps"]) == 26
     assert workflow_payload["steps"][0]["tool"]["id"] == "jira.check_blockers"
     assert workflow_payload["steps"][3]["tool"]["id"] == "jira.update_issue_status"
-    assert workflow_payload["steps"][6]["skill"]["id"] == "moonspec-tasks"
-    assert workflow_payload["steps"][8]["skill"]["id"] == "moonspec-implement"
-    assert workflow_payload["steps"][24]["skill"]["id"] == "jira-issue-updater"
+    assert workflow_payload["steps"][7]["skill"]["id"] == "moonspec-tasks"
+    assert workflow_payload["steps"][9]["skill"]["id"] == "moonspec-implement"
+    assert workflow_payload["steps"][25]["skill"]["id"] == "jira-issue-updater"
     assert workflow_payload["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
     assert workflow_payload["recovery"] == {
         "kind": "exact_full_rerun",

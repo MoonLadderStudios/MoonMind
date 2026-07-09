@@ -54,9 +54,14 @@ if _ENABLE_TEST_UI_ROUTE:
     from api_service.test_ui_route import router as test_ui_router
 
 from api_service.api.routers.workflow_console import router as workflow_console_router
+from api_service.dashboard_static import DashboardStaticFiles
 from api_service.api.routers.agent_runs import router as agent_runs_router
 from api_service.api.routers.agent_runs import sessions_router as session_resources_router
 from api_service.api.routers.sessions import router as sessions_router
+from api_service.api.routers.omnigent_bridge import (
+    OMNIGENT_BRIDGE_MOUNT_PATH,
+    router as omnigent_bridge_router,
+)
 from api_service.api.routers.workflow_proposals import router as workflow_proposals_router
 from api_service.api.routers.presets import (
     router as presets_router,
@@ -391,7 +396,7 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 if DASHBOARD_STATIC_DIST_DIR.is_dir():
     app.mount(
         "/static/workflow_console/dist",
-        StaticFiles(directory=str(DASHBOARD_STATIC_DIST_DIR)),
+        DashboardStaticFiles(directory=str(DASHBOARD_STATIC_DIST_DIR)),
         name="workflow-console-dist",
     )
 
@@ -465,6 +470,7 @@ app.include_router(recurring_workflows_router)
 app.include_router(agent_runs_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(session_resources_router, prefix="/api")
+app.include_router(omnigent_bridge_router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
 app.include_router(workflow_console_router)
 app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)

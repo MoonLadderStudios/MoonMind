@@ -6,7 +6,7 @@
 >
 > **Document class:** this roadmap is an *imperative execution tracker* (milestones, tasks, status). Per `docs/Workflows/MoonSpecDocumentModel.md`, durable desired state lives in the canonical declarative `docs/` files each milestone names in its `X.0` task — not here. When the two disagree, the declarative docs win.
 >
-> Last updated: 2026-07-08
+> Last updated: 2026-07-09
 
 ---
 
@@ -140,7 +140,7 @@ These are not active roadmap milestones, but they are important assumptions for 
 
 ### Remaining work
 
-- [ ] **4.0 Declarative design first** — capture the bridge proxy routes, event-normalization contract, and Workflow Detail chat projection as target state in `docs/Omnigent/OmnigentBridge.md`, `docs/UI/WorkflowChatPanel.md`, and `docs/UI/WorkflowDetailsPage.md` before implementation.
+- [ ] **4.0 Declarative design first** — capture the bridge proxy routes, embedded host-facing auth topology, event-normalization contract, and Workflow Detail chat projection as target state in `docs/Omnigent/OmnigentBridge.md`, `docs/Security/SettingsSystem.md`, `docs/UI/WorkflowChatPanel.md`, and `docs/UI/WorkflowDetailsPage.md` before implementation.
 - [ ] **4.1 Proxy-mode bridge routes** — implement or complete the MoonMind bridge facade for Omnigent-shaped session, event, stream, agent, and resource routes while proxying to a stock Omnigent server/host.
 - [ ] **4.2 Bridge event normalizer** — normalize host/session events into durable MoonMind event records while preserving raw event journals as artifacts.
 - [ ] **4.3 Bridge session projection API** — expose `GET /api/omnigent/bridge-sessions/{bridge_session_id}/events` and `/stream` as the canonical Workflow Chat/read-model surface.
@@ -149,9 +149,10 @@ These are not active roadmap milestones, but they are important assumptions for 
 - [ ] **4.6 Failed-launch visibility** — create visible bridge diagnostics and a Chat timeline even when host launch or session creation fails before a normal terminal stream exists.
 - [ ] **4.7 Direct Codex compatibility producer** — during migration, have direct Codex managed sessions emit bridge-compatible events so Workflow Detail no longer depends on runtime-specific observability records.
 - [ ] **4.8 Conformance and smoke tests** — add fake Omnigent server tests, proxy-mode route tests, event-normalization tests, chat projection tests, and live combined-stack smoke coverage.
-- [ ] **4.9 Embedded compatibility mode** 🔒 — implement MoonMind-as-Omnigent-compatible host/server surface only after proxy mode has conformance and live smoke evidence.
+- [ ] **4.9 Omnigent-compatible MoonMind server auth shim** 🔒 — for embedded compatibility mode, reuse the existing upstream Omnigent server/host auth verifier as a narrow library dependency or vendored module with a MoonMind adapter layer. Map verified Omnigent host/API principals to MoonMind service principals and bridge-session ownership; keep Omnigent token parsing, signature/JWKS validation, host-runner credential semantics, and conformance fixtures unchanged where possible. Add only config/SecretRef resolution, audit redaction, and FastAPI dependency glue in MoonMind. Do not reimplement the auth protocol, fork the host, or forward MoonMind user JWT/cookie headers as Omnigent credentials.
+- [ ] **4.10 Embedded compatibility mode** 🔒 — implement MoonMind-as-Omnigent-compatible host/server surface only after proxy mode has conformance and live smoke evidence.
 
-**Done means:** an Omnigent-backed workflow produces a Workflow Detail chat experience equivalent to existing cloud-agent conversations, with durable replay and artifact links even after the host container is gone.
+**Done means:** an Omnigent-backed workflow produces a Workflow Detail chat experience equivalent to existing cloud-agent conversations, with durable replay and artifact links even after the host container is gone; when embedded mode is enabled, its host-facing auth path remains Omnigent-compatible rather than a MoonMind-specific fork.
 
 ---
 

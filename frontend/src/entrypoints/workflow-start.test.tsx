@@ -920,19 +920,24 @@ describe("WorkflowStart CSS Layout", () => {
 
   it("centers the floating submit rail on the create primary column", async () => {
     expect(dashboardCss).toMatch(
-      /\.workflow-start-workspace\s*\{[^}]*--workflow-start-primary-offset:\s*calc\(\s*\(var\(--workflow-list-column-workflow-width\)\s*\+\s*1\.25rem\)\s*\/\s*2\s*\);[^}]*--workflow-start-primary-available-width:\s*calc\(\s*100%\s*-\s*var\(--workflow-list-column-workflow-width\)\s*-\s*1\.25rem\s*-\s*2rem\s*\);/s,
+      /\.workflow-start-workspace\s*\{[^}]*--mm-content-max:\s*72rem;[^}]*--workflow-start-primary-offset:\s*calc\(\s*\(var\(--mm-rail-width\)\s*\+\s*1\.25rem\)\s*\/\s*2\s*\);[^}]*--workflow-start-primary-available-width:\s*calc\(\s*100%\s*-\s*var\(--mm-rail-width\)\s*-\s*1\.25rem\s*-\s*2rem\s*\);/s,
     );
     expect(dashboardCss).toMatch(
       /\.workflow-start-workspace\s*\.queue-floating-bar\s*\{[^}]*left:\s*calc\(50%\s*\+\s*var\(--workflow-start-primary-offset\)\);[^}]*width:\s*min\(var\(--workflow-start-primary-available-width\),\s*70rem\);/s,
     );
-    // MM-1138 Q2: toggling the rail must not move the composer. The collapsed
-    // state keeps the primary content in column 2 (rather than resetting the
-    // offset to 0 and re-centering), so the floating bar holds its position.
+    // MM-1138 Q2: wide screens keep the create content viewport-centered by
+    // switching the shell to symmetric gutters and resetting the floating bar
+    // displacement to zero.
     expect(dashboardCss).toMatch(
-      /\.workflow-start-workspace\[data-sidebar-collapsed="true"\]\s*\.workflow-start-primary\s*\{[^}]*grid-column:\s*2;/s,
+      /@media \(min-width:\s*114rem\)\s*\{[^}]*\.workflow-start-workspace\s*\{[^}]*--workflow-start-primary-offset:\s*0rem;[^}]*--workflow-start-primary-available-width:\s*calc\(100% - 2rem\);/s,
     );
-    expect(dashboardCss).not.toMatch(
-      /\.workflow-start-workspace\[data-sidebar-collapsed="true"\]\s*\{[^}]*--workflow-start-primary-offset:\s*0rem;/s,
+    // Below that threshold, collapsed create content spans the single available
+    // column and uses the same centered floating-bar values.
+    expect(dashboardCss).toMatch(
+      /@media \(max-width:\s*114rem\) and \(min-width:\s*768px\)\s*\{[\s\S]*\.workflow-start-workspace\[data-sidebar-collapsed="true"\] \.workflow-start-primary\s*\{[\s\S]*grid-column:\s*1 \/ -1;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /@media \(max-width:\s*114rem\) and \(min-width:\s*768px\)\s*\{[\s\S]*\.workflow-start-workspace\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*--workflow-start-primary-offset:\s*0rem;/s,
     );
     expect(dashboardCss).toMatch(
       /@media \(max-width:\s*924px\) and \(min-width:\s*641px\)\s*\{[^}]*\.workflow-start-workspace \.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto;/s,

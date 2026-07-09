@@ -10,15 +10,17 @@ from typing import Any
 import httpx
 import pytest
 
-from moonmind.omnigent.execute import (
+from moonmind.omnigent.bridge_artifacts import (
     LocalOmnigentArtifactGateway,
     OmnigentArtifactError,
-    OmnigentContractError,
     OmnigentCaptureBundle,
+    build_omnigent_result,
+)
+from moonmind.omnigent.execute import (
+    OmnigentContractError,
     OmnigentSessionStillRunningError,
     _agent_items,
     _resolve_agent_id,
-    build_omnigent_result,
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
@@ -1080,7 +1082,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     )
     assert external_state["retry"]["sessionResolution"] == "attached"
     assert external_state["retry"]["attached"] is True
-    assert external_state["retry"]["attachSource"] == "durable_idempotency_mapping"
+    assert external_state["retry"]["attachSource"] == "bridge_session_store"
     assert external_state["retry"]["firstMessageOutcome"] == "already_posted"
     assert external_state["firstMessage"]["state"] == "posted"
     assert external_state["firstMessage"]["posted"] is True
@@ -2193,3 +2195,20 @@ async def test_run_omnigent_execution_redacts_raw_events_before_persistence(
     raw_text = raw_path.read_text(encoding="utf-8")
     assert "sk-should-not-persist" not in raw_text
     assert "[REDACTED]" in raw_text
+    normalized_path = tmp_path / "corr-1" / "runtime.omnigent.sse.normalized.jsonl"
+    normalized_events = [
+        json.loads(line)
+        for line in normalized_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert normalized_events[0]["schemaVersion"] == "moonmind.omnigent_bridge.event.v1"
+    assert normalized_events[0]["sequence"] == 1
+    assert normalized_events[0]["type"] == "host.capabilities"
+    assert normalized_events[0]["normalizedStatus"] == "running"
+    assert normalized_events[0]["data"] == {}
+    assert normalized_events[0]["metadata"]["moonmind"] == {
+        "workflowChatVisible": False,
+        "source": "omnigent_stream",
+    }
+    assert normalized_events[-1]["type"] == "response.completed"
+    assert normalized_events[-1]["normalizedStatus"] == "completed"

@@ -22,6 +22,21 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowValidationError,
 )
 
+LIST_DEFAULTS = {
+    "cursor": None,
+    "sort": "updatedAt",
+    "sort_dir": "desc",
+    "schedule": "",
+    "state": "",
+    "target": "",
+    "repository": "",
+    "cadence": "",
+    "next_run": "",
+    "last_scheduled": "",
+    "dispatch": "",
+    "updated": "",
+}
+
 def _definition(**overrides):
     now = datetime.now(UTC)
     base = {
@@ -96,6 +111,7 @@ async def test_list_recurring_workflows_global_requires_operator() -> None:
         await recurring_router.list_recurring_workflows(
             scope="global",
             limit=50,
+            **LIST_DEFAULTS,
             service=service,
             user=user,
         )
@@ -110,6 +126,7 @@ async def test_list_recurring_workflows_uses_runtime_schedule_summary() -> None:
     last_scheduled_for = datetime(2026, 6, 23, 13, tzinfo=UTC)
     definition = _definition(next_run_at=stale_next_run)
     service.list_definitions.return_value = [definition]
+    service.count_definitions.return_value = 1
     service.runtime_summaries_for_definitions.return_value = {
         definition.id: RecurringScheduleRuntimeSummary(
             next_run_at=live_next_run,
@@ -123,6 +140,7 @@ async def test_list_recurring_workflows_uses_runtime_schedule_summary() -> None:
     response = await recurring_router.list_recurring_workflows(
         scope="personal",
         limit=50,
+        **LIST_DEFAULTS,
         service=service,
         user=user,
     )
@@ -134,7 +152,102 @@ async def test_list_recurring_workflows_uses_runtime_schedule_summary() -> None:
     assert response.items[0].permissions.can_run_now is True
     assert response.items[0].permissions.can_delete is True
     assert response.items[0].actions == response.items[0].permissions
+    assert response.count == 1
+    assert response.next_page_token is None
+    assert response.active_count == 1
     service.runtime_summaries_for_definitions.assert_awaited_once_with([definition])
+    service.list_definitions.assert_any_await(
+        scope="personal",
+        user_id=definition.owner_user_id,
+        limit=50,
+        offset=0,
+    )
+    service.list_definitions.assert_any_await(
+        scope="personal",
+        user_id=definition.owner_user_id,
+        limit=500,
+        offset=0,
+    )
+
+@pytest.mark.asyncio
+async def test_list_recurring_workflows_filters_sorts_and_returns_opaque_cursor() -> None:
+    service = AsyncMock()
+    owner_id = uuid4()
+    early = _definition(
+        owner_user_id=owner_id,
+        name="Nightly Repo A",
+        target={
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {"repository": "MoonLadderStudios/MoonMind"},
+        },
+        updated_at=datetime(2026, 6, 20, 10, tzinfo=UTC),
+    )
+    late = _definition(
+        owner_user_id=owner_id,
+        name="Nightly Repo B",
+        target={
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {"repository": "MoonLadderStudios/MoonMind"},
+        },
+        updated_at=datetime(2026, 6, 21, 10, tzinfo=UTC),
+    )
+    other = _definition(
+        owner_user_id=owner_id,
+        name="Other schedule",
+        target={
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {"repository": "example/other"},
+        },
+    )
+    service.list_definitions.return_value = [other, early, late]
+    service.runtime_summaries_for_definitions.return_value = {}
+    user = SimpleNamespace(id=owner_id, is_superuser=False)
+
+    first_page = await recurring_router.list_recurring_workflows(
+        scope="personal",
+        limit=1,
+        cursor=None,
+        sort="updatedAt",
+        sort_dir="asc",
+        schedule="nightly",
+        state="active",
+        target="UserWorkflow",
+        repository="MoonMind",
+        cadence="",
+        next_run="",
+        last_scheduled="",
+        dispatch="",
+        updated="",
+        service=service,
+        user=user,
+    )
+
+    assert first_page.count == 2
+    assert [item.name for item in first_page.items] == ["Nightly Repo A"]
+    assert first_page.next_page_token
+
+    second_page = await recurring_router.list_recurring_workflows(
+        scope="personal",
+        limit=1,
+        cursor=first_page.next_page_token,
+        sort="updatedAt",
+        sort_dir="asc",
+        schedule="nightly",
+        state="active",
+        target="UserWorkflow",
+        repository="MoonMind",
+        cadence="",
+        next_run="",
+        last_scheduled="",
+        dispatch="",
+        updated="",
+        service=service,
+        user=user,
+    )
+
+    assert second_page.count == 2
+    assert [item.name for item in second_page.items] == ["Nightly Repo B"]
+    assert second_page.next_page_token is None
 
 @pytest.mark.asyncio
 async def test_create_recurring_workflow_returns_serialized_definition() -> None:

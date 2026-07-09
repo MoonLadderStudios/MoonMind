@@ -1,69 +1,83 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issue_ref": "MoonLadderStudios/MoonMind#3068",
-  "source_verification_artifact": "artifacts/github-issue-implement-verify.json",
+  "issue_ref": "MM-1146",
+  "issue_url": "https://moonladder.atlassian.net/browse/MM-1146",
+  "source_verification_artifact": "artifacts/jira-implement-verify.json",
   "source_verdict": "ADDITIONAL_WORK_NEEDED",
-  "summary": "Remediated the verifier-reported Recurring workspace gaps by changing the shared masthead list display control from pressed buttons to radio-role options with aria-checked state, adding focused Recurring mode-resolution and accessibility assertions, and adding mobile Recurring sidebar/control absence coverage where feasible.",
+  "brief_truncated": false,
+  "summary": "Remediated the two verifier-reported implementation gaps and the associated verification gap for the Recurring schedules desktop table (frontend/src/entrypoints/schedules.tsx). Added the documented 'Updated' (updatedAt) column at order 9 (after Policy) and an 'Actions' column at order 10 exposing only safe, common row actions (Run now, Pause/Resume) gated by the existing scheduleActionAvailability logic. Destructive delete remains detail-only per docs/UI/RecurringSchedulesPage.md#s21 / STORY-011. Extended schedules.test.tsx to assert both new columns, the safe row actions with no delete control, a triggered run-now action, and absence of spawned execution content in the list (testing contract item 16). Scope was bounded strictly to the verifier's remaining_work backlog; the issue scope was not broadened, no PR was created, and Jira status was not changed.",
   "changed_files": [
-    "frontend/src/entrypoints/dashboard-app.tsx",
-    "frontend/src/entrypoints/dashboard.test.tsx",
-    "frontend/src/lib/workflowListDisplayMode.test.ts",
-    "frontend/src/styles/dashboard.css",
-    "frontend/src/styles/dashboardBrand.test.ts",
-    "tests/e2e/test_masthead_workflow_list_display_browser.py"
+    "frontend/src/entrypoints/schedules.tsx",
+    "frontend/src/entrypoints/schedules.test.tsx",
+    "frontend/src/styles/dashboard.css"
   ],
   "gap_statuses": [
     {
-      "requirement": "Masthead selector is a real radio group, not three disconnected buttons.",
+      "requirement": "AC-updated-column: The desktop table includes the 'Updated' column (updatedAt) in the documented order after Policy.",
       "gap_type": "implementation",
       "status": "fixed",
       "evidence": [
-        "frontend/src/entrypoints/dashboard-app.tsx now renders each display-mode option with role=\"radio\", aria-checked, roving tabIndex, and arrow/Home/End key handling.",
-        "frontend/src/styles/dashboard.css selected-state styling now keys off aria-checked instead of aria-pressed.",
-        "frontend/src/entrypoints/dashboard.test.tsx asserts radio roles, aria-checked state, and absence of aria-pressed on the list display options."
+        "frontend/src/entrypoints/schedules.tsx now defines a DataTable column {key:'updatedAt', header:'Updated', render:(item)=>formatWhen(item.updatedAt)} immediately after the Policy column (order 9).",
+        "frontend/src/entrypoints/schedules.test.tsx asserts getByRole('columnheader',{name:'Updated'}) and the formatted updatedAt value rendered from the schedule row."
       ]
     },
     {
-      "requirement": "Tests cover mode resolution and accessibility labels.",
+      "requirement": "AC-actions-column: An 'Actions' column with safe common row actions is added where row actions are needed, with destructive delete remaining on detail.",
+      "gap_type": "implementation",
+      "status": "fixed",
+      "evidence": [
+        "frontend/src/entrypoints/schedules.tsx adds a ScheduleRowActions component wired via the shared DataTable rowActions prop (trailing 'Actions' column, order 10). It surfaces only safe, common actions: 'Run now' (POST to the runNow endpoint) and 'Pause'/'Resume' (PATCH enabled), each gated by scheduleActionAvailability (canRun / canEdit) with permission-disabled reasons via title. Destructive delete is NOT rendered in the list and stays on detail per docs/UI/RecurringSchedulesPage.md#s21 / STORY-011.",
+        "The schedule-name link in column 1 remains the primary accessible link to /schedules/{definitionId}; row actions render as normal secondary controls.",
+        "frontend/src/entrypoints/schedules.test.tsx asserts getByRole('columnheader',{name:'Actions'}), one 'Run now' action per row (3), Pause on enabled rows (2), Resume on the paused row (1), and queryByRole('button',{name:/delete/i}) is null."
+      ]
+    },
+    {
+      "requirement": "AC-testing-contract-item-16: Row rendering tests reflect the new columns for recurring definitions with no spawned execution content.",
       "gap_type": "verification",
       "status": "fixed",
       "evidence": [
-        "frontend/src/lib/workflowListDisplayMode.test.ts adds resolveRecurringListDisplay coverage for table, selected sidebar/hidden, first-visible fallback, empty-list fallback, and detail hidden/sidebar/table branches.",
-        "frontend/src/entrypoints/dashboard.test.tsx continues to cover Recurring list display accessible name, route transitions, and sidebar selection using radio semantics."
+        "frontend/src/entrypoints/schedules.test.tsx adds a test 'renders the documented Updated and Actions columns in the recurring table' asserting both column headers, the updatedAt value, the safe row-action set, absence of delete, and absence of Steps/Artifacts/Logs/Proposals/Diagnostics headings in the list.",
+        "Added 'triggers a safe run-now row action without exposing destructive delete' asserting the run-now POST fires to /api/recurring-workflows/schedule-1/run and that no delete control is present.",
+        "Updated the beforeEach list mock to include updatedAt on schedule-1 so the Updated column value is asserted deterministically."
       ]
     },
     {
-      "requirement": "Mobile keeps a usable list-to-detail flow without exposing non-rendered desktop sidebar controls.",
-      "gap_type": "verification",
-      "status": "partially_fixed_static_verified_browser_blocked",
+      "requirement": "DESIGN-REQ-016: Render the scan-optimized column set in documented order through Updated (9) and Actions (10).",
+      "gap_type": "implementation",
+      "status": "fixed",
       "evidence": [
-        "frontend/src/entrypoints/dashboard.test.tsx asserts mobile CSS hides .workflow-list-display-control at max-width 767px and .recurring-schedule-sidebar at max-width 720px.",
-        "tests/e2e/test_masthead_workflow_list_display_browser.py was updated so future browser runs assert Recurring mobile routes expose neither the Recurring list display radiogroup nor Recurring schedule navigation complementary region."
-      ],
-      "remaining_blocker": "The existing browser/e2e path could not run in this runtime because Python pytest is not installed: `python -m pytest --version` failed with `/usr/local/bin/python: No module named pytest`."
+        "The DataTable columns array now runs Schedule, State, Target, Cadence, Next Run, Last Scheduled, Dispatch, Policy, Updated (columns 1-9) with the rowActions-rendered Actions cell at column 10, matching docs/UI/RecurringSchedulesPage.md section 9 order."
+      ]
     }
+  ],
+  "unchanged_verified_requirements": [
+    "DESIGN-REQ-017 (status pill State, non-color-only attention, compact dispatch error, compact target summary) - already VERIFIED, unaffected by this change.",
+    "DESIGN-REQ-018 (shared DataTable visual language, empty state + create action, no per-run fetch, no spawned content) - already VERIFIED; the new Updated column and safe row actions add no per-run workflow fetch and no spawned execution content.",
+    "AC-first-column-link (schedule name is the primary link to /schedules/{definitionId}) - unchanged and preserved."
   ],
   "targeted_checks": [
     {
-      "command": "npm run ui:test -- frontend/src/lib/workflowListDisplayMode.test.ts frontend/src/entrypoints/dashboard.test.tsx frontend/src/entrypoints/schedules.test.tsx",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/schedules.test.tsx",
       "result": "PASS",
-      "notes": "3 test files passed, 141 tests passed."
+      "notes": "1 test file passed, 33 tests passed (Vitest v4.1.1). Up from 31; the two added tests cover the Updated column, the Actions column safe actions with no delete, the run-now row action, and no spawned execution content in the list."
     },
     {
-      "command": "npm run ui:test -- frontend/src/styles/dashboardBrand.test.ts",
+      "command": "node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json",
       "result": "PASS",
-      "notes": "1 test file passed, 2 tests passed."
+      "notes": "Frontend TypeScript typecheck completed with no errors (the npm 'ui:typecheck' script maps to this; the bare 'tsc' binary is not on PATH, so it was invoked from node_modules/.bin)."
+    }
+  ],
+  "environment_notes": [
+    {
+      "item": "MoonMind RAG retrieved context",
+      "status": "NOT RUN",
+      "detail": "Retrieved context was delivered in degraded local fallback mode. Non-gating: remediation relied on direct repository inspection, the authoritative verify artifact, and the focused frontend unit suite plus typecheck."
     },
     {
-      "command": "npm run ui:test -- frontend/src/lib/workflowListDisplayMode.test.ts frontend/src/entrypoints/dashboard.test.tsx frontend/src/entrypoints/schedules.test.tsx frontend/src/styles/dashboardBrand.test.ts",
-      "result": "PASS",
-      "notes": "4 test files passed, 143 tests passed."
-    },
-    {
-      "command": "python -m pytest --version",
-      "result": "FAIL",
-      "notes": "Python pytest is unavailable in this runtime: /usr/local/bin/python: No module named pytest. Browser/e2e execution was therefore not feasible locally."
+      "item": "Stale prior artifact overwritten",
+      "status": "NOTE",
+      "detail": "The previous reports/remediation_attempt-1.json described a different issue (MoonLadderStudios/MoonMind#3068, masthead workflow list display). It was stale scaffolding and has been overwritten with this MM-1146 attempt-1 record."
     }
   ]
 }

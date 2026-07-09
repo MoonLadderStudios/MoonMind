@@ -10,10 +10,8 @@ import pytest
 import pytest_asyncio
 from aiohttp import web
 
-from moonmind.omnigent.execute import (
-    LocalOmnigentArtifactGateway,
-    run_omnigent_execution,
-)
+from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+from moonmind.omnigent.execute import run_omnigent_execution
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]

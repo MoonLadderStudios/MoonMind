@@ -44,6 +44,7 @@ from api_service.api.routers.workflow_console_view_model import (
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.models import AgentSkillDefinition, TemporalArtifact, User
+from api_service.dashboard_static import DASHBOARD_HTML_CACHE_CONTROL
 from api_service.services.settings_catalog import settings_permissions_for_user
 from moonmind.config.settings import settings
 from moonmind.capabilities.input_contracts import (
@@ -76,6 +77,10 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SAFE_WORKFLOW_ID_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:{}-]{0,254}$")
+_DASHBOARD_UI_ERROR_DETAIL = (
+    "Dashboard asset bundle is missing or invalid. Check server logs and rebuild "
+    "the UI assets before retrying."
+)
 _WORKFLOW_DETAIL_TABS = {"chat", "overview", "steps", "artifacts", "runs", "debug"}
 _RESERVED_WORKFLOW_ROUTE_SEGMENTS = {
     "manifests",
@@ -609,13 +614,15 @@ def _dashboard_ui_error_response(page: str, detail: str) -> HTMLResponse:
   <p>Rebuild with <code>npm run ui:build</code> or deploy a Docker image that builds the UI from source (see <code>api_service/Dockerfile</code> <code>frontend-builder</code> stage).</p>
 </body>
 </html>"""
-    return HTMLResponse(status_code=503, content=body, media_type="text/html")
+    response = HTMLResponse(status_code=503, content=body, media_type="text/html")
+    response.headers["Cache-Control"] = DASHBOARD_HTML_CACHE_CONTROL
+    return response
 
 def _vite_assets_or_error(page: str) -> HTMLResponse | str:
     try:
         return ui_assets("dashboard")
-    except DashboardUIAssetsError as exc:
-        return _dashboard_ui_error_response(page, str(exc))
+    except DashboardUIAssetsError:
+        return _dashboard_ui_error_response(page, _DASHBOARD_UI_ERROR_DETAIL)
 
 async def _render_react_page(
     request: Request,
@@ -633,7 +640,7 @@ async def _render_react_page(
     if isinstance(assets_html, HTMLResponse):
         return assets_html
 
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "react_dashboard.html",
         {
@@ -644,6 +651,8 @@ async def _render_react_page(
             "build_id": None,
         },
     )
+    response.headers["Cache-Control"] = DASHBOARD_HTML_CACHE_CONTROL
+    return response
 
 def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
     mode = (info.external_attr >> 16) & 0o170000

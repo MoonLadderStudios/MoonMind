@@ -294,6 +294,7 @@ describe('Dashboard shared entry', () => {
   let fetchSpy: MockInstance;
   let dashboardCss: string;
   const originalWebSocket = window.WebSocket;
+  const originalMatchMedia = window.matchMedia;
 
   beforeAll(async () => {
     const { readFileSync } = await import('node:fs');
@@ -337,6 +338,11 @@ describe('Dashboard shared entry', () => {
   afterEach(() => {
     fetchSpy.mockRestore();
     window.WebSocket = originalWebSocket;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
     document.querySelectorAll('[data-nav]').forEach((node) => node.remove());
     window.localStorage.clear();
     window.history.replaceState({}, '', '/');
@@ -467,7 +473,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -527,6 +533,66 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
   });
 
+  it('MM-1149 renders mobile recurring schedule cards with standalone detail links and required facts', async () => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === '(max-width: 720px)',
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 'schedule-one',
+              name: 'Daily recurring scan',
+              enabled: true,
+              cron: '0 9 * * *',
+              timezone: 'UTC',
+              nextRunAt: '2026-07-09T09:00:00Z',
+              lastDispatchStatus: 'failed',
+              lastDispatchError: 'Provider queue rejected the run',
+              target: {
+                kind: 'queue_task',
+                job: { payload: { repository: 'MoonLadderStudios/MoonMind' } },
+              },
+              policy: {},
+            }],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    const cardList = await screen.findByRole('list', { name: 'Recurring schedule cards' });
+    expect(cardList.textContent).toContain('Daily recurring scan');
+    expect(cardList.textContent).toContain('Needs attention');
+    expect(cardList.textContent).toContain('0 9 * * *');
+    expect(cardList.textContent).toContain('UTC');
+    expect(cardList.textContent).toContain('Queue Task');
+    expect(cardList.textContent).toContain('MoonLadderStudios/MoonMind');
+    expect(cardList.textContent).toContain('Provider queue rejected the run');
+    expect(cardList.querySelector('a')?.getAttribute('href')).toBe('/schedules/schedule-one');
+  });
+
   it('verifies remembered recurring IDs before opening sidebar mode from the schedules table', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -536,7 +602,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/recurring-workflows/stale-schedule') {
         return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -600,7 +666,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -663,6 +729,107 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
   });
 
+  it('MM-1150 restores deterministic focus after keyboard-driven Recurring mode switches', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 'schedule-one',
+              name: 'Daily recurring scan',
+              enabled: true,
+              cron: '0 9 * * *',
+              timezone: 'UTC',
+              nextRunAt: '2026-07-09T09:00:00Z',
+              lastDispatchStatus: 'enqueued',
+              target: {},
+              policy: {},
+            }],
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 'schedule-one',
+            name: 'Daily recurring scan',
+            description: 'Runs every morning.',
+            enabled: true,
+            cron: '0 9 * * *',
+            timezone: 'UTC',
+            nextRunAt: '2026-07-09T09:00:00Z',
+            lastScheduledFor: '2026-07-08T09:00:00Z',
+            lastDispatchStatus: 'enqueued',
+            target: {},
+            policy: {},
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    const tableRadio = screen.getByRole('radio', { name: 'Full screen table' });
+    tableRadio.focus();
+    fireEvent.keyDown(tableRadio, { key: 'ArrowLeft' });
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules/schedule-one');
+    });
+    await waitFor(() => {
+      const sidebarRow = document.querySelector('[data-recurring-sidebar-row-focus="schedule-one"]');
+      expect(sidebarRow).toBeTruthy();
+      expect(document.activeElement).toBe(sidebarRow);
+    });
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+
+    let sidebarRadio = screen.getByRole('radio', { name: 'Sidebar list' });
+    sidebarRadio.focus();
+    fireEvent.keyDown(sidebarRadio, { key: 'ArrowLeft' });
+
+    const detailHeading = await screen.findByRole('heading', { name: 'Daily recurring scan' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(detailHeading);
+    });
+    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+
+    const hiddenRadio = screen.getByRole('radio', { name: 'No list' });
+    hiddenRadio.focus();
+    fireEvent.keyDown(hiddenRadio, { key: 'ArrowRight' });
+
+    await waitFor(() => {
+      const sidebarRow = document.querySelector('[data-recurring-sidebar-row-focus="schedule-one"]');
+      expect(sidebarRow).toBeTruthy();
+      expect(document.activeElement).toBe(sidebarRow);
+    });
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+
+    sidebarRadio = screen.getByRole('radio', { name: 'Sidebar list' });
+    sidebarRadio.focus();
+    fireEvent.keyDown(sidebarRadio, { key: 'ArrowRight' });
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules');
+    });
+    const selectedTableRow = await screen.findByRole('link', { name: 'Daily recurring scan' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(selectedTableRow);
+    });
+    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+  });
+
   // MM-1145: persistence + reseeding of the Recurring list display mode and the
   // last-selected definition (dashboard preferences), and honoring a persisted
   // `hidden` on a direct `/schedules/{definitionId}` visit.
@@ -690,7 +857,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
@@ -725,7 +892,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         // A different first-visible row proves the remembered ID was preferred.
         return Promise.resolve({
           ok: true,
@@ -774,7 +941,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/recurring-workflows/stale-schedule') {
         return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
@@ -817,7 +984,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
@@ -860,7 +1027,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/recurring-workflows?scope=personal') {
+      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
@@ -1520,21 +1687,31 @@ describe('Dashboard shared entry', () => {
     // outside `.workflow-list-data-slab`) can consume it.
     const shellBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-shell');
     expect(shellBlock).toContain('--workflow-list-slab-bleed-inline: 1rem');
+    expect(shellBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
+    expect(shellBlock).toContain('[content-start] min(var(--mm-content-max), calc(100% - 2rem))');
 
-    // Only the left edge widens (right edge stays on the grid boundary); the
-    // container padding stays 0 so the rail's dividers reach the screen edge.
+    // The rail stays fixed to the shared workflow-column width and bleeds left
+    // by the same amount as the data slab, so its painted edge reaches x:0.
     const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
-    expect(sidebarBlock).toContain('width: calc(100% + var(--workflow-list-slab-bleed-inline))');
-    expect(sidebarBlock).toContain('margin-left: calc(var(--workflow-list-slab-bleed-inline) * -1)');
+    expect(sidebarBlock).toContain('width: calc(var(--mm-rail-width) + var(--mm-rail-bleed))');
+    expect(sidebarBlock).toContain('margin-left: calc(var(--mm-rail-bleed) * -1)');
     expect(sidebarBlock).toContain('padding: 0');
+    const sidebarPlacementBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-workspace-sidebar,\n.workflow-workspace-sidebar-slot',
+    );
+    expect(sidebarPlacementBlock).toContain('grid-column: rail-start / content-start');
+    const sidebarSlotBlock = cssRuleBlocks(dashboardCss, '.workflow-workspace-sidebar-slot')
+      .find((block) => block.includes('width: var(--mm-rail-width)')) ?? '';
+    expect(sidebarSlotBlock).toContain('width: var(--mm-rail-width)');
 
     // Header and rows re-inset the left padding by the bleed so titles land at
     // the same 1rem inset as the list table's first column.
     const sidebarHeaderBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-header');
-    expect(sidebarHeaderBlock).toContain('padding: 0.5rem 0.75rem 0.5rem var(--workflow-list-slab-bleed-inline)');
+    expect(sidebarHeaderBlock).toContain('padding: 0.5rem 0.75rem 0.5rem var(--mm-rail-bleed)');
 
     const sidebarRowBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-row');
-    expect(sidebarRowBlock).toContain('0.58rem 0.55rem 0.58rem var(--workflow-list-slab-bleed-inline)');
+    expect(sidebarRowBlock).toContain('0.58rem 0.55rem 0.58rem var(--mm-rail-bleed)');
   });
 
   it('MM-1138 Q1 scopes the workflow-list row divider to the shared list token', async () => {
@@ -1550,34 +1727,40 @@ describe('Dashboard shared entry', () => {
   });
 
   it('MM-1138 Q2 keeps the create page content anchored when the rail is toggled', async () => {
-    // Primary content stays in column 2 rather than spanning the full width.
-    const primaryCollapsedBlock = cssRuleBlock(
-      dashboardCss,
-      '.workflow-start-workspace[data-sidebar-collapsed="true"] .workflow-start-primary',
-    );
-    expect(primaryCollapsedBlock).toContain('grid-column: 2');
-    expect(primaryCollapsedBlock).not.toContain('1 / -1');
+    const startWorkspaceBlock = cssRuleBlock(dashboardCss, '.workflow-start-workspace');
+    expect(startWorkspaceBlock).toContain('--mm-content-max: 72rem');
+    expect(startWorkspaceBlock).toContain('--workflow-start-primary-offset');
 
-    // The two-column track stays reserved on the create page when collapsed.
-    const createCollapsedGridBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
-      normalizeCssSelector(rule.selector)
-        === '.workflow-start-workspace.workflow-workspace-shell[data-sidebar-collapsed="true"]' &&
+    // Wide screens use the symmetric three-track shell, so create content and
+    // its floating bar are viewport-centered whether the rail is visible or not.
+    const wideStartBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.workflow-start-workspace' &&
       rule.parent?.type === 'atrule' &&
       rule.parent.name === 'media' &&
+      rule.parent.params.includes('min-width: 114rem')
+    ));
+    expect(wideStartBlock).toContain('--workflow-start-primary-offset: 0rem');
+    expect(wideStartBlock).toContain('--workflow-start-primary-available-width: calc(100% - 2rem)');
+
+    // Below the threshold, the layout intentionally falls back to the older
+    // in-flow behavior: collapsed create content spans the single available
+    // column and the floating bar resets to the viewport-centered offset.
+    const midShellBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.workflow-workspace-shell' &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes('max-width: 114rem') &&
       rule.parent.params.includes('min-width: 768px')
     ));
-    expect(createCollapsedGridBlock).toContain(
-      'grid-template-columns: var(--workflow-list-column-workflow-width) minmax(0, 1fr)',
-    );
+    expect(midShellBlock).toContain('grid-template-columns: var(--mm-rail-width) minmax(0, 1fr)');
 
-    // The displacement offset is preserved: there is no collapsed reset to 0.
-    const startWorkspaceBlock = cssRuleBlock(dashboardCss, '.workflow-start-workspace');
-    expect(startWorkspaceBlock).toContain('--workflow-start-primary-offset');
-    const collapsedOffsetResetBlock = cssRuleBlock(
-      dashboardCss,
-      '.workflow-start-workspace[data-sidebar-collapsed="true"]',
-    );
-    expect(collapsedOffsetResetBlock).not.toContain('--workflow-start-primary-offset: 0rem');
+    const midCollapsedPrimaryBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      rule.selector.includes('.workflow-start-workspace[data-sidebar-collapsed="true"] .workflow-start-primary') &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes('max-width: 114rem')
+    ));
+    expect(midCollapsedPrimaryBlock).toContain('grid-column: 1 / -1');
   });
 
   it('MM-1116 defines one workflow-list row metric token family for table and sidebar modes', async () => {
@@ -1592,7 +1775,8 @@ describe('Dashboard shared entry', () => {
     expect(tableWorkflowColumnBlock).toContain('width: var(--workflow-list-column-workflow-width)');
 
     const shellBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-shell');
-    expect(shellBlock).toContain('grid-template-columns: var(--workflow-list-column-workflow-width) minmax(0, 1fr)');
+    expect(shellBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
+    expect(shellBlock).toContain('[content-start] min(var(--mm-content-max), calc(100% - 2rem))');
 
     const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
     expect(sidebarBlock).not.toContain('border-right');
@@ -2000,6 +2184,10 @@ describe('Dashboard shared entry', () => {
       dashboardCss,
       isMobileWorkflowRule('.workflow-list-view-options-popover'),
     );
+    const mobileWorkspaceSidebarBlock = cssRuleBlockMatching(
+      dashboardCss,
+      isMobileWorkflowRule('.workflow-workspace-sidebar, .workflow-workspace-sidebar-slot'),
+    );
 
     expect(mobileSlabBlock).toContain('border: 0');
     expect(mobileSlabBlock).toContain('border-radius: 0');
@@ -2014,6 +2202,8 @@ describe('Dashboard shared entry', () => {
     expect(mobileFooterBlock).toContain('padding-left: 0');
     expect(mobileFooterBlock).toContain('padding-right: 0');
 
+    expect(mobileWorkspaceSidebarBlock).toContain('width: 100%');
+
     expect(mobileViewOptionsPopoverBlock).toContain('right: auto');
     expect(mobileViewOptionsPopoverBlock).toContain('left: 0');
     expect(mobileViewOptionsPopoverBlock).toContain('max-width: calc(100vw - 2rem)');
@@ -2023,6 +2213,42 @@ describe('Dashboard shared entry', () => {
     expect(cardBlock).toContain('border: 1px solid rgb(var(--mm-border) / 0.8)');
     expect(cardBlock).toContain('border-radius: 1rem');
     expect(cardBlock).toContain('background: rgb(var(--mm-panel) / 0.78)');
+  });
+
+  it('MM-1149 switches recurring schedules from reduced tablet columns to mobile cards', async () => {
+    const recurringMediaRule = (selector: string, maxWidth: string) => (rule: Rule) =>
+      rule.selector.split(',').map(normalizeCssSelector).includes(selector) &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes(`max-width: ${maxWidth}`);
+
+    const tabletPolicyHeaderBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="policy"]', '1180px'),
+    );
+    const tabletUpdatedCellBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="updatedAt"]', '1180px'),
+    );
+    const narrowLastScheduledBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="lastScheduledFor"]', '980px'),
+    );
+    const mobileTableBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table-slab', '720px'),
+    );
+    const mobileCardListBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-mobile-card-list', '720px'),
+    );
+
+    expect(cssRuleBlock(dashboardCss, '.schedules-mobile-card-list')).toContain('display: none');
+    expect(tabletPolicyHeaderBlock).toContain('display: none');
+    expect(tabletUpdatedCellBlock).toContain('display: none');
+    expect(narrowLastScheduledBlock).toContain('display: none');
+    expect(mobileTableBlock).toContain('display: none');
+    expect(mobileCardListBlock).toContain('display: grid');
   });
 
   it('stacks Settings section radio controls on mobile viewports', async () => {

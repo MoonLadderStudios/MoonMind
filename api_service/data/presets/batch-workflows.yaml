@@ -28,6 +28,7 @@ annotations:
       jira_issue: '{{ target.jiraIssue }}'
       jira_issue_key: '{{ target.jiraIssue.key }}'
       repository: '{{ target.repository }}'
+      update_status: '{{ shared.update_status }}'
       constraints: '{{ shared.constraints }}'
     preset:jira-implement:
       jira_issue: '{{ target.jiraIssue }}'
@@ -72,6 +73,11 @@ annotations:
         title: Run verification
         description: Run verification in child implement workflows.
         default: true
+      update_status:
+        type: boolean
+        title: Update Jira status on PASS
+        description: Move Jira issues to a done status when jira-verify returns PASS.
+        default: false
       additional_jql:
         type: string
         title: Additional JQL filter
@@ -96,6 +102,11 @@ annotations:
       advanced: true
     run_verify:
       widget: checkbox
+    update_status:
+      widget: checkbox
+      visibleWhen:
+        field: run_ref
+        equals: skill:jira-verify
     additional_jql:
       widget: textarea
       advanced: true
@@ -108,6 +119,7 @@ annotations:
     run_ref: skill:jira-verify
     max_workflows: '25'
     run_verify: true
+    update_status: false
     publish_mode: none
 inputs:
 - name: jira_project_key
@@ -143,6 +155,11 @@ inputs:
   type: boolean
   required: false
   default: true
+- name: update_status
+  label: Update Jira Status On PASS
+  type: boolean
+  required: false
+  default: false
 - name: additional_jql
   label: Additional JQL Filter
   type: textarea
@@ -198,6 +215,7 @@ steps:
     --publish-mode "{{ inputs.publish_mode }}" \
     --max-workflows "{{ inputs.max_workflows }}" \
     {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
+    {% if inputs.update_status %}--update-status{% else %}--no-update-status{% endif %} \
     --constraints "{{ inputs.constraints }}"
     The helper stamps runtimeInheritance="caller" plus a fallback copy of the parent
     runtime on each child and assigns a stable idempotency key per target kind,
@@ -220,6 +238,7 @@ steps:
     sharedInputs:
       constraints: '{{ inputs.constraints }}'
       run_verify: '{{ inputs.run_verify }}'
+      update_status: '{{ inputs.update_status }}'
     publish:
       mode: '{{ inputs.publish_mode }}'
     runtime:

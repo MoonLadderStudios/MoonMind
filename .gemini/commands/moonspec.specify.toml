@@ -1,1 +1,10 @@
-../../moonspec/bundle/commands/gemini/moonspec.specify.toml
+description = "Create or update a one-story MoonSpec specification."
+
+prompt = """
+Use the `moonspec-specify` skill to create or update a one-story MoonSpec `spec.md`.
+
+User input:
+{{args}}
+
+Use MoonSpec skill IDs and command IDs only: `moonspec-*` and `/moonspec.*`.
+"""
