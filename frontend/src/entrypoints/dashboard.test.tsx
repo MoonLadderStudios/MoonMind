@@ -1520,21 +1520,31 @@ describe('Dashboard shared entry', () => {
     // outside `.workflow-list-data-slab`) can consume it.
     const shellBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-shell');
     expect(shellBlock).toContain('--workflow-list-slab-bleed-inline: 1rem');
+    expect(shellBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
+    expect(shellBlock).toContain('[content-start] min(var(--mm-content-max), calc(100% - 2rem))');
 
-    // Only the left edge widens (right edge stays on the grid boundary); the
-    // container padding stays 0 so the rail's dividers reach the screen edge.
+    // The rail stays fixed to the shared workflow-column width and bleeds left
+    // by the same amount as the data slab, so its painted edge reaches x:0.
     const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
-    expect(sidebarBlock).toContain('width: calc(100% + var(--workflow-list-slab-bleed-inline))');
-    expect(sidebarBlock).toContain('margin-left: calc(var(--workflow-list-slab-bleed-inline) * -1)');
+    expect(sidebarBlock).toContain('width: calc(var(--mm-rail-width) + var(--mm-rail-bleed))');
+    expect(sidebarBlock).toContain('margin-left: calc(var(--mm-rail-bleed) * -1)');
     expect(sidebarBlock).toContain('padding: 0');
+    const sidebarPlacementBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-workspace-sidebar,\n.workflow-workspace-sidebar-slot',
+    );
+    expect(sidebarPlacementBlock).toContain('grid-column: rail-start / content-start');
+    const sidebarSlotBlock = cssRuleBlocks(dashboardCss, '.workflow-workspace-sidebar-slot')
+      .find((block) => block.includes('width: var(--mm-rail-width)')) ?? '';
+    expect(sidebarSlotBlock).toContain('width: var(--mm-rail-width)');
 
     // Header and rows re-inset the left padding by the bleed so titles land at
     // the same 1rem inset as the list table's first column.
     const sidebarHeaderBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-header');
-    expect(sidebarHeaderBlock).toContain('padding: 0.5rem 0.75rem 0.5rem var(--workflow-list-slab-bleed-inline)');
+    expect(sidebarHeaderBlock).toContain('padding: 0.5rem 0.75rem 0.5rem var(--mm-rail-bleed)');
 
     const sidebarRowBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-row');
-    expect(sidebarRowBlock).toContain('0.58rem 0.55rem 0.58rem var(--workflow-list-slab-bleed-inline)');
+    expect(sidebarRowBlock).toContain('0.58rem 0.55rem 0.58rem var(--mm-rail-bleed)');
   });
 
   it('MM-1138 Q1 scopes the workflow-list row divider to the shared list token', async () => {
@@ -1550,34 +1560,40 @@ describe('Dashboard shared entry', () => {
   });
 
   it('MM-1138 Q2 keeps the create page content anchored when the rail is toggled', async () => {
-    // Primary content stays in column 2 rather than spanning the full width.
-    const primaryCollapsedBlock = cssRuleBlock(
-      dashboardCss,
-      '.workflow-start-workspace[data-sidebar-collapsed="true"] .workflow-start-primary',
-    );
-    expect(primaryCollapsedBlock).toContain('grid-column: 2');
-    expect(primaryCollapsedBlock).not.toContain('1 / -1');
+    const startWorkspaceBlock = cssRuleBlock(dashboardCss, '.workflow-start-workspace');
+    expect(startWorkspaceBlock).toContain('--mm-content-max: 72rem');
+    expect(startWorkspaceBlock).toContain('--workflow-start-primary-offset');
 
-    // The two-column track stays reserved on the create page when collapsed.
-    const createCollapsedGridBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
-      normalizeCssSelector(rule.selector)
-        === '.workflow-start-workspace.workflow-workspace-shell[data-sidebar-collapsed="true"]' &&
+    // Wide screens use the symmetric three-track shell, so create content and
+    // its floating bar are viewport-centered whether the rail is visible or not.
+    const wideStartBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.workflow-start-workspace' &&
       rule.parent?.type === 'atrule' &&
       rule.parent.name === 'media' &&
+      rule.parent.params.includes('min-width: 114rem')
+    ));
+    expect(wideStartBlock).toContain('--workflow-start-primary-offset: 0rem');
+    expect(wideStartBlock).toContain('--workflow-start-primary-available-width: calc(100% - 2rem)');
+
+    // Below the threshold, the layout intentionally falls back to the older
+    // in-flow behavior: collapsed create content spans the single available
+    // column and the floating bar resets to the viewport-centered offset.
+    const midShellBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.workflow-workspace-shell' &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes('max-width: 114rem') &&
       rule.parent.params.includes('min-width: 768px')
     ));
-    expect(createCollapsedGridBlock).toContain(
-      'grid-template-columns: var(--workflow-list-column-workflow-width) minmax(0, 1fr)',
-    );
+    expect(midShellBlock).toContain('grid-template-columns: var(--mm-rail-width) minmax(0, 1fr)');
 
-    // The displacement offset is preserved: there is no collapsed reset to 0.
-    const startWorkspaceBlock = cssRuleBlock(dashboardCss, '.workflow-start-workspace');
-    expect(startWorkspaceBlock).toContain('--workflow-start-primary-offset');
-    const collapsedOffsetResetBlock = cssRuleBlock(
-      dashboardCss,
-      '.workflow-start-workspace[data-sidebar-collapsed="true"]',
-    );
-    expect(collapsedOffsetResetBlock).not.toContain('--workflow-start-primary-offset: 0rem');
+    const midCollapsedPrimaryBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      rule.selector.includes('.workflow-start-workspace[data-sidebar-collapsed="true"] .workflow-start-primary') &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes('max-width: 114rem')
+    ));
+    expect(midCollapsedPrimaryBlock).toContain('grid-column: 1 / -1');
   });
 
   it('MM-1116 defines one workflow-list row metric token family for table and sidebar modes', async () => {
@@ -1592,7 +1608,8 @@ describe('Dashboard shared entry', () => {
     expect(tableWorkflowColumnBlock).toContain('width: var(--workflow-list-column-workflow-width)');
 
     const shellBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-shell');
-    expect(shellBlock).toContain('grid-template-columns: var(--workflow-list-column-workflow-width) minmax(0, 1fr)');
+    expect(shellBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
+    expect(shellBlock).toContain('[content-start] min(var(--mm-content-max), calc(100% - 2rem))');
 
     const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
     expect(sidebarBlock).not.toContain('border-right');
@@ -2000,6 +2017,10 @@ describe('Dashboard shared entry', () => {
       dashboardCss,
       isMobileWorkflowRule('.workflow-list-view-options-popover'),
     );
+    const mobileWorkspaceSidebarBlock = cssRuleBlockMatching(
+      dashboardCss,
+      isMobileWorkflowRule('.workflow-workspace-sidebar, .workflow-workspace-sidebar-slot'),
+    );
 
     expect(mobileSlabBlock).toContain('border: 0');
     expect(mobileSlabBlock).toContain('border-radius: 0');
@@ -2013,6 +2034,8 @@ describe('Dashboard shared entry', () => {
     expect(mobileFooterBlock).toContain('border-top: 0');
     expect(mobileFooterBlock).toContain('padding-left: 0');
     expect(mobileFooterBlock).toContain('padding-right: 0');
+
+    expect(mobileWorkspaceSidebarBlock).toContain('width: 100%');
 
     expect(mobileViewOptionsPopoverBlock).toContain('right: auto');
     expect(mobileViewOptionsPopoverBlock).toContain('left: 0');
