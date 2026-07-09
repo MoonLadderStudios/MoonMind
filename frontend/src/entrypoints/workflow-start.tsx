@@ -3236,23 +3236,23 @@ function capabilityFieldVisible(
   values: Record<string, unknown>,
   defaults?: Record<string, unknown>,
 ): boolean {
-  const visibleWhen = recordValue(uiSchema.visibleWhen);
+  const visibleWhen = recordValue(uiSchema["visibleWhen"]);
   if (Object.keys(visibleWhen).length === 0) {
     return true;
   }
-  const field = String(visibleWhen.field || "").trim();
+  const field = String(visibleWhen["field"] ?? "").trim();
   if (!field) {
     return true;
   }
   const actual =
-    values[field] !== undefined
+    values && values[field] !== undefined
       ? values[field]
       : safeCapabilityDefault(defaults, field);
   if (Object.prototype.hasOwnProperty.call(visibleWhen, "equals")) {
-    return actual === visibleWhen.equals;
+    return actual === visibleWhen["equals"];
   }
-  if (Array.isArray(visibleWhen.oneOf)) {
-    return visibleWhen.oneOf.some((value) => value === actual);
+  if (Array.isArray(visibleWhen["oneOf"])) {
+    return visibleWhen["oneOf"].some((value) => value === actual);
   }
   return true;
 }
@@ -3542,7 +3542,7 @@ function resolvedPresetInputValues(
 }
 
 function validateSchemaCapabilityValues(
-  detail: Pick<PresetDetail, "inputSchema" | "uiSchema">,
+  detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults">,
   values: Record<string, unknown>,
 ): Record<string, string> {
   const errors: Record<string, string> = {};
