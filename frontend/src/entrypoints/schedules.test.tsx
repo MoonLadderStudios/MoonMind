@@ -236,6 +236,7 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
+    expect(screen.getAllByText("Daily repository sweep")).toHaveLength(1);
     expect(await screen.findByText("Sparse schedule")).not.toBeNull();
     expect(screen.getByText("Failing schedule")).not.toBeNull();
     expect(screen.getAllByText("Active").length).toBeGreaterThanOrEqual(1);
@@ -246,6 +247,57 @@ describe("SchedulesPage", () => {
     expect(screen.getByText("Skip / Latest")).not.toBeNull();
     expect(screen.getByText("Adapter rejected schedule")).not.toBeNull();
     expect(screen.getByText("Total").nextElementSibling?.textContent).toBe("3");
+  });
+
+  it("renders mobile schedule cards only at the mobile breakpoint and preserves dispatch errors", async () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === "(max-width: 720px)",
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            id: "schedule-error",
+            name: "Error carrying schedule",
+            enabled: true,
+            cron: "0 12 * * *",
+            timezone: "UTC",
+            lastDispatchStatus: "enqueued",
+            lastDispatchError: "  Last adapter failure  ",
+            nextRunAt: null,
+            lastScheduledFor: null,
+            target: {},
+            policy: {},
+          },
+        ],
+      }),
+    } as Response);
+
+    try {
+      renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+      expect(await screen.findByLabelText("Recurring schedule cards")).not.toBeNull();
+      expect(screen.getByText("Enqueued: Last adapter failure")).not.toBeNull();
+    } finally {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: originalMatchMedia,
+      });
+    }
   });
 
   it("renders the documented Updated and Actions columns in the recurring table", async () => {

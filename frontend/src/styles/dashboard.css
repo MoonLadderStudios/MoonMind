@@ -1460,6 +1460,10 @@ h1 {
   gap: 0.75rem;
 }
 
+.schedules-mobile-card-list {
+  display: none;
+}
+
 .recurring-schedule-workspace {
   display: grid;
   grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
@@ -3587,6 +3591,109 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(var(--mm-danger) / 0.5);
   background: rgb(var(--mm-danger) / 0.08);
   color: rgb(var(--mm-danger));
+}
+
+@media (max-width: 1180px) {
+  .schedules-table-panel .data-table [data-column-key="policy"],
+  .schedules-table-panel .data-table [data-column-key="updatedAt"] {
+    display: none;
+  }
+}
+
+@media (max-width: 980px) {
+  .schedules-table-panel .data-table [data-column-key="lastScheduledFor"] {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .schedules-table-panel .data-table-slab {
+    display: none;
+  }
+
+  .schedules-mobile-card-list {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .schedules-mobile-card-list-state {
+    padding: 0.85rem;
+    border: 1px solid rgb(var(--mm-border) / 0.72);
+    border-radius: 0.65rem;
+    color: rgb(var(--mm-muted));
+    background: rgb(var(--mm-panel) / 0.82);
+  }
+
+  .schedules-mobile-card {
+    display: grid;
+    gap: 0.75rem;
+    min-width: 0;
+    padding: 0.9rem;
+    border: 1px solid rgb(var(--mm-border) / 0.72);
+    border-radius: 0.65rem;
+    background: rgb(var(--mm-panel) / 0.86);
+    box-shadow: 0 14px 26px -24px rgb(var(--mm-ink) / 0.48);
+  }
+
+  .schedules-mobile-card-link {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-width: 0;
+    color: rgb(var(--mm-ink));
+    text-decoration: none;
+  }
+
+  .schedules-mobile-card-link:hover,
+  .schedules-mobile-card-link:focus-visible {
+    color: rgb(var(--mm-accent));
+    text-decoration: underline;
+  }
+
+  .schedules-mobile-card-title {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-weight: 760;
+    line-height: 1.25;
+  }
+
+  .schedules-mobile-card-facts {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.65rem;
+    margin: 0;
+  }
+
+  .schedules-mobile-card-facts div {
+    display: grid;
+    gap: 0.18rem;
+    min-width: 0;
+  }
+
+  .schedules-mobile-card-facts dt {
+    color: rgb(var(--mm-muted));
+    font-size: 0.74rem;
+    font-weight: 750;
+    text-transform: uppercase;
+  }
+
+  .schedules-mobile-card-facts dd {
+    display: grid;
+    gap: 0.12rem;
+    min-width: 0;
+    margin: 0;
+    color: rgb(var(--mm-ink));
+    overflow-wrap: anywhere;
+  }
+
+  .schedules-mobile-card-facts dd span {
+    color: rgb(var(--mm-muted));
+    font-size: 0.8rem;
+  }
 }
 
 .notice.ok {

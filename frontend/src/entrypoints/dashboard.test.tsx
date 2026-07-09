@@ -294,6 +294,7 @@ describe('Dashboard shared entry', () => {
   let fetchSpy: MockInstance;
   let dashboardCss: string;
   const originalWebSocket = window.WebSocket;
+  const originalMatchMedia = window.matchMedia;
 
   beforeAll(async () => {
     const { readFileSync } = await import('node:fs');
@@ -337,6 +338,11 @@ describe('Dashboard shared entry', () => {
   afterEach(() => {
     fetchSpy.mockRestore();
     window.WebSocket = originalWebSocket;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
     document.querySelectorAll('[data-nav]').forEach((node) => node.remove());
     window.localStorage.clear();
     window.history.replaceState({}, '', '/');
@@ -525,6 +531,66 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('complementary', { name: 'Recurring schedule navigation' })).toBeTruthy();
     expect(screen.getByRole('link', { name: /Daily recurring scan/ }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('MM-1149 renders mobile recurring schedule cards with standalone detail links and required facts', async () => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === '(max-width: 720px)',
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 'schedule-one',
+              name: 'Daily recurring scan',
+              enabled: true,
+              cron: '0 9 * * *',
+              timezone: 'UTC',
+              nextRunAt: '2026-07-09T09:00:00Z',
+              lastDispatchStatus: 'failed',
+              lastDispatchError: 'Provider queue rejected the run',
+              target: {
+                kind: 'queue_task',
+                job: { payload: { repository: 'MoonLadderStudios/MoonMind' } },
+              },
+              policy: {},
+            }],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    const cardList = await screen.findByRole('list', { name: 'Recurring schedule cards' });
+    expect(cardList.textContent).toContain('Daily recurring scan');
+    expect(cardList.textContent).toContain('Needs attention');
+    expect(cardList.textContent).toContain('0 9 * * *');
+    expect(cardList.textContent).toContain('UTC');
+    expect(cardList.textContent).toContain('Queue Task');
+    expect(cardList.textContent).toContain('MoonLadderStudios/MoonMind');
+    expect(cardList.textContent).toContain('Provider queue rejected the run');
+    expect(cardList.querySelector('a')?.getAttribute('href')).toBe('/schedules/schedule-one');
   });
 
   it('verifies remembered recurring IDs before opening sidebar mode from the schedules table', async () => {
@@ -2147,6 +2213,42 @@ describe('Dashboard shared entry', () => {
     expect(cardBlock).toContain('border: 1px solid rgb(var(--mm-border) / 0.8)');
     expect(cardBlock).toContain('border-radius: 1rem');
     expect(cardBlock).toContain('background: rgb(var(--mm-panel) / 0.78)');
+  });
+
+  it('MM-1149 switches recurring schedules from reduced tablet columns to mobile cards', async () => {
+    const recurringMediaRule = (selector: string, maxWidth: string) => (rule: Rule) =>
+      rule.selector.split(',').map(normalizeCssSelector).includes(selector) &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes(`max-width: ${maxWidth}`);
+
+    const tabletPolicyHeaderBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="policy"]', '1180px'),
+    );
+    const tabletUpdatedCellBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="updatedAt"]', '1180px'),
+    );
+    const narrowLastScheduledBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="lastScheduledFor"]', '980px'),
+    );
+    const mobileTableBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-table-panel .data-table-slab', '720px'),
+    );
+    const mobileCardListBlock = cssRuleBlockMatching(
+      dashboardCss,
+      recurringMediaRule('.schedules-mobile-card-list', '720px'),
+    );
+
+    expect(cssRuleBlock(dashboardCss, '.schedules-mobile-card-list')).toContain('display: none');
+    expect(tabletPolicyHeaderBlock).toContain('display: none');
+    expect(tabletUpdatedCellBlock).toContain('display: none');
+    expect(narrowLastScheduledBlock).toContain('display: none');
+    expect(mobileTableBlock).toContain('display: none');
+    expect(mobileCardListBlock).toContain('display: grid');
   });
 
   it('stacks Settings section radio controls on mobile viewports', async () => {

@@ -13,6 +13,8 @@ import {
 } from '../lib/recurringScheduleFocus';
 import { formatStatusLabel } from '../utils/formatters';
 
+const SCHEDULES_MOBILE_MEDIA_QUERY = '(max-width: 720px)';
+
 const ScheduleSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -367,6 +369,18 @@ function policySummary(schedule: Schedule): string {
     ? String((catchup as { mode?: unknown }).mode || '').trim()
     : '';
   return [overlapMode, catchupMode].filter(Boolean).map((value) => titleCaseLabel(formatStatusLabel(value))).join(' / ') || '-';
+}
+
+function dispatchAttentionLabel(schedule: Schedule): string {
+  const error = schedule.lastDispatchError?.trim();
+  const status = schedule.lastDispatchStatus?.trim();
+  if (scheduleState(schedule) === 'attention') {
+    return error
+      ? `Needs attention: ${error}`
+      : 'Needs attention';
+  }
+  const statusLabel = status ? titleCaseLabel(formatStatusLabel(status)) : 'No dispatch attention';
+  return error ? `${statusLabel}: ${error}` : statusLabel;
 }
 
 function formatJsonValue(value: unknown): string {
@@ -1358,6 +1372,101 @@ function ScheduleDetailPage({
   );
 }
 
+function RecurringScheduleMobileList({
+  schedules,
+  isLoading,
+  isError,
+  error,
+}: {
+  schedules: Schedule[];
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+}) {
+  if (isLoading) {
+    return (
+      <div className="schedules-mobile-card-list" aria-busy="true">
+        <LoadingPlaceholder
+          surface="schedules"
+          region="mobile-list"
+          variant="table"
+          density="compact"
+          preserveContext
+        />
+      </div>
+    );
+  }
+  if (isError) {
+    return (
+      <div className="schedules-mobile-card-list schedules-mobile-card-list-state" role="alert">
+        {errorMessage(error, 'Failed to fetch schedules')}
+      </div>
+    );
+  }
+  if (schedules.length === 0) {
+    return (
+      <div className="schedules-mobile-card-list schedules-mobile-card-list-state">
+        No recurring schedules yet. Create one from the workflow page.
+      </div>
+    );
+  }
+  return (
+    <ul className="schedules-mobile-card-list" aria-label="Recurring schedule cards">
+      {schedules.map((schedule) => (
+        <li key={schedule.id} className="schedules-mobile-card">
+          <a className="schedules-mobile-card-link" href={`/schedules/${encodeURIComponent(schedule.id)}`}>
+            <span className="schedules-mobile-card-title">{schedule.name}</span>
+            <span className={`schedules-state schedules-state--${scheduleState(schedule)}`}>
+              {stateLabel(schedule)}
+            </span>
+          </a>
+          <dl className="schedules-mobile-card-facts">
+            <div>
+              <dt>Cadence</dt>
+              <dd>
+                <code>{schedule.cron}</code>
+                <span>{displayValue(schedule.timezone)}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>Next run</dt>
+              <dd>{formatWhen(schedule.nextRunAt)}</dd>
+            </div>
+            <div>
+              <dt>Target</dt>
+              <dd>
+                <strong>{targetKind(schedule)}</strong>
+                <span>{targetRepository(schedule)}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>Dispatch</dt>
+              <dd>{dispatchAttentionLabel(schedule)}</dd>
+            </div>
+          </dl>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function useSchedulesMobileLayout(): boolean {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+    const query = window.matchMedia(SCHEDULES_MOBILE_MEDIA_QUERY);
+    const update = (event: MediaQueryList | MediaQueryListEvent) => setIsMobile(event.matches);
+    update(query);
+    query.addEventListener?.('change', update);
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+
+  return isMobile;
+}
+
 function ScheduleRowActions({
   schedule,
   payload,
@@ -1476,6 +1585,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     const dueSoon = schedules.filter((schedule) => isDueSoon(schedule, now)).length;
     return { active, attention, dueSoon, total: schedules.length };
   }, [schedules]);
+  const isMobileLayout = useSchedulesMobileLayout();
 
   useEffect(() => {
     if (routeDefinitionId) {
@@ -1565,6 +1675,14 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
       </section>
 
       <section className="schedules-table-panel" aria-label="Recurring schedule list">
+        {isMobileLayout ? (
+          <RecurringScheduleMobileList
+            schedules={schedules}
+            isLoading={isLoading}
+            isError={isError}
+            error={error}
+          />
+        ) : null}
         <DataTable
             data={schedules}
             isLoading={isLoading}
