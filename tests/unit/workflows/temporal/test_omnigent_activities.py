@@ -5,7 +5,7 @@ import pytest
 from temporalio.testing import ActivityEnvironment
 
 from moonmind.omnigent import execute as omnigent_execute_module
-from moonmind.omnigent.execute import LocalOmnigentArtifactGateway
+from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.temporal.activities import (
