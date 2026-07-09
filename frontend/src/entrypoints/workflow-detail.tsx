@@ -3899,7 +3899,13 @@ function StepObservabilityGroup({
         workflowId: row.workflowId,
         idempotencyKey: bridgeIdempotencyKey,
       }),
-    enabled: Boolean(logStreamingEnabled && !agentRunId && !explicitBridgeSessionId && row.workflowId),
+    enabled: Boolean(
+      logStreamingEnabled &&
+        !agentRunId &&
+        !explicitBridgeSessionId &&
+        row.workflowId &&
+        bridgeIdempotencyKey,
+    ),
     staleTime: stepTerminal(row.status) ? Infinity : 2000,
     retry: false,
   });
@@ -5509,10 +5515,22 @@ function BridgeSessionLogsPanel({
     const sequences = eventsQuery.data?.events
       .map((event) => event.sequence)
       .filter((sequence) => Number.isFinite(sequence));
-    setLogContent(historyRows);
-    lastSeqRef.current = sequences && sequences.length > 0 ? Math.max(...sequences) : null;
-    setViewerState(isTerminal ? 'ended' : 'live');
-  }, [eventsQuery.data, eventsQuery.isSuccess, historyRows, isTerminal]);
+    setLogContent((prev) => {
+      const rowsById = new Map(prev.map((row) => [row.id, row]));
+      for (const row of historyRows) {
+        rowsById.set(row.id, row);
+      }
+      return Array.from(rowsById.values()).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+    });
+    if (sequences && sequences.length > 0) {
+      lastSeqRef.current = Math.max(lastSeqRef.current ?? 0, ...sequences);
+    }
+    setViewerState('live');
+  }, [eventsQuery.data, eventsQuery.isSuccess, historyRows]);
+
+  useEffect(() => {
+    if (isTerminal) setViewerState('ended');
+  }, [isTerminal]);
 
   useEffect(() => {
     if (!bridgeSessionId || !eventsQuery.isSuccess || isTerminal || !isVisible) return;

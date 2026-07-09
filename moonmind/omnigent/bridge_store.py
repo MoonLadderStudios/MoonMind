@@ -309,7 +309,9 @@ class OmnigentBridgeSessionStore:
 
         key = (idempotency_key or "").strip()
         if key:
-            return await self.get_existing(key)
+            row = await self.get_existing(key)
+            if row is not None:
+                return row
 
         workflow = (workflow_id or "").strip()
         if not workflow:
@@ -325,7 +327,7 @@ class OmnigentBridgeSessionStore:
                 )
             statement = statement.order_by(
                 OmnigentBridgeSession.updated_at.desc(),
-                OmnigentBridgeSession.first_message_post_attempted_at.desc().nullslast(),
+                OmnigentBridgeSession.first_message_post_attempted_at.desc().nulls_last(),
                 OmnigentBridgeSession.created_at.desc(),
             ).limit(1)
             result = await session.execute(statement)

@@ -316,6 +316,85 @@ def test_list_bridge_session_events_returns_chat_projection_shape() -> None:
     assert event["metadata"]["source"] == "omnigent_bridge"
 
 
+def test_list_bridge_session_events_handles_nullable_event_type() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id="evt-null",
+            bridge_session_id="brs-1",
+            sequence=1,
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+            direction="host_to_moonmind",
+            event_type=None,
+            normalized_status="running",
+            text_preview=None,
+            artifact_ref=None,
+            metadata_={},
+        ),
+        SimpleNamespace(
+            event_id="evt-delta",
+            bridge_session_id="brs-1",
+            sequence=2,
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:01+00:00"),
+            direction="host_to_moonmind",
+            event_type="response.output_text.delta",
+            normalized_status="running",
+            text_preview="chunk",
+            artifact_ref=None,
+            metadata_={},
+        ),
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")
+
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+    assert events[0]["stream"] == "stdout"
+    assert events[0]["text"] == "Bridge session event."
+    assert events[0]["kind"] == "system_annotation"
+    assert events[1]["kind"] == "assistant_message_delta"
+
+
+def test_stream_bridge_session_events_keeps_since_and_stops_on_terminal() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id="evt-1",
+            bridge_session_id="brs-1",
+            sequence=1,
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+            direction="host_to_moonmind",
+            event_type="response.output_text.delta",
+            normalized_status="running",
+            text_preview="old",
+            artifact_ref=None,
+            metadata_={},
+        ),
+        SimpleNamespace(
+            event_id="evt-2",
+            bridge_session_id="brs-1",
+            sequence=2,
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:01+00:00"),
+            direction="host_to_moonmind",
+            event_type="response.completed",
+            normalized_status="completed",
+            text_preview="done",
+            artifact_ref=None,
+            metadata_={},
+        ),
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+
+    with client.stream(
+        "GET", f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/stream?since=1"
+    ) as resp:
+        body = resp.read().decode()
+
+    assert resp.status_code == 200
+    assert "evt-1" not in body
+    assert "evt-2" in body
+    assert "event: bridge_event" in body
+
+
 def test_list_bridge_session_events_denies_non_owner() -> None:
     client, _, _ = _build(owner_id=uuid4())
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")

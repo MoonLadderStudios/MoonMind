@@ -253,6 +253,13 @@ async def test_resolve_projection_session_prefers_idempotency_then_latest_workfl
     assert by_key is not None
     assert by_key.bridge_session_id == first.bridge_session_id
 
+    missed_key = await store.resolve_projection_session(
+        workflow_id="mm:wf-owner",
+        idempotency_key="stale-or-execution-key",
+    )
+    assert missed_key is not None
+    assert missed_key.bridge_session_id == second.bridge_session_id
+
     latest = await store.resolve_projection_session(workflow_id="mm:wf-owner")
     assert latest is not None
     assert latest.bridge_session_id == second.bridge_session_id

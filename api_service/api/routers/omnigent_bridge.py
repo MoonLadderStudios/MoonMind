@@ -13,6 +13,8 @@ maps bridge failure classes onto HTTP status codes.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -373,13 +375,16 @@ async def _authorize_bridge_session_projection(
         )
 
 
-def _bridge_event_kind(event_type: str) -> str:
+_BRIDGE_TERMINAL_STATUSES = frozenset({"completed", "failed", "canceled", "timed_out"})
+
+
+def _bridge_event_kind(event_type: str | None) -> str:
     raw = str(event_type or "").strip()
     if raw in {"session.created", "session.started"}:
         return "session_started"
     if raw.startswith("session.input") or raw in {"message.sent", "input.message"}:
         return "user_message_submitted"
-    if raw in {"response.delta", "response.output.delta"}:
+    if raw in {"response.delta", "response.output.delta"} or raw.endswith(".delta"):
         return "assistant_message_delta"
     if raw.startswith("response.output") or raw in {"response.message", "message.received"}:
         return "assistant_message"
@@ -404,10 +409,11 @@ def _bridge_event_kind(event_type: str) -> str:
     return raw.replace(".", "_") or "system_annotation"
 
 
-def _bridge_event_stream(direction: str, event_type: str) -> str:
+def _bridge_event_stream(direction: str, event_type: str | None) -> str:
     if str(direction or "").strip() == "moonmind_to_host":
         return "stdout"
-    if event_type.startswith("session.") or event_type.startswith("resource."):
+    event_type_str = str(event_type or "")
+    if event_type_str.startswith("session.") or event_type_str.startswith("resource."):
         return "session"
     return "stdout"
 
@@ -417,7 +423,8 @@ def _bridge_event_text(row: Any) -> str:
         return row.text_preview
     if row.artifact_ref:
         return "Bridge artifact available."
-    return row.event_type.replace(".", " ") or "Bridge session event."
+    event_type = str(row.event_type or "")
+    return event_type.replace(".", " ") or "Bridge session event."
 
 
 def _bridge_event_payload(row: Any) -> dict[str, Any]:
@@ -520,16 +527,24 @@ async def stream_omnigent_bridge_session_events(
         service=service,
         store=store,
     )
-    rows = await store.list_events(bridge_session_id)
-    if since is not None:
-        rows = [row for row in rows if row.sequence > since]
-
     async def _event_stream():
-        import json
-
-        for row in rows:
-            payload = json.dumps(_bridge_event_payload(row), separators=(",", ":"))
-            yield f"event: bridge_event\ndata: {payload}\n\n"
+        last_sequence = since
+        idle_polls = 0
+        while True:
+            rows = await store.list_events(bridge_session_id)
+            if last_sequence is not None:
+                rows = [row for row in rows if row.sequence > last_sequence]
+            rows.sort(key=lambda row: row.sequence)
+            for row in rows:
+                last_sequence = row.sequence
+                idle_polls = 0
+                payload = json.dumps(_bridge_event_payload(row), separators=(",", ":"))
+                yield f"event: bridge_event\ndata: {payload}\n\n"
+                if str(row.normalized_status or "").strip() in _BRIDGE_TERMINAL_STATUSES:
+                    return
+            idle_polls += 1
+            yield ": keepalive\n\n"
+            await asyncio.sleep(1.0 if idle_polls < 30 else 5.0)
 
     return StreamingResponse(_event_stream(), media_type="text/event-stream")
 
