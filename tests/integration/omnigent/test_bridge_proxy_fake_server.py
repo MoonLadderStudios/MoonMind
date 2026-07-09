@@ -8,11 +8,8 @@ first message, and durable ``session.created`` emission.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 import pytest_asyncio
-from aiohttp import web
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -30,56 +27,22 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+from tests.helpers.omnigent_conformance import (
+    FakeOmnigentServer,
+    start_fake_omnigent_server,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
-
-
-class FakeOmnigentServer:
-    def __init__(self) -> None:
-        self.session_ids: list[str] = []
-        self.create_payloads: list[dict[str, Any]] = []
-
-    def app(self) -> web.Application:
-        app = web.Application()
-        app.router.add_get("/api/agents", self.list_agents)
-        app.router.add_post("/v1/sessions", self.create_session)
-        app.router.add_get("/v1/sessions/{session_id}", self.get_session)
-        return app
-
-    async def list_agents(self, _request: web.Request) -> web.Response:
-        return web.json_response({"agents": [{"id": "agent-1", "name": "codex"}]})
-
-    async def create_session(self, request: web.Request) -> web.Response:
-        payload = await request.json()
-        self.create_payloads.append(payload)
-        session_id = f"session-{len(self.session_ids) + 1}"
-        self.session_ids.append(session_id)
-        return web.json_response({"id": session_id})
-
-    async def get_session(self, request: web.Request) -> web.Response:
-        return web.json_response(
-            {
-                "id": request.match_info["session_id"],
-                "status": "running",
-                "summary": "fake Omnigent snapshot",
-            }
-        )
 
 
 @pytest_asyncio.fixture
 async def fake_server():
     server = FakeOmnigentServer()
-    runner = web.AppRunner(server.app())
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    sockets = site._server.sockets if site._server is not None else []
-    assert sockets
-    host, port = sockets[0].getsockname()[:2]
+    running = await start_fake_omnigent_server(server)
     try:
-        yield server, f"http://{host}:{port}"
+        yield server, running.base_url
     finally:
-        await runner.cleanup()
+        await running.runner.cleanup()
 
 
 @pytest_asyncio.fixture
@@ -151,7 +114,7 @@ async def test_bridge_proxy_create_get_and_journal(fake_server, store) -> None:
     # GET returns an Omnigent-shaped snapshot.
     snapshot = await proxy.get_session("session-1")
     assert snapshot["id"] == "session-1"
-    assert snapshot["summary"] == "fake Omnigent snapshot"
+    assert snapshot["summary"] == "fake Omnigent completed"
 
     # Agent catalog proxied.
     agents = await proxy.list_agents()
