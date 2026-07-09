@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import stat
 import sys
 from pathlib import Path
 
@@ -79,6 +80,7 @@ def test_write_vendors_real_files_and_check_passes(tmp_path, capsys):
     assert "name: moonspec-verify" in skill_md.read_text(encoding="utf-8")
     script = tmp_path / ".specify" / "scripts" / "bash" / "setup-plan.sh"
     assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env bash")
+    assert stat.S_IMODE(script.stat().st_mode) == 0o755
     assert (tmp_path / ".gemini" / "commands" / "moonspec.verify.toml").is_file()
 
     capsys.readouterr()
@@ -98,6 +100,21 @@ def test_check_reports_missing_and_content_drift(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "content differs from moonspec/bundle" in err
     assert "missing: .gemini/commands/moonspec.verify.toml" in err
+
+
+def test_check_reports_mode_drift(tmp_path, capsys):
+    _make_bundle(tmp_path)
+    assert _run(tmp_path, "--write") == 0
+    script = tmp_path / ".specify" / "scripts" / "bash" / "setup-plan.sh"
+    script.chmod(0o644)
+
+    assert _run(tmp_path, "--check") == 1
+
+    err = capsys.readouterr().err
+    assert (
+        "mode differs from moonspec projection: "
+        ".specify/scripts/bash/setup-plan.sh (000644 != 000755)"
+    ) in err
 
 
 def test_check_rejects_symlinked_targets(tmp_path, capsys):
@@ -154,6 +171,23 @@ def test_write_prunes_stale_projection_managed_files_only(tmp_path):
     assert not legacy.exists()
     assert (foreign_skill / "SKILL.md").is_file()
     assert foreign_command.is_file()
+
+
+def test_write_prunes_duplicate_stale_matches_once(tmp_path):
+    source_root = _make_bundle(tmp_path)
+    recipe = source_root / "bundle" / "projections" / "moonmind.yaml"
+    recipe.write_text(
+        recipe.read_text(encoding="utf-8")
+        + "  - .specify/scripts/bash/legacy.sh\n",
+        encoding="utf-8",
+    )
+    assert _run(tmp_path, "--write") == 0
+    legacy = tmp_path / ".specify" / "scripts" / "bash" / "legacy.sh"
+    legacy.write_text("old\n", encoding="utf-8")
+
+    assert _run(tmp_path, "--write") == 0
+
+    assert not legacy.exists()
 
 
 def test_plan_fails_fast_on_unclassified_directory_mapping(tmp_path, capsys):

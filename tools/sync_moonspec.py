@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -217,6 +218,7 @@ def _is_projection_managed(
 
 def _stale_paths(plan: Projection, repo_root: Path) -> Iterator[Path]:
     expected = {item.target for item in plan.files}
+    seen: set[Path] = set()
     for scope, ownership in sorted(plan.directory_targets.items()):
         if not scope.is_dir():
             continue
@@ -226,6 +228,9 @@ def _stale_paths(plan: Projection, repo_root: Path) -> Iterator[Path]:
             if path in expected:
                 continue
             if _is_projection_managed(plan, scope, ownership, path):
+                if path in seen:
+                    continue
+                seen.add(path)
                 yield path
     for pattern in plan.unexpected_patterns:
         try:
@@ -236,13 +241,36 @@ def _stale_paths(plan: Projection, repo_root: Path) -> Iterator[Path]:
             if path.is_dir() and not path.is_symlink():
                 continue
             _resolve_inside(path, repo_root, "unexpectedLegacy match")
+            if path in seen:
+                continue
+            seen.add(path)
             yield path
+
+
+def _expected_mode(item: PlannedFile) -> int:
+    source_mode = stat.S_IMODE(item.source.stat().st_mode)
+    if (
+        item.target.suffix == ".sh"
+        and ".specify" in item.target.parts
+        and "scripts" in item.target.parts
+        and "bash" in item.target.parts
+    ):
+        return source_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+    return source_mode
 
 
 def _target_matches(item: PlannedFile) -> bool:
     if item.target.is_symlink() or not item.target.is_file():
         return False
-    return item.target.read_bytes() == item.source.read_bytes()
+    target_mode = stat.S_IMODE(item.target.stat().st_mode)
+    return (
+        item.target.read_bytes() == item.source.read_bytes()
+        and target_mode == _expected_mode(item)
+    )
+
+
+def _mode_label(mode: int) -> str:
+    return f"{mode:06o}"[-6:]
 
 
 def _drift(plan: Projection, repo_root: Path) -> list[str]:
@@ -255,8 +283,16 @@ def _drift(plan: Projection, repo_root: Path) -> list[str]:
             drift.append(f"directory blocks vendored file: {rel}")
         elif not item.target.is_file():
             drift.append(f"missing: {rel}")
-        elif not _target_matches(item):
-            drift.append(f"content differs from moonspec/bundle: {rel}")
+        else:
+            if item.target.read_bytes() != item.source.read_bytes():
+                drift.append(f"content differs from moonspec/bundle: {rel}")
+            target_mode = stat.S_IMODE(item.target.stat().st_mode)
+            expected_mode = _expected_mode(item)
+            if target_mode != expected_mode:
+                drift.append(
+                    "mode differs from moonspec projection: "
+                    f"{rel} ({_mode_label(target_mode)} != {_mode_label(expected_mode)})"
+                )
     for path in _stale_paths(plan, repo_root):
         drift.append(f"stale projection-managed file: {path.relative_to(repo_root)}")
     return drift
@@ -274,6 +310,7 @@ def _write(plan: Projection, repo_root: Path) -> tuple[list[str], list[str]]:
         if item.target.is_symlink() or item.target.exists():
             item.target.unlink()
         item.target.write_bytes(item.source.read_bytes())
+        item.target.chmod(_expected_mode(item))
         written.append(rel)
 
     removed: list[str] = []
