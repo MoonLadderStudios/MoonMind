@@ -1,1 +1,10 @@
-../../moonspec/bundle/commands/gemini/moonspec.align.toml
+description = "Analyze and remediate MoonSpec artifact drift."
+
+prompt = """
+Use the `moonspec-align` skill to analyze and remediate the active MoonSpec artifacts.
+
+User input:
+{{args}}
+
+Use MoonSpec skill IDs and command IDs only: `moonspec-*` and `/moonspec.*`.
+"""

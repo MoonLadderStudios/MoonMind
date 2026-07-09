@@ -1,1 +1,10 @@
-../../moonspec/bundle/commands/gemini/moonspec.implement.toml
+description = "Implement a one-story MoonSpec task breakdown with TDD."
+
+prompt = """
+Use the `moonspec-implement` skill to execute the active MoonSpec `tasks.md` with TDD.
+
+User input:
+{{args}}
+
+Use MoonSpec skill IDs and command IDs only: `moonspec-*` and `/moonspec.*`.
+"""

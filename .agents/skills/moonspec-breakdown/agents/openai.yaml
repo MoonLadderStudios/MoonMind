@@ -1,1 +1,4 @@
-../../../../moonspec/bundle/skills/moonspec-breakdown/agents/openai.yaml
+interface:
+  display_name: "MoonSpec Breakdown"
+  short_description: "Split designs into coverage-checked one-story specs."
+  default_prompt: "Use $moonspec-breakdown to extract coverage-checked one-story MoonSpec feature specs from this design:"
