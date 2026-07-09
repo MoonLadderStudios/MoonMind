@@ -25,8 +25,10 @@ export function readRecurringScheduleFocusRequest(): RecurringScheduleFocusReque
     if (!raw) {
       return null;
     }
-    const parsed = JSON.parse(raw) as Partial<RecurringScheduleFocusRequest>;
+    const parsed = JSON.parse(raw) as Partial<RecurringScheduleFocusRequest> | null;
     if (
+      !parsed ||
+      typeof parsed !== 'object' ||
       parsed.target !== 'detail-heading' &&
       parsed.target !== 'sidebar-row' &&
       parsed.target !== 'table-row' &&
