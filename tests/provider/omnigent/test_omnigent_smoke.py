@@ -22,6 +22,7 @@ from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeSessionProxy,
 )
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.settings import is_omnigent_enabled
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 pytestmark = [
@@ -29,6 +30,10 @@ pytestmark = [
     pytest.mark.provider_verification,
     pytest.mark.requires_credentials,
 ]
+
+_SUCCESS_STATUSES = {"completed", "succeeded"}
+_TERMINAL_STATUSES = _SUCCESS_STATUSES | {"failed", "canceled", "timed_out"}
+_SMOKE_PROMPT = "Reply with: MM-995 live bridge smoke complete"
 
 
 def _live_env() -> dict[str, str]:
@@ -47,7 +52,26 @@ def _live_env() -> dict[str, str]:
             "live Omnigent smoke requires provider credentials: "
             + ", ".join(missing)
         )
+    if not is_omnigent_enabled(env=required):
+        pytest.skip("live Omnigent smoke requires OMNIGENT_ENABLED=true")
     return required
+
+
+def _message_event(text: str) -> BridgeSessionEventRequest:
+    return BridgeSessionEventRequest(
+        type="message",
+        data={
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}],
+        },
+    )
+
+
+def _event_status(event: dict[str, object]) -> str:
+    session = event.get("session")
+    if isinstance(session, dict):
+        return str(session.get("status") or "").strip().lower()
+    return ""
 
 
 @pytest_asyncio.fixture
@@ -92,12 +116,15 @@ async def test_live_omnigent_bridge_smoke_disposable_managed_session(
     )
     posted = await proxy.post_event(
         session_id=created["id"],
-        event=BridgeSessionEventRequest(
-            type="message",
-            text="Reply with: MM-995 live bridge smoke complete",
-        ),
+        event=_message_event(_SMOKE_PROMPT),
     )
-    stream_events = [event async for event in client.stream_events(created["id"])]
+    stream_events = []
+    async for event in client.stream_events(created["id"]):
+        stream_events.append(event)
+        if event.get("type") == "response.completed":
+            break
+        if _event_status(event) in _TERMINAL_STATUSES:
+            break
     final_snapshot = await proxy.get_session(created["id"])
     harvested = await proxy.harvest_session(created["id"])
     reused = await proxy.create_session(
@@ -113,6 +140,7 @@ async def test_live_omnigent_bridge_smoke_disposable_managed_session(
     assert posted
     assert stream_events
     assert final_snapshot["id"] == created["id"]
+    assert str(final_snapshot.get("status") or "").lower() in _SUCCESS_STATUSES
     assert "resources" in harvested
     assert reused["id"] == created["id"]
     assert reused["moonmind"]["reused"] is True

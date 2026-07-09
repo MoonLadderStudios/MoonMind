@@ -110,6 +110,8 @@ class FakeOmnigentServer:
                 "fake Omnigent failed"
                 if status == "failed"
                 else "fake Omnigent completed"
+                if status == "completed"
+                else "fake Omnigent running"
             ),
             "githubPrUrl": "https://github.example/org/repo/pull/42",
         }
@@ -178,7 +180,9 @@ class FakeOmnigentServer:
         body = {
             "README.md": b"# Fake repo\n",
             "src/app.py": b"print('fake')\n",
-        }[path]
+        }.get(path)
+        if body is None:
+            return web.Response(status=404, text="File not found")
         return web.Response(body=body, content_type="text/plain")
 
     async def get_workspace_diff(self, request: web.Request) -> web.Response:

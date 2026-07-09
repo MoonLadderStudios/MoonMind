@@ -114,7 +114,7 @@ async def test_bridge_proxy_create_get_and_journal(fake_server, store) -> None:
     # GET returns an Omnigent-shaped snapshot.
     snapshot = await proxy.get_session("session-1")
     assert snapshot["id"] == "session-1"
-    assert snapshot["summary"] == "fake Omnigent completed"
+    assert snapshot["summary"] == "fake Omnigent running"
 
     # Agent catalog proxied.
     agents = await proxy.list_agents()
