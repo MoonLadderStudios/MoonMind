@@ -7760,6 +7760,75 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('renders bridge session events before managed-runtime missing copy', async () => {
+    window.history.pushState({}, 'Bridge Chat Test', '/workflows/test-123/chat?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: 'non-uuid-run',
+      runId: 'non-uuid-run',
+      source: 'temporal',
+      title: 'Bridge task',
+      summary: 'Completed through bridge',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      closedAt: '2026-07-09T00:00:30Z',
+      createdAt: '2026-07-09T00:00:00Z',
+      updatedAt: '2026-07-09T00:00:30Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            bridgeSessionId: 'brs-1',
+            workflowId: 'test-123',
+            status: 'completed',
+          }),
+        } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/brs-1/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            bridgeSessionId: 'brs-1',
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-07-09T00:00:10Z',
+                stream: 'stdout',
+                text: 'Bridge assistant output',
+                kind: 'assistant_message',
+                sessionId: 'brs-1',
+                metadata: { responseId: 'resp-1', source: 'omnigent_bridge' },
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Bridge assistant output').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText(/managed runtime observability record was created/i)).toBeNull();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/')),
+    ).toBe(false);
+  });
+
   it('renders artifact download link using explicit downloadUrl when present', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {

@@ -2657,6 +2657,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/bridge-sessions/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve Omnigent Bridge Session Projection
+         * @description Resolve the bridge session Workflow Chat should read before legacy logs.
+         */
+        get: operations["resolve_omnigent_bridge_session_projection_api_omnigent_bridge_sessions_resolve_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/bridge-sessions/{bridge_session_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Omnigent Bridge Session Events
+         * @description List Workflow Chat projection events for one bridge session (§15).
+         */
+        get: operations["list_omnigent_bridge_session_events_api_omnigent_bridge_sessions__bridge_session_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/bridge-sessions/{bridge_session_id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Omnigent Bridge Session Events
+         * @description Stream bridge session projection events as server-sent events (§15).
+         */
+        get: operations["stream_omnigent_bridge_session_events_api_omnigent_bridge_sessions__bridge_session_id__stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/v1/sessions/{session_id}/events": {
         parameters: {
             query?: never;
@@ -16086,6 +16146,107 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_omnigent_bridge_session_projection_api_omnigent_bridge_sessions_resolve_get: {
+        parameters: {
+            query?: {
+                workflowId?: string | null;
+                agentRunId?: string | null;
+                idempotencyKey?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_omnigent_bridge_session_events_api_omnigent_bridge_sessions__bridge_session_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bridge_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_omnigent_bridge_session_events_api_omnigent_bridge_sessions__bridge_session_id__stream_get: {
+        parameters: {
+            query?: {
+                since?: number | null;
+            };
+            header?: never;
+            path: {
+                bridge_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

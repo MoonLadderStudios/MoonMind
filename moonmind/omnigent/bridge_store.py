@@ -261,6 +261,81 @@ class OmnigentBridgeSessionStore:
                 agent_run_id=row.moonmind_agent_run_id,
             )
 
+    async def get_bridge_session_owner(
+        self, bridge_session_id: str
+    ) -> BridgeSessionBinding | None:
+        """Return the MoonMind owner for a canonical bridge session id."""
+
+        row = await self.get_bridge_session(bridge_session_id)
+        if row is None:
+            return None
+        return BridgeSessionBinding(
+            workflow_id=row.moonmind_workflow_id,
+            agent_run_id=row.moonmind_agent_run_id,
+        )
+
+    async def get_bridge_session(
+        self, bridge_session_id: str
+    ) -> OmnigentBridgeSession | None:
+        """Return one bridge session by canonical ``bridge_session_id``."""
+
+        key = (bridge_session_id or "").strip()
+        if not key:
+            return None
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.bridge_session_id == key)
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            return _detached(session, row)
+
+    async def resolve_projection_session(
+        self,
+        *,
+        workflow_id: str | None = None,
+        agent_run_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> OmnigentBridgeSession | None:
+        """Resolve the Workflow Chat bridge projection target (§15).
+
+        Resolution prefers an explicit idempotency key when supplied; otherwise
+        it returns the latest bridge session for the workflow, optionally scoped
+        to the step/agent-run binding.
+        """
+
+        key = (idempotency_key or "").strip()
+        if key:
+            row = await self.get_existing(key)
+            if row is not None:
+                return row
+
+        workflow = (workflow_id or "").strip()
+        if not workflow:
+            return None
+        agent_run = (agent_run_id or "").strip()
+        async with self._session_factory() as session:
+            statement = select(OmnigentBridgeSession).where(
+                OmnigentBridgeSession.moonmind_workflow_id == workflow
+            )
+            if agent_run:
+                statement = statement.where(
+                    OmnigentBridgeSession.moonmind_agent_run_id == agent_run
+                )
+            statement = statement.order_by(
+                OmnigentBridgeSession.updated_at.desc(),
+                OmnigentBridgeSession.first_message_post_attempted_at.desc().nulls_last(),
+                OmnigentBridgeSession.created_at.desc(),
+            ).limit(1)
+            result = await session.execute(statement)
+            row = result.scalars().first()
+            if row is None:
+                return None
+            return _detached(session, row)
+
     async def attach_session(
         self, idempotency_key: str, session_id: str
     ) -> OmnigentBridgeSession:

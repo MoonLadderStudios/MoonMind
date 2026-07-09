@@ -228,6 +228,51 @@ async def test_get_session_owner_resolves_by_session_id(store):
 
 
 @pytest.mark.asyncio
+async def test_resolve_projection_session_prefers_idempotency_then_latest_workflow(store):
+    first = await store.get_or_create(
+        request=_request("idem-first"),
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-first",
+    )
+    second = await store.get_or_create(
+        request=_request("idem-second"),
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-second",
+    )
+    await store.mark_posting("idem-second")
+
+    by_key = await store.resolve_projection_session(idempotency_key="idem-first")
+    assert by_key is not None
+    assert by_key.bridge_session_id == first.bridge_session_id
+
+    missed_key = await store.resolve_projection_session(
+        workflow_id="mm:wf-owner",
+        idempotency_key="stale-or-execution-key",
+    )
+    assert missed_key is not None
+    assert missed_key.bridge_session_id == second.bridge_session_id
+
+    latest = await store.resolve_projection_session(workflow_id="mm:wf-owner")
+    assert latest is not None
+    assert latest.bridge_session_id == second.bridge_session_id
+
+    scoped = await store.resolve_projection_session(
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-first",
+    )
+    assert scoped is not None
+    assert scoped.bridge_session_id == first.bridge_session_id
+
+
+@pytest.mark.asyncio
 async def test_attach_and_first_message_transitions(store):
     request = _request()
     await store.get_or_create(
