@@ -135,7 +135,7 @@ function mockScheduleDetailFetch(fetchSpy: MockInstance, overrides: Record<strin
         json: async () => detailRuns,
       } as Response;
     }
-    if (url === "/console/schedules?scope=personal") {
+    if (url.startsWith("/console/schedules?scope=personal")) {
       return {
         ok: true,
         json: async () => ({ items: [schedule] }),
@@ -155,6 +155,7 @@ describe("SchedulesPage", () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
+    window.history.pushState({}, "Test", "/schedules");
     fetchSpy = vi.spyOn(window, "fetch").mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -220,16 +221,24 @@ describe("SchedulesPage", () => {
     vi.mocked(navigateTo).mockReset();
   });
 
-  it("renders page-matched loading placeholders for schedule summary and table regions", () => {
-    fetchSpy.mockReturnValue(new Promise(() => {}) as Promise<Response>);
+  it("renders page-matched loading placeholders for schedule summary and table regions", async () => {
+    let resolveFetch: (value: Response) => void = () => {};
+    fetchSpy.mockReturnValue(new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    }));
 
-    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    renderWithClient(<SchedulesPage payload={{ ...mockPayload, apiBase: "/loading-api" }} />);
 
     expect(screen.getByRole("heading", { name: "Recurring Schedules" })).toBeTruthy();
     expect(screen.getByText("Recurring summary loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByText("Recurring list loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-metric-strip")).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-table")).toBeTruthy();
+    resolveFetch({
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
   });
 
   it("renders streamlined schedule status, target, cadence, and policy columns", async () => {
@@ -516,7 +525,7 @@ describe("SchedulesPage", () => {
     });
     expect(mutationCalls).toEqual([]);
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/recurring-workflows?scope=personal"),
+      fetchSpy.mock.calls.some(([url]) => String(url).startsWith("/api/recurring-workflows?scope=personal")),
     ).toBe(true);
   });
 
@@ -558,7 +567,7 @@ describe("SchedulesPage", () => {
     );
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal&limit=50&sort=updatedAt&sortDir=desc");
   });
 
   it("uses apiBase for the default schedule list endpoint", async () => {
@@ -578,7 +587,117 @@ describe("SchedulesPage", () => {
     );
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/tenant/api/recurring-workflows?scope=personal");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/tenant/api/recurring-workflows?scope=personal&limit=50&sort=updatedAt&sortDir=desc");
+  });
+
+  it("renders recurring filters, chips, safe URL state, and resets pagination on filter changes", async () => {
+    window.history.pushState({}, "Test", "/schedules?cursor=opaque-cursor&unsafe=1&targetPayload=%7B%7D&prompt=secret&limit=25");
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], count: 0 }),
+    } as Response);
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toContain("cursor=opaque-cursor");
+
+    fireEvent.click(screen.getByRole("button", { name: "Schedule filter. No filter applied." }));
+    fireEvent.change(screen.getByLabelText("Schedule filter value"), {
+      target: { value: "nightly" },
+    });
+
+    await waitFor(() => {
+      const latest = String(fetchSpy.mock.calls.at(-1)?.[0]);
+      expect(latest).toContain("schedule=nightly");
+      expect(latest).not.toContain("cursor=opaque-cursor");
+    });
+    expect(screen.getAllByRole("button", { name: "Schedule filter: nightly" }).length).toBeGreaterThanOrEqual(1);
+    expect(window.location.search).toContain("schedule=nightly");
+    expect(window.location.search).not.toContain("unsafe=");
+    expect(window.location.search).not.toContain("targetPayload=");
+    expect(window.location.search).not.toContain("prompt=");
+  });
+
+  it("exposes a mobile filter sheet with the full recurring filter set", async () => {
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Recurring filters" });
+    for (const label of [
+      "Schedule filter value",
+      "State filter value",
+      "Target filter value",
+      "Repository filter value",
+      "Cadence / Timezone filter value",
+      "Next run filter value",
+      "Last scheduled filter value",
+      "Dispatch filter value",
+      "Updated filter value",
+    ]) {
+      expect(within(dialog).getByLabelText(label)).not.toBeNull();
+    }
+  });
+
+  it("uses opaque cursor paging and resets the cursor on page-size changes", async () => {
+    fetchSpy.mockImplementation(async (input) => {
+      const url = String(input);
+      return {
+        ok: true,
+        json: async () => ({
+          items: url.includes("cursor=cursor-2") ? [] : [
+            {
+              id: "schedule-page-1",
+              name: "Page one schedule",
+              enabled: true,
+              cron: "0 9 * * *",
+              timezone: "UTC",
+              lastDispatchStatus: null,
+              lastDispatchError: null,
+              nextRunAt: null,
+              lastScheduledFor: null,
+              target: {},
+              policy: {},
+            },
+          ],
+          count: 2,
+          nextPageToken: url.includes("cursor=cursor-2") ? null : "cursor-2",
+        }),
+      } as Response;
+    });
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("Page one schedule")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    await waitFor(() => {
+      expect(String(fetchSpy.mock.calls.at(-1)?.[0])).toContain("cursor=cursor-2");
+    });
+
+    fireEvent.change(screen.getByLabelText("Show"), { target: { value: "20" } });
+
+    await waitFor(() => {
+      const latest = String(fetchSpy.mock.calls.at(-1)?.[0]);
+      expect(latest).toContain("limit=20");
+      expect(latest).not.toContain("cursor=cursor-2");
+    });
+  });
+
+  it("requests server-authoritative sorting instead of current-page sorting", async () => {
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Next Run. Server sorted not active." }));
+
+    await waitFor(() => {
+      const latest = String(fetchSpy.mock.calls.at(-1)?.[0]);
+      expect(latest).toContain("sort=nextRunAt");
+      expect(latest).toContain("sortDir=asc");
+    });
+    expect(screen.getByText("Sorting is server-authoritative.")).not.toBeNull();
   });
 
   it("loads the recurring schedule detail route by the routed definition id", async () => {
@@ -611,7 +730,7 @@ describe("SchedulesPage", () => {
     expect(screen.queryByRole("heading", { name: "Logs" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules?scope=personal")).toBe(true);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith("/console/schedules?scope=personal"))).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha")).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha/runs?limit=200")).toBe(true);
     expect(screen.getByRole("complementary", { name: "Recurring schedule navigation" })).not.toBeNull();
@@ -646,7 +765,7 @@ describe("SchedulesPage", () => {
       if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
         return { ok: true, json: async () => detailRuns } as Response;
       }
-      if (url === "/console/schedules?scope=personal") {
+      if (url.startsWith("/console/schedules?scope=personal")) {
         return { ok: true, json: async () => ({ items: [] }) } as Response;
       }
       if (url === "/console/schedules/schedule-alpha") {
@@ -848,7 +967,7 @@ describe("SchedulesPage", () => {
     );
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal&limit=50&sort=updatedAt&sortDir=desc");
   });
 
   it("keeps update requests keyed by the route definition id", async () => {

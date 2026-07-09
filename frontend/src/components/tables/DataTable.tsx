@@ -4,7 +4,7 @@ export type ColumnAlign = 'left' | 'center' | 'right';
 
 export interface Column<T> {
   key: keyof T | string;
-  header: string;
+  header: React.ReactNode;
   render?: (item: T) => React.ReactNode;
   /** Cell + header text alignment. */
   align?: ColumnAlign;
@@ -159,7 +159,7 @@ export function DataTable<T>({
             type="button"
             className="data-table__sort"
             onClick={() => handleSort(key)}
-            aria-label={`Sort by ${column.sortLabel ?? column.header}${
+            aria-label={`Sort by ${column.sortLabel ?? String(column.header)}${
               isSorted
                 ? sort?.direction === 'asc'
                   ? ' (ascending)'

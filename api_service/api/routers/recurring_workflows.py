@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
@@ -29,6 +31,7 @@ from api_service.services.recurring_workflows_service import (
 
 router = APIRouter(prefix="/api/recurring-workflows", tags=["recurring-workflows"])
 logger = logging.getLogger(__name__)
+_MIN_AWARE_DATETIME = datetime.min.replace(tzinfo=UTC)
 
 class RecurringWorkflowActionPermissionsModel(BaseModel):
     """Action availability for a recurring schedule visible to the caller."""
@@ -80,6 +83,8 @@ class RecurringWorkflowDefinitionListResponse(BaseModel):
     items: list[RecurringWorkflowDefinitionModel] = Field(
         default_factory=list, alias="items"
     )
+    count: int = Field(0, alias="count")
+    next_page_token: Optional[str] = Field(None, alias="nextPageToken")
 
 class RecurringWorkflowRunModel(BaseModel):
     """Serialized recurring run history record."""
@@ -294,6 +299,149 @@ def _audit_schedule_action(
         },
     )
 
+def _cursor_from_offset(offset: int) -> str:
+    raw = f"offset:{max(0, offset)}".encode("ascii")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+def _offset_from_cursor(cursor: str | None) -> int:
+    raw = str(cursor or "").strip()
+    if not raw:
+        return 0
+    try:
+        padded = raw + ("=" * (-len(raw) % 4))
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_recurring_cursor",
+                "message": "Recurring schedule cursor is invalid.",
+            },
+        )
+    prefix = "offset:"
+    if not decoded.startswith(prefix):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_recurring_cursor",
+                "message": "Recurring schedule cursor is invalid.",
+            },
+        )
+    try:
+        return max(0, int(decoded[len(prefix) :]))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_recurring_cursor",
+                "message": "Recurring schedule cursor is invalid.",
+            },
+        )
+
+def _definition_repository(definition: RecurringWorkflowDefinition) -> str:
+    target = dict(definition.target or {})
+    job = target.get("job")
+    if isinstance(job, dict):
+        payload = job.get("payload")
+        if isinstance(payload, dict):
+            repository = payload.get("repository")
+            if isinstance(repository, str):
+                return repository
+    initial_parameters = target.get("initialParameters")
+    if isinstance(initial_parameters, dict):
+        repository = initial_parameters.get("repository")
+        if isinstance(repository, str):
+            return repository
+    repository = target.get("repository")
+    return repository if isinstance(repository, str) else ""
+
+def _definition_target_kind(definition: RecurringWorkflowDefinition) -> str:
+    target = dict(definition.target or {})
+    raw = target.get("kind") or target.get("workflowType") or target.get("workflow_type")
+    return str(raw or "")
+
+def _definition_state(
+    definition: RecurringWorkflowDefinition,
+    runtime_summary: RecurringScheduleRuntimeSummary | None,
+) -> str:
+    if not definition.enabled:
+        return "paused"
+    status_value = (
+        runtime_summary.last_dispatch_status
+        if runtime_summary is not None
+        else definition.last_dispatch_status
+    )
+    raw = str(status_value or "").lower()
+    return "attention" if "error" in raw or "failed" in raw else "active"
+
+def _runtime_value(
+    definition: RecurringWorkflowDefinition,
+    runtime_summary: RecurringScheduleRuntimeSummary | None,
+    field_name: str,
+) -> Any:
+    runtime_candidate = getattr(runtime_summary, field_name, None) if runtime_summary else None
+    return runtime_candidate if runtime_candidate is not None else getattr(definition, field_name)
+
+def _contains(value: object, needle: str) -> bool:
+    if not needle:
+        return True
+    return needle.lower() in str(value or "").lower()
+
+def _matches_recurring_filters(
+    definition: RecurringWorkflowDefinition,
+    runtime_summary: RecurringScheduleRuntimeSummary | None,
+    *,
+    schedule: str,
+    state: str,
+    target: str,
+    repository: str,
+    cadence: str,
+    next_run: str,
+    last_scheduled: str,
+    dispatch: str,
+    updated: str,
+) -> bool:
+    return (
+        _contains(f"{definition.name} {definition.id} {definition.description or ''}", schedule)
+        and _contains(_definition_state(definition, runtime_summary), state)
+        and _contains(_definition_target_kind(definition), target)
+        and _contains(_definition_repository(definition), repository)
+        and _contains(f"{definition.cron} {definition.timezone}", cadence)
+        and _contains(_runtime_value(definition, runtime_summary, "next_run_at"), next_run)
+        and _contains(_runtime_value(definition, runtime_summary, "last_scheduled_for"), last_scheduled)
+        and _contains(
+            f"{_runtime_value(definition, runtime_summary, 'last_dispatch_status') or ''} "
+            f"{_runtime_value(definition, runtime_summary, 'last_dispatch_error') or ''}",
+            dispatch,
+        )
+        and _contains(definition.updated_at, updated)
+    )
+
+def _recurring_sort_value(
+    definition: RecurringWorkflowDefinition,
+    runtime_summary: RecurringScheduleRuntimeSummary | None,
+    sort: str,
+) -> Any:
+    if sort == "name":
+        return definition.name.lower()
+    if sort == "state":
+        return _definition_state(definition, runtime_summary)
+    if sort == "target":
+        return _definition_target_kind(definition).lower()
+    if sort == "repository":
+        return _definition_repository(definition).lower()
+    if sort == "cron":
+        return definition.cron
+    if sort == "timezone":
+        return definition.timezone
+    if sort == "nextRunAt":
+        return _runtime_value(definition, runtime_summary, "next_run_at") or _MIN_AWARE_DATETIME
+    if sort == "lastScheduledFor":
+        return _runtime_value(definition, runtime_summary, "last_scheduled_for") or _MIN_AWARE_DATETIME
+    if sort == "dispatch":
+        return str(_runtime_value(definition, runtime_summary, "last_dispatch_status") or "").lower()
+    return definition.updated_at or _MIN_AWARE_DATETIME
+
 def _map_error(exc: Exception) -> HTTPException:
     if isinstance(exc, RecurringWorkflowNotFoundError):
         return HTTPException(
@@ -332,6 +480,29 @@ async def list_recurring_workflows(
     *,
     scope: Literal["personal", "global"] = Query("personal"),
     limit: int = Query(200, ge=1, le=500),
+    cursor: Optional[str] = Query(None),
+    sort: Literal[
+        "updatedAt",
+        "name",
+        "state",
+        "target",
+        "repository",
+        "cron",
+        "timezone",
+        "nextRunAt",
+        "lastScheduledFor",
+        "dispatch",
+    ] = Query("updatedAt"),
+    sort_dir: Literal["asc", "desc"] = Query("desc", alias="sortDir"),
+    schedule: str = Query("", max_length=160),
+    state: str = Query("", max_length=160),
+    target: str = Query("", max_length=160),
+    repository: str = Query("", max_length=160),
+    cadence: str = Query("", max_length=160),
+    next_run: str = Query("", max_length=160, alias="nextRun"),
+    last_scheduled: str = Query("", max_length=160, alias="lastScheduled"),
+    dispatch: str = Query("", max_length=160),
+    updated: str = Query("", max_length=160),
     service: RecurringWorkflowsService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> RecurringWorkflowDefinitionListResponse:
@@ -342,9 +513,42 @@ async def list_recurring_workflows(
     definitions = await service.list_definitions(
         scope=scope,
         user_id=user_id if isinstance(user_id, UUID) else None,
-        limit=limit,
+        limit=500,
     )
     runtime_summaries = await service.runtime_summaries_for_definitions(definitions)
+    filtered_definitions = [
+        item
+        for item in definitions
+        if _matches_recurring_filters(
+            item,
+            runtime_summaries.get(item.id),
+            schedule=schedule,
+            state=state,
+            target=target,
+            repository=repository,
+            cadence=cadence,
+            next_run=next_run,
+            last_scheduled=last_scheduled,
+            dispatch=dispatch,
+            updated=updated,
+        )
+    ]
+    filtered_definitions.sort(
+        key=lambda item: (
+            _recurring_sort_value(item, runtime_summaries.get(item.id), sort),
+            str(item.id),
+        ),
+        reverse=sort_dir == "desc",
+    )
+    offset = _offset_from_cursor(cursor)
+    page_size = max(1, min(int(limit), 500))
+    page_items = filtered_definitions[offset : offset + page_size]
+    next_offset = offset + page_size
+    next_page_token = (
+        _cursor_from_offset(next_offset)
+        if next_offset < len(filtered_definitions)
+        else None
+    )
     return RecurringWorkflowDefinitionListResponse(
         items=[
             _serialize_definition(
@@ -355,8 +559,10 @@ async def list_recurring_workflows(
                     user=user,
                 ),
             )
-            for item in definitions
-        ]
+            for item in page_items
+        ],
+        count=len(filtered_definitions),
+        next_page_token=next_page_token,
     )
 
 @router.post(
