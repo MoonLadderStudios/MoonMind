@@ -200,7 +200,7 @@ function hasActiveScheduleListFilters(endpoint: string): boolean {
   try {
     const parsed = new URL(endpoint, 'http://moonmind.local');
     for (const [key, value] of parsed.searchParams.entries()) {
-      const normalizedKey = key.trim().toLowerCase();
+      const normalizedKey = key.trim().toLowerCase().replace(/_/g, '');
       const normalizedValue = value.trim();
       if (!normalizedValue || normalizedKey === 'scope') {
         continue;

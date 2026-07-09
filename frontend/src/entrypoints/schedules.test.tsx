@@ -564,6 +564,37 @@ describe("SchedulesPage", () => {
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal&state=paused");
   });
 
+  it("detects snake_case schedule list filter keys in configured list queries", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response);
+
+    renderWithClient(
+      <SchedulesPage
+        payload={{
+          page: "schedules",
+          apiBase: "/api",
+          initialData: {
+            dashboardConfig: {
+              sources: {
+                schedules: {
+                  list: "/console/schedules?scope=personal&last_scheduled_for=2026-07-09",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("No recurring schedules match the current filters.")).not.toBeNull();
+    expect(screen.queryByText("No recurring schedules yet. Create one from the workflow page.")).toBeNull();
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      "/console/schedules?scope=personal&last_scheduled_for=2026-07-09",
+    );
+  });
+
   it("uses a non-disclosing table-level access message for forbidden schedule lists", async () => {
     fetchSpy.mockResolvedValueOnce({
       ok: false,
