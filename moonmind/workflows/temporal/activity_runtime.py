@@ -1299,6 +1299,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "agent_runtime_publish_session_artifacts",
     ),
+    "agent_runtime.publish_bridge_events": (
+        "agent_runtime",
+        "agent_runtime_publish_bridge_events",
+    ),
     "agent_runtime.reconcile_managed_sessions": (
         "agent_runtime",
         "agent_runtime_reconcile_managed_sessions",
@@ -1329,6 +1333,14 @@ def _artifact_id_from_ref(value: ArtifactRef | str) -> str:
     if not normalized:
         raise TemporalActivityRuntimeError("artifact reference is required")
     return normalized
+
+
+def _string_or_none_for_activity(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
 
 def _derive_integration_title(
     description: str, fallback_title: str | None = None
@@ -9244,6 +9256,182 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.publish_session_artifacts",
             model_type=CodexManagedSessionArtifactsPublication,
         )
+
+    async def agent_runtime_publish_bridge_events(
+        self,
+        payload: Mapping[str, Any] | None = None,
+        /,
+    ) -> dict[str, Any]:
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "payload is required for agent_runtime.publish_bridge_events"
+            )
+        request_raw = payload.get("request")
+        if not isinstance(request_raw, Mapping):
+            raise TemporalActivityRuntimeError(
+                "payload.request is required for agent_runtime.publish_bridge_events"
+            )
+        request = AgentExecutionRequest.model_validate(dict(request_raw))
+        parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
+        communication = parameters.get("communication")
+        if not isinstance(communication, Mapping):
+            return {"skipped": True, "reason": "communication_mode_absent"}
+        mode = str(communication.get("mode") or "").strip()
+        if mode != "omnigent_bridge":
+            return {"skipped": True, "reason": "communication_mode_mismatch"}
+
+        binding_raw = payload.get("binding")
+        locator_raw = payload.get("locator")
+        turn_raw = payload.get("turnResponse")
+        summary_raw = payload.get("summary")
+        publication_raw = payload.get("publication")
+        if not all(
+            isinstance(value, Mapping)
+            for value in (
+                binding_raw,
+                locator_raw,
+                turn_raw,
+                summary_raw,
+                publication_raw,
+            )
+        ):
+            raise TemporalActivityRuntimeError(
+                "payload.binding, locator, turnResponse, summary, and publication are required"
+            )
+
+        binding = CodexManagedSessionBinding.model_validate(dict(binding_raw))
+        locator = CodexManagedSessionLocator.model_validate(dict(locator_raw))
+        turn_response = CodexManagedSessionTurnResponse.model_validate(dict(turn_raw))
+        summary = CodexManagedSessionSummary.model_validate(dict(summary_raw))
+        publication = CodexManagedSessionArtifactsPublication.model_validate(
+            dict(publication_raw)
+        )
+        compatibility_profile = (
+            str(
+                payload.get("compatibilityProfile")
+                or communication.get("compatibilityProfile")
+                or "moonmind.codex_direct_compat.v1"
+            ).strip()
+            or "moonmind.codex_direct_compat.v1"
+        )
+
+        from api_service.db.base import get_async_session_context
+        from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
+        from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+
+        store = OmnigentBridgeSessionStore(get_async_session_context)
+        workspace = _string_or_none_for_activity(parameters.get("repository"))
+        if workspace is None:
+            workspace = _string_or_none_for_activity(parameters.get("workspace"))
+        row = await store.get_or_create(
+            request=request,
+            endpoint_ref="direct-codex-compat",
+            agent_id=request.agent_id,
+            agent_name="Codex CLI",
+            target_metadata={
+                "hostType": "managed",
+                "workspace": workspace,
+                "compatibilityProfile": compatibility_profile,
+                "producer": "direct_codex_managed_session",
+                "temporaryMigrationPath": True,
+            },
+        )
+        row = await store.attach_session(
+            request.idempotency_key,
+            locator.session_id,
+        )
+        row = await store.record_session_created(
+            request.idempotency_key,
+            session_id=locator.session_id,
+            agent_id=request.agent_id,
+            endpoint_ref="direct-codex-compat",
+        )
+
+        assistant_text = str(
+            turn_response.metadata.get("assistantText")
+            or summary.metadata.get("lastAssistantText")
+            or ""
+        ).strip()
+        event_payloads: list[dict[str, Any]] = [
+            {
+                "type": "session.started",
+                "status": "running",
+                "data": {
+                    "sessionId": locator.session_id,
+                    "sessionEpoch": locator.session_epoch,
+                    "containerId": locator.container_id,
+                    "threadId": locator.thread_id,
+                    "managedSessionWorkflowId": binding.workflow_id,
+                    "managedAgentRunId": binding.agent_run_id,
+                    "compatibilityProfile": compatibility_profile,
+                    "producer": "direct_codex_managed_session",
+                },
+            }
+        ]
+        if assistant_text:
+            event_payloads.append(
+                {
+                    "type": "response.output",
+                    "status": "running",
+                    "text": assistant_text,
+                    "data": {
+                        "turnId": turn_response.turn_id,
+                        "text": assistant_text,
+                    },
+                }
+            )
+        terminal_status = str(
+            payload.get("terminalStatus")
+            or ("completed" if turn_response.status == "completed" else "failed")
+        ).strip()
+        if terminal_status not in {"completed", "failed"}:
+            raise TemporalActivityRuntimeError(
+                "payload.terminalStatus must be 'completed' or 'failed'"
+            )
+        terminal_type = (
+            "response.completed" if terminal_status == "completed" else "response.failed"
+        )
+        event_payloads.append(
+            {
+                "type": terminal_type,
+                "status": terminal_status,
+                "data": {
+                    "turnId": turn_response.turn_id,
+                    "outputRefs": list(turn_response.output_refs),
+                    "publishedArtifactRefs": list(publication.published_artifact_refs),
+                },
+            }
+        )
+        events = [
+            build_omnigent_bridge_event(
+                payload=event_payload,
+                sequence=index,
+                request=request,
+                omnigent_session_id=locator.session_id,
+                bridge_session_id=row.bridge_session_id,
+            ).event
+            for index, event_payload in enumerate(event_payloads, start=1)
+        ]
+        await store.mark_terminal(
+            request.idempotency_key,
+            status=terminal_status,
+            terminal_refs={
+                "metadataRefs": {
+                    "latestSummaryRef": publication.latest_summary_ref,
+                    "latestCheckpointRef": publication.latest_checkpoint_ref,
+                    "latestControlEventRef": publication.latest_control_event_ref,
+                    "latestResetBoundaryRef": publication.latest_reset_boundary_ref,
+                },
+                "publishedArtifactRefs": list(publication.published_artifact_refs),
+            },
+            events=events,
+        )
+        return {
+            "bridgeSessionId": row.bridge_session_id,
+            "omnigentSessionId": locator.session_id,
+            "eventCount": len(events),
+            "compatibilityProfile": compatibility_profile,
+        }
 
     async def agent_runtime_reconcile_managed_sessions(
         self,

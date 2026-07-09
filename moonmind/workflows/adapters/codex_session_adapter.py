@@ -122,6 +122,10 @@ PublishArtifactsFunc = Callable[
     [PublishCodexManagedSessionArtifactsRequest],
     Awaitable[CodexManagedSessionArtifactsPublication | Mapping[str, Any]],
 ]
+PublishBridgeEventsFunc = Callable[
+    [dict[str, Any]],
+    Awaitable[Mapping[str, Any] | None],
+]
 
 _MAX_AGENT_RUN_RESULT_SUMMARY_CHARS = 4096
 _COMPACT_METADATA_TEXT_CHARS = 1024
@@ -335,6 +339,18 @@ def _merge_durable_retrieval_metadata(
         elif isinstance(value, int) and not isinstance(value, bool):
             moonmind_metadata[key] = value
 
+
+def _uses_omnigent_bridge_communication(
+    parameters: Mapping[str, Any] | None,
+) -> bool:
+    if not isinstance(parameters, Mapping):
+        return False
+    communication = parameters.get("communication")
+    if not isinstance(communication, Mapping):
+        return False
+    return str(communication.get("mode") or "").strip() == "omnigent_bridge"
+
+
 def _clamp_agent_run_result_summary(summary: Any, *, default: str) -> str:
     normalized = str(summary or "").strip() or default
     if len(normalized) <= _MAX_AGENT_RUN_RESULT_SUMMARY_CHARS:
@@ -486,6 +502,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         terminate_remote_session: TerminateSessionFunc,
         fetch_remote_summary: FetchSummaryFunc,
         publish_remote_artifacts: PublishArtifactsFunc,
+        publish_bridge_events: PublishBridgeEventsFunc | None = None,
         attach_runtime_handles: SessionHandleSignaler,
         apply_session_control_action: SessionControlSignaler,
         workspace_root: str,
@@ -505,6 +522,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._terminate_remote_session = terminate_remote_session
         self._fetch_remote_summary = fetch_remote_summary
         self._publish_remote_artifacts = publish_remote_artifacts
+        self._publish_bridge_events = publish_bridge_events
         self._attach_runtime_handles = attach_runtime_handles
         self._apply_session_control_action = apply_session_control_action
         self._workspace_root = Path(workspace_root).resolve()
@@ -885,6 +903,23 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     managed_run_id=binding.agent_run_id,
                     run_id=run_id,
                 )
+                if publication is not None:
+                    summary = CodexManagedSessionSummary(
+                        session_state=publication.session_state,
+                        latest_summary_ref=publication.latest_summary_ref,
+                        latest_checkpoint_ref=publication.latest_checkpoint_ref,
+                        latest_control_event_ref=publication.latest_control_event_ref,
+                        latest_reset_boundary_ref=publication.latest_reset_boundary_ref,
+                    )
+                    await self._publish_direct_codex_bridge_events(
+                        request=request,
+                        binding=binding,
+                        locator=current_locator,
+                        turn_response=turn_response,
+                        summary=summary,
+                        publication=publication,
+                        terminal_status="failed",
+                    )
                 failure_result = self._persist_failed_run_state(
                     run_id=run_id,
                     agent_id=request.agent_id,
@@ -944,7 +979,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         )
                     )
                 )
-
                 disposition = turn_response.metadata.get("disposition")
                 disposition_reason = turn_response.metadata.get("reason")
                 if disposition == "no_op":
@@ -1001,6 +1035,17 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             "failure_class": "execution_error",
                         }
                     )
+                await self._publish_direct_codex_bridge_events(
+                    request=request,
+                    binding=binding,
+                    locator=current_locator,
+                    turn_response=turn_response,
+                    summary=summary,
+                    publication=publication,
+                    terminal_status=(
+                        "failed" if result.failure_class is not None else "completed"
+                    ),
+                )
             except Exception as exc:
                 failure_result = self._persist_failed_run_state(
                     run_id=run_id,
@@ -1475,6 +1520,39 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             )
         raise ValueError(
             "Managed session adapter requires instructionRef or parameters.instructions"
+        )
+
+    async def _publish_direct_codex_bridge_events(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        binding: CodexManagedSessionBinding,
+        locator: CodexManagedSessionLocator,
+        turn_response: CodexManagedSessionTurnResponse,
+        summary: CodexManagedSessionSummary,
+        publication: CodexManagedSessionArtifactsPublication,
+        terminal_status: str | None = None,
+    ) -> None:
+        if self._publish_bridge_events is None:
+            return
+        if not _uses_omnigent_bridge_communication(request.parameters):
+            return
+        await self._publish_bridge_events(
+            {
+                "request": request.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude_none=True,
+                ),
+                "binding": binding.model_dump(mode="json", by_alias=True),
+                "locator": locator.model_dump(mode="json", by_alias=True),
+                "turnResponse": turn_response.model_dump(mode="json", by_alias=True),
+                "summary": summary.model_dump(mode="json", by_alias=True),
+                "publication": publication.model_dump(mode="json", by_alias=True),
+                "terminalStatus": terminal_status,
+                "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+                "producer": "direct_codex_managed_session",
+            }
         )
 
     def _require_binding(self, request: AgentExecutionRequest) -> CodexManagedSessionBinding:

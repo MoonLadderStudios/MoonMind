@@ -1087,6 +1087,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
+            activity_type="agent_runtime.publish_bridge_events",
+            family="agent_runtime",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(60, 180),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
             activity_type="agent_runtime.reconcile_managed_sessions",
             family="agent_runtime",
             capability_class="agent_runtime",

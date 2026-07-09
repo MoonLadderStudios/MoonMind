@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from temporalio import activity as _activity
 from temporalio import workflow
 from temporalio.service import RPCError
@@ -255,6 +256,7 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
         str(managed_run_root),
     )
     controller = FakeCodexSessionController()
+    bridge_event_payloads: list[dict[str, Any]] = []
 
     @_activity.defn(name="agent_runtime.build_launch_context")
     async def build_launch_context(payload: dict[str, Any]) -> dict[str, Any]:
@@ -355,6 +357,15 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
             )()
         )
 
+    @_activity.defn(name="agent_runtime.publish_bridge_events")
+    async def publish_bridge_events(payload: dict[str, Any]) -> dict[str, Any]:
+        bridge_event_payloads.append(dict(payload))
+        return {
+            "bridgeSessionId": "brs-test-codex",
+            "omnigentSessionId": payload["locator"]["sessionId"],
+            "eventCount": 3,
+        }
+
     @_activity.defn(name="agent_runtime.fetch_result")
     async def fetch_result(payload: dict[str, Any]) -> AgentRunResult:
         del payload
@@ -378,6 +389,10 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
         parameters={
             "publishMode": "none",
             "instructions": "Shrink the dashboard title text a bit",
+            "communication": {
+                "mode": "omnigent_bridge",
+                "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+            },
         },
         managedSession={
             "workflowId": "test-codex-session-workflow",
@@ -422,6 +437,7 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
                         send_turn,
                         fetch_session_summary,
                         publish_session_artifacts,
+                        publish_bridge_events,
                         fetch_result,
                     ],
                 ):
@@ -462,3 +478,34 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
                     assert result.metadata["sessionSummary"]["metadata"][
                         "lastAssistantText"
                     ] == "Recovered final answer without vendor turn id"
+                    assert len(bridge_event_payloads) == 1
+                    bridge_payload = bridge_event_payloads[0]
+                    assert bridge_payload["compatibilityProfile"] == (
+                        "moonmind.codex_direct_compat.v1"
+                    )
+                    assert bridge_payload["producer"] == "direct_codex_managed_session"
+                    assert bridge_payload["request"]["parameters"]["communication"][
+                        "mode"
+                    ] == "omnigent_bridge"
+                    assert bridge_payload["locator"]["sessionId"] == (
+                        "sess:test-codex-session-workflow"
+                    )
+                    assert bridge_payload["turnResponse"]["metadata"][
+                        "assistantText"
+                    ] == "Recovered final answer without vendor turn id"
+
+
+def test_agent_execution_request_rejects_top_level_communication_field() -> None:
+    with pytest.raises(ValidationError):
+        AgentExecutionRequest.model_validate(
+            {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-invalid-communication",
+                "idempotencyKey": "idem-invalid-communication",
+                "communication": {"mode": "omnigent_bridge"},
+                "parameters": {
+                    "instructions": "do work",
+                },
+            }
+        )

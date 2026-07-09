@@ -1390,6 +1390,7 @@ async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
     binding = _binding()
     workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
+    bridge_payloads: list[dict[str, Any]] = []
     assistant_text = (
         "I could not read the Jira issue body from Atlassian in this runtime "
         "without an authenticated Jira session, so this check is based on the "
@@ -1441,6 +1442,9 @@ async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
             thread_id="thread-1",
         )
 
+    async def _publish_bridge_events(payload: dict[str, Any]) -> None:
+        bridge_payloads.append(dict(payload))
+
     adapter = CodexSessionAdapter(
         profile_fetcher=_fake_profiles(
             [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
@@ -1461,6 +1465,7 @@ async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
         terminate_remote_session=_async_noop,
         fetch_remote_summary=_fetch_summary,
         publish_remote_artifacts=_publish_artifacts,
+        publish_bridge_events=_publish_bridge_events,
         attach_runtime_handles=_async_noop,
         apply_session_control_action=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
@@ -1472,6 +1477,7 @@ async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
             "selectedSkill": "jira-pr-verify",
         },
     }
+    request.parameters["communication"] = {"mode": "omnigent_bridge"}
 
     with pytest.raises(CodexSessionRunFailedError) as exc_info:
         await adapter.start(request)
@@ -1485,6 +1491,9 @@ async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
     assert persisted_record is not None
     assert persisted_record.status == "failed"
     assert persisted_record.failure_class == "execution_error"
+    assert len(bridge_payloads) == 1
+    assert bridge_payloads[0]["terminalStatus"] == "failed"
+    assert bridge_payloads[0]["turnResponse"]["status"] == "completed"
 
 async def test_jira_verify_blocker_summary_detects_comment_posting_failure() -> None:
     summary = _jira_skill_blocker_summary(
@@ -1616,6 +1625,7 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
     workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     summary_calls: list[Any] = []
     publication_calls: list[Any] = []
+    bridge_payloads: list[dict[str, Any]] = []
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     oversized_reason = "turn failed: " + ("x" * 5000)
     expected_reason = oversized_reason[:4096]
@@ -1665,6 +1675,9 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
             thread_id="thread-1",
         )
 
+    async def _publish_bridge_events(payload: dict[str, Any]) -> None:
+        bridge_payloads.append(dict(payload))
+
     adapter = CodexSessionAdapter(
         profile_fetcher=_fake_profiles(
             [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
@@ -1685,18 +1698,26 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
         terminate_remote_session=_async_noop,
         fetch_remote_summary=_fetch_summary,
         publish_remote_artifacts=_publish_artifacts,
+        publish_bridge_events=_publish_bridge_events,
         attach_runtime_handles=_async_noop,
         apply_session_control_action=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
 
+    request = _request(binding, workspace_path=str(workspace_path))
+    request.parameters["communication"] = {"mode": "omnigent_bridge"}
+
     with pytest.raises(RuntimeError) as excinfo:
-        await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+        await adapter.start(request)
 
     assert str(excinfo.value) == expected_reason
     assert summary_calls == []
     assert len(publication_calls) == 1
+    assert len(bridge_payloads) == 1
+    assert bridge_payloads[0]["terminalStatus"] == "failed"
+    assert bridge_payloads[0]["summary"]["latestSummaryRef"] == "artifact:session-summary"
+    assert bridge_payloads[0]["turnResponse"]["status"] == "failed"
     persisted_record = run_store.load(binding.agent_run_id)
     assert persisted_record is not None
     assert persisted_record.status == "failed"
