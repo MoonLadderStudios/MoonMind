@@ -663,6 +663,107 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
   });
 
+  it('MM-1150 restores deterministic focus after keyboard-driven Recurring mode switches', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/recurring-workflows?scope=personal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 'schedule-one',
+              name: 'Daily recurring scan',
+              enabled: true,
+              cron: '0 9 * * *',
+              timezone: 'UTC',
+              nextRunAt: '2026-07-09T09:00:00Z',
+              lastDispatchStatus: 'enqueued',
+              target: {},
+              policy: {},
+            }],
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 'schedule-one',
+            name: 'Daily recurring scan',
+            description: 'Runs every morning.',
+            enabled: true,
+            cron: '0 9 * * *',
+            timezone: 'UTC',
+            nextRunAt: '2026-07-09T09:00:00Z',
+            lastScheduledFor: '2026-07-08T09:00:00Z',
+            lastDispatchStatus: 'enqueued',
+            target: {},
+            policy: {},
+          }),
+        } as Response);
+      }
+      if (url === '/api/recurring-workflows/schedule-one/runs?limit=200') {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+
+    window.history.replaceState({}, '', '/schedules');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    const tableRadio = screen.getByRole('radio', { name: 'Full screen table' });
+    tableRadio.focus();
+    fireEvent.keyDown(tableRadio, { key: 'ArrowLeft' });
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules/schedule-one');
+    });
+    await waitFor(() => {
+      const sidebarRow = document.querySelector('[data-recurring-sidebar-row-focus="schedule-one"]');
+      expect(sidebarRow).toBeTruthy();
+      expect(document.activeElement).toBe(sidebarRow);
+    });
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+
+    let sidebarRadio = screen.getByRole('radio', { name: 'Sidebar list' });
+    sidebarRadio.focus();
+    fireEvent.keyDown(sidebarRadio, { key: 'ArrowLeft' });
+
+    const detailHeading = await screen.findByRole('heading', { name: 'Daily recurring scan' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(detailHeading);
+    });
+    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+
+    const hiddenRadio = screen.getByRole('radio', { name: 'No list' });
+    hiddenRadio.focus();
+    fireEvent.keyDown(hiddenRadio, { key: 'ArrowRight' });
+
+    await waitFor(() => {
+      const sidebarRow = document.querySelector('[data-recurring-sidebar-row-focus="schedule-one"]');
+      expect(sidebarRow).toBeTruthy();
+      expect(document.activeElement).toBe(sidebarRow);
+    });
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+
+    sidebarRadio = screen.getByRole('radio', { name: 'Sidebar list' });
+    sidebarRadio.focus();
+    fireEvent.keyDown(sidebarRadio, { key: 'ArrowRight' });
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules');
+    });
+    const selectedTableRow = await screen.findByRole('link', { name: 'Daily recurring scan' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(selectedTableRow);
+    });
+    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+  });
+
   // MM-1145: persistence + reseeding of the Recurring list display mode and the
   // last-selected definition (dashboard preferences), and honoring a persisted
   // `hidden` on a direct `/schedules/{definitionId}` visit.
