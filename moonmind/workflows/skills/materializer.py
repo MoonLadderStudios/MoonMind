@@ -27,12 +27,6 @@ from urllib.request import (
     build_opener,
 )
 
-from .pointer_files import (
-    SUBMODULE_REMEDIATION_HINT,
-    flattened_symlink_target,
-    resolve_flattened_skill_symlink,
-    skill_source_allowed_root,
-)
 from .resolver import ResolvedSkill, RunSkillSelection, validate_skill_name
 from .workspace_links import (
     SkillWorkspaceError,
@@ -136,15 +130,6 @@ def _hash_skill_directory(skill_dir: Path) -> str:
         if path.is_symlink():
             digest.update(b"SYMLINK")
             digest.update(str(path.readlink()).encode("utf-8"))
-            continue
-        flattened_symlink = resolve_flattened_skill_symlink(
-            path,
-            skill_dir=skill_dir,
-            allowed_root=skill_source_allowed_root(skill_dir),
-        )
-        if flattened_symlink is not None:
-            digest.update(b"SYMLINK")
-            digest.update(flattened_symlink.target.encode("utf-8"))
             continue
         if path.is_dir():
             digest.update(b"DIR")
@@ -529,23 +514,6 @@ def _find_skill_dir(root: Path, *, skill_name: str) -> Path:
         f"Unable to locate skill directory for '{skill_name}' in source root {root}",
     )
 
-def _validated_flattened_skill_file(path: Path, *, skill_dir: Path) -> Path | None:
-    flattened_symlink = resolve_flattened_skill_symlink(
-        path,
-        skill_dir=skill_dir,
-        allowed_root=skill_source_allowed_root(skill_dir),
-    )
-    if flattened_symlink is None:
-        return None
-    if not flattened_symlink.target_path.is_file():
-        raise SkillMaterializationError(
-            "skill_md_flattened_symlink",
-            f"SKILL.md for skill '{skill_dir.name}' at {path} contains "
-            f"only the symlink pointer text {flattened_symlink.target!r} and "
-            f"the target does not exist; {SUBMODULE_REMEDIATION_HINT}",
-        )
-    return flattened_symlink.target_path
-
 def _validate_skill_metadata(entry: ResolvedSkill, skill_dir: Path) -> None:
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
@@ -554,17 +522,7 @@ def _validate_skill_metadata(entry: ResolvedSkill, skill_dir: Path) -> None:
             f"Missing SKILL.md for skill '{entry.skill_name}' in {skill_dir}",
         )
 
-    pointer_target = flattened_symlink_target(skill_md)
-    metadata_path = _validated_flattened_skill_file(skill_md, skill_dir=skill_dir)
-    if pointer_target is not None and metadata_path is None:
-        raise SkillMaterializationError(
-            "skill_md_flattened_symlink",
-            f"SKILL.md for skill '{entry.skill_name}' at {skill_md} contains "
-            f"untrusted pointer-shaped text {pointer_target!r} instead of "
-            f"skill content; {SUBMODULE_REMEDIATION_HINT}",
-        )
-
-    metadata_name = _parse_frontmatter_name(metadata_path or skill_md)
+    metadata_name = _parse_frontmatter_name(skill_md)
     if metadata_name and metadata_name != skill_dir.name:
         raise SkillMaterializationError(
             "skill_name_mismatch",
@@ -592,35 +550,8 @@ def _ensure_signature(entry: ResolvedSkill, *, verify_signatures: bool) -> None:
             f"Skill '{entry.skill_name}' is missing a required signature",
         )
 
-def _copy_skill_file(source: str, destination: str, *, skill_dir: Path) -> None:
-    source_path = Path(source)
-    flattened_target = resolve_flattened_skill_symlink(
-        source_path,
-        skill_dir=skill_dir,
-        allowed_root=skill_source_allowed_root(skill_dir),
-    )
-    if flattened_target is not None:
-        if not flattened_target.target_path.is_file():
-            raise SkillMaterializationError(
-                "skill_flattened_symlink_target_missing",
-                f"skill bundle file {source_path} contains only the symlink "
-                f"pointer text {flattened_target.target!r} and the target "
-                f"does not exist; {SUBMODULE_REMEDIATION_HINT}",
-            )
-        source_path = flattened_target.target_path
-    shutil.copy2(source_path, destination)
-
-
 def _copy_skill_directory(skill_dir: Path, destination: Path) -> None:
-    shutil.copytree(
-        skill_dir,
-        destination,
-        copy_function=lambda source, target: _copy_skill_file(
-            source,
-            target,
-            skill_dir=skill_dir,
-        ),
-    )
+    shutil.copytree(skill_dir, destination)
 
 def _materialize_cache_entry(
     *, entry: ResolvedSkill, cache_root: Path

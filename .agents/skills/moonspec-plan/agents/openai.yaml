@@ -1,1 +1,4 @@
-../../../../moonspec/bundle/skills/moonspec-plan/agents/openai.yaml
+interface:
+  display_name: "MoonSpec Plan"
+  short_description: "Create implementation plans and design artifacts."
+  default_prompt: "Use $moonspec-plan to create a MoonSpec implementation plan and design artifacts for the active feature:"

@@ -67,7 +67,6 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./docs:/app/docs:ro
       - ./.agents:/app/.agents:ro
-      - ./moonspec:/app/moonspec:ro
       - ./deploy/state:/workspace/deployment_state:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - moonmind_secrets:/app/var/secrets
@@ -492,7 +491,6 @@ services:
       - ./docs:/app/docs:ro
       - ./services:/app/services:ro
       - ./.agents:/app/.agents:ro
-      - ./moonspec:/app/moonspec:ro
       - moonmind_secrets:/app/var/secrets
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
@@ -596,7 +594,6 @@ services:
       - ./docs:/app/docs:ro
       - ./services:/app/services:ro
       - ./.agents:/app/.agents:ro
-      - ./moonspec:/app/moonspec:ro
       - moonmind_secrets:/app/var/secrets
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
@@ -676,7 +673,6 @@ services:
       - ./docs:/app/docs:ro
       - ./services:/app/services:ro
       - ./.agents:/app/.agents:ro
-      - ./moonspec:/app/moonspec:ro
       - moonmind_secrets:/app/var/secrets
     entrypoint:
       - /bin/sh

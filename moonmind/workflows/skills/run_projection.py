@@ -31,10 +31,6 @@ from moonmind.schemas.agent_skill_models import (
 from moonmind.services.skills_on_demand import skills_on_demand_runtime_instruction
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.workflows.temporal.artifacts import TemporalArtifactError
-from moonmind.workflows.skills.pointer_files import (
-    SUBMODULE_REMEDIATION_HINT,
-    flattened_symlink_target,
-)
 from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 
 AUTO_SKILL_SENTINEL = "auto"
@@ -254,17 +250,6 @@ async def verify_skill_projection(
             raise SkillProjectionError(
                 "skill projection failed before runtime launch: "
                 f"selected skill '{selected_skill}' is missing {selected_skill_doc}"
-            )
-        pointer_target = await asyncio.to_thread(
-            flattened_symlink_target, selected_skill_doc
-        )
-        if pointer_target is not None:
-            raise SkillProjectionError(
-                "skill projection failed before runtime launch: "
-                f"selected skill '{selected_skill}' SKILL.md at "
-                f"{selected_skill_doc} contains only the symlink pointer text "
-                f"{pointer_target!r} instead of skill content; "
-                f"{SUBMODULE_REMEDIATION_HINT}"
             )
 
 

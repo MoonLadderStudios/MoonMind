@@ -1,1 +1,4 @@
-../../../../moonspec/bundle/skills/moonspec-implement/agents/openai.yaml
+interface:
+  display_name: "MoonSpec Implement"
+  short_description: "Implement a one-story MoonSpec task breakdown with TDD."
+  default_prompt: "Use $moonspec-implement to execute the active MoonSpec tasks with TDD."
