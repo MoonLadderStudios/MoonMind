@@ -3231,6 +3231,32 @@ function capabilityFieldUiSchema(
   return recordValue(uiSchema?.[name]);
 }
 
+function capabilityFieldVisible(
+  uiSchema: Record<string, unknown>,
+  values: Record<string, unknown>,
+  defaults?: Record<string, unknown>,
+): boolean {
+  const visibleWhen = recordValue(uiSchema.visibleWhen);
+  if (Object.keys(visibleWhen).length === 0) {
+    return true;
+  }
+  const field = String(visibleWhen.field || "").trim();
+  if (!field) {
+    return true;
+  }
+  const actual =
+    values[field] !== undefined
+      ? values[field]
+      : safeCapabilityDefault(defaults, field);
+  if (Object.prototype.hasOwnProperty.call(visibleWhen, "equals")) {
+    return actual === visibleWhen.equals;
+  }
+  if (Array.isArray(visibleWhen.oneOf)) {
+    return visibleWhen.oneOf.some((value) => value === actual);
+  }
+  return true;
+}
+
 function capabilityWidgetName(
   schema: Record<string, unknown>,
   uiSchema: Record<string, unknown>,
@@ -3525,6 +3551,9 @@ function validateSchemaCapabilityValues(
   for (const [name, rawSchema] of Object.entries(properties)) {
     const fieldSchema = recordValue(rawSchema);
     const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
+    if (!capabilityFieldVisible(uiSchema, values, detail.defaults)) {
+      continue;
+    }
     const widget = capabilityWidgetName(fieldSchema, uiSchema);
     const value = values[name];
     if (widget === "jira.issue-picker") {
@@ -11271,9 +11300,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               )
                 ? Object.entries(
                     schemaProperties(step.presetDetail?.inputSchema),
-                  ).filter(([name]) =>
-                    isVisiblePresetInputName(step.presetDetail?.slug, name),
-                  )
+                  ).filter(([name]) => {
+                    if (!isVisiblePresetInputName(step.presetDetail?.slug, name)) {
+                      return false;
+                    }
+                    const uiSchema = capabilityFieldUiSchema(
+                      step.presetDetail?.uiSchema,
+                      name,
+                    );
+                    return capabilityFieldVisible(
+                      uiSchema,
+                      step.presetInputValues,
+                      step.presetDetail?.defaults,
+                    );
+                  })
                 : [];
               const selectedSkillDetail =
                 skillsQuery.data?.detailsById[step.skillId.trim()] || null;
