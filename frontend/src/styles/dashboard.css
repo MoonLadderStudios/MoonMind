@@ -3594,17 +3594,14 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @media (max-width: 1180px) {
-  .schedules-table-panel .data-table th:nth-child(8),
-  .schedules-table-panel .data-table td:nth-child(8),
-  .schedules-table-panel .data-table th:nth-child(9),
-  .schedules-table-panel .data-table td:nth-child(9) {
+  .schedules-table-panel .data-table [data-column-key="policy"],
+  .schedules-table-panel .data-table [data-column-key="updatedAt"] {
     display: none;
   }
 }
 
 @media (max-width: 980px) {
-  .schedules-table-panel .data-table th:nth-child(6),
-  .schedules-table-panel .data-table td:nth-child(6) {
+  .schedules-table-panel .data-table [data-column-key="lastScheduledFor"] {
     display: none;
   }
 }

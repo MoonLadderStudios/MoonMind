@@ -9,6 +9,8 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
 import { formatStatusLabel } from '../utils/formatters';
 
+const SCHEDULES_MOBILE_MEDIA_QUERY = '(max-width: 720px)';
+
 const ScheduleSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -347,14 +349,15 @@ function policySummary(schedule: Schedule): string {
 }
 
 function dispatchAttentionLabel(schedule: Schedule): string {
+  const error = schedule.lastDispatchError?.trim();
+  const status = schedule.lastDispatchStatus?.trim();
   if (scheduleState(schedule) === 'attention') {
-    return schedule.lastDispatchError
-      ? `Needs attention: ${schedule.lastDispatchError}`
+    return error
+      ? `Needs attention: ${error}`
       : 'Needs attention';
   }
-  return schedule.lastDispatchStatus
-    ? titleCaseLabel(formatStatusLabel(schedule.lastDispatchStatus))
-    : 'No dispatch attention';
+  const statusLabel = status ? titleCaseLabel(formatStatusLabel(status)) : 'No dispatch attention';
+  return error ? `${statusLabel}: ${error}` : statusLabel;
 }
 
 function formatJsonValue(value: unknown): string {
@@ -1409,6 +1412,23 @@ function RecurringScheduleMobileList({
   );
 }
 
+function useSchedulesMobileLayout(): boolean {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+    const query = window.matchMedia(SCHEDULES_MOBILE_MEDIA_QUERY);
+    const update = (event: MediaQueryList | MediaQueryListEvent) => setIsMobile(event.matches);
+    update(query);
+    query.addEventListener?.('change', update);
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+
+  return isMobile;
+}
+
 function ScheduleRowActions({
   schedule,
   payload,
@@ -1527,6 +1547,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     const dueSoon = schedules.filter((schedule) => isDueSoon(schedule, now)).length;
     return { active, attention, dueSoon, total: schedules.length };
   }, [schedules]);
+  const isMobileLayout = useSchedulesMobileLayout();
 
   if (routeDefinitionId) {
     return (
@@ -1594,12 +1615,14 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
       </section>
 
       <section className="schedules-table-panel" aria-label="Recurring schedule list">
-        <RecurringScheduleMobileList
-          schedules={schedules}
-          isLoading={isLoading}
-          isError={isError}
-          error={error}
-        />
+        {isMobileLayout ? (
+          <RecurringScheduleMobileList
+            schedules={schedules}
+            isLoading={isLoading}
+            isError={isError}
+            error={error}
+          />
+        ) : null}
         <DataTable
             data={schedules}
             isLoading={isLoading}

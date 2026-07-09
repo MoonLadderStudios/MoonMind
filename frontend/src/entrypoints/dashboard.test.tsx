@@ -294,6 +294,7 @@ describe('Dashboard shared entry', () => {
   let fetchSpy: MockInstance;
   let dashboardCss: string;
   const originalWebSocket = window.WebSocket;
+  const originalMatchMedia = window.matchMedia;
 
   beforeAll(async () => {
     const { readFileSync } = await import('node:fs');
@@ -337,6 +338,11 @@ describe('Dashboard shared entry', () => {
   afterEach(() => {
     fetchSpy.mockRestore();
     window.WebSocket = originalWebSocket;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
     document.querySelectorAll('[data-nav]').forEach((node) => node.remove());
     window.localStorage.clear();
     window.history.replaceState({}, '', '/');
@@ -528,6 +534,20 @@ describe('Dashboard shared entry', () => {
   });
 
   it('MM-1149 renders mobile recurring schedule cards with standalone detail links and required facts', async () => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === '(max-width: 720px)',
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/ui/info') {
@@ -2103,15 +2123,15 @@ describe('Dashboard shared entry', () => {
 
     const tabletPolicyHeaderBlock = cssRuleBlockMatching(
       dashboardCss,
-      recurringMediaRule('.schedules-table-panel .data-table th:nth-child(8)', '1180px'),
+      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="policy"]', '1180px'),
     );
     const tabletUpdatedCellBlock = cssRuleBlockMatching(
       dashboardCss,
-      recurringMediaRule('.schedules-table-panel .data-table td:nth-child(9)', '1180px'),
+      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="updatedAt"]', '1180px'),
     );
     const narrowLastScheduledBlock = cssRuleBlockMatching(
       dashboardCss,
-      recurringMediaRule('.schedules-table-panel .data-table th:nth-child(6)', '980px'),
+      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="lastScheduledFor"]', '980px'),
     );
     const mobileTableBlock = cssRuleBlockMatching(
       dashboardCss,

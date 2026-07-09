@@ -151,6 +151,7 @@ export function DataTable<T>({
         scope="col"
         aria-sort={ariaSort}
         data-align={column.align ?? 'left'}
+        data-column-key={key}
         style={style}
       >
         {column.sortable ? (
@@ -209,12 +210,16 @@ export function DataTable<T>({
     return sortedData.map((item) => (
       <tr key={getRowKey(item)}>
         {columns.map((col) => (
-          <td key={col.key as string} data-align={col.align ?? 'left'}>
+          <td
+            key={col.key as string}
+            data-align={col.align ?? 'left'}
+            data-column-key={col.key as string}
+          >
             {col.render ? col.render(item) : String(item[col.key as keyof T] ?? '')}
           </td>
         ))}
         {rowActions ? (
-          <td className="data-table__row-actions" data-align="right">
+          <td className="data-table__row-actions" data-align="right" data-column-key="actions">
             {rowActions(item)}
           </td>
         ) : null}
@@ -263,7 +268,7 @@ export function DataTable<T>({
           <tr>
             {columns.map(renderHeaderCell)}
             {rowActions ? (
-              <th scope="col" data-align="right">
+              <th scope="col" data-align="right" data-column-key="actions">
                 {rowActionsHeader}
               </th>
             ) : null}
