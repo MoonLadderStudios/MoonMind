@@ -44,6 +44,7 @@ from api_service.api.routers.workflow_console_view_model import (
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.models import AgentSkillDefinition, TemporalArtifact, User
+from api_service.dashboard_static import DASHBOARD_HTML_CACHE_CONTROL
 from api_service.services.settings_catalog import settings_permissions_for_user
 from moonmind.config.settings import settings
 from moonmind.capabilities.input_contracts import (
@@ -609,7 +610,9 @@ def _dashboard_ui_error_response(page: str, detail: str) -> HTMLResponse:
   <p>Rebuild with <code>npm run ui:build</code> or deploy a Docker image that builds the UI from source (see <code>api_service/Dockerfile</code> <code>frontend-builder</code> stage).</p>
 </body>
 </html>"""
-    return HTMLResponse(status_code=503, content=body, media_type="text/html")
+    response = HTMLResponse(status_code=503, content=body, media_type="text/html")
+    response.headers["Cache-Control"] = DASHBOARD_HTML_CACHE_CONTROL
+    return response
 
 def _vite_assets_or_error(page: str) -> HTMLResponse | str:
     try:
@@ -633,7 +636,7 @@ async def _render_react_page(
     if isinstance(assets_html, HTMLResponse):
         return assets_html
 
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "react_dashboard.html",
         {
@@ -644,6 +647,8 @@ async def _render_react_page(
             "build_id": None,
         },
     )
+    response.headers["Cache-Control"] = DASHBOARD_HTML_CACHE_CONTROL
+    return response
 
 def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
     mode = (info.external_attr >> 16) & 0o170000

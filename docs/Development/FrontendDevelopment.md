@@ -42,6 +42,11 @@ This is the preferred review path because the browser receives one coherent
 asset set from the same server that owns the dashboard HTML shell and API
 routes.
 
+Do not rebuild `api_service/static/workflow_console/dist/` while a running
+FastAPI process is actively serving it. During active frontend development, use
+`MOONMIND_UI_DEV_SERVER_URL` instead. After rebuilding the served static bundle,
+restart FastAPI so browsers receive a coherent manifest and asset set.
+
 Do not open the Vite dev server root (`http://localhost:5173/`) for demos or
 reviews. MoonMind's Vite server serves frontend modules for development; it does
 not own the dashboard HTML routes and may return `404` at `/`.
