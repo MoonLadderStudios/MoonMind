@@ -10,9 +10,7 @@ For AI-assisted or AI-written descriptions:
 
 ## Related issue
 
-Closes #
-Related to #
-N/A
+<!-- Replace with Closes #<issue_number>, Related to #<issue_number>, or N/A -->
 
 ## Summary
 
