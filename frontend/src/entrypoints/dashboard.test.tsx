@@ -1229,6 +1229,24 @@ describe('Dashboard shared entry', () => {
     expect(window.location.search).toBe('?source=temporal');
   });
 
+  it('MM-1167 preserves the Create sidebar when preferences change', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('link', { name: 'Create' }));
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'preference-sync' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+    });
+  });
+
   it('MM-1029 navigateTo uses the SPA route event for dashboard-internal URLs', async () => {
     window.history.replaceState({}, '', '/workflows/new');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);

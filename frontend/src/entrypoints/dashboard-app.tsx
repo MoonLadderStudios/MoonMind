@@ -955,6 +955,9 @@ function RoutedDashboardPage({
     if (normalizedPath === '/workflows') {
       setRequestedMode('table');
     } else if (normalizedPath.startsWith('/workflows/')) {
+      if (requestedMode === 'table') {
+        updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
+      }
       setRequestedMode((mode) => (mode === 'table' ? 'sidebar' : mode));
     } else if (normalizedPath === '/schedules') {
       setRequestedRecurringMode('table');
