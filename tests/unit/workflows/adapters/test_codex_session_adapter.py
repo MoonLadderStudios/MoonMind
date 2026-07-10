@@ -48,6 +48,9 @@ from moonmind.workflows.temporal.managed_session_errors import (
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
 )
+from moonmind.workflows.temporal.runtime.managed_session_controller import (
+    DockerCodexManagedSessionController,
+)
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 pytestmark = [pytest.mark.asyncio]
@@ -203,6 +206,76 @@ async def test_pr_resolver_continuation_recovers_on_same_session(tmp_path: Path)
     assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
     assert result.metadata["terminalContractContinuationCount"] == 1
     assert termination_calls == []
+
+
+async def test_pr_resolver_scripted_app_server_journey_resumes_active_shell(
+    tmp_path: Path,
+) -> None:
+    """Exercise recovery through the real controller/app-server command boundary."""
+    binding = _binding()
+    workspace = tmp_path / "workspace"
+    invoked: list[dict[str, Any]] = []
+    active_shell_id = "shell-session-3142"
+
+    async def _fake_app_server(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del env
+        assert command[:3] == ("docker", "exec", "-i")
+        assert command[-2:] == ("invoke", "send_turn")
+        payload = json.loads(input_text or "{}")
+        invoked.append(payload)
+        if len(invoked) == 1:
+            metadata = {
+                "assistantText": "Outer wait completed.",
+                "toolResult": {
+                    "status": "completed",
+                    "payload": {"session_id": active_shell_id, "status": "running"},
+                },
+            }
+        else:
+            result = workspace / "var" / "pr_resolver" / "result.json"
+            result.parent.mkdir(parents=True)
+            result.write_text('{"status":"blocked"}', encoding="utf-8")
+            metadata = {"assistantText": "Resumed the shell and wrote evidence."}
+        response = {
+            "sessionState": {
+                "sessionId": payload["sessionId"],
+                "sessionEpoch": payload["sessionEpoch"],
+                "containerId": payload["containerId"],
+                "threadId": payload["threadId"],
+                "activeTurnId": None,
+            },
+            "turnId": f"vendor-turn-{len(invoked)}",
+            "status": "completed",
+            "metadata": metadata,
+        }
+        return 0, json.dumps(response), ""
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path / "agent_jobs"),
+        command_runner=_fake_app_server,
+    )
+    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=controller.send_turn)
+
+    handle = await adapter.start(_pr_resolver_request(binding, workspace))
+    result = await adapter.fetch_result(handle.run_id)
+
+    assert handle.status == "completed"
+    assert [item["requestId"] for item in invoked] == [
+        "idem-1:initial",
+        "idem-1:terminal-contract:1",
+    ]
+    assert {item["sessionId"] for item in invoked} == {binding.session_id}
+    assert {item["sessionEpoch"] for item in invoked} == {binding.session_epoch}
+    assert {item["threadId"] for item in invoked} == {"thread-terminal-contract"}
+    assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
+    assert result.metadata["terminalContractContinuationCount"] == 1
 
 
 async def test_pr_resolver_continuation_exhaustion_is_compact_execution_error(

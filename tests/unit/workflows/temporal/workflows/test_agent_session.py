@@ -785,6 +785,66 @@ async def test_agent_session_completed_identified_request_rejects_duplicate_muta
             )
         )
 
+
+@pytest.mark.asyncio
+async def test_agent_session_replay_deduplicates_terminal_contract_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retried activity cannot issue the same logical continuation twice."""
+    _configure_workflow_runtime(monkeypatch)
+    request_id = "idem-1:terminal-contract:1"
+    workflow = MoonMindAgentSessionWorkflow(
+        _workflow_input(
+            containerId="container-1",
+            threadId="thread-1",
+            requestTrackingState=[
+                {
+                    "requestId": request_id,
+                    "action": "send_turn",
+                    "sessionEpoch": 1,
+                    "status": "completed",
+                    "resultRef": "art-terminal-contract-summary",
+                }
+            ],
+        )
+    )
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        del payload
+        raise AssertionError(f"duplicate continuation activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    with pytest.raises(ValueError, match="already completed"):
+        await workflow.send_follow_up(
+            _send_follow_up(
+                {
+                    "message": "Resume incomplete terminal contract.",
+                    "reason": "missing var/pr_resolver/result.json",
+                    "requestId": request_id,
+                }
+            )
+        )
+
+    assert workflow.get_status()["requestTrackingState"] == [
+        {
+            "requestId": request_id,
+            "action": "send_turn",
+            "sessionEpoch": 1,
+            "status": "completed",
+            "resultRef": "art-terminal-contract-summary",
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_agent_session_send_follow_up_update_executes_session_activity_surface(
     monkeypatch: pytest.MonkeyPatch,
