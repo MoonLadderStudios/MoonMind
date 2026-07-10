@@ -39,6 +39,76 @@ def _make_request(**overrides) -> AgentExecutionRequest:
     defaults.update(overrides)
     return AgentExecutionRequest(**defaults)
 
+
+@pytest.mark.asyncio
+async def test_launch_records_model_tier_resolution_with_runtime_effort_status(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    class _RecorderLogStreamer:
+        def __init__(self) -> None:
+            self.emissions: list[dict[str, object]] = []
+
+        def emit_system_annotation(self, **kwargs: object) -> None:
+            self.emissions.append(kwargs)
+
+    class _FakeProcess:
+        pid = 1175
+        returncode = 0
+        stdout = asyncio.StreamReader()
+        stderr = asyncio.StreamReader()
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    log_streamer = _RecorderLogStreamer()
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"), log_streamer=log_streamer
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    resolution = {
+        "providerProfileId": "codex-profile",
+        "requestedModelTier": 3,
+        "effectiveModelTier": 2,
+        "tierLabel": "Implementation",
+        "fallbackReason": "requested_tier_above_configured_range",
+        "resolvedModel": "gpt-5.5",
+        "resolvedEffort": "xhigh",
+        "modelSource": "requested_tier",
+        "effortSource": "requested_tier",
+        "effortApplicationStatus": "unknown",
+        "previewMismatch": False,
+    }
+
+    await launcher.launch(
+        run_id="run-tier-resolution",
+        request=_make_request(
+            instruction_ref="Implement the issue",
+            parameters={"modelTierResolution": resolution},
+        ),
+        profile=_make_profile(runtime_id="codex_cli"),
+        workspace_path=str(workspace),
+    )
+
+    emission = next(
+        item
+        for item in log_streamer.emissions
+        if item.get("annotation_type") == "model_tier_resolution"
+    )
+    recorded = emission["metadata"]["modelTierResolution"]
+    assert recorded == {
+        **resolution,
+        "effortApplicationStatus": "not_supported",
+    }
+    assert resolution["effortApplicationStatus"] == "unknown"
+
 @pytest.mark.asyncio
 async def test_claude_workspace_trust_config_merges_existing_projects(tmp_path):
     store = ManagedRunStore(tmp_path / "managed_runs")

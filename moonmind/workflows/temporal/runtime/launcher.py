@@ -1385,6 +1385,25 @@ class ManagedRuntimeLauncher:
                 request.instruction_ref = hinted_instruction_ref
 
             cmd = self.build_command(profile, request, strategy=strategy)
+            model_tier_resolution = request.parameters.get("modelTierResolution")
+            if isinstance(model_tier_resolution, dict):
+                launch_resolution = dict(model_tier_resolution)
+                if strategy is not None:
+                    launch_resolution["effortApplicationStatus"] = (
+                        strategy.effort_application_status(
+                            launch_resolution.get("resolvedEffort")
+                        )
+                    )
+                self._emit_system_annotation(
+                    run_id=run_id,
+                    workspace_path=resolved_workspace_path,
+                    annotation_type="model_tier_resolution",
+                    text="Launcher: recorded model tier resolution for this run.",
+                    metadata={
+                        "reason": "model_tier_resolution",
+                        "modelTierResolution": launch_resolution,
+                    },
+                )
             self._reset_live_log_spool(resolved_workspace_path)
 
             for key in profile.passthrough_env_keys:

@@ -132,6 +132,10 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
     def supports_slash_passthrough(self) -> bool:
         return True
 
+    def effort_application_status(self, resolved_effort: object) -> str:
+        """Codex CLI does not apply the tier policy's effort value."""
+        return "not_supported" if resolved_effort is not None else "unknown"
+
     def build_command(
         self,
         profile: Any,
