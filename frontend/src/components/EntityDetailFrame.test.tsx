@@ -46,4 +46,13 @@ describe('EntityDetailFrame', () => {
     expect(screen.getByRole('alert').textContent).toContain('Schedule details are unavailable.');
     expect(screen.queryByText('Schedule content')).toBeNull();
   });
+
+  it.each([
+    ['loading', 'status', 'Loading…'],
+    ['error', 'alert', 'Unable to load these details.'],
+  ] as const)('provides accessible fallback content for the %s state', (state, role, fallback) => {
+    render(<EntityDetailFrame entity="workflow" main={<p>Workflow content</p>} state={state} />);
+
+    expect(screen.getByRole(role).textContent).toBe(fallback);
+  });
 });

@@ -1540,7 +1540,6 @@ h1 {
 
   .entity-detail-frame__facts {
     position: static;
-    grid-row: 1;
   }
 }
 

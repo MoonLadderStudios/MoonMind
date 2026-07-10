@@ -55,7 +55,7 @@ export function EntityDetailFrame({
               className={`entity-detail-frame__state entity-detail-frame__state--${state}`}
               role={state === 'loading' ? 'status' : 'alert'}
             >
-              {stateContent}
+              {stateContent ?? (state === 'loading' ? 'Loading…' : 'Unable to load these details.')}
             </div>
           ) : main}
         </div>
