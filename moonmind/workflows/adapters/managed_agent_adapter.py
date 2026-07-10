@@ -28,7 +28,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -276,6 +276,8 @@ def _pr_resolver_disposition(
         or next_step.startswith("run_fix_")
     ):
         return "reenter_gate"
+    if status in _PR_RESOLVER_FAILURE_STATUSES:
+        return "manual_review"
     return ""
 
 
@@ -696,7 +698,12 @@ def _load_pr_resolver_terminal_result(
             failures.append(f"{provenance}: workflow identity mismatch")
             continue
         timestamp = _payload_sort_timestamp(path, payload)
-        if not_before is not None and timestamp < not_before.astimezone(UTC):
+        # Filesystems and the run store do not share guaranteed sub-second clock
+        # precision. Allow a narrow boundary tolerance while still rejecting
+        # artifacts left by an earlier execution.
+        if not_before is not None and timestamp < (
+            not_before.astimezone(UTC) - timedelta(seconds=1)
+        ):
             failures.append(f"{provenance}: stale terminal artifact")
             continue
         return _PrResolverEvidence(payload, provenance, tuple(failures))

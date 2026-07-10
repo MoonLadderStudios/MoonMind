@@ -102,7 +102,7 @@ def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
     artifacts.mkdir()
     (resolver / "result.json").write_text("not json", encoding="utf-8")
     (artifacts / "pr_resolver_result.json").write_text(
-        '{"status":"merged","runId":"prior","finished_at":"2020-01-01T00:00:00Z"}',
+        '{"status":"merged","runId":"current","finished_at":"2020-01-01T00:00:00Z"}',
         encoding="utf-8",
     )
 
@@ -115,7 +115,7 @@ def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
     assert terminal.payload is None
     assert terminal.validation_failures == (
         "var/pr_resolver/result.json: malformed JSON object",
-        "artifacts/pr_resolver_result.json: run identity mismatch",
+        "artifacts/pr_resolver_result.json: stale terminal artifact",
     )
 
 
