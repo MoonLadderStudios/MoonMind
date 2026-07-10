@@ -1774,6 +1774,107 @@ class MergeAutomationStartInput(BaseModel):
             raise ValueError("cycleCount must be non-negative")
         return value
 
+
+class PRResolverPolicyModel(BaseModel):
+    """Bounded retry and no-progress policy for ``MoonMind.PRResolver``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    poll_interval_seconds: int = Field(60, alias="pollIntervalSeconds", ge=1, le=3600)
+    max_elapsed_seconds: int = Field(7200, alias="maxElapsedSeconds", ge=1, le=86400)
+    max_finalize_attempts: int = Field(60, alias="maxFinalizeAttempts", ge=1, le=500)
+    max_remediations_per_type: int = Field(
+        2, alias="maxRemediationsPerType", ge=1, le=20
+    )
+    max_identical_blockers_without_progress: int = Field(
+        2, alias="maxIdenticalBlockersWithoutProgress", ge=1, le=20
+    )
+
+
+class PRResolverStartInput(BaseModel):
+    """Compact durable input for ``MoonMind.PRResolver``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_type: Literal["MoonMind.PRResolver"] = Field(..., alias="workflowType")
+    parent_workflow_id: str = Field(..., alias="parentWorkflowId")
+    parent_run_id: str | None = Field(None, alias="parentRunId")
+    principal: str = Field(..., alias="principal")
+    repository: str = Field(..., alias="repository")
+    pr_number: int = Field(..., alias="prNumber", gt=0)
+    pr_url: str = Field(..., alias="prUrl")
+    merge_method: MergeMethod = Field("squash", alias="mergeMethod")
+    head_sha: str | None = Field(None, alias="headSha")
+    base_sha: str | None = Field(None, alias="baseSha")
+    step_id: str = Field(..., alias="stepId")
+    correlation_id: str = Field(..., alias="correlationId")
+    base_agent_request: dict[str, Any] = Field(..., alias="baseAgentRequest")
+    blocker_snapshot_refs: list[str] = Field(
+        default_factory=list, alias="blockerSnapshotRefs"
+    )
+    policy: PRResolverPolicyModel = Field(
+        default_factory=PRResolverPolicyModel, alias="policy"
+    )
+    shadow_mode: bool = Field(False, alias="shadowMode")
+
+    @field_validator(
+        "parent_workflow_id",
+        "principal",
+        "repository",
+        "pr_url",
+        "step_id",
+        "correlation_id",
+    )
+    @classmethod
+    def _required_pr_resolver_text(cls, value: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            raise ValueError("field must be a non-empty string")
+        return candidate
+
+    @field_validator("base_agent_request", mode="after")
+    @classmethod
+    def _compact_base_agent_request(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value, field_name="baseAgentRequest"
+        )
+
+
+class PRResolverTerminalResultModel(BaseModel):
+    """Canonical terminal resolver evidence returned to existing consumers."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_version: Literal[3] = Field(3, alias="schemaVersion")
+    status: Literal["merged", "already_merged", "manual_review", "failed", "canceled"]
+    merge_outcome: Literal[
+        "merged", "already_merged", "manual_review", "failed", "canceled"
+    ] = Field(..., alias="mergeOutcome")
+    merge_automation_disposition: Literal[
+        "merged", "already_merged", "manual_review", "failed"
+    ] = Field(..., alias="mergeAutomationDisposition")
+    reason: str = Field(..., alias="reason")
+    reason_code: str = Field(..., alias="reasonCode")
+    next_step: str = Field(..., alias="nextStep")
+    repository: str
+    pr_number: int = Field(..., alias="prNumber")
+    pr_url: str = Field(..., alias="prUrl")
+    verified_head_sha: str | None = Field(None, alias="verifiedHeadSha")
+    verified_merge_sha: str | None = Field(None, alias="verifiedMergeSha")
+    finalize_attempt_count: int = Field(..., alias="finalizeAttemptCount")
+    remediation_counts: dict[str, int] = Field(
+        default_factory=dict, alias="remediationCounts"
+    )
+    attempt_summary_refs: list[str] = Field(
+        default_factory=list, alias="attemptSummaryRefs"
+    )
+    publish_evidence_ref: str | None = Field(None, alias="publishEvidenceRef")
+    latest_snapshot: dict[str, Any] = Field(default_factory=dict, alias="latestSnapshot")
+    timeline: list[dict[str, Any]] = Field(default_factory=list, alias="timeline")
+    workflow_id: str = Field(..., alias="workflowId")
+    step_id: str = Field(..., alias="stepId")
+    correlation_id: str = Field(..., alias="correlationId")
+
 class DependencyResolvedSignalPayload(BaseModel):
     """Signal payload emitted when a prerequisite execution reaches a terminal state."""
 

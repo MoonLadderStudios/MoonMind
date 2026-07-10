@@ -49,6 +49,7 @@ class PullRequestReadinessResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     head_sha: str = Field(..., alias="headSha")
+    base_sha: str | None = Field(None, alias="baseSha")
     ready: bool = Field(False, alias="ready")
     pull_request_open: bool | None = Field(None, alias="pullRequestOpen")
     pull_request_merged: bool | None = Field(None, alias="pullRequestMerged")
@@ -1210,6 +1211,7 @@ class GitHubService:
         headers = self._github_headers(token)
         blockers: list[dict[str, Any]] = []
         observed_head_sha = head_sha
+        observed_base_sha: str | None = None
         pr_open: bool | None = None
         pr_merged: bool | None = None
         checks_complete: bool | None = None
@@ -1230,6 +1232,9 @@ class GitHubService:
                 head = pr_data.get("head") if isinstance(pr_data, dict) else {}
                 if isinstance(head, dict):
                     observed_head_sha = str(head.get("sha") or head_sha)
+                base = pr_data.get("base") if isinstance(pr_data, dict) else {}
+                if isinstance(base, dict):
+                    observed_base_sha = str(base.get("sha") or "").strip() or None
                 merge_conflicted = _pull_request_has_merge_conflicts(pr_data)
             except httpx.HTTPStatusError as exc:
                 blockers.append(
@@ -1269,6 +1274,7 @@ class GitHubService:
             if pr_open is True and pr_merged is not True and merge_conflicted:
                 return PullRequestReadinessResult(
                     headSha=observed_head_sha,
+                    baseSha=observed_base_sha,
                     ready=True,
                     pullRequestOpen=pr_open,
                     pullRequestMerged=pr_merged,
@@ -1309,6 +1315,7 @@ class GitHubService:
 
         return PullRequestReadinessResult(
             headSha=observed_head_sha,
+            baseSha=observed_base_sha,
             ready=not blockers and pr_merged is not True,
             pullRequestOpen=pr_open,
             pullRequestMerged=pr_merged,

@@ -1247,6 +1247,18 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "merge_automation_complete_post_merge_jira",
     ),
+    "pr_resolver.read_snapshot": ("integrations", "pr_resolver_read_snapshot"),
+    "pr_resolver.classify_gate": ("integrations", "pr_resolver_classify_gate"),
+    "pr_resolver.finalize_merge": ("integrations", "pr_resolver_finalize_merge"),
+    "pr_resolver.verify_remote_head": (
+        "integrations",
+        "pr_resolver_verify_remote_head",
+    ),
+    "pr_resolver.verify_merged": ("integrations", "pr_resolver_verify_merged"),
+    "pr_resolver.write_terminal_result": (
+        "artifacts",
+        "pr_resolver_write_terminal_result",
+    ),
     "memory.evaluate_proposals": ("integrations", "memory_evaluate_proposals"),
     "memory.apply_policy": ("integrations", "memory_apply_policy"),
     "agent_runtime.build_launch_context": (
@@ -4742,6 +4754,110 @@ class TemporalIntegrationActivities:
             transition_issue=transition_issue,
         )
         return decision.model_dump(by_alias=True, mode="json")
+
+    async def pr_resolver_read_snapshot(self, payload, /, **kwargs):
+        """Capture one compact, immutable GitHub gate snapshot."""
+
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError("pr_resolver.read_snapshot requires an object")
+        repository = str(payload.get("repository") or "").strip()
+        pr_number = int(payload.get("prNumber") or 0)
+        if not repository or pr_number <= 0:
+            raise TemporalActivityRuntimeError(
+                "pr_resolver.read_snapshot requires repository and prNumber"
+            )
+        readiness = await GitHubService().evaluate_pull_request_readiness(
+            repo=repository,
+            pr_number=pr_number,
+            head_sha=str(payload.get("headSha") or ""),
+            policy={"checks": "required", "automatedReview": "required"},
+        )
+        result = readiness.model_dump(by_alias=True, mode="json")
+        result["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
+        return result
+
+    async def pr_resolver_finalize_merge(self, payload, /, **kwargs):
+        """Perform one idempotent merge attempt for an exact PR revision."""
+
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError("pr_resolver.finalize_merge requires an object")
+        service = GitHubService()
+        repository = str(payload.get("repository") or "").strip()
+        pr_number = int(payload.get("prNumber") or 0)
+        expected_head = str(payload.get("headSha") or "").strip()
+        readiness = await service.evaluate_pull_request_readiness(
+            repo=repository,
+            pr_number=pr_number,
+            head_sha=expected_head,
+            policy={"checks": "required", "automatedReview": "required"},
+        )
+        if readiness.pull_request_merged is True:
+            return {
+                "merged": True,
+                "alreadyMerged": True,
+                "headSha": readiness.head_sha,
+                "idempotencyKey": str(payload.get("idempotencyKey") or ""),
+            }
+        if expected_head and readiness.head_sha != expected_head:
+            return {
+                "merged": False,
+                "reasonCode": "stale_revision",
+                "headSha": readiness.head_sha,
+                "idempotencyKey": str(payload.get("idempotencyKey") or ""),
+            }
+        if not readiness.ready:
+            return {
+                "merged": False,
+                "reasonCode": "gate_not_ready",
+                "headSha": readiness.head_sha,
+                "idempotencyKey": str(payload.get("idempotencyKey") or ""),
+            }
+        result = await service.merge_pull_request(
+            pr_url=str(payload.get("prUrl") or ""),
+            merge_method=str(payload.get("mergeMethod") or "squash"),
+        )
+        output = result.model_dump(by_alias=True, mode="json")
+        output["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
+        output["headSha"] = readiness.head_sha
+        return output
+
+    async def pr_resolver_classify_gate(self, payload, /, **kwargs):
+        """Classify only the captured snapshot supplied by the workflow."""
+
+        from moonmind.workflows.temporal.workflows.pr_resolver import (
+            classify_pr_resolver_snapshot,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError("pr_resolver.classify_gate requires an object")
+        snapshot = payload.get("snapshot")
+        if not isinstance(snapshot, Mapping):
+            raise TemporalActivityRuntimeError(
+                "pr_resolver.classify_gate requires snapshot"
+            )
+        result = classify_pr_resolver_snapshot(snapshot)
+        result["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
+        return result
+
+    async def pr_resolver_verify_remote_head(self, payload, /, **kwargs):
+        """Independently re-read the PR head after a remediation child."""
+
+        return await self.pr_resolver_read_snapshot(payload)
+
+    async def pr_resolver_verify_merged(self, payload, /, **kwargs):
+        """Independently verify the authoritative remote merge state."""
+
+        snapshot = await self.pr_resolver_read_snapshot(payload)
+        return {
+            "merged": snapshot.get("pullRequestMerged") is True,
+            "headSha": snapshot.get("headSha"),
+            "mergeSha": snapshot.get("mergeSha"),
+            "idempotencyKey": str(payload.get("idempotencyKey") or ""),
+        }
 
     async def _merge_gate_jira_status_allowed(
         self,

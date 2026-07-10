@@ -101,7 +101,11 @@ MoonMind's lifecycle model already expects `MoonMind.UserWorkflow` to mix direct
 
 ### 6.3 Why the resolver itself is a child `MoonMind.UserWorkflow`
 
-The current MoonMind execution model dispatches plan execution through `agent_runtime` child workflows. `pr-resolver` is an agent skill selected for the resolver run, not a standalone workflow type, and it owns git/PR mutations and requires `publishMode = "none"`.
+The current MoonMind execution model routes a selected `pr-resolver` step to the
+dedicated `MoonMind.PRResolver` child workflow. That workflow owns the durable
+gate loop and starts bounded `MoonMind.AgentRun` children only for
+`fix-comments`, `fix-ci`, or `fix-merge-conflicts`. It owns merge verification
+and terminal evidence; managed agents do not host the polling loop.
 
 Because of that, `MoonMind.MergeAutomation` SHOULD start a child **`MoonMind.UserWorkflow`** for the resolver, rather than trying to execute the resolver skill directly inside the gate workflow. This reuses:
 

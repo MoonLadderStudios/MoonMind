@@ -123,6 +123,9 @@ from moonmind.workflows.temporal.workflows.oauth_session import (
 from moonmind.workflows.temporal.workflows.merge_automation import (
     MoonMindMergeAutomationWorkflow as MoonMindMergeAutomation,
 )
+from moonmind.workflows.temporal.workflows.pr_resolver import (
+    MoonMindPRResolverWorkflow as MoonMindPRResolver,
+)
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
