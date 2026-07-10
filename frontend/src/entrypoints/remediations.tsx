@@ -45,14 +45,14 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
       [row.title, row.status, row.targetTitle, row.latestActionSummary, row.resolution]
         .some((value) => String(value ?? '').toLowerCase().includes(term))) : (query.data ?? []);
   }, [filter, query.data]);
-  const columns: Column<RemediationRow>[] = [
+  const columns = useMemo<Column<RemediationRow>[]>(() => [
     { key: 'title', header: 'Remediation', render: (row) => <Link to={`/workflows/${encodeURIComponent(row.remediationWorkflowId)}`}>{row.title}</Link> },
     { key: 'status', header: 'Lifecycle / attention', render: (row) => <><span>{row.status}</span>{row.attentionRequired ? <strong> · Attention</strong> : null}</> },
     { key: 'targetTitle', header: 'Source Workflow', render: (row) => <Link to={`/workflows/${encodeURIComponent(row.targetWorkflowId)}`}>{row.targetTitle}</Link> },
     { key: 'authorityMode', header: 'Contract', render: (row) => `${row.authorityMode} · ${row.mode}` },
     { key: 'latestActionSummary', header: 'Latest action', render: (row) => row.latestActionSummary || row.resolution || '—' },
     { key: 'updatedAt', header: 'Updated', sortable: true, render: (row) => formatDateTime(row.updatedAt) },
-  ];
+  ], []);
   if (query.isError) return <DashboardErrorState title="Remediation inventory unavailable" description="MoonMind could not load remediations." detail={query.error instanceof Error ? query.error.message : null} onRetry={() => void query.refetch()} />;
   return <main className="data-wide-panel" aria-labelledby="remediations-title">
     <div className="page-header"><div><h2 id="remediations-title">Remediation</h2><p>Scan remediation workflows and their source Workflow provenance.</p></div><button type="button" onClick={() => void query.refetch()}>Refresh</button></div>

@@ -11056,49 +11056,51 @@ async def list_remediation_collection(
     user: User = Depends(get_current_user()),
 ) -> RemediationCollectionResponseModel:
     """List only remediation relationships whose two executions are visible."""
-    items: list[RemediationCollectionItemModel] = []
-    for link in await service.list_remediation_links():
+    async def build_item(link: Any) -> RemediationCollectionItemModel | None:
         try:
-            remediation = await _get_owned_execution(
-                service=service,
-                workflow_id=link.remediation_workflow_id,
-                user=user,
-            )
-            target = await _get_owned_execution(
-                service=service,
-                workflow_id=link.target_workflow_id,
-                user=user,
+            remediation, target = await asyncio.gather(
+                _get_owned_execution(
+                    service=service,
+                    workflow_id=link.remediation_workflow_id,
+                    user=user,
+                ),
+                _get_owned_execution(
+                    service=service,
+                    workflow_id=link.target_workflow_id,
+                    user=user,
+                ),
             )
         except HTTPException as exc:
             if exc.status_code == status.HTTP_404_NOT_FOUND:
-                continue
+                return None
             raise
-        items.append(
-            RemediationCollectionItemModel(
-                remediationWorkflowId=link.remediation_workflow_id,
-                title=str(
-                    (getattr(remediation, "memo", None) or {}).get("title")
-                    or link.remediation_workflow_id
-                ),
-                status=str(
-                    _enum_value(getattr(remediation, "state", None)) or link.status
-                ),
-                attentionRequired=bool(
-                    getattr(remediation, "attention_required", False)
-                ),
-                targetWorkflowId=link.target_workflow_id,
-                targetTitle=str(
-                    (getattr(target, "memo", None) or {}).get("title")
-                    or link.target_workflow_id
-                ),
-                authorityMode=link.authority_mode,
-                mode=link.mode,
-                latestActionSummary=link.latest_action_summary,
-                resolution=link.outcome,
-                createdAt=link.created_at,
-                updatedAt=link.updated_at,
-            )
+        return RemediationCollectionItemModel(
+            remediationWorkflowId=link.remediation_workflow_id,
+            title=str(
+                (getattr(remediation, "memo", None) or {}).get("title")
+                or link.remediation_workflow_id
+            ),
+            status=str(link.status),
+            attentionRequired=bool(
+                getattr(remediation, "attention_required", False)
+            ),
+            targetWorkflowId=link.target_workflow_id,
+            targetTitle=str(
+                (getattr(target, "memo", None) or {}).get("title")
+                or link.target_workflow_id
+            ),
+            authorityMode=link.authority_mode,
+            mode=link.mode,
+            latestActionSummary=link.latest_action_summary,
+            resolution=link.outcome,
+            createdAt=link.created_at,
+            updatedAt=link.updated_at,
         )
+
+    results = await asyncio.gather(
+        *(build_item(link) for link in await service.list_remediation_links())
+    )
+    items = [item for item in results if item is not None]
     return RemediationCollectionResponseModel(items=items)
 
 @router.get(
