@@ -797,6 +797,11 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={detailPayload} />);
 
     expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    expect(document.querySelector('[data-entity-detail-frame="recurring"]')).not.toBeNull();
+    expect(screen.getByRole("navigation", { name: "Schedule detail sections" })).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Overview" }).getAttribute("href")).toBe("#schedule-overview");
+    expect(screen.getByRole("link", { name: "Runs" }).getAttribute("href")).toBe("#schedule-runs");
+    expect(screen.getByRole("link", { name: "Configuration" }).getAttribute("href")).toBe("#schedule-configuration");
     expect((screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByRole("button", { name: "Delete schedule" })).toBeNull();

@@ -1455,6 +1455,31 @@ h1 {
   width: 100%;
 }
 
+.entity-detail-frame {
+  min-width: 0;
+  width: 100%;
+}
+
+.entity-detail-frame__tabs {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-color, rgba(148, 163, 184, 0.25));
+}
+
+.entity-detail-frame__tabs a {
+  color: var(--text-secondary, #94a3b8);
+  padding: 0.7rem 0.9rem;
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+}
+
+.entity-detail-frame__tabs a:hover,
+.entity-detail-frame__tabs a:focus-visible {
+  color: var(--text-primary, #f8fafc);
+  border-bottom-color: currentColor;
+}
+
 .schedules-toolbar {
   align-items: flex-start;
 }
