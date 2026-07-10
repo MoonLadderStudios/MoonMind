@@ -1527,100 +1527,31 @@ h1 {
   display: none;
 }
 
-.recurring-schedule-workspace {
-  display: grid;
-  grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
-  gap: 0.9rem;
-  align-items: start;
+.schedules-detail-page {
   min-width: 0;
 }
 
-.recurring-schedule-workspace-detail {
-  min-width: 0;
+.collection-sidebar-filter {
+  display: block;
+  margin-top: 0.35rem;
 }
 
-.recurring-schedule-sidebar {
-  position: sticky;
-  top: 0.85rem;
-  display: grid;
-  gap: 0;
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid rgb(var(--mm-border) / 0.76);
-  border-radius: 0.68rem;
-  background: rgb(var(--mm-panel) / 0.86);
-  box-shadow: 0 18px 32px -28px rgb(var(--mm-ink) / 0.48);
-}
-
-.recurring-schedule-sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 2.65rem;
-  padding: 0 0.85rem;
-  border-bottom: 1px solid rgb(var(--mm-border) / 0.72);
-  color: rgb(var(--mm-ink));
-}
-
-.recurring-schedule-sidebar-list {
-  display: grid;
-  max-height: calc(100vh - 13rem);
-  overflow: auto;
-}
-
-.recurring-schedule-sidebar-row {
-  display: grid;
-  gap: 0.18rem;
-  min-height: 3.7rem;
-  min-width: 0;
-  padding: 0.65rem 0.85rem;
-  border-bottom: 1px solid rgb(var(--mm-border) / 0.56);
-  color: rgb(var(--mm-ink));
-  text-decoration: none;
-}
-
-.recurring-schedule-sidebar-row:hover,
-.recurring-schedule-sidebar-row:focus-visible {
-  background: rgb(var(--mm-accent-2) / 0.1);
-  outline: none;
-}
-
-.recurring-schedule-sidebar-row:focus-visible {
-  box-shadow: inset var(--mm-control-focus-ring);
-}
-
-.recurring-schedule-sidebar-row--active,
-.recurring-schedule-sidebar-row[aria-current="page"] {
-  background: rgb(var(--mm-accent) / 0.12);
-  color: rgb(var(--mm-accent));
-}
-
-.recurring-schedule-sidebar-name,
-.recurring-schedule-sidebar-meta {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.recurring-schedule-sidebar-name {
-  font-size: 0.9rem;
-  font-weight: 760;
-}
-
-.recurring-schedule-sidebar-meta,
-.recurring-schedule-sidebar-state {
-  color: rgb(var(--mm-muted));
+.collection-sidebar-filter input {
+  width: 100%;
+  min-height: 1.9rem;
+  padding: 0.25rem 0.45rem;
   font-size: 0.78rem;
 }
 
-.recurring-schedule-sidebar-state {
-  margin: 0;
-  padding: 0.8rem 0.85rem;
-}
-
-.schedules-detail-page {
-  min-width: 0;
+.collection-sidebar-row-meta {
+  max-width: 7.5rem;
+  overflow: hidden;
+  color: rgb(var(--mm-muted));
+  font-size: 0.72rem;
+  line-height: 1.2;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .schedules-detail-page .page-meta a {
@@ -2733,11 +2664,11 @@ tbody tr:hover {
 }
 
 @media (max-width: 720px) {
-  .recurring-schedule-workspace {
+  .workflow-workspace-shell[data-recurring-list-display-mode="sidebar"] {
     display: block;
   }
 
-  .recurring-schedule-sidebar {
+  .workflow-workspace-shell[data-recurring-list-display-mode="sidebar"] .collection-sidebar {
     display: none;
   }
 

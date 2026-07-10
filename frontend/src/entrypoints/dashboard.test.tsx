@@ -3179,7 +3179,7 @@ describe('Dashboard shared entry', () => {
       /@media \(max-width: 767px\)\s*\{[\s\S]*\.workflow-list-display-control\s*\{[^}]*display:\s*none/s,
     );
     expect(dashboardCss).toMatch(
-      /@media \(max-width: 720px\)\s*\{[\s\S]*\.recurring-schedule-sidebar\s*\{[^}]*display:\s*none/s,
+      /@media \(max-width: 720px\)\s*\{[\s\S]*\[data-recurring-list-display-mode="sidebar"\] \.collection-sidebar\s*\{[^}]*display:\s*none/s,
     );
     expect(dashboardCss).toMatch(
       /@media \(max-width: 900px\)\s*\{[\s\S]*\.grid-2\s*\{/,

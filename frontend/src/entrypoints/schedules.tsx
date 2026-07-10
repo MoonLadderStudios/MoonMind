@@ -5,6 +5,7 @@ import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector'
 import { DataTable } from '../components/tables/DataTable';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
+import { CollectionSidebar, type CollectionSidebarRow } from '../components/CollectionSidebar';
 import { WorkflowColumnFilterButton, WorkflowColumnHeader } from '../components/WorkflowColumnHeader';
 
 import { z } from 'zod';
@@ -848,47 +849,42 @@ function RecurringScheduleSidebar({
   schedules,
   isLoading,
   error,
+  pinnedSchedule,
+  onRetry,
 }: {
   definitionId: string;
   schedules: Schedule[];
   isLoading: boolean;
   error: unknown;
+  pinnedSchedule?: Schedule | null;
+  onRetry?: () => void;
 }) {
+  const toRow = (schedule: Schedule): CollectionSidebarRow => ({
+    id: schedule.id,
+    href: `/schedules/${encodeURIComponent(schedule.id)}`,
+    primaryText: schedule.name,
+    metadata: <>{stateLabel(schedule)} · next {formatWhen(schedule.nextRunAt)}</>,
+  });
   return (
-    <aside className="recurring-schedule-sidebar" aria-label="Recurring schedule navigation">
-      <div className="recurring-schedule-sidebar-header">
-        <strong>Recurring</strong>
-      </div>
-      {isLoading ? (
-        <p className="recurring-schedule-sidebar-state">Loading recurring schedules...</p>
-      ) : error ? (
-        <p className="recurring-schedule-sidebar-state" role="alert">
-          {errorMessage(error, 'Recurring schedule navigation unavailable')}
-        </p>
-      ) : schedules.length === 0 ? (
-        <p className="recurring-schedule-sidebar-state">No recurring schedules yet.</p>
-      ) : (
-        <nav className="recurring-schedule-sidebar-list">
-          {schedules.map((schedule) => {
-            const active = schedule.id === definitionId;
-            return (
-              <a
-                key={schedule.id}
-                href={`/schedules/${encodeURIComponent(schedule.id)}`}
-                aria-current={active ? 'page' : undefined}
-                data-recurring-sidebar-row-focus={schedule.id}
-                className={`recurring-schedule-sidebar-row${active ? ' recurring-schedule-sidebar-row--active' : ''}`}
-              >
-                <span className="recurring-schedule-sidebar-name">{schedule.name}</span>
-                <span className="recurring-schedule-sidebar-meta">
-                  {stateLabel(schedule)} · next {formatWhen(schedule.nextRunAt)}
-                </span>
-              </a>
-            );
-          })}
-        </nav>
-      )}
-    </aside>
+    <CollectionSidebar
+      landmarkLabel="Recurring schedule navigation"
+      tableLabel="Recurring schedule list table slice"
+      header="Recurring"
+      filterLabel="Recurring schedule sidebar filter"
+      filterPlaceholder="Filter recurring schedules"
+      rows={schedules.map(toRow)}
+      activeId={definitionId}
+      pinnedRow={pinnedSchedule ? toRow(pinnedSchedule) : null}
+      isLoading={isLoading}
+      error={error}
+      onRetry={onRetry}
+      loadingCopy="Loading recurring schedules..."
+      emptyCopy="No recurring schedules yet."
+      filteredEmptyCopy="No recurring schedules match the current filter."
+      errorCopy="Recurring schedule navigation is unavailable."
+      currentRowCopy="Current recurring schedule"
+      rowFocusAttribute="data-recurring-sidebar-row-focus"
+    />
   );
 }
 
@@ -898,6 +894,8 @@ function RecurringScheduleWorkspace({
   schedules,
   isLoading,
   error,
+  pinnedSchedule,
+  onRetry,
   children,
 }: {
   definitionId: string;
@@ -905,20 +903,24 @@ function RecurringScheduleWorkspace({
   schedules: Schedule[];
   isLoading: boolean;
   error: unknown;
+  pinnedSchedule?: Schedule | null;
+  onRetry?: () => void;
   children: ReactNode;
 }) {
   if (listDisplayMode !== 'sidebar') {
     return <>{children}</>;
   }
   return (
-    <div className="recurring-schedule-workspace">
+    <div className="workflow-workspace-shell" data-recurring-list-display-mode="sidebar">
       <RecurringScheduleSidebar
         definitionId={definitionId}
         schedules={schedules}
         isLoading={isLoading}
         error={error}
+        pinnedSchedule={pinnedSchedule}
+        onRetry={onRetry}
       />
-      <div className="recurring-schedule-workspace-detail">
+      <div className="workflow-workspace-detail">
         {children}
       </div>
     </div>
@@ -932,6 +934,7 @@ function ScheduleDetailPage({
   sidebarSchedules = [],
   isSidebarLoading = false,
   sidebarError = null,
+  onSidebarRetry,
 }: {
   payload: BootPayload;
   definitionId: string;
@@ -939,6 +942,7 @@ function ScheduleDetailPage({
   sidebarSchedules?: Schedule[];
   isSidebarLoading?: boolean;
   sidebarError?: unknown;
+  onSidebarRetry?: () => void;
 }) {
   const queryClient = useQueryClient();
   const [isEditing, setIsEditing] = useState(false);
@@ -1122,6 +1126,7 @@ function ScheduleDetailPage({
         schedules={sidebarSchedules}
         isLoading={isSidebarLoading}
         error={sidebarError}
+        onRetry={onSidebarRetry}
       >
         <div className="schedules-page stack">
           <p className="loading">Loading recurring schedule...</p>
@@ -1138,6 +1143,7 @@ function ScheduleDetailPage({
         schedules={sidebarSchedules}
         isLoading={isSidebarLoading}
         error={sidebarError}
+        onRetry={onSidebarRetry}
       >
         <div className="schedules-page stack">
           <a href="/schedules" className="secondary">Back to recurring schedules</a>
@@ -1154,6 +1160,8 @@ function ScheduleDetailPage({
       schedules={sidebarSchedules}
       isLoading={isSidebarLoading}
       error={sidebarError}
+      pinnedSchedule={schedule}
+      onRetry={onSidebarRetry}
     >
     <EntityDetailFrame entity="recurring">
     <div className="schedules-page schedules-detail-page stack">
@@ -1996,6 +2004,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
         sidebarSchedules={schedules}
         isSidebarLoading={isLoading}
         sidebarError={isError ? error : null}
+        onSidebarRetry={() => void refetch()}
       />
     );
   }
