@@ -1266,6 +1266,7 @@ class SendCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
 
     instructions: NonBlankStr = Field(..., alias="instructions")
     reason: NonBlankStr | None = Field(None, alias="reason")
+    request_id: NonBlankStr | None = Field(None, alias="requestId")
 
 class SteerCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Provide follow-up steering to an in-flight turn."""

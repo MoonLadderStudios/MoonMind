@@ -39,7 +39,7 @@ Representative implementation surfaces:
 
 ```text
 frontend/src/entrypoints/schedules.tsx
-frontend/src/lib/workflowListDisplayMode.ts
+frontend/src/lib/collectionListDisplayMode.ts
 frontend/src/components/workflows/WorkflowWorkspaceSidebar.tsx
 frontend/src/styles/dashboard.css
 api_service/api/routers/recurring_workflows.py

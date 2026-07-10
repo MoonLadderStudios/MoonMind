@@ -8,7 +8,7 @@ import WorkflowDetailEntrypoint, { WorkflowWorkspaceShell } from './workflow-det
 import WorkflowStartPage from './workflow-start';
 import {
   readWorkflowListDisplayMode,
-} from '../lib/workflowListDisplayMode';
+} from '../lib/collectionListDisplayMode';
 import { decodeWorkflowIdFromPath } from '../lib/workflowDetailRoutes';
 
 const DESKTOP_MEDIA_QUERY = '(min-width: 768px)';

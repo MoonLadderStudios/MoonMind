@@ -45,11 +45,11 @@ import {
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
 import {
-  WORKFLOW_LIST_DISPLAY_MODES,
+  COLLECTION_LIST_DISPLAY_MODES,
   resolveRecurringListDisplay,
   resolveWorkflowListDisplay,
-  type WorkflowListDisplayMode,
-} from '../lib/workflowListDisplayMode';
+  type CollectionListDisplayMode,
+} from '../lib/collectionListDisplayMode';
 import { requestRecurringScheduleFocus } from '../lib/recurringScheduleFocus';
 import {
   DASHBOARD_PREFERENCES_CHANGED_EVENT,
@@ -96,7 +96,7 @@ type NavIconProps = {
 };
 
 function requestRecurringFocusForMode(
-  mode: WorkflowListDisplayMode,
+  mode: CollectionListDisplayMode,
   definitionId: string | null | undefined,
 ): void {
   if (mode === 'table') {
@@ -582,22 +582,22 @@ function DashboardLiveUpdateProvider({
   return <>{children}</>;
 }
 
-function WorkflowListDisplayModeControl({
-  accessibleName = 'Workflow list display',
+function CollectionListDisplayModeControl({
+  accessibleName = 'List display',
   effectiveMode,
   status,
   onSelect,
 }: {
   accessibleName?: string;
-  effectiveMode: WorkflowListDisplayMode;
+  effectiveMode: CollectionListDisplayMode;
   status?: string | null | undefined;
-  onSelect: (mode: WorkflowListDisplayMode) => void;
+  onSelect: (mode: CollectionListDisplayMode) => void;
 }) {
   const selectByKey = (
     event: KeyboardEvent<HTMLButtonElement>,
     currentIndex: number,
   ) => {
-    const lastIndex = WORKFLOW_LIST_DISPLAY_MODES.length - 1;
+    const lastIndex = COLLECTION_LIST_DISPLAY_MODES.length - 1;
     let nextIndex: number | null = null;
 
     if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
@@ -615,7 +615,7 @@ function WorkflowListDisplayModeControl({
     }
 
     event.preventDefault();
-    const nextMode = WORKFLOW_LIST_DISPLAY_MODES[nextIndex];
+    const nextMode = COLLECTION_LIST_DISPLAY_MODES[nextIndex];
     if (!nextMode) {
       return;
     }
@@ -632,7 +632,7 @@ function WorkflowListDisplayModeControl({
       role="radiogroup"
       aria-label={accessibleName}
     >
-      {WORKFLOW_LIST_DISPLAY_MODES.map((mode, index) => {
+      {COLLECTION_LIST_DISPLAY_MODES.map((mode, index) => {
         const Icon = iconForWorkflowListMode(mode.icon);
         const checked = effectiveMode === mode.value;
         return (
@@ -662,18 +662,10 @@ function WorkflowListDisplayModeControl({
   );
 }
 
-function DashboardNavigation({
+function ApplicationRail({
   uiInfo,
-  listDisplayAccessibleName,
-  workflowListMode,
-  workflowListDisplayStatus,
-  onWorkflowListModeSelect,
 }: {
   uiInfo: DashboardUiInfo | null;
-  listDisplayAccessibleName?: string | undefined;
-  workflowListMode: WorkflowListDisplayMode | null;
-  workflowListDisplayStatus?: string | null | undefined;
-  onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -743,7 +735,7 @@ function DashboardNavigation({
   }, [open]);
 
   return (
-    <header className="masthead">
+    <aside className="application-rail" aria-label="Application rail">
       <Link className="masthead-brand" to="/workflows" aria-label="MoonMind workflows">
         <img
           className="masthead-logo"
@@ -757,15 +749,6 @@ function DashboardNavigation({
           <span className="masthead-brand-mind">Mind</span>
         </h1>
       </Link>
-
-      {workflowListMode ? (
-        <WorkflowListDisplayModeControl
-          {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
-          effectiveMode={workflowListMode}
-          status={workflowListDisplayStatus}
-          onSelect={onWorkflowListModeSelect}
-        />
-      ) : null}
 
       <button
         ref={menuButtonRef}
@@ -792,7 +775,7 @@ function DashboardNavigation({
         />
       ) : null}
 
-      <div className="masthead-nav">
+      <div className="application-rail-nav">
         <nav
           ref={navRef}
           className={`route-nav${open ? ' route-nav--open' : ''}`}
@@ -870,14 +853,14 @@ function DashboardNavigation({
         </nav>
       </div>
 
-      {buildId ? (
-        <div className="masthead-title-meta">
+      <div className="application-rail-utilities">
+        {buildId ? (
           <div className="version-badge" title="MoonMind image version">
             <span className="version-badge-value">v{buildId}</span>
           </div>
-        </div>
-      ) : null}
-    </header>
+        ) : null}
+      </div>
+    </aside>
   );
 }
 
@@ -885,52 +868,56 @@ function AppShell({
   dataWidePanel,
   uiInfo,
   listDisplayAccessibleName,
-  workflowListMode,
-  workflowListDisplayStatus,
-  onWorkflowListModeSelect,
+  listDisplayMode,
+  listDisplayStatus,
+  onListDisplayModeSelect,
   children,
 }: {
   dataWidePanel: boolean;
   uiInfo: DashboardUiInfo | null;
   listDisplayAccessibleName?: string | undefined;
-  workflowListMode: WorkflowListDisplayMode | null;
-  workflowListDisplayStatus?: string | null | undefined;
-  onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
+  listDisplayMode: CollectionListDisplayMode | null;
+  listDisplayStatus?: string | null | undefined;
+  onListDisplayModeSelect: (mode: CollectionListDisplayMode) => void;
   children: ReactNode;
 }) {
   return (
     <DashboardLiveUpdateProvider uiInfo={uiInfo}>
       <main className="dashboard-root">
-        <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
-          <p>
-            <span className="worker-pause-label" data-worker-pause-status>
-              Workers: Running
-            </span>
-            <span className="worker-pause-reason" data-worker-pause-reason />
-            <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
-              Manage operations
-            </Link>
-          </p>
-        </section>
+        <ApplicationRail uiInfo={uiInfo} />
+        <div className="dashboard-content">
+          <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
+            <p>
+              <span className="worker-pause-label" data-worker-pause-status>
+                Workers: Running
+              </span>
+              <span className="worker-pause-reason" data-worker-pause-reason />
+              <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
+                Manage operations
+              </Link>
+            </p>
+          </section>
 
-        <div className="dashboard-shell-full">
-          <DashboardNavigation
-            uiInfo={uiInfo}
-            listDisplayAccessibleName={listDisplayAccessibleName}
-            workflowListMode={workflowListMode}
-            workflowListDisplayStatus={workflowListDisplayStatus}
-            onWorkflowListModeSelect={onWorkflowListModeSelect}
-          />
-        </div>
+          {listDisplayMode ? (
+            <div className="dashboard-collection-utilities">
+              <CollectionListDisplayModeControl
+                {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
+                effectiveMode={listDisplayMode}
+                status={listDisplayStatus}
+                onSelect={onListDisplayModeSelect}
+              />
+            </div>
+          ) : null}
 
-        <div
-          className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
-        >
-          <DashboardAlerts />
+          <div
+            className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
+          >
+            <DashboardAlerts />
+          </div>
+          <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
+            {children}
+          </section>
         </div>
-        <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
-          {children}
-        </section>
       </main>
     </DashboardLiveUpdateProvider>
   );
@@ -948,10 +935,10 @@ function RoutedDashboardPage({
   const location = useLocation();
   const navigate = useNavigate();
   const pendingRequestRef = useRef<symbol | null>(null);
-  const [requestedMode, setRequestedMode] = useState<WorkflowListDisplayMode>(() => (
+  const [requestedMode, setRequestedMode] = useState<CollectionListDisplayMode>(() => (
     readDashboardPreferences().workflowListDisplayMode
   ));
-  const [requestedRecurringMode, setRequestedRecurringMode] = useState<WorkflowListDisplayMode>(
+  const [requestedRecurringMode, setRequestedRecurringMode] = useState<CollectionListDisplayMode>(
     () => readDashboardPreferences().recurringListDisplayMode,
   );
   const [lastSelectedWorkflowId, setLastSelectedWorkflowId] = useState<string | null>(
@@ -1072,7 +1059,7 @@ function RoutedDashboardPage({
     setResolutionStatus(null);
   }, [location.pathname]);
 
-  const handleWorkflowListModeSelect = async (mode: WorkflowListDisplayMode) => {
+  const handleWorkflowListModeSelect = async (mode: CollectionListDisplayMode) => {
     const selectedMode = mode;
     const search = new URLSearchParams(location.search);
     pendingRequestRef.current = null;
@@ -1220,9 +1207,9 @@ function RoutedDashboardPage({
         dataWidePanel={false}
         uiInfo={uiInfo}
         listDisplayAccessibleName={activeListDisplayAccessibleName}
-        workflowListMode={null}
-        workflowListDisplayStatus={resolutionStatus}
-        onWorkflowListModeSelect={handleWorkflowListModeSelect}
+        listDisplayMode={null}
+        listDisplayStatus={resolutionStatus}
+        onListDisplayModeSelect={handleWorkflowListModeSelect}
       >
         <UnknownPage page={location.pathname} />
       </AppShell>
@@ -1238,9 +1225,9 @@ function RoutedDashboardPage({
         dataWidePanel={route.dataWidePanel}
         uiInfo={uiInfo}
         listDisplayAccessibleName={activeListDisplayAccessibleName}
-        workflowListMode={activeListDisplay?.effectiveMode ?? null}
-        workflowListDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
-        onWorkflowListModeSelect={handleWorkflowListModeSelect}
+        listDisplayMode={activeListDisplay?.effectiveMode ?? null}
+        listDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
+        onListDisplayModeSelect={handleWorkflowListModeSelect}
       >
         <LoadingPage />
       </AppShell>
@@ -1254,7 +1241,7 @@ function RoutedDashboardPage({
         ? routedPayload.initialData
         : {}),
       workflowListDisplayMode: resolvedDisplay.effectiveMode,
-      workflowListDisplayStatus: resolutionStatus ?? resolvedDisplay.status,
+      listDisplayStatus: resolutionStatus ?? resolvedDisplay.status,
     };
   }
   if (resolvedRecurringDisplay) {
@@ -1276,9 +1263,9 @@ function RoutedDashboardPage({
       dataWidePanel={layout.dataWidePanel === true}
       uiInfo={uiInfo}
       listDisplayAccessibleName={activeListDisplayAccessibleName}
-      workflowListMode={activeListDisplay?.effectiveMode ?? null}
-      workflowListDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
-      onWorkflowListModeSelect={handleWorkflowListModeSelect}
+      listDisplayMode={activeListDisplay?.effectiveMode ?? null}
+      listDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
+      onListDisplayModeSelect={handleWorkflowListModeSelect}
     >
       <PageContent
         key={routeKey}
@@ -1362,8 +1349,8 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
           <AppShell
             dataWidePanel={false}
             uiInfo={uiInfo}
-            workflowListMode={null}
-            onWorkflowListModeSelect={() => undefined}
+            listDisplayMode={null}
+            onListDisplayModeSelect={() => undefined}
           >
             <UnknownPage page={window.location.pathname} />
           </AppShell>

@@ -163,6 +163,7 @@ _STEP_TYPE_PRESET = "preset"
 _RUNTIME_ONLY_ORCHESTRATE_SLUGS = {"jira-orchestrate", "moonspec-orchestrate"}
 _ORCHESTRATION_MODE_INPUT = "orchestration_mode"
 _BATCH_WORKFLOWS_SLUG = "batch-workflows"
+_BATCH_GITHUB_WORKFLOWS_SLUG = "batch-github-workflows"
 _REMOVED_BATCH_WORKFLOWS_INPUTS = frozenset({"target_preset_version"})
 _SKILL_METADATA_KEYS = frozenset(
     {"context", "permissions", "autonomy", "runtime", "allowedTools"}
@@ -1091,7 +1092,7 @@ def _apply_contextual_input_overrides(
         submitted=dict(submitted),
     )
 
-    if slug == _BATCH_WORKFLOWS_SLUG:
+    if slug in {_BATCH_WORKFLOWS_SLUG, _BATCH_GITHUB_WORKFLOWS_SLUG}:
         repository = _repository_from_context(context)
         schema_defaults = _input_schema_defaults_by_name(inputs_schema)
         submitted_repository = str(adjusted.get("repository") or "").strip()

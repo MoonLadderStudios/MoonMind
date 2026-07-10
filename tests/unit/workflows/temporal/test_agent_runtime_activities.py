@@ -1445,6 +1445,27 @@ async def test_publish_artifacts_no_service_returns_result_unchanged() -> None:
     assert isinstance(result, AgentRunResult)
     assert result.summary == "done"
 
+
+def test_incomplete_pr_resolver_failure_survives_canonical_serialization() -> None:
+    """MoonLadderStudios/MoonMind#3141 workflow-boundary regression."""
+    original = AgentRunResult(
+        summary="pr-resolver execution incomplete",
+        failure_class="execution_error",
+        retry_recommendation="continue_same_session",
+        metadata={
+            "failureCode": "INCOMPLETE_TERMINAL_CONTRACT",
+            "missingEvidence": ["var/pr_resolver/result.json"],
+        },
+    )
+
+    restored = AgentRunResult.model_validate(
+        original.model_dump(by_alias=True, mode="json")
+    )
+
+    assert restored.failure_class == "execution_error"
+    assert restored.retry_recommendation == "continue_same_session"
+    assert restored.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+
 async def test_publish_artifacts_none_input_returns_none() -> None:
     """T3.3 — None input returns None."""
     activities = TemporalAgentRuntimeActivities()

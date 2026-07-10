@@ -172,7 +172,7 @@ def child_goal_for_target(
         return None
     if (
         target_kind == "preset"
-        and target_slug == "github-issue-implement"
+        and target_slug in {"github-issue-implement", "github-issue-orchestrate"}
         and provider == "github"
     ):
         issue = (
@@ -187,9 +187,19 @@ def child_goal_for_target(
         number = issue.get("number")
         ref = _text(target.get("ref"))
         if repository and number is not None:
-            return f"Implement GitHub issue {repository}#{number}."
+            action = (
+                "Orchestrate"
+                if target_slug == "github-issue-orchestrate"
+                else "Implement"
+            )
+            return f"{action} GitHub issue {repository}#{number}."
         if ref:
-            return f"Implement GitHub issue {ref}."
+            action = (
+                "Orchestrate"
+                if target_slug == "github-issue-orchestrate"
+                else "Implement"
+            )
+            return f"{action} GitHub issue {ref}."
         return None
     return None
 
@@ -254,7 +264,7 @@ def bind_child_inputs(
         return inputs
     if (
         target_kind == "preset"
-        and target_slug == "github-issue-implement"
+        and target_slug in {"github-issue-implement", "github-issue-orchestrate"}
         and provider == "github"
     ):
         issue = (
