@@ -24,7 +24,9 @@ import {
   type TemporalTaskEditingExecutionContract,
   type TemporalTaskInputAttachmentRef,
 } from "../lib/temporalTaskEditing";
-import { readWorkflowListDisplayMode } from "../lib/workflowListDisplayMode";
+import {
+  readWorkflowListDisplayMode,
+} from "../lib/workflowListDisplayMode";
 import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowWorkspaceSidebar";
 import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
 import {
@@ -41,11 +43,8 @@ type WorkflowStartDashboardConfig = {
   };
 };
 
-function readWorkflowStartDashboardConfig(
-  payload: BootPayload,
-): WorkflowStartDashboardConfig | undefined {
-  const raw = payload.initialData as
-    { dashboardConfig?: WorkflowStartDashboardConfig } | undefined;
+function readWorkflowStartDashboardConfig(payload: BootPayload): WorkflowStartDashboardConfig | undefined {
+  const raw = payload.initialData as { dashboardConfig?: WorkflowStartDashboardConfig } | undefined;
   return raw?.dashboardConfig;
 }
 
@@ -128,9 +127,7 @@ export const WORKFLOW_START_HEADING_QUOTES = [
   "All systems go",
 ];
 
-export function workflowStartFormSnapshot(
-  form: HTMLFormElement | null,
-): string {
+export function workflowStartFormSnapshot(form: HTMLFormElement | null): string {
   if (!form) {
     return "";
   }
@@ -163,9 +160,7 @@ export function workflowStartFormSnapshot(
   return values.sort().join("\n");
 }
 
-export function deriveExplicitWorkflowTitle(
-  sourceValue: string,
-): string | undefined {
+export function deriveExplicitWorkflowTitle(sourceValue: string): string | undefined {
   const source = sourceValue.trim();
   if (!source) {
     return undefined;
@@ -562,7 +557,10 @@ type JiraImportTarget =
   | { kind: "step"; localId: string; attachmentsOnly?: boolean };
 
 type JiraImportMode =
-  "preset-brief" | "execution-brief" | "description-only" | "acceptance-only";
+  | "preset-brief"
+  | "execution-brief"
+  | "description-only"
+  | "acceptance-only";
 
 interface JiraImportProvenance {
   issueKey: string;
@@ -609,9 +607,7 @@ export interface ModelTierPreview {
   warning: string | null;
 }
 
-function modelTiersForProfile(
-  profile: ProviderProfile | undefined,
-): ProviderModelEffortTier[] {
+function modelTiersForProfile(profile: ProviderProfile | undefined): ProviderModelEffortTier[] {
   if (!profile) {
     return [];
   }
@@ -655,9 +651,7 @@ export function previewModelTier(
   const effectiveTier = Math.min(requestedTier, tiers.length);
   const tier = tiers[effectiveTier - 1] || {};
   const fallbackReason =
-    requestedTier > tiers.length
-      ? "requested_tier_above_configured_range"
-      : null;
+    requestedTier > tiers.length ? "requested_tier_above_configured_range" : null;
   return {
     requestedTier,
     effectiveTier,
@@ -706,9 +700,7 @@ export function resolveDefaultProviderProfileId(
       return configured.profile_id;
     }
   }
-  const explicitDefault = launchableProfiles.find(
-    (profile) => profile.is_default,
-  );
+  const explicitDefault = launchableProfiles.find((profile) => profile.is_default);
   if (explicitDefault) {
     return explicitDefault.profile_id;
   }
@@ -1050,7 +1042,8 @@ interface AppliedTemplateState {
 
 function readDashboardConfig(payload: BootPayload): DashboardConfig {
   const raw = payload.initialData as
-    { dashboardConfig?: DashboardConfig } | undefined;
+    | { dashboardConfig?: DashboardConfig }
+    | undefined;
   return raw?.dashboardConfig ?? {};
 }
 
@@ -1094,9 +1087,10 @@ function configuredTemporalDetailUrl(
   detailTemplate: string,
   workflowId: string,
 ): string {
-  return withQueryParams(interpolatePath(detailTemplate, { workflowId }), {
-    source: "temporal",
-  });
+  return withQueryParams(
+    interpolatePath(detailTemplate, { workflowId }),
+    { source: "temporal" },
+  );
 }
 
 function configuredTemporalUpdateUrl(
@@ -1143,9 +1137,7 @@ function recordValue(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function nonEmptyRecordValue(
-  value: unknown,
-): Record<string, unknown> | undefined {
+function nonEmptyRecordValue(value: unknown): Record<string, unknown> | undefined {
   const record = recordValue(value);
   return Object.keys(record).length > 0 ? record : undefined;
 }
@@ -1161,9 +1153,7 @@ function compactSourceFromPresetProvenance(
     ? provenance.path.map((entry) => String(entry).trim()).filter(Boolean)
     : [];
   const presetSlug = String(source.slug || "").trim();
-  const presetDigest = String(
-    source.presetDigest || source.digest || "",
-  ).trim();
+  const presetDigest = String(source.presetDigest || source.digest || "").trim();
   const originalStepId = String(source.originalStepId || "").trim();
   const compact: Record<string, unknown> = { kind: "preset-derived" };
   if (presetSlug) compact.presetSlug = presetSlug;
@@ -1173,9 +1163,7 @@ function compactSourceFromPresetProvenance(
   return Object.keys(compact).length > 1 ? compact : undefined;
 }
 
-function presetDetailFromCatalogItem(
-  preset: TemplateOption,
-): PresetDetail | null {
+function presetDetailFromCatalogItem(preset: TemplateOption): PresetDetail | null {
   const hasDetailContract =
     Object.prototype.hasOwnProperty.call(preset, "inputs") ||
     Object.prototype.hasOwnProperty.call(preset, "inputSchema") ||
@@ -1214,15 +1202,11 @@ function presetDetailFromCatalogItem(
   };
 }
 
-function cloneJsonRecord(
-  value: Record<string, unknown>,
-): Record<string, unknown> {
+function cloneJsonRecord(value: Record<string, unknown>): Record<string, unknown> {
   return structuredClone(value) as Record<string, unknown>;
 }
 
-function workflowRecord(
-  source: Record<string, unknown>,
-): Record<string, unknown> {
+function workflowRecord(source: Record<string, unknown>): Record<string, unknown> {
   return recordValue(source.workflow);
 }
 
@@ -1395,10 +1379,7 @@ export function buildEditParametersPatch({
   submittedPayload: Record<string, unknown>;
   submittedWorkflow: Record<string, unknown>;
 }): Record<string, unknown> {
-  const artifactBase = artifactInputParametersForPatch(
-    execution,
-    artifactInput,
-  );
+  const artifactBase = artifactInputParametersForPatch(execution, artifactInput);
   const executionParameters = recordValue(execution.inputParameters);
   const baseParameters = mergeRecordValues(
     artifactBase.fromAuthoritativeDraft
@@ -1478,8 +1459,7 @@ export function buildEditParametersPatch({
   parametersPatch.resolvedModel = submittedRuntimeModel || null;
   parametersPatch.effort = submittedRuntimeEffort || null;
   parametersPatch.modelTier =
-    Number.isInteger(submittedRuntimeModelTier) &&
-    submittedRuntimeModelTier >= 1
+    Number.isInteger(submittedRuntimeModelTier) && submittedRuntimeModelTier >= 1
       ? submittedRuntimeModelTier
       : null;
   parametersPatch.tierFallback =
@@ -1733,10 +1713,7 @@ function normalizeJiraIssuePickerValue(value: unknown): unknown {
 }
 
 function presetJiraIssueInputValuesFromIssue(
-  detail:
-    | Pick<PresetDetail, "inputSchema" | "uiSchema" | "inputs">
-    | null
-    | undefined,
+  detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "inputs"> | null | undefined,
   currentValues: Record<string, unknown>,
   issue: JiraIssueDetail,
 ): { values: Record<string, unknown>; changedNames: string[] } {
@@ -1748,9 +1725,7 @@ function presetJiraIssueInputValuesFromIssue(
   const changedNames: string[] = [];
   const issueValue = jiraIssuePickerValueFromKey(issueKey, issue);
 
-  for (const [name, rawSchema] of Object.entries(
-    schemaProperties(detail.inputSchema),
-  )) {
+  for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
     const fieldSchema = recordValue(rawSchema);
     const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
     if (capabilityWidgetName(fieldSchema, uiSchema) !== "jira.issue-picker") {
@@ -1880,9 +1855,7 @@ function runtimeCommandMatchesInstructions(
   const { firstLine } = firstLineAndBody(rawInstructions);
   const rawCommand = String(stored.rawCommand || "");
   const targetRuntime = String(stored.targetRuntime || runtime || "");
-  return (
-    Boolean(rawCommand) && rawCommand === firstLine && targetRuntime === runtime
-  );
+  return Boolean(rawCommand) && rawCommand === firstLine && targetRuntime === runtime;
 }
 
 function deriveRuntimeCommandPreview({
@@ -2017,9 +1990,7 @@ function deriveRuntimeCommandPreview({
     instructionBody: body,
     detectionStatus: "detected",
     hintStatus: hint ? "hinted" : "opaque",
-    recognitionMode: hint
-      ? "hinted_runtime_passthrough"
-      : "runtime_passthrough",
+    recognitionMode: hint ? "hinted_runtime_passthrough" : "runtime_passthrough",
     requiresRuntimeRecognition: true,
     messageSeverity: "info",
     label: `Runtime command: /${command}`,
@@ -2102,19 +2073,23 @@ function createStepStateEntriesFromTemporalDraft(
       primarySkill !== "" &&
       !hasExplicitSkillSelection(step.skillId);
     const hasJiraOrchestration =
-      step.jiraOrchestration && Object.keys(step.jiraOrchestration).length > 0;
+      step.jiraOrchestration &&
+      Object.keys(step.jiraOrchestration).length > 0;
     const toolPayload = step.tool || {};
     const presetPayload = step.preset || {};
     const presetKey =
       step.stepType === "preset"
         ? String(
-            presetPayload.id || presetPayload.slug || presetPayload.name || "",
+            presetPayload.id ||
+              presetPayload.slug ||
+              presetPayload.name ||
+              "",
           ).trim()
         : "";
 
     const toolInputs =
       step.stepType === "tool"
-        ? toolPayload.inputs || step.skillArgs || {}
+        ? (toolPayload.inputs || step.skillArgs || {})
         : {};
 
     return createStepStateEntry(index + 1, {
@@ -2146,12 +2121,12 @@ function createStepStateEntriesFromTemporalDraft(
         step.runtime?.tierFallback === "strict" ? "strict" : "clamp",
       toolId:
         step.stepType === "tool"
-          ? String(
-              toolPayload.id || toolPayload.name || step.skillId || "",
-            ).trim()
+          ? String(toolPayload.id || toolPayload.name || step.skillId || "").trim()
           : "",
       toolInputs:
-        step.stepType === "tool" ? JSON.stringify(toolInputs, null, 2) : "{}",
+        step.stepType === "tool"
+          ? JSON.stringify(toolInputs, null, 2)
+          : "{}",
       toolInputValues:
         step.stepType === "tool" && toolInputs && typeof toolInputs === "object"
           ? structuredClone(toolInputs as Record<string, unknown>)
@@ -2220,12 +2195,8 @@ function skillPublishMetadataDeclaresAuto(
     return false;
   }
   return (
-    String(publish.mode || "")
-      .trim()
-      .toLowerCase() === "auto" &&
-    String(publish.owner || "")
-      .trim()
-      .toLowerCase() === "agent" &&
+    String(publish.mode || "").trim().toLowerCase() === "auto" &&
+    String(publish.owner || "").trim().toLowerCase() === "agent" &&
     publish.requiresEvidence === true
   );
 }
@@ -2237,9 +2208,7 @@ function skillSideEffectMetadataDeclaresAgentOwned(
     return false;
   }
   return (
-    String(sideEffect.owner || "")
-      .trim()
-      .toLowerCase() === "agent" &&
+    String(sideEffect.owner || "").trim().toLowerCase() === "agent" &&
     String(sideEffect.kind || "").trim().length > 0
   );
 }
@@ -2296,7 +2265,9 @@ function activeAppliedTemplatesForSteps(
   steps: StepState[],
 ): AppliedTemplateState[] {
   const activeStepIds = new Set(
-    steps.map((step) => (step.id || "").trim()).filter(Boolean),
+    steps
+      .map((step) => (step.id || "").trim())
+      .filter(Boolean),
   );
   return appliedTemplates.filter((template) => {
     const stepIds = Array.isArray(template.stepIds)
@@ -2350,18 +2321,12 @@ function parseCapabilitiesCsv(value: string): string[] {
   );
 }
 
-function mergeCapabilities(
-  ...groups: Array<string[] | undefined | null>
-): string[] {
+function mergeCapabilities(...groups: Array<string[] | undefined | null>): string[] {
   return Array.from(
     new Set(
       groups
         .flatMap((group) => group || [])
-        .map((item) =>
-          String(item || "")
-            .trim()
-            .toLowerCase(),
-        )
+        .map((item) => String(item || "").trim().toLowerCase())
         .filter(Boolean),
     ),
   );
@@ -2464,7 +2429,13 @@ function capabilityCatalogEntry(token: string): CapabilityCatalogEntry {
 }
 
 export type CapabilitySourceKind =
-  "explicit" | "preset" | "skill" | "tool" | "runtime" | "publish" | "template";
+  | "explicit"
+  | "preset"
+  | "skill"
+  | "tool"
+  | "runtime"
+  | "publish"
+  | "template";
 
 const CAPABILITY_SOURCE_LABELS: Record<CapabilitySourceKind, string> = {
   explicit: "added to this step",
@@ -2563,9 +2534,7 @@ export function buildCapabilityChips(
         chipsByToken.set(token, chip);
         order.push(token);
       }
-      if (
-        chip.sources.some((source) => source.sourceKind === group.sourceKind)
-      ) {
+      if (chip.sources.some((source) => source.sourceKind === group.sourceKind)) {
         continue;
       }
       chip.sources.push({
@@ -2598,9 +2567,7 @@ export function buildCapabilityChips(
   });
 }
 
-function explicitCapabilityReadiness(
-  sourceLabels: string[],
-): CapabilityReadiness {
+function explicitCapabilityReadiness(sourceLabels: string[]): CapabilityReadiness {
   return {
     state: "requested",
     label: "Requested capability",
@@ -2611,9 +2578,7 @@ function explicitCapabilityReadiness(
   };
 }
 
-function derivedCapabilityReadiness(
-  sourceLabels: string[],
-): CapabilityReadiness {
+function derivedCapabilityReadiness(sourceLabels: string[]): CapabilityReadiness {
   return {
     state: "required_before_launch",
     label: "Required before launch",
@@ -2699,8 +2664,8 @@ function isTemplateBoundStepForInstructions(
 ): boolean {
   return Boolean(
     step?.templateStepId &&
-    step.id === step.templateStepId &&
-    step.instructions === step.templateInstructions,
+      step.id === step.templateStepId &&
+      step.instructions === step.templateInstructions,
   );
 }
 
@@ -2710,9 +2675,9 @@ function isTemplateBoundStepForAttachments(
 ): boolean {
   return Boolean(
     step?.templateStepId &&
-    step.id === step.templateStepId &&
-    attachmentSignature(attachments) ===
-      attachmentSignature(step.templateAttachments),
+      step.id === step.templateStepId &&
+      attachmentSignature(attachments) ===
+        attachmentSignature(step.templateAttachments),
   );
 }
 
@@ -2951,9 +2916,7 @@ function scopeLabel(scope: TemplateScope): string {
   return scope === "personal" ? "Personal" : "Global";
 }
 
-export function preferredTemplate(
-  items: TemplateOption[],
-): TemplateOption | null {
+export function preferredTemplate(items: TemplateOption[]): TemplateOption | null {
   const preferredSlugs = [
     JIRA_ORCHESTRATE_PRESET_SLUG,
     MOONSPEC_ORCHESTRATE_PRESET_SLUG,
@@ -3205,30 +3168,19 @@ function deriveRequiredCapabilities(args: {
 
 const PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE = "pr_with_merge_automation";
 
-function normalizePublishModeSelection(
-  value: string | null | undefined,
-): string {
-  return String(value || "")
-    .trim()
-    .toLowerCase();
+function normalizePublishModeSelection(value: string | null | undefined): string {
+  return String(value || "").trim().toLowerCase();
 }
 
-function normalizePublishModeForSubmit(
-  value: string | null | undefined,
-): string {
+function normalizePublishModeForSubmit(value: string | null | undefined): string {
   const normalized = normalizePublishModeSelection(value);
   return normalized === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE
     ? "pr"
     : normalized;
 }
 
-function isMergeAutomationPublishMode(
-  value: string | null | undefined,
-): boolean {
-  return (
-    normalizePublishModeSelection(value) ===
-    PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE
-  );
+function isMergeAutomationPublishMode(value: string | null | undefined): boolean {
+  return normalizePublishModeSelection(value) === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE;
 }
 
 function templateEnumOptionLabel(
@@ -3252,15 +3204,11 @@ function mapExpandedStepToState(
   index: number,
   step: ExpandedStepPayload,
 ): StepState {
-  const rawType = String(step.type || "")
-    .trim()
-    .toLowerCase();
+  const rawType = String(step.type || "").trim().toLowerCase();
   const isToolStep =
     rawType === "tool" ||
     Boolean(step.tool && !step.skill) ||
-    String(step.tool?.type || "")
-      .trim()
-      .toLowerCase() === "tool";
+    String(step.tool?.type || "").trim().toLowerCase() === "tool";
   const tool = step.tool || step.skill || {};
   const inlineInputs =
     tool.inputs && typeof tool.inputs === "object"
@@ -3281,9 +3229,7 @@ function mapExpandedStepToState(
     nonEmptyRecordValue(step.jira_orchestration);
   const source =
     nonEmptyRecordValue(step.source) ||
-    compactSourceFromPresetProvenance(
-      nonEmptyRecordValue(step.presetProvenance),
-    );
+    compactSourceFromPresetProvenance(nonEmptyRecordValue(step.presetProvenance));
   const normalizedSource = source ? { ...source } : undefined;
   const templateAttachments = Array.isArray(step.inputAttachments)
     ? step.inputAttachments
@@ -3366,15 +3312,11 @@ function isVisiblePresetInputName(
   return true;
 }
 
-function schemaProperties(
-  schema: Record<string, unknown> | undefined,
-): Record<string, unknown> {
+function schemaProperties(schema: Record<string, unknown> | undefined): Record<string, unknown> {
   return recordValue(schema?.properties);
 }
 
-function schemaRequired(
-  schema: Record<string, unknown> | undefined,
-): Set<string> {
+function schemaRequired(schema: Record<string, unknown> | undefined): Set<string> {
   return new Set(
     (Array.isArray(schema?.required) ? schema.required : [])
       .map((item) => String(item || "").trim())
@@ -3382,10 +3324,7 @@ function schemaRequired(
   );
 }
 
-function capabilityFieldLabel(
-  name: string,
-  schema: Record<string, unknown>,
-): string {
+function capabilityFieldLabel(name: string, schema: Record<string, unknown>): string {
   return String(schema.title || name)
     .trim()
     .replaceAll("_", " ");
@@ -3429,11 +3368,7 @@ function capabilityWidgetName(
   uiSchema: Record<string, unknown>,
 ): string {
   return String(
-    uiSchema.widget ||
-      schema["x-moonmind-widget"] ||
-      schema.format ||
-      schema.type ||
-      "text",
+    uiSchema.widget || schema["x-moonmind-widget"] || schema.format || schema.type || "text",
   )
     .trim()
     .toLowerCase();
@@ -3451,9 +3386,7 @@ function schemaChoiceOptions(schema: Record<string, unknown>): Array<{
   return choices
     .map((choice) => {
       const choiceSchema = recordValue(choice);
-      const value =
-        choiceSchema.const ??
-        (Array.isArray(choiceSchema.enum) ? choiceSchema.enum[0] : undefined);
+      const value = choiceSchema.const ?? (Array.isArray(choiceSchema.enum) ? choiceSchema.enum[0] : undefined);
       if (value === undefined) {
         return null;
       }
@@ -3462,15 +3395,11 @@ function schemaChoiceOptions(schema: Record<string, unknown>): Array<{
         value,
       };
     })
-    .filter((choice): choice is { label: string; value: unknown } =>
-      Boolean(choice),
-    );
+    .filter((choice): choice is { label: string; value: unknown } => Boolean(choice));
 }
 
 function textInputTypeForSchema(schema: Record<string, unknown>): string {
-  const format = String(schema.format || "")
-    .trim()
-    .toLowerCase();
+  const format = String(schema.format || "").trim().toLowerCase();
   if (format === "date-time") {
     return "datetime-local";
   }
@@ -3583,9 +3512,7 @@ function capabilityInputValue(
   defaults: Record<string, unknown> | undefined,
   name: string,
 ): unknown {
-  return values[name] !== undefined
-    ? values[name]
-    : safeCapabilityDefault(defaults, name);
+  return values[name] !== undefined ? values[name] : safeCapabilityDefault(defaults, name);
 }
 
 function capabilityInputTextValue(
@@ -3638,10 +3565,7 @@ function normalizeGitHubIssueInput(
   const shorthandMatch = value.match(/^#(\d+)$/);
   const normalizedRepository = String(defaultRepository || "").trim();
   if (shorthandMatch && OWNER_REPO_PATTERN.test(normalizedRepository)) {
-    return {
-      repository: normalizedRepository,
-      number: Number(shorthandMatch[1]),
-    };
+    return { repository: normalizedRepository, number: Number(shorthandMatch[1]) };
   }
   return { repository: normalizedRepository, number: Number.NaN, raw: value };
 }
@@ -3662,9 +3586,7 @@ function issuePickerTextValue(
   return String(issueValue.key || "");
 }
 
-function schemaContractHasFields(
-  detail: Pick<PresetDetail, "inputSchema"> | null | undefined,
-): boolean {
+function schemaContractHasFields(detail: Pick<PresetDetail, "inputSchema"> | null | undefined): boolean {
   return Object.keys(schemaProperties(detail?.inputSchema)).length > 0;
 }
 
@@ -3676,12 +3598,9 @@ function resolveSchemaCapabilityValues(
   const values: Record<string, unknown> = {};
   const required = schemaRequired(detail.inputSchema);
   const instructionFeatureRequest = String(featureRequestOverride || "").trim();
-  const instructionJiraIssueKey = extractJiraIssueKeyFromText(
-    instructionFeatureRequest,
-  );
-  for (const [name, rawSchema] of Object.entries(
-    schemaProperties(detail.inputSchema),
-  )) {
+  const instructionJiraIssueKey =
+    extractJiraIssueKeyFromText(instructionFeatureRequest);
+  for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
     const fieldSchema = recordValue(rawSchema);
     const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
     const widget = capabilityWidgetName(fieldSchema, uiSchema);
@@ -3724,11 +3643,7 @@ function resolvedPresetInputValues(
   featureRequestOverride?: string,
 ): Record<string, unknown> {
   return schemaContractHasFields(detail)
-    ? resolveSchemaCapabilityValues(
-        detail,
-        explicitValues,
-        featureRequestOverride,
-      )
+    ? resolveSchemaCapabilityValues(detail, explicitValues, featureRequestOverride)
     : explicitValues;
 }
 
@@ -3758,20 +3673,12 @@ function validateSchemaCapabilityValues(
       const issueValue = recordValue(value);
       const repository = String(issueValue.repository || "").trim();
       const number = Number(issueValue.number);
-      if (
-        required.has(name) &&
-        (!OWNER_REPO_PATTERN.test(repository) ||
-          !Number.isInteger(number) ||
-          number <= 0)
-      ) {
+      if (required.has(name) && (!OWNER_REPO_PATTERN.test(repository) || !Number.isInteger(number) || number <= 0)) {
         errors[name] = "A GitHub issue is required.";
       }
       continue;
     }
-    if (
-      required.has(name) &&
-      (value === undefined || value === null || value === "")
-    ) {
+    if (required.has(name) && (value === undefined || value === null || value === "")) {
       errors[name] = `${capabilityFieldLabel(name, fieldSchema)} is required.`;
       continue;
     }
@@ -3780,8 +3687,7 @@ function validateSchemaCapabilityValues(
     }
     if (fieldSchema.type === "array") {
       if (!Array.isArray(value)) {
-        errors[name] =
-          `${capabilityFieldLabel(name, fieldSchema)} must be a JSON array.`;
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a JSON array.`;
         continue;
       }
       const itemSchema = recordValue(fieldSchema.items);
@@ -3789,8 +3695,7 @@ function validateSchemaCapabilityValues(
         const allowed = new Set(itemSchema.enum.map((item) => String(item)));
         const invalid = value.some((item) => !allowed.has(String(item)));
         if (invalid) {
-          errors[name] =
-            `${capabilityFieldLabel(name, fieldSchema)} must use available options.`;
+          errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must use available options.`;
           continue;
         }
       }
@@ -3798,8 +3703,7 @@ function validateSchemaCapabilityValues(
     if (Array.isArray(fieldSchema.enum)) {
       const allowed = new Set(fieldSchema.enum.map((item) => String(item)));
       if (!allowed.has(String(value))) {
-        errors[name] =
-          `${capabilityFieldLabel(name, fieldSchema)} must use an available option.`;
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must use an available option.`;
         continue;
       }
     }
@@ -3807,13 +3711,11 @@ function validateSchemaCapabilityValues(
       const numericValue =
         typeof value === "number" ? value : Number(String(value).trim());
       if (!Number.isFinite(numericValue)) {
-        errors[name] =
-          `${capabilityFieldLabel(name, fieldSchema)} must be a number.`;
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a number.`;
         continue;
       }
       if (fieldSchema.type === "integer" && !Number.isInteger(numericValue)) {
-        errors[name] =
-          `${capabilityFieldLabel(name, fieldSchema)} must be a whole number.`;
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a whole number.`;
         continue;
       }
       const minimum =
@@ -3825,31 +3727,25 @@ function validateSchemaCapabilityValues(
           ? Number(fieldSchema.maximum)
           : NaN;
       if (Number.isFinite(minimum) && numericValue < minimum) {
-        errors[name] =
-          `${capabilityFieldLabel(name, fieldSchema)} must be at least ${minimum}.`;
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be at least ${minimum}.`;
         continue;
       }
       if (Number.isFinite(maximum) && numericValue > maximum) {
-        errors[name] =
-          `${capabilityFieldLabel(name, fieldSchema)} must be at most ${maximum}.`;
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be at most ${maximum}.`;
       }
     }
     if (
       fieldSchema.type === "object" &&
       (typeof value !== "object" || Array.isArray(value))
     ) {
-      errors[name] =
-        `${capabilityFieldLabel(name, fieldSchema)} must be a JSON object.`;
+      errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a JSON object.`;
     }
   }
   return errors;
 }
 
 function schemaSkillInputs(
-  detail:
-    | Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults">
-    | null
-    | undefined,
+  detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults"> | null | undefined,
   explicitValues: Record<string, unknown>,
 ): {
   values: Record<string, unknown>;
@@ -3935,10 +3831,7 @@ function skillPayloadWithInputs(args: {
 }
 
 function schemaToolInputs(
-  detail:
-    | Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults">
-    | null
-    | undefined,
+  detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults"> | null | undefined,
   explicitValues: Record<string, unknown>,
 ): {
   values: Record<string, unknown>;
@@ -3950,9 +3843,7 @@ function schemaToolInputs(
   const rawValues = resolveSchemaCapabilityValues(detail, explicitValues);
   const required = schemaRequired(detail.inputSchema);
   const values: Record<string, unknown> = {};
-  for (const [name, rawSchema] of Object.entries(
-    schemaProperties(detail.inputSchema),
-  )) {
+  for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
     const fieldSchema = recordValue(rawSchema);
     const value = rawValues[name];
     if (value === undefined || value === null) {
@@ -4100,9 +3991,7 @@ function pentestGeneratedScopeValues(
 ): Record<string, unknown> {
   const target = String(toolInputs.target || "").trim();
   const host = targetHostFromValue(target);
-  const operationMode = String(
-    toolInputs.operation_mode || "recon_only",
-  ).trim();
+  const operationMode = String(toolInputs.operation_mode || "recon_only").trim();
   const runnerProfile = String(
     toolInputs.runner_profile_id || "pentestgpt-claude-oauth",
   ).trim();
@@ -4149,9 +4038,7 @@ function buildPentestApprovedScope(
   const host = String(values.target_host || targetHostFromValue(target)).trim();
   const allowedActions = Array.isArray(values.allowed_actions)
     ? values.allowed_actions.map(String).filter(Boolean)
-    : defaultPentestAllowedActions(
-        String(toolInputs.operation_mode || "recon_only"),
-      );
+    : defaultPentestAllowedActions(String(toolInputs.operation_mode || "recon_only"));
   const allowedRunnerProfiles = Array.isArray(values.allowed_runner_profiles)
     ? values.allowed_runner_profiles.map(String).filter(Boolean)
     : [String(toolInputs.runner_profile_id || "pentestgpt-claude-oauth")];
@@ -4161,9 +4048,7 @@ function buildPentestApprovedScope(
     owner_user_id: null,
     created_at: new Date().toISOString(),
     expires_at: datetimeLocalToIso(values.expires_at),
-    target_class: String(
-      values.target_class || inferPentestTargetClass(target),
-    ),
+    target_class: String(values.target_class || inferPentestTargetClass(target)),
     targets: [
       ...(target
         ? [
@@ -4188,9 +4073,7 @@ function buildPentestApprovedScope(
     prohibited_actions: [],
     requires_manual_approval: Boolean(values.requires_manual_approval),
     approval_ticket: String(values.approval_ticket || "").trim(),
-    approval_recorded: Boolean(
-      values.approval_recorded || draft.confirmAuthorized,
-    ),
+    approval_recorded: Boolean(values.approval_recorded || draft.confirmAuthorized),
     allowed_runner_profiles: allowedRunnerProfiles,
     required_network_attachment_type: null,
     metadata: {
@@ -4229,10 +4112,7 @@ function validatePentestScopeDocument(
     errors.allowed_actions = "At least one allowed action is required.";
   } else {
     const unsupported = allowedActions.filter(
-      (action) =>
-        !PENTEST_SCOPE_ACTIONS.includes(
-          action as (typeof PENTEST_SCOPE_ACTIONS)[number],
-        ),
+      (action) => !PENTEST_SCOPE_ACTIONS.includes(action as typeof PENTEST_SCOPE_ACTIONS[number]),
     );
     if (unsupported.length > 0) {
       errors.allowed_actions = `Unsupported allowed action: ${unsupported[0]}.`;
@@ -4250,8 +4130,7 @@ function validatePentestScopeDocument(
   }
   const normalizedTarget = target.trim().toLowerCase();
   if (normalizedTarget && Array.isArray(scope.targets)) {
-    const normalizedTargetHost =
-      targetHostFromValue(normalizedTarget).toLowerCase();
+    const normalizedTargetHost = targetHostFromValue(normalizedTarget).toLowerCase();
     const covered = scope.targets.some((entry) => {
       const value =
         entry && typeof entry === "object"
@@ -4270,8 +4149,7 @@ function validatePentestScopeDocument(
       );
     });
     if (!covered) {
-      errors.target =
-        "Scope targets do not appear to cover the selected target.";
+      errors.target = "Scope targets do not appear to cover the selected target.";
     }
   }
   return errors;
@@ -4362,17 +4240,12 @@ function SchemaCapabilityFields({
             </label>
           );
         }
-        if (
-          widget === "jira.issue-picker" ||
-          widget === "github.issue-picker"
-        ) {
+        if (widget === "jira.issue-picker" || widget === "github.issue-picker") {
           const issueValue = recordValue(value);
           const provider = widget === "github.issue-picker" ? "github" : "jira";
           const placeholder = String(
             uiSchema.searchPlaceholder ||
-              (provider === "github"
-                ? "Search GitHub issues"
-                : "Search Jira issues"),
+              (provider === "github" ? "Search GitHub issues" : "Search Jira issues"),
           );
           return (
             <label key={name} htmlFor={inputId}>
@@ -4391,13 +4264,7 @@ function SchemaCapabilityFields({
                       name,
                       normalizeGitHubIssueInput(
                         event.target.value,
-                        String(
-                          issueValue.repository ||
-                            readLocalPreference(
-                              LAST_REPOSITORY_OPTION_PREFERENCE_KEY,
-                            ) ||
-                            "",
-                        ),
+                        String(issueValue.repository || readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY) || ""),
                       ),
                     );
                     return;
@@ -4408,9 +4275,7 @@ function SchemaCapabilityFields({
                   });
                 }}
               />
-              {description ? (
-                <span className="small">{description}</span>
-              ) : null}
+              {description ? <span className="small">{description}</span> : null}
               {error ? <span className="notice small">{error}</span> : null}
             </label>
           );
@@ -4428,9 +4293,7 @@ function SchemaCapabilityFields({
                 aria-invalid={Boolean(error)}
                 onChange={(event) => onChange(name, event.target.checked)}
               />
-              {description ? (
-                <span className="small">{description}</span>
-              ) : null}
+              {description ? <span className="small">{description}</span> : null}
               {error ? <span className="notice small">{error}</span> : null}
             </label>
           );
@@ -4438,8 +4301,7 @@ function SchemaCapabilityFields({
         const itemSchema = recordValue(fieldSchema.items);
         if (
           fieldSchema.type === "array" &&
-          (Array.isArray(itemSchema.enum) ||
-            schemaChoiceOptions(itemSchema).length > 0)
+          (Array.isArray(itemSchema.enum) || schemaChoiceOptions(itemSchema).length > 0)
         ) {
           const itemChoices = schemaChoiceOptions(itemSchema);
           const itemEnumOptions = Array.isArray(itemSchema.enum)
@@ -4464,29 +4326,23 @@ function SchemaCapabilityFields({
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
                 onChange={(event) => {
-                  const selected = Array.from(
-                    event.currentTarget.selectedOptions,
-                  ).map((option) => {
-                    const matched = itemOptions.find(
-                      (item) => String(item.value) === option.value,
-                    );
-                    return matched?.value ?? option.value;
-                  });
+                  const selected = Array.from(event.currentTarget.selectedOptions)
+                    .map((option) => {
+                      const matched = itemOptions.find(
+                        (item) => String(item.value) === option.value,
+                      );
+                      return matched?.value ?? option.value;
+                    });
                   onChange(name, selected);
                 }}
               >
                 {itemOptions.map((option) => (
-                  <option
-                    key={String(option.value)}
-                    value={String(option.value)}
-                  >
+                  <option key={String(option.value)} value={String(option.value)}>
                     {option.label}
                   </option>
                 ))}
               </select>
-              {description ? (
-                <span className="small">{description}</span>
-              ) : null}
+              {description ? <span className="small">{description}</span> : null}
               {error ? <span className="notice small">{error}</span> : null}
             </label>
           );
@@ -4519,17 +4375,12 @@ function SchemaCapabilityFields({
                 }}
               >
                 {options.map((option) => (
-                  <option
-                    key={String(option.value)}
-                    value={String(option.value)}
-                  >
+                  <option key={String(option.value)} value={String(option.value)}>
                     {option.label}
                   </option>
                 ))}
               </select>
-              {description ? (
-                <span className="small">{description}</span>
-              ) : null}
+              {description ? <span className="small">{description}</span> : null}
               {error ? <span className="notice small">{error}</span> : null}
             </label>
           );
@@ -4546,9 +4397,7 @@ function SchemaCapabilityFields({
                 aria-invalid={Boolean(error)}
                 onChange={(event) => onChange(name, event.target.value)}
               />
-              {description ? (
-                <span className="small">{description}</span>
-              ) : null}
+              {description ? <span className="small">{description}</span> : null}
               {error ? <span className="notice small">{error}</span> : null}
             </label>
           );
@@ -4564,15 +4413,10 @@ function SchemaCapabilityFields({
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
                 onChange={(event) =>
-                  onChange(
-                    name,
-                    parseComplexCapabilityValue(event.target.value),
-                  )
+                  onChange(name, parseComplexCapabilityValue(event.target.value))
                 }
               />
-              {description ? (
-                <span className="small">{description}</span>
-              ) : null}
+              {description ? <span className="small">{description}</span> : null}
               {error ? <span className="notice small">{error}</span> : null}
             </label>
           );
@@ -4810,14 +4654,11 @@ async function createInputArtifact(
     });
   } catch (error) {
     if (error instanceof TypeError && error.message === "Failed to fetch") {
-      console.error(
-        "[WorkflowStart] Network failure during artifact creation.",
-        {
-          endpoint: createEndpoint,
-          possibleCauses:
-            "API service unreachable, CORS block, or network issue.",
-        },
-      );
+      console.error("[WorkflowStart] Network failure during artifact creation.", {
+        endpoint: createEndpoint,
+        possibleCauses:
+          "API service unreachable, CORS block, or network issue.",
+      });
       throw new Error(
         `Failed to reach the artifact creation API (endpoint: ${createEndpoint}). ` +
           "The API service may be unreachable or a CORS policy is blocking the request.",
@@ -4931,10 +4772,7 @@ async function createJsonArtifact(
   });
   if (!createResponse.ok) {
     throw new Error(
-      await responseErrorMessage(
-        createResponse,
-        `Failed to create ${failureLabel}.`,
-      ),
+      await responseErrorMessage(createResponse, `Failed to create ${failureLabel}.`),
     );
   }
   const created = (await createResponse.json()) as {
@@ -4974,10 +4812,7 @@ async function createJsonArtifact(
   });
   if (!uploadResponse.ok) {
     throw new Error(
-      await responseErrorMessage(
-        uploadResponse,
-        `Failed to upload ${failureLabel}.`,
-      ),
+      await responseErrorMessage(uploadResponse, `Failed to upload ${failureLabel}.`),
     );
   }
   await completeArtifactUpload(
@@ -5031,7 +4866,10 @@ async function completeArtifactUpload(
       return;
     }
 
-    const detail = await responseErrorDetail(completeResponse, failureMessage);
+    const detail = await responseErrorDetail(
+      completeResponse,
+      failureMessage,
+    );
     completeError = new Error(detail.message);
     if (
       completeResponse.status !== 409 ||
@@ -5050,7 +4888,9 @@ async function createInputAttachmentArtifact(
   createEndpoint: string,
   file: File,
   repository: string,
-  context: { kind: "objective" } | { kind: "step"; stepLabel: string },
+  context:
+    | { kind: "objective" }
+    | { kind: "step"; stepLabel: string },
 ): Promise<StepAttachmentRef> {
   const filename = file.name || "attachment";
   const contentType = String(file.type || "application/octet-stream").trim();
@@ -5178,9 +5018,7 @@ function stripOversizedInlineInstructions(
   const workflowInput =
     workflow && typeof workflow === "object" && !Array.isArray(workflow)
       ? workflow
-      : createTask &&
-          typeof createTask === "object" &&
-          !Array.isArray(createTask)
+      : createTask && typeof createTask === "object" && !Array.isArray(createTask)
         ? createTask
         : null;
   if (!workflowInput) {
@@ -5293,15 +5131,12 @@ async function linkInputArtifact(
     });
   } catch (error) {
     if (error instanceof TypeError && error.message === "Failed to fetch") {
-      console.error(
-        "[WorkflowStart] Network failure during artifact linking.",
-        {
-          endpoint: linkEndpoint,
-          artifactId,
-          possibleCauses:
-            "API service unreachable, CORS block, or network issue.",
-        },
-      );
+      console.error("[WorkflowStart] Network failure during artifact linking.", {
+        endpoint: linkEndpoint,
+        artifactId,
+        possibleCauses:
+          "API service unreachable, CORS block, or network issue.",
+      });
       throw new Error(
         `Failed to reach the artifact linking API (endpoint: ${linkEndpoint}). ` +
           "The API service may be unreachable or a CORS policy is blocking the request.",
@@ -5446,7 +5281,13 @@ function InfoIcon() {
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <circle cx="12" cy="12" r="9.5" strokeWidth="2" />
       <path d="M12 11v6.25" strokeWidth="2.6" strokeLinecap="round" />
-      <circle cx="12" cy="7.75" r="1.45" fill="currentColor" stroke="none" />
+      <circle
+        cx="12"
+        cy="7.75"
+        r="1.45"
+        fill="currentColor"
+        stroke="none"
+      />
     </svg>
   );
 }
@@ -5706,9 +5547,7 @@ function derivedCapabilityExplanation(chip: StepCapabilityChip): string {
 function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
   const [showExplanation, setShowExplanation] = useState(false);
   const provenance = capabilityChipProvenanceLabel(chip);
-  const explanation = chip.removable
-    ? chip.description
-    : derivedCapabilityExplanation(chip);
+  const explanation = chip.removable ? chip.description : derivedCapabilityExplanation(chip);
   const chipTitle = provenance
     ? `${chip.label}: ${provenance}`
     : chip.description
@@ -5719,7 +5558,9 @@ function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
       className={`queue-step-capability-chip${chip.removable ? "" : " is-derived"}`}
       title={chipTitle}
       onClick={
-        chip.removable ? undefined : () => setShowExplanation((value) => !value)
+        chip.removable
+          ? undefined
+          : () => setShowExplanation((value) => !value)
       }
     >
       <span className="queue-step-capability-chip-icon" aria-hidden="true">
@@ -5802,10 +5643,7 @@ function StepContextBar({
         >
           {attachments.map((attachment) => (
             <li key={attachment.key} className="queue-step-attachment-chip">
-              <span
-                className="queue-step-attachment-chip-icon"
-                aria-hidden="true"
-              >
+              <span className="queue-step-attachment-chip-icon" aria-hidden="true">
                 🖼
               </span>
               <span className="queue-step-attachment-chip-label">
@@ -5878,12 +5716,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     () => resolveTaskSubmitPageMode(window.location.search),
     [],
   );
-  const [workflowStartHeadingQuote] = useState(() =>
-    randomWorkflowStartHeading(),
-  );
+  const [workflowStartHeadingQuote] = useState(() => randomWorkflowStartHeading());
   const temporalTaskEditingEnabled = Boolean(
     dashboardConfig.features?.temporalDashboard?.temporalWorkflowEditing ??
-    dashboardConfig.features?.temporalDashboard?.temporalTaskEditing,
+      dashboardConfig.features?.temporalDashboard?.temporalTaskEditing,
   );
   const temporalCreateEndpoint = String(
     dashboardConfig.sources?.temporal?.create || "/api/executions",
@@ -5913,7 +5749,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.providerProfiles?.defaultProfileRef ?? null;
   const presetCatalog = dashboardConfig.system?.presetCatalog;
   const presetCatalogEnabled = Boolean(presetCatalog?.enabled);
-  const presetSaveEnabled = Boolean(presetCatalog?.templateSaveEnabled);
+  const presetSaveEnabled = Boolean(
+    presetCatalog?.templateSaveEnabled,
+  );
   const taskTemplateListEndpoint = String(
     presetCatalog?.list || "/api/presets",
   );
@@ -5924,7 +5762,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     presetCatalog?.expand || "/api/presets/{slug}:expand",
   );
   const taskTemplateSaveEndpoint = String(
-    presetCatalog?.saveFromWorkflow || "/api/presets/save-from-workflow",
+    presetCatalog?.saveFromWorkflow ||
+      "/api/presets/save-from-workflow",
   );
   const jiraIntegration = useMemo<JiraIntegrationConfig | null>(() => {
     const systemConfig = dashboardConfig.system?.jiraIntegration;
@@ -5945,7 +5784,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ),
       endpoints,
     };
-  }, [dashboardConfig.sources?.jira, dashboardConfig.system?.jiraIntegration]);
+  }, [
+    dashboardConfig.sources?.jira,
+    dashboardConfig.system?.jiraIntegration,
+  ]);
 
   const attachmentPolicy = useMemo<AttachmentPolicy>(() => {
     const config = dashboardConfig.system?.attachmentPolicy;
@@ -6070,17 +5912,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [scheduleTimezone, setScheduleTimezone] = useState("UTC");
   const [scheduleName, setScheduleName] = useState("");
   const [templateFeatureRequest, setTemplateFeatureRequest] = useState("");
-  const [selectedDependencyWorkflowId, setSelectedDependencyWorkflowId] =
-    useState("");
-  const [selectedDependencies, setSelectedDependencies] = useState<string[]>(
-    [],
-  );
-  const [remediationDraft, setRemediationDraft] =
-    useState<RemediationCreateDraft | null>(null);
+  const [selectedDependencyWorkflowId, setSelectedDependencyWorkflowId] = useState("");
+  const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
+  const [remediationDraft, setRemediationDraft] = useState<RemediationCreateDraft | null>(null);
   const remediationDraftIdRef = useRef<string | null>(null);
-  const [dependencyMessage, setDependencyMessage] = useState<string | null>(
-    null,
-  );
+  const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
   const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
@@ -6110,29 +5946,26 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   >({});
   const [jiraImportMode, setJiraImportMode] =
     useState<JiraImportMode>("preset-brief");
-  const [jiraWriteMode, setJiraWriteMode] = useState<"append" | "replace">(
-    "append",
-  );
+  const [jiraWriteMode, setJiraWriteMode] =
+    useState<"append" | "replace">("append");
   const [presetJiraProvenance, setPresetJiraProvenance] =
     useState<JiraImportProvenance | null>(null);
   const [stepJiraProvenance, setStepJiraProvenance] = useState<
     Record<string, JiraImportProvenance>
   >({});
-  const [
-    selectedObjectiveAttachmentFiles,
-    setSelectedObjectiveAttachmentFiles,
-  ] = useState<File[]>([]);
-  const [selectedStepAttachmentFiles, setSelectedStepAttachmentFiles] =
-    useState<Record<string, File[]>>({});
+  const [selectedObjectiveAttachmentFiles, setSelectedObjectiveAttachmentFiles] =
+    useState<File[]>([]);
+  const [selectedStepAttachmentFiles, setSelectedStepAttachmentFiles] = useState<
+    Record<string, File[]>
+  >({});
   const [persistedObjectiveAttachments, setPersistedObjectiveAttachments] =
     useState<StepAttachmentRef[]>([]);
   const [attachmentTargetErrors, setAttachmentTargetErrors] = useState<
     Record<string, string>
   >({});
-  const [submitMessageState, setSubmitMessageState] = useState<{
-    text: string;
-    tone: "error" | "pending" | "ok";
-  } | null>(null);
+  const [submitMessageState, setSubmitMessageState] = useState<
+    { text: string; tone: "error" | "pending" | "ok" } | null
+  >(null);
   const submitMessage = submitMessageState?.text ?? null;
   const submitMessageTone = submitMessageState?.tone ?? "error";
   // Structured technical diagnostics for the most recent submit failure. When
@@ -6165,9 +5998,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const submitExpansionInFlightRef = useRef(false);
   const submitExpansionRequestIdRef = useRef(0);
   const [submitRippleKey, setSubmitRippleKey] = useState(0);
-  const [submitRippleRect, setSubmitRippleRect] = useState<DOMRect | null>(
-    null,
-  );
+  const [submitRippleRect, setSubmitRippleRect] = useState<DOMRect | null>(null);
   const [isSubmitArrowExiting, setIsSubmitArrowExiting] = useState(false);
   const submitArrowExitHeldRef = useRef(false);
   const submitArrowExitTimeoutRef = useRef<number | null>(null);
@@ -6184,8 +6015,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     const captureSnapshot = () => {
       const form = document.getElementById("queue-submit-form");
-      initialRouteGuardSnapshotRef.current =
-        form instanceof HTMLFormElement ? workflowStartFormSnapshot(form) : "";
+      initialRouteGuardSnapshotRef.current = form instanceof HTMLFormElement
+        ? workflowStartFormSnapshot(form)
+        : "";
     };
     const timerId = window.setTimeout(captureSnapshot, 0);
     const handleRouteChangeRequest = (event: Event) => {
@@ -6199,67 +6031,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         event.preventDefault();
       }
     };
-    const confirmDraftNavigation = (): boolean =>
-      !workflowStartFormChanged(initialRouteGuardSnapshotRef.current) ||
-      window.confirm(
-        "Leave Create? Unsaved workflow draft changes may be lost.",
-      );
-    const handleDocumentNavigation = (event: MouseEvent) => {
-      if (
-        event.defaultPrevented ||
-        event.button !== 0 ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.shiftKey ||
-        event.altKey
-      ) {
-        return;
-      }
-      const target = event.target;
-      const anchor =
-        target instanceof Element ? target.closest("a[href]") : null;
-      if (
-        !(anchor instanceof HTMLAnchorElement) ||
-        anchor.target === "_blank" ||
-        anchor.hasAttribute("download")
-      ) {
-        return;
-      }
-      const destination = new URL(anchor.href, window.location.href);
-      const current = new URL(window.location.href);
-      if (
-        destination.origin !== current.origin ||
-        `${destination.pathname}${destination.search}${destination.hash}` ===
-          `${current.pathname}${current.search}${current.hash}`
-      ) {
-        return;
-      }
-      if (!confirmDraftNavigation()) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    };
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!workflowStartFormChanged(initialRouteGuardSnapshotRef.current)) {
-        return;
-      }
-      event.preventDefault();
-      event.returnValue = "";
-    };
     window.addEventListener(
       WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
       handleRouteChangeRequest,
     );
-    document.addEventListener("click", handleDocumentNavigation, true);
-    window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
       window.clearTimeout(timerId);
       window.removeEventListener(
         WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
         handleRouteChangeRequest,
       );
-      document.removeEventListener("click", handleDocumentNavigation, true);
-      window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, []);
 
@@ -6311,10 +6092,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             "This execution cannot be edited here because only MoonMind.UserWorkflow is supported.",
           );
         }
-        if (
-          pageMode.intent === "edit" &&
-          execution.actions?.canUpdateInputs !== true
-        ) {
+        if (pageMode.intent === "edit" && execution.actions?.canUpdateInputs !== true) {
           throw new Error(
             "This execution does not currently allow editing its inputs.",
           );
@@ -6335,12 +6113,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         const snapshotArtifactRef = String(
           execution.taskInputSnapshot?.artifactRef || "",
         ).trim();
-        const inputArtifactRef = String(
-          execution.inputArtifactRef || "",
-        ).trim();
-        const inlineTask = workflowRecord(
-          recordValue(execution.inputParameters),
-        );
+        const inputArtifactRef = String(execution.inputArtifactRef || "").trim();
+        const inlineTask = workflowRecord(recordValue(execution.inputParameters));
         if (
           execution.taskInputSnapshot?.reconstructionMode === "authoritative" &&
           snapshotArtifactRef
@@ -6624,7 +6398,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setScheduleDeferredMinutes("");
     setScheduleCron("");
     setScheduleName("");
-  }, [defaultPublishMode, pageMode.mode, temporalDraftQuery.data]);
+  }, [
+    defaultPublishMode,
+    pageMode.mode,
+    temporalDraftQuery.data,
+  ]);
 
   useEffect(() => {
     if (pageMode.mode !== "create") {
@@ -6646,9 +6424,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       setRemediationDraft(null);
       remediationDraftAppliedRef.current = null;
       remediationDraftIdRef.current = null;
-      setSubmitMessage(
-        "The remediation draft is no longer available. Open Remediate from the target workflow again.",
-      );
+      setSubmitMessage("The remediation draft is no longer available. Open Remediate from the target workflow again.");
       return;
     }
 
@@ -6682,10 +6458,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.runtime?.modelTier != null) {
       setModelTier(String(draft.runtime.modelTier));
     }
-    if (
-      draft.runtime?.tierFallback === "strict" ||
-      draft.runtime?.tierFallback === "clamp"
-    ) {
+    if (draft.runtime?.tierFallback === "strict" || draft.runtime?.tierFallback === "clamp") {
       setTierFallback(draft.runtime.tierFallback);
     }
     if (draft.instructions) {
@@ -6774,8 +6547,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       const data = (await response.json()) as DependencyPickerListResponse;
       return (data.items || []).filter(
         (item) =>
-          String(item.workflowType || "MoonMind.UserWorkflow") ===
-            "MoonMind.UserWorkflow" &&
+          String(item.workflowType || "MoonMind.UserWorkflow") === "MoonMind.UserWorkflow" &&
           String(item.entry || "user_workflow") === "user_workflow",
       );
     },
@@ -6806,9 +6578,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ...(item.inputSchema ? { inputSchema: item.inputSchema } : {}),
           ...(item.uiSchema ? { uiSchema: item.uiSchema } : {}),
           ...(item.defaults ? { defaults: item.defaults } : {}),
-          ...(item.contractDigest
-            ? { contractDigest: item.contractDigest }
-            : {}),
+          ...(item.contractDigest ? { contractDigest: item.contractDigest } : {}),
           ...(item.contentDigest ? { contentDigest: item.contentDigest } : {}),
           ...(item.contentRef ? { contentRef: item.contentRef } : {}),
           ...(item.source ? { source: item.source } : {}),
@@ -6818,11 +6588,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ...(Array.isArray(item.requiredCapabilities)
             ? {
                 requiredCapabilities: item.requiredCapabilities
-                  .map((capability) =>
-                    String(capability || "")
-                      .trim()
-                      .toLowerCase(),
-                  )
+                  .map((capability) => String(capability || "").trim().toLowerCase())
                   .filter(Boolean),
               }
             : {}),
@@ -6861,9 +6627,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       skillsQuery.data?.detailsById[primarySkill] || null;
     if (isSelfManagedPublishSkill(primarySkill, primarySkillDetail)) {
       setPublishMode("auto");
-    } else if (
-      isRepositoryPublishDisabledSkill(primarySkill, primarySkillDetail)
-    ) {
+    } else if (isRepositoryPublishDisabledSkill(primarySkill, primarySkillDetail)) {
       setPublishMode("none");
     }
   }, [skillsQuery.data?.detailsById, steps[0]?.skillId]);
@@ -6960,12 +6724,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
   const jiraProjectsQuery = useQuery({
     ...configQueryDefaults,
-    queryKey: [
-      "workflow-start",
-      "jira",
-      "projects",
-      jiraIntegration?.endpoints.projects,
-    ],
+    queryKey: ["workflow-start", "jira", "projects", jiraIntegration?.endpoints.projects],
     enabled: Boolean(jiraIntegration?.enabled && jiraBrowserOpen),
     queryFn: async (): Promise<JiraProject[]> => {
       const endpoint = jiraIntegration?.endpoints.projects || "";
@@ -7094,7 +6853,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       selectedJiraProjectKey,
     ],
     enabled: Boolean(
-      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraIssueKey,
+      jiraIntegration?.enabled &&
+        jiraBrowserOpen &&
+        selectedJiraIssueKey,
     ),
     queryFn: async (): Promise<JiraIssueDetail> => {
       const endpoint = withQueryParams(
@@ -7364,40 +7125,35 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     selectedJiraProjectKey &&
     jiraBoardsQuery.isSuccess &&
     (jiraBoardsQuery.data || []).length === 0
-      ? localJiraEmptyStateMessage(
-          "No Jira boards are available for this project.",
-        )
+      ? localJiraEmptyStateMessage("No Jira boards are available for this project.")
       : null;
   const jiraColumnsEmpty =
     selectedJiraBoardId &&
     jiraColumnsQuery.isSuccess &&
     (jiraColumnsQuery.data || []).length === 0
-      ? localJiraEmptyStateMessage(
-          "No Jira columns are available for this board.",
-        )
+      ? localJiraEmptyStateMessage("No Jira columns are available for this board.")
       : null;
   const jiraActiveColumnEmpty =
     selectedJiraBoardId &&
     activeJiraColumnId &&
     jiraIssuesQuery.isSuccess &&
     activeJiraIssues.length === 0
-      ? localJiraEmptyStateMessage(
-          "No Jira issues are available in this column.",
-        )
+      ? localJiraEmptyStateMessage("No Jira issues are available in this column.")
       : null;
   const jiraTargetText = jiraTargetLabel(jiraImportTarget, steps);
   const jiraTargetStep =
     jiraImportTarget?.kind === "step"
       ? steps.find((step) => step.localId === jiraImportTarget.localId) || null
       : null;
-  const jiraImportWillCustomizeTemplateStep = jiraImportTarget?.attachmentsOnly
-    ? isTemplateBoundStepForAttachments(
-        jiraTargetStep,
-        jiraTargetStep
-          ? selectedStepAttachmentFiles[jiraTargetStep.localId] || []
-          : [],
-      )
-    : isTemplateBoundStepForInstructions(jiraTargetStep);
+  const jiraImportWillCustomizeTemplateStep =
+    jiraImportTarget?.attachmentsOnly
+      ? isTemplateBoundStepForAttachments(
+          jiraTargetStep,
+          jiraTargetStep
+            ? selectedStepAttachmentFiles[jiraTargetStep.localId] || []
+            : [],
+        )
+      : isTemplateBoundStepForInstructions(jiraTargetStep);
 
   useEffect(() => {
     if (
@@ -7468,8 +7224,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (provenance?.columnId) {
       setActiveJiraColumnId(provenance.columnId);
     }
-    jiraProjectSelectionInitializedRef.current = Boolean(nextProjectKey);
-    jiraBoardSelectionInitializedRef.current = Boolean(nextBoardId);
+    jiraProjectSelectionInitializedRef.current = Boolean(
+      nextProjectKey,
+    );
+    jiraBoardSelectionInitializedRef.current = Boolean(
+      nextBoardId,
+    );
     setJiraImportTarget(target);
     setJiraImportMode(defaultJiraImportMode(target));
     setJiraWriteMode("append");
@@ -7549,15 +7309,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     target: JiraImportTarget,
     objectiveTextForReapply?: string,
   ): Promise<void> {
-    const attachments = Array.isArray(issue.attachments)
-      ? issue.attachments
-      : [];
+    const attachments = Array.isArray(issue.attachments) ? issue.attachments : [];
     if (!attachmentPolicy.enabled || attachments.length === 0) {
       return;
     }
     const eligible = attachments.filter(
-      (attachment) =>
-        !validateJiraImageAttachment(attachment, attachmentPolicy),
+      (attachment) => !validateJiraImageAttachment(attachment, attachmentPolicy),
     );
     if (eligible.length === 0) {
       setSubmitMessage(
@@ -7581,9 +7338,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     );
     const toDownload = eligible.slice(0, room);
     if (toDownload.length === 0) {
-      setSubmitMessage(
-        "Attachment limit reached before Jira images could be added.",
-      );
+      setSubmitMessage("Attachment limit reached before Jira images could be added.");
       return;
     }
     try {
@@ -7592,10 +7347,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           const response = await fetch(attachment.downloadUrl);
           if (!response.ok) {
             throw new Error(
-              await responseErrorMessage(
-                response,
-                "Failed to download Jira image.",
-              ),
+              await responseErrorMessage(response, "Failed to download Jira image."),
             );
           }
           const blob = await response.blob();
@@ -7759,17 +7511,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         );
       }
       setPresetJiraProvenance(provenance);
-      await importSelectedJiraImagesWithReporting(
-        issue,
-        importTarget,
-        nextText,
-      );
+      await importSelectedJiraImagesWithReporting(issue, importTarget, nextText);
       return;
     }
 
-    const targetStep = steps.find(
-      (step) => step.localId === importTarget.localId,
-    );
+    const targetStep = steps.find((step) => step.localId === importTarget.localId);
     if (!targetStep) {
       return;
     }
@@ -7788,11 +7534,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         : { values: targetStep.presetInputValues, changedNames: [] };
     const nextPresetInputErrors =
       presetInputUpdate.changedNames.length > 0
-        ? (Object.fromEntries(
+        ? Object.fromEntries(
             Object.entries(targetStep.presetInputErrors).filter(
               ([name]) => !presetInputUpdate.changedNames.includes(name),
             ),
-          ) as Record<string, string>)
+          ) as Record<string, string>
         : targetStep.presetInputErrors;
     updateStep(importTarget.localId, {
       instructions: nextInstructions,
@@ -7999,12 +7745,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       isDefault: Boolean(profile.is_default),
     }));
 
-  const selectedProviderProfileForPreview =
-    providerProfilesQuery.isPlaceholderData
-      ? undefined
-      : (providerProfilesQuery.data || []).find(
-          (profile) => profile.profile_id === providerProfile,
-        );
+  const selectedProviderProfileForPreview = providerProfilesQuery.isPlaceholderData
+    ? undefined
+    : (providerProfilesQuery.data || []).find(
+        (profile) => profile.profile_id === providerProfile,
+      );
   const workflowTierPreview = previewModelTier(
     selectedProviderProfileForPreview,
     modelTier,
@@ -8129,10 +7874,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       : "");
   const selectedBranchIsStale = Boolean(
     branch.trim() &&
-    branchOptionsQuery.isSuccess &&
-    !(branchOptionsQuery.data?.items || []).some(
-      (item) => item.value === branch.trim(),
-    ),
+      branchOptionsQuery.isSuccess &&
+      !(branchOptionsQuery.data?.items || []).some(
+        (item) => item.value === branch.trim(),
+      ),
   );
   const branchControlDisabled =
     !selectedRepositoryForBranchLookup.trim() ||
@@ -8156,9 +7901,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (branchOptionsQuery.isError) {
       const error = branchOptionsQuery.error;
-      return error instanceof Error
-        ? error.message
-        : "Failed to load branches.";
+      return error instanceof Error ? error.message : "Failed to load branches.";
     }
     if (selectedBranchIsStale) {
       return "Selected branch is not in the latest list for this repository.";
@@ -8225,20 +7968,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     expectedInstructions?: string,
     expectedInputValues?: Record<string, unknown>,
   ): boolean {
-    const currentStep = stepsRef.current.find(
-      (step) => step.localId === localId,
-    );
+    const currentStep = stepsRef.current.find((step) => step.localId === localId);
     const inputValuesMatch =
       expectedInputValues === undefined ||
       presetInputValueSignature(currentStep?.presetInputValues || {}) ===
         presetInputValueSignature(expectedInputValues);
     return Boolean(
       currentStep &&
-      currentStep.stepType === "preset" &&
-      currentStep.presetKey === presetKey &&
-      (expectedInstructions === undefined ||
-        currentStep.instructions === expectedInstructions) &&
-      inputValuesMatch,
+        currentStep.stepType === "preset" &&
+        currentStep.presetKey === presetKey &&
+        (expectedInstructions === undefined ||
+          currentStep.instructions === expectedInstructions) &&
+        inputValuesMatch,
     );
   }
 
@@ -8252,7 +7993,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (!preset) {
       return;
     }
-    if (pageMode.mode === "create" && isSelfManagedPublishSkill(preset.slug)) {
+    if (
+      pageMode.mode === "create" &&
+      isSelfManagedPublishSkill(preset.slug)
+    ) {
       setPublishMode("auto");
     } else if (
       pageMode.mode === "create" &&
@@ -8288,9 +8032,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           }
         }
         if (Object.prototype.hasOwnProperty.call(updates, "toolInputValues")) {
-          nextStep.toolInputs = serializeToolInputValues(
-            nextStep.toolInputValues,
-          );
+          nextStep.toolInputs = serializeToolInputValues(nextStep.toolInputValues);
           nextStep.toolInputErrors = {};
         }
         return nextStep;
@@ -8472,9 +8214,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           source: "workflow-start-pentest-scope",
           tool: PENTEST_TOOL_ID,
           scope_id: String(scope.scope_id || "").trim(),
-          environment: String(
-            recordValue(scope.metadata).environment || "development",
-          ),
+          environment: String(recordValue(scope.metadata).environment || "development"),
         },
         "approved Pentest scope artifact",
       );
@@ -8489,12 +8229,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           attachedArtifactId: artifact.artifactId,
           attachedArtifactRef: artifact.artifactId,
           attachedTarget: target,
-          attachedOperationMode: String(
-            step.toolInputValues.operation_mode || "",
-          ).trim(),
-          attachedRunnerProfileId: String(
-            step.toolInputValues.runner_profile_id || "",
-          ).trim(),
+          attachedOperationMode: String(step.toolInputValues.operation_mode || "").trim(),
+          attachedRunnerProfileId: String(step.toolInputValues.runner_profile_id || "").trim(),
           validationErrors: {},
           validationWarnings: [],
           uploadStatus: "attached",
@@ -8546,9 +8282,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       });
     } catch (error) {
       const failure =
-        error instanceof Error
-          ? error
-          : new Error("Invalid uploaded scope JSON.");
+        error instanceof Error ? error : new Error("Invalid uploaded scope JSON.");
       const step = stepsRef.current.find((item) => item.localId === localId);
       updateStep(localId, {
         pentestScopeDraft: {
@@ -8579,8 +8313,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ...current,
         [step.localId]: {
           isLoading: false,
-          error:
-            "Enter issueKey in Tool Inputs before loading Jira target statuses.",
+          error: "Enter issueKey in Tool Inputs before loading Jira target statuses.",
           issueKey: "",
           toolId: step.toolId.trim(),
           options: [],
@@ -8731,7 +8464,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
         if (
           step.stepType === "preset" &&
-          (step.presetKey || Object.keys(step.presetInputValues).length > 0)
+          (step.presetKey ||
+            Object.keys(step.presetInputValues).length > 0)
         ) {
           nextStep.presetKey = "";
           nextStep.presetInputValues = {};
@@ -8745,9 +8479,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     );
   }
 
-  function stepRuntimePayload(
-    step: StepState,
-  ): Record<string, string | number> | null {
+  function stepRuntimePayload(step: StepState): Record<string, string | number> | null {
     const mode = (step.runtimeMode || "").trim();
     const modelValue = (step.runtimeModel || "").trim();
     const effortValue = (step.runtimeEffort || "").trim();
@@ -8755,16 +8487,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const modelTierValue = (step.runtimeModelTier || "").trim();
     const modelTier = Number.parseInt(modelTierValue, 10);
     const hasModelTier = Number.isInteger(modelTier) && modelTier >= 1;
-    const tierFallback =
-      step.runtimeTierFallback === "strict" ? "strict" : "clamp";
-    if (
-      !mode &&
-      !modelValue &&
-      !effortValue &&
-      !profileId &&
-      !hasModelTier &&
-      tierFallback !== "strict"
-    ) {
+    const tierFallback = step.runtimeTierFallback === "strict" ? "strict" : "clamp";
+    if (!mode && !modelValue && !effortValue && !profileId && !hasModelTier && tierFallback !== "strict") {
       return null;
     }
     return {
@@ -9003,9 +8727,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return String(explicit);
     }
     if (definition.type === "jira_board") {
-      return String(
-        definition.default || jiraIntegration?.defaultBoardId || "",
-      ).trim();
+      return String(definition.default || jiraIntegration?.defaultBoardId || "").trim();
     }
     if (isJiraProjectInputKey(definition.name)) {
       return String(
@@ -9013,9 +8735,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ).trim();
     }
     if (isRepositoryInputKey(definition.name)) {
-      return String(
-        definition.default || repository || defaultRepository || "",
-      ).trim();
+      return String(definition.default || repository || defaultRepository || "").trim();
     }
     return String(definition.default ?? "").trim();
   }
@@ -9143,17 +8863,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const appliedTemplate = expansion.appliedTemplate || {};
     return {
       slug: String(appliedTemplate.slug || preset.slug),
-      ...(String(
-        appliedTemplate.presetDigest ||
-          detail.presetDigest ||
-          preset.presetDigest ||
-          "",
-      ).trim()
+      ...(String(appliedTemplate.presetDigest || detail.presetDigest || preset.presetDigest || "").trim()
         ? {
             presetDigest: String(
-              appliedTemplate.presetDigest ||
-                detail.presetDigest ||
-                preset.presetDigest,
+              appliedTemplate.presetDigest || detail.presetDigest || preset.presetDigest,
             ).trim(),
           }
         : {}),
@@ -9226,9 +8939,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         if (targetIndex >= 0) {
           const next = current.slice();
           next.splice(targetIndex, 1, ...expandedSteps);
-          return next.length > 0
-            ? next
-            : [createStepStateEntry(nextStepNumber)];
+          return next.length > 0 ? next : [createStepStateEntry(nextStepNumber)];
         }
       }
       if (replaceEmptyDefault) {
@@ -9249,7 +8960,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ? ` Auto-filled ${expansion.assumptions.length} input(s): ${expansion.assumptions.join(", ")}.`
         : "";
     const warningSuffix =
-      expansion.warnings.length > 0 ? ` ${expansion.warnings.join(" ")}` : "";
+      expansion.warnings.length > 0
+        ? ` ${expansion.warnings.join(" ")}`
+        : "";
     const publishConstraintSuffix = isSelfManagedPublishSkill(
       String(expansion.appliedTemplate?.slug || preset.slug),
     )
@@ -9295,8 +9008,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         if (Object.keys(validationErrors).length > 0) {
           updateStepPresetIfCurrent(localId, preset.key, {
             presetInputErrors: validationErrors,
-            presetMessage:
-              Object.values(validationErrors)[0] || "Preset input is required.",
+            presetMessage: Object.values(validationErrors)[0] || "Preset input is required.",
           });
           return;
         }
@@ -9348,9 +9060,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
   }
 
-  async function handleSaveCurrentStepsAsPreset(
-    nameOverride: string,
-  ): Promise<boolean> {
+  async function handleSaveCurrentStepsAsPreset(nameOverride: string): Promise<boolean> {
     if (!presetSaveEnabled || isSavingPreset) {
       return false;
     }
@@ -9487,9 +9197,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
   }
 
-  async function handleDeleteSelectedPreset(
-    nameOverride: string,
-  ): Promise<boolean> {
+  async function handleDeleteSelectedPreset(nameOverride: string): Promise<boolean> {
     if (!presetSaveEnabled || isDeletingPreset) {
       return false;
     }
@@ -9603,12 +9311,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       parametersPatch: parametersPatch ?? null,
     });
     const isRerun = updateName === "RequestRerun";
-    const attemptEvent = isRerun
-      ? "rerun_submit_attempt"
-      : "update_submit_attempt";
-    const resultEvent = isRerun
-      ? "rerun_submit_result"
-      : "update_submit_result";
+    const attemptEvent = isRerun ? "rerun_submit_attempt" : "update_submit_attempt";
+    const resultEvent = isRerun ? "rerun_submit_result" : "update_submit_result";
     recordTemporalTaskEditingClientEvent({
       event: attemptEvent,
       mode: isRerun ? "rerun" : "edit",
@@ -9771,12 +9475,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           );
         }
         if (
-          submitExpansionRequestIdRef.current !==
-          Number(requestId.split("-").at(-1))
+          submitExpansionRequestIdRef.current !== Number(requestId.split("-").at(-1))
         ) {
-          throw new Error(
-            "Preset expansion was superseded by another submit attempt.",
-          );
+          throw new Error("Preset expansion was superseded by another submit attempt.");
         }
         if (schemaContractHasFields(detail)) {
           const validationErrors = validateSchemaCapabilityValues(
@@ -9822,12 +9523,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           throw new Error(blockingWarning);
         }
         if (
-          submitExpansionRequestIdRef.current !==
-          Number(requestId.split("-").at(-1))
+          submitExpansionRequestIdRef.current !== Number(requestId.split("-").at(-1))
         ) {
-          throw new Error(
-            "Preset expansion was superseded by another submit attempt.",
-          );
+          throw new Error("Preset expansion was superseded by another submit attempt.");
         }
         const expandedSteps = expansion.expandedSteps.map((expandedStep) => {
           const mapped = mapExpandedStepToState(
@@ -9866,9 +9564,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         });
       } catch (error) {
         const failure =
-          error instanceof Error
-            ? error
-            : new Error("Failed to expand preset.");
+          error instanceof Error ? error : new Error("Failed to expand preset.");
         const message = `Failed to expand preset: ${failure.message}`;
         updatePresetSubmitExpansion(step.localId, {
           presetMessage: message,
@@ -9916,10 +9612,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       clearSubmitBusy();
       return;
     }
-    if (
-      selectedAttachmentFiles.length > 0 ||
-      persistedAttachmentRefs.length > 0
-    ) {
+    if (selectedAttachmentFiles.length > 0 || persistedAttachmentRefs.length > 0) {
       if (!attachmentPolicy.enabled) {
         setSubmitMessage("Attachments are disabled for this runtime.");
         clearSubmitBusy();
@@ -9978,9 +9671,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     });
     if (invalidStepModelTier) {
       const stepIndex = submissionSteps.indexOf(invalidStepModelTier) + 1;
-      setSubmitMessage(
-        `Step ${stepIndex} model tier must be a positive number.`,
-      );
+      setSubmitMessage(`Step ${stepIndex} model tier must be a positive number.`);
       clearSubmitBusy();
       return;
     }
@@ -9995,9 +9686,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     // Priority and Max Attempts live behind the Advanced mode toggle. When that
     // toggle is off the inputs are unmounted, so fall back to defaults instead
     // of validating or submitting whatever value the hidden state still holds.
-    const effectivePriority = showAdvancedStepOptions
-      ? priority
-      : DEFAULT_PRIORITY;
+    const effectivePriority = showAdvancedStepOptions ? priority : DEFAULT_PRIORITY;
     const effectiveMaxAttempts = showAdvancedStepOptions
       ? maxAttempts
       : DEFAULT_MAX_ATTEMPTS;
@@ -10031,9 +9720,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         }
       } catch (error) {
         const failure =
-          error instanceof Error
-            ? error
-            : new Error("Failed to expand preset.");
+          error instanceof Error ? error : new Error("Failed to expand preset.");
         setSubmitMessage(failure.message);
         clearSubmitBusy();
         return;
@@ -10085,17 +9772,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       clearSubmitBusy();
       return;
     }
-    const effectivePublishMode = isSelfManagedPublishSkill(
-      effectivePublishSkillId,
-      effectivePublishSkillDetailForSubmit,
-    )
-      ? "auto"
-      : isRepositoryPublishDisabledSkill(
+    const effectivePublishMode =
+      isSelfManagedPublishSkill(
+        effectivePublishSkillId,
+        effectivePublishSkillDetailForSubmit,
+      )
+        ? "auto"
+        : isRepositoryPublishDisabledSkill(
             effectivePublishSkillId,
             effectivePublishSkillDetailForSubmit,
           )
-        ? "none"
-        : normalizedPublishMode;
+          ? "none"
+          : normalizedPublishMode;
     if (effectivePublishMode === "branch" && !effectiveBranch) {
       setSubmitMessage(
         "Choose a branch before saving or rerunning this publish-mode workflow.",
@@ -10103,13 +9791,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       clearSubmitBusy();
       return;
     }
-    const primarySkillArgsRaw =
-      primaryStepIsSkill && showAdvancedStepOptions
-        ? String(primaryStep?.skillArgs || "").trim()
-        : "";
+    const primarySkillArgsRaw = primaryStepIsSkill && showAdvancedStepOptions
+      ? String(primaryStep?.skillArgs || "").trim()
+      : "";
     const primarySkillDetail = primaryStepIsSkill
-      ? skillsQuery.data?.detailsById[primaryValidation.value.skillId.trim()] ||
-        null
+      ? skillsQuery.data?.detailsById[primaryValidation.value.skillId.trim()] || null
       : null;
     const taskSkillRequiredCapabilities = primaryStepIsSkill
       ? mergeCapabilities(
@@ -10158,11 +9844,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       "";
     const primaryCurrentInputContractDigest =
       primarySkillDetail?.contractDigest || "";
-    const primaryToolDefinition = primaryStepIsTool
-      ? (trustedToolsQuery.data || []).find(
-          (tool) => toolDefinitionId(tool) === primaryStep.toolId.trim(),
-        ) || null
-      : null;
+    const primaryToolDefinition =
+      primaryStepIsTool
+        ? (trustedToolsQuery.data || []).find(
+            (tool) => toolDefinitionId(tool) === primaryStep.toolId.trim(),
+          ) || null
+        : null;
     const primaryToolDetail = detailFromTrustedTool(primaryToolDefinition);
     const primaryToolRequiredCapabilities =
       primaryStepIsTool && !executableGeneratedToolPayload(primaryStep)
@@ -10195,9 +9882,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       } else {
         const parsedToolInputs = parseToolInputsText(primaryStep.toolInputs);
         if (!parsedToolInputs.ok) {
-          setSubmitMessage(
-            "Step 1 Tool Inputs must be valid JSON object text.",
-          );
+          setSubmitMessage("Step 1 Tool Inputs must be valid JSON object text.");
           clearSubmitBusy();
           return;
         }
@@ -10259,8 +9944,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       const generatedToolPayload = executableGeneratedToolPayload(step);
       const generatedSkillPayload = executableGeneratedSkillPayload(step);
       const stepSkillId = stepIsSkill ? step.skillId.trim() : "";
-      const stepSkillArgsRaw =
-        stepIsSkill && showAdvancedStepOptions ? step.skillArgs.trim() : "";
+      const stepSkillArgsRaw = stepIsSkill && showAdvancedStepOptions
+        ? step.skillArgs.trim()
+        : "";
       const stepSkillDetail = stepIsSkill
         ? skillsQuery.data?.detailsById[stepSkillId] || null
         : null;
@@ -10270,11 +9956,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             step.explicitRequiredCapabilities,
           )
         : [];
-      const stepToolDefinition = stepIsTool
-        ? (trustedToolsQuery.data || []).find(
-            (tool) => toolDefinitionId(tool) === step.toolId.trim(),
-          ) || null
-        : null;
+      const stepToolDefinition =
+        stepIsTool
+          ? (trustedToolsQuery.data || []).find(
+              (tool) => toolDefinitionId(tool) === step.toolId.trim(),
+            ) || null
+          : null;
       const stepToolDetail = detailFromTrustedTool(stepToolDefinition);
       const stepToolCaps =
         stepIsTool && !generatedToolPayload
@@ -10300,8 +9987,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         Boolean(step.toolInputs.trim()) &&
         step.toolInputs.trim() !== "{}";
       const hasRuntimePayload = Boolean(stepRuntimePayload(step));
-      const stepAttachmentFiles =
-        selectedStepAttachmentFiles[step.localId] || [];
+      const stepAttachmentFiles = selectedStepAttachmentFiles[step.localId] || [];
       const hasStepContent =
         Boolean(step.instructions) ||
         stepAttachmentFiles.length > 0 ||
@@ -10321,9 +10007,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       let stepToolInputs: Record<string, unknown> = {};
       if (stepIsTool && !generatedToolPayload) {
         if (hasStepContent && !step.toolId.trim()) {
-          setSubmitMessage(
-            `Select a Tool before submitting Step ${index + 1}.`,
-          );
+          setSubmitMessage(`Select a Tool before submitting Step ${index + 1}.`);
           clearSubmitBusy();
           return;
         }
@@ -10376,7 +10060,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         stepSchemaInputs.values,
       );
       const stepSavedInputContractDigest =
-        step.skillInputContractDigest || stepSkillDetail?.contractDigest || "";
+        step.skillInputContractDigest ||
+        stepSkillDetail?.contractDigest ||
+        "";
       const stepCurrentInputContractDigest =
         stepSkillDetail?.contractDigest || "";
       parsedAdditionalStepInputs.push({
@@ -10664,11 +10350,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       } else if (generatedSkillPayload) {
         stepPayload.skill = generatedSkillPayload;
       } else if (step.stepType === "tool") {
-        const toolPayload = manualToolPayload(
-          step,
-          stepToolInputs,
-          stepToolCaps,
-        );
+        const toolPayload = manualToolPayload(step, stepToolInputs, stepToolCaps);
         if (toolPayload) {
           stepPayload.tool = toolPayload;
         }
@@ -10733,12 +10415,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 ? { inputAttachments: primaryStepAttachmentRefs }
                 : pageMode.mode !== "create"
                   ? { inputAttachments: [] }
-                  : {}),
+                : {}),
               ...(primaryGeneratedToolPayload
                 ? { tool: primaryGeneratedToolPayload }
                 : primaryStepHasSkillOverride
-                  ? { tool: primaryStepTool, skill: primaryStepSkill }
-                  : {}),
+                ? { tool: primaryStepTool, skill: primaryStepSkill }
+                : {}),
               ...(primaryRuntimePayload
                 ? { runtime: primaryRuntimePayload }
                 : {}),
@@ -10781,7 +10463,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             sourceStep.source && Object.keys(sourceStep.source).length > 0
               ? {
                   ...sourceStep.source,
-                  ...(sourceInstructionsChanged ? { kind: "detached" } : {}),
+                  ...(sourceInstructionsChanged
+                    ? { kind: "detached" }
+                    : {}),
                 }
               : undefined;
           const hasPayloadContent = Object.entries(entry.payload).some(
@@ -10802,7 +10486,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             ) ||
             Boolean(
               sourceStep.jiraOrchestration &&
-              Object.keys(sourceStep.jiraOrchestration).length > 0,
+                Object.keys(sourceStep.jiraOrchestration).length > 0,
             );
           const shouldSubmitStepType =
             submittedStepType === "tool" ||
@@ -10907,19 +10591,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     )
       ? { include: [{ name: effectiveSubmissionSkillId }] }
       : undefined;
-    const submissionAuthoredPresets = authoredPresetsFromAppliedTemplates(
-      submissionAppliedTemplates,
-    );
+    const submissionAuthoredPresets =
+      authoredPresetsFromAppliedTemplates(submissionAppliedTemplates);
 
     // Address: Gemini r3034477068 — keep tool/skill objects in sync with effectiveSkillId
-    const resolvedTool =
-      effectiveSubmissionSkillId !== primarySkillId
-        ? { ...normalizedTaskTool, name: effectiveSubmissionSkillId }
-        : normalizedTaskTool;
-    const resolvedSkill =
-      effectiveSubmissionSkillId !== primarySkillId
-        ? { ...primaryStepSkill, id: effectiveSubmissionSkillId }
-        : primaryStepSkill;
+    const resolvedTool = effectiveSubmissionSkillId !== primarySkillId
+      ? { ...normalizedTaskTool, name: effectiveSubmissionSkillId }
+      : normalizedTaskTool;
+    const resolvedSkill = effectiveSubmissionSkillId !== primarySkillId
+      ? { ...primaryStepSkill, id: effectiveSubmissionSkillId }
+      : primaryStepSkill;
 
     const shouldSubmitMergeAutomation =
       isMergeAutomationPublishMode(publishMode) &&
@@ -10940,8 +10621,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       : (providerProfilesQuery.data || []).find(
           (profile) => profile.profile_id === providerProfile,
         );
-    const selectedProviderId =
-      selectedProviderProfile?.provider_id?.trim?.() || "";
+    const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
     const submittedModel = modelManualOverride ? model.trim() : "";
     const submittedEffort = effortManualOverride ? effort.trim() : "";
 
@@ -10953,19 +10633,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ? { inputAttachments: taskLevelAttachmentRefs }
         : pageMode.mode !== "create"
           ? { inputAttachments: [] }
-          : {}),
-      ...(taskSkillSelectors ? { skills: taskSkillSelectors } : {}),
-      ...(Object.keys(primarySkillArgs).length > 0
-        ? { inputs: primarySkillArgs }
         : {}),
+      ...(taskSkillSelectors ? { skills: taskSkillSelectors } : {}),
+      ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
       ...(explicitTitle ? { title: explicitTitle } : {}),
       proposeTasks,
       runtime: {
         mode: normalizedRuntime,
         ...(hasSubmittedModelTier ? { modelTier: submittedModelTier } : {}),
-        ...(hasSubmittedModelTier || tierFallback === "strict"
-          ? { tierFallback }
-          : {}),
+        ...(hasSubmittedModelTier || tierFallback === "strict" ? { tierFallback } : {}),
         ...(submittedModel ? { model: submittedModel } : {}),
         ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
@@ -11061,13 +10737,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       }
       const editParametersPatch =
         temporalDraftData && pageMode.intent !== "comparison"
-          ? buildEditParametersPatch({
-              execution: temporalDraftData.execution,
-              artifactInput: temporalDraftData.artifactInput,
-              submittedPayload,
-              submittedWorkflow: taskPayload,
-            })
-          : null;
+      ? buildEditParametersPatch({
+          execution: temporalDraftData.execution,
+          artifactInput: temporalDraftData.artifactInput,
+          submittedPayload,
+          submittedWorkflow: taskPayload,
+        })
+      : null;
       const artifactPayload = editParametersPatch ?? submittedPayload;
       const isExactRerunRequest =
         pageMode.mode === "rerun" && pageMode.intent === "rerun";
@@ -11129,8 +10805,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         requestBody.payload = artifactPayload;
       }
       const rerunDraft = temporalDraftData?.draft;
-      const currentPublishModeSelection =
-        normalizePublishModeSelection(publishMode);
+      const currentPublishModeSelection = normalizePublishModeSelection(publishMode);
       const rerunDraftPublishModeSelection = normalizePublishModeSelection(
         rerunDraft?.publishMode,
       );
@@ -11189,9 +10864,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           (pageMode.mode !== "create" && Boolean(existingInputArtifactRef)));
       if (shouldCreateInputArtifact) {
         const sourceWorkflowId =
-          pageMode.mode === "rerun"
-            ? String(pageMode.executionId || "").trim()
-            : null;
+          pageMode.mode === "rerun" ? String(pageMode.executionId || "").trim() : null;
         const artifact = await createInputArtifact(
           artifactCreateEndpoint,
           taskInputArtifactBody,
@@ -11331,23 +11004,23 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     pageMode.intent === "comparison"
       ? "Start Comparison Run"
       : pageMode.intent === "edit"
-        ? "Save Changes"
-        : pageMode.intent === "edit-for-rerun"
-          ? "Run edited workflow"
-          : pageMode.mode === "rerun"
-            ? "Start New Run"
-            : "Start Workflow";
+      ? "Save Changes"
+      : pageMode.intent === "edit-for-rerun"
+        ? "Run edited workflow"
+      : pageMode.mode === "rerun"
+        ? "Start New Run"
+        : "Start Workflow";
   const showPrimaryCtaArrow = true;
   const primaryCtaTooltip =
     pageMode.intent === "comparison"
       ? "Start a new comparison run from this workflow draft"
       : pageMode.intent === "edit"
-        ? "Save changes to this workflow draft"
-        : pageMode.intent === "edit-for-rerun"
-          ? "Start a new run from this edited workflow draft"
-          : pageMode.mode === "rerun"
-            ? "Start a new run from this workflow draft"
-            : "Start this workflow";
+      ? "Save changes to this workflow draft"
+      : pageMode.intent === "edit-for-rerun"
+        ? "Start a new run from this edited workflow draft"
+      : pageMode.mode === "rerun"
+        ? "Start a new run from this workflow draft"
+        : "Start this workflow";
   const repositoryTooltip = "Select the GitHub repository for this workflow";
   const branchTooltip = branchOptionsQuery.isLoading
     ? "Loading branches for the selected repository..."
@@ -11448,8 +11121,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
       {pageMode.intent === "edit-for-rerun" && !modeLoadError ? (
         <p className="notice" role="status">
-          You are editing a previous workflow. Your changes will create a new
-          run. The original run will remain unchanged.
+          You are editing a previous workflow. Your changes will create a new run.
+          The original run will remain unchanged.
         </p>
       ) : null}
 
@@ -11474,8 +11147,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 <p className="small">{`Target: ${jiraTargetText}`}</p>
                 {jiraImportWillCustomizeTemplateStep ? (
                   <p className="notice small">
-                    Importing into this template-bound step will make it
-                    manually customized.
+                    Importing into this template-bound step will make it manually
+                    customized.
                   </p>
                 ) : null}
               </div>
@@ -11538,11 +11211,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 Import target
                 <select
                   value={jiraTargetValue(jiraImportTarget)}
-                  onChange={(event) =>
-                    selectJiraImportTarget(event.target.value)
-                  }
+                  onChange={(event) => selectJiraImportTarget(event.target.value)}
                 >
-                  <option value="preset-text">Instructions (Preset)</option>
+                  <option value="preset-text">
+                    Instructions (Preset)
+                  </option>
                   {attachmentPolicy.enabled ? (
                     <option value="preset-attachments">
                       Instructions attachments (Preset)
@@ -11634,9 +11307,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   {jiraColumnsQuery.isLoading || jiraIssuesQuery.isLoading ? (
                     <p className="small">Loading Jira issues...</p>
                   ) : jiraBoardIssuesError ? (
-                    <p className="small">
-                      Jira issues are unavailable right now.
-                    </p>
+                    <p className="small">Jira issues are unavailable right now.</p>
                   ) : activeJiraIssues.length > 0 ? (
                     activeJiraIssues.map((issue) => (
                       <button
@@ -11697,1438 +11368,1272 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           disabled={isTemporalFormBlocked}
           aria-busy={isTemporalFormBlocked}
         >
-          {remediationDraft ? (
-            <section
-              className="card queue-remediation-draft-summary stack"
-              aria-label="Remediation draft"
-              data-jira-issue="MM-1119"
-            >
-              <div className="queue-section-heading">
-                <div>
-                  <h2>Remediation Draft</h2>
-                  <p className="small">
-                    Target{" "}
-                    {remediationDraft.target.title ||
-                      remediationDraft.target.workflowId}
-                  </p>
-                </div>
-              </div>
-              <div className="grid-2">
-                <label>
-                  Target workflow
-                  <input value={remediationDraft.target.workflowId} readOnly />
-                </label>
-                <label>
-                  Pinned run
-                  <input value={remediationDraft.target.runId} readOnly />
-                </label>
-                <label>
-                  Remediation mode
-                  <input value={remediationDraft.remediation.mode} readOnly />
-                </label>
-                <label>
-                  Authority
-                  <input
-                    value={remediationDraft.remediation.authorityMode}
-                    readOnly
-                  />
-                </label>
-                <label>
-                  Action policy
-                  <input
-                    value={remediationDraft.remediation.actionPolicyRef || ""}
-                    readOnly
-                  />
-                </label>
-                <label>
-                  Checkpoint refs
-                  <input
-                    value={String(
-                      remediationDraft.target.stepSelectors?.length || 0,
-                    )}
-                    readOnly
-                  />
-                </label>
-              </div>
-              <p className="small">
-                Evidence preview: recovery, incident, step ledger, checkpoint
-                branch, adapter, diagnostics, and linked artifact refs.
-              </p>
-              {remediationTargetFreshnessWarning ? (
-                <p className="notice small" role="alert">
-                  {remediationTargetFreshnessWarning}
-                </p>
-              ) : null}
-            </section>
-          ) : null}
+        {remediationDraft ? (
           <section
-            className="card queue-steps-section stack"
-            data-canonical-create-section="Steps"
-            aria-label="Steps"
+            className="card queue-remediation-draft-summary stack"
+            aria-label="Remediation draft"
+            data-jira-issue="MM-1119"
           >
-            <div id="queue-steps-list" className="stack queue-steps-list">
-              <datalist id={MODEL_OPTIONS_DATALIST_ID}>
-                {modelOptions.map((item) => (
-                  <option key={item} value={item} />
-                ))}
-              </datalist>
-              <datalist id={EFFORT_OPTIONS_DATALIST_ID}>
-                {effortOptions.map((item) => (
-                  <option key={item} value={item} />
-                ))}
-              </datalist>
-              <datalist id={REPOSITORY_OPTIONS_DATALIST_ID}>
-                {repositoryOptions.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </datalist>
-              <datalist id={BRANCH_OPTIONS_DATALIST_ID}>
-                {branchOptions.map((item) => (
-                  <option
-                    key={`${item.source}:${item.value}`}
-                    value={item.value}
-                  >
-                    {item.label}
-                  </option>
-                ))}
-              </datalist>
+            <div className="queue-section-heading">
+              <div>
+                <h2>Remediation Draft</h2>
+                <p className="small">
+                  Target {remediationDraft.target.title || remediationDraft.target.workflowId}
+                </p>
+              </div>
+            </div>
+            <div className="grid-2">
+              <label>
+                Target workflow
+                <input value={remediationDraft.target.workflowId} readOnly />
+              </label>
+              <label>
+                Pinned run
+                <input value={remediationDraft.target.runId} readOnly />
+              </label>
+              <label>
+                Remediation mode
+                <input value={remediationDraft.remediation.mode} readOnly />
+              </label>
+              <label>
+                Authority
+                <input value={remediationDraft.remediation.authorityMode} readOnly />
+              </label>
+              <label>
+                Action policy
+                <input value={remediationDraft.remediation.actionPolicyRef || ""} readOnly />
+              </label>
+              <label>
+                Checkpoint refs
+                <input
+                  value={String(remediationDraft.target.stepSelectors?.length || 0)}
+                  readOnly
+                />
+              </label>
+            </div>
+            <p className="small">
+              Evidence preview: recovery, incident, step ledger, checkpoint branch, adapter, diagnostics, and linked artifact refs.
+            </p>
+            {remediationTargetFreshnessWarning ? (
+              <p className="notice small" role="alert">
+                {remediationTargetFreshnessWarning}
+              </p>
+            ) : null}
+          </section>
+        ) : null}
+        <section
+          className="card queue-steps-section stack"
+          data-canonical-create-section="Steps"
+          aria-label="Steps"
+        >
+          <div id="queue-steps-list" className="stack queue-steps-list">
+            <datalist id={MODEL_OPTIONS_DATALIST_ID}>
+              {modelOptions.map((item) => (
+                <option key={item} value={item} />
+              ))}
+            </datalist>
+            <datalist id={EFFORT_OPTIONS_DATALIST_ID}>
+              {effortOptions.map((item) => (
+                <option key={item} value={item} />
+              ))}
+            </datalist>
+            <datalist id={REPOSITORY_OPTIONS_DATALIST_ID}>
+              {repositoryOptions.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </datalist>
+            <datalist id={BRANCH_OPTIONS_DATALIST_ID}>
+              {branchOptions.map((item) => (
+                <option key={`${item.source}:${item.value}`} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </datalist>
 
-              {steps.map((step, index) => {
-                const isPrimaryStep = index === 0;
-                const showSkillArgsField = showAdvancedStepOptions;
-                const visiblePresetInputs = step.presetDetail
-                  ? (step.presetDetail.inputs || []).filter(
-                      (definition) =>
-                        isVisiblePresetInput(
-                          step.presetDetail?.slug,
-                          definition,
-                        ) && !isFeatureRequestInputKey(definition.name),
-                    )
+            {steps.map((step, index) => {
+              const isPrimaryStep = index === 0;
+              const showSkillArgsField = showAdvancedStepOptions;
+              const visiblePresetInputs = step.presetDetail
+                ? (step.presetDetail.inputs || []).filter(
+                    (definition) =>
+                      isVisiblePresetInput(step.presetDetail?.slug, definition) &&
+                      !isFeatureRequestInputKey(definition.name),
+                  )
+                : [];
+              const visiblePresetSchemaFields = schemaContractHasFields(
+                step.presetDetail,
+              )
+                ? Object.entries(
+                    schemaProperties(step.presetDetail?.inputSchema),
+                  ).filter(([name]) => {
+                    if (!isVisiblePresetInputName(step.presetDetail?.slug, name)) {
+                      return false;
+                    }
+                    const uiSchema = capabilityFieldUiSchema(
+                      step.presetDetail?.uiSchema,
+                      name,
+                    );
+                    return capabilityFieldVisible(
+                      uiSchema,
+                      step.presetInputValues,
+                      step.presetDetail?.defaults,
+                    );
+                  })
+                : [];
+              const selectedSkillDetail =
+                skillsQuery.data?.detailsById[step.skillId.trim()] || null;
+              const skillContractNotice =
+                skillContractDigestNotice(
+                  step.skillInputContractDigest,
+                  selectedSkillDetail?.contractDigest,
+                ) || step.skillInputContractNotice;
+              const visibleSkillSchemaFields = schemaContractHasFields(
+                selectedSkillDetail,
+              )
+                ? Object.entries(schemaProperties(selectedSkillDetail?.inputSchema))
+                : [];
+              const toolSearchText = toolSearchTextByStep[step.localId] || "";
+              const trustedToolDefinitions = trustedToolsQuery.data || [];
+              const toolChoiceGroups = groupedToolChoices(
+                trustedToolDefinitions,
+                toolSearchText,
+              );
+              const selectedTrustedTool =
+                trustedToolDefinitions.find(
+                  (tool) => toolDefinitionId(tool) === step.toolId.trim(),
+                ) || null;
+              const selectedToolDetail = detailFromTrustedTool(selectedTrustedTool);
+              const selectedToolRequired = schemaRequired(
+                selectedToolDetail?.inputSchema,
+              );
+              const visibleToolSchemaFields =
+                selectedToolDetail && schemaContractHasFields(selectedToolDetail)
+                  ? Object.entries(schemaProperties(selectedToolDetail.inputSchema))
                   : [];
-                const visiblePresetSchemaFields = schemaContractHasFields(
-                  step.presetDetail,
-                )
-                  ? Object.entries(
-                      schemaProperties(step.presetDetail?.inputSchema),
-                    ).filter(([name]) => {
-                      if (
-                        !isVisiblePresetInputName(step.presetDetail?.slug, name)
-                      ) {
-                        return false;
-                      }
-                      const uiSchema = capabilityFieldUiSchema(
-                        step.presetDetail?.uiSchema,
-                        name,
-                      );
-                      return capabilityFieldVisible(
-                        uiSchema,
-                        step.presetInputValues,
-                        step.presetDetail?.defaults,
-                      );
-                    })
-                  : [];
-                const selectedSkillDetail =
-                  skillsQuery.data?.detailsById[step.skillId.trim()] || null;
-                const skillContractNotice =
-                  skillContractDigestNotice(
-                    step.skillInputContractDigest,
-                    selectedSkillDetail?.contractDigest,
-                  ) || step.skillInputContractNotice;
-                const visibleSkillSchemaFields = schemaContractHasFields(
-                  selectedSkillDetail,
-                )
-                  ? Object.entries(
-                      schemaProperties(selectedSkillDetail?.inputSchema),
-                    )
-                  : [];
-                const toolSearchText = toolSearchTextByStep[step.localId] || "";
-                const trustedToolDefinitions = trustedToolsQuery.data || [];
-                const toolChoiceGroups = groupedToolChoices(
-                  trustedToolDefinitions,
-                  toolSearchText,
-                );
-                const selectedTrustedTool =
-                  trustedToolDefinitions.find(
-                    (tool) => toolDefinitionId(tool) === step.toolId.trim(),
-                  ) || null;
-                const selectedToolDetail =
-                  detailFromTrustedTool(selectedTrustedTool);
-                const selectedToolRequired = schemaRequired(
-                  selectedToolDetail?.inputSchema,
-                );
-                const visibleToolSchemaFields =
-                  selectedToolDetail &&
-                  schemaContractHasFields(selectedToolDetail)
-                    ? Object.entries(
-                        schemaProperties(selectedToolDetail.inputSchema),
-                      )
-                    : [];
-                const requiredToolSchemaFields = visibleToolSchemaFields.filter(
-                  ([name]) => selectedToolRequired.has(name),
-                );
-                const optionalToolSchemaFields = visibleToolSchemaFields.filter(
-                  ([name]) => !selectedToolRequired.has(name),
-                );
-                const selectedPresetDetail =
-                  step.stepType === "preset" ? step.presetDetail : null;
-                const selectedPresetCapabilities = selectedPresetDetail
-                  ? mergeCapabilities(
-                      selectedPresetDetail.requiredCapabilities,
-                      selectedPresetDetail.capabilities,
-                    )
-                  : [];
-                const stepTemplateCapabilities = templateCapabilitiesForStep(
-                  appliedTemplates,
-                  step,
-                );
-                // MM-936: derive the capability chip row for this step. Explicit
-                // chips are removable; preset/skill/tool/runtime/publish/template
-                // derived chips are non-removable and carry provenance.
-                const stepCapabilityChips = buildCapabilityChips({
-                  explicit: step.explicitRequiredCapabilities,
-                  skill: selectedSkillDetail?.requiredCapabilities,
-                  generatedSkill: step.generatedSkill?.requiredCapabilities,
-                  tool: selectedToolDetail?.requiredCapabilities,
-                  generatedTool: step.generatedTool?.requiredCapabilities,
-                  preset: selectedPresetCapabilities,
-                  template: stepTemplateCapabilities,
-                  runtime: step.runtimeMode ? [step.runtimeMode] : [],
-                  publish:
-                    isPrimaryStep && stepPublishModeRequiresGh ? ["gh"] : [],
-                });
-                const stepCapabilityTokens = stepCapabilityChips.map(
-                  (chip) => chip.token,
-                );
-                const stepPreviewProfileId =
-                  step.runtimeProviderProfile.trim() || providerProfile;
-                const stepPreviewProfile =
-                  providerProfilesQuery.isPlaceholderData
-                    ? undefined
-                    : (providerProfilesQuery.data || []).find(
-                        (profile) =>
-                          profile.profile_id === stepPreviewProfileId,
-                      );
-                const stepTierPreview = previewModelTier(
-                  stepPreviewProfile,
-                  step.runtimeModelTier,
-                );
-                const isPentestTool = step.toolId.trim() === PENTEST_TOOL_ID;
-                const pentestScopeValues = isPentestTool
-                  ? pentestGeneratedScopeValues(
+              const requiredToolSchemaFields = visibleToolSchemaFields.filter(
+                ([name]) => selectedToolRequired.has(name),
+              );
+              const optionalToolSchemaFields = visibleToolSchemaFields.filter(
+                ([name]) => !selectedToolRequired.has(name),
+              );
+              const selectedPresetDetail =
+                step.stepType === "preset" ? step.presetDetail : null;
+              const selectedPresetCapabilities = selectedPresetDetail
+                ? mergeCapabilities(
+                    selectedPresetDetail.requiredCapabilities,
+                    selectedPresetDetail.capabilities,
+                  )
+                : [];
+              const stepTemplateCapabilities = templateCapabilitiesForStep(
+                appliedTemplates,
+                step,
+              );
+              // MM-936: derive the capability chip row for this step. Explicit
+              // chips are removable; preset/skill/tool/runtime/publish/template
+              // derived chips are non-removable and carry provenance.
+              const stepCapabilityChips = buildCapabilityChips({
+                explicit: step.explicitRequiredCapabilities,
+                skill: selectedSkillDetail?.requiredCapabilities,
+                generatedSkill: step.generatedSkill?.requiredCapabilities,
+                tool: selectedToolDetail?.requiredCapabilities,
+                generatedTool: step.generatedTool?.requiredCapabilities,
+                preset: selectedPresetCapabilities,
+                template: stepTemplateCapabilities,
+                runtime: step.runtimeMode ? [step.runtimeMode] : [],
+                publish:
+                  isPrimaryStep && stepPublishModeRequiresGh ? ["gh"] : [],
+              });
+              const stepCapabilityTokens = stepCapabilityChips.map(
+                (chip) => chip.token,
+              );
+              const stepPreviewProfileId =
+                step.runtimeProviderProfile.trim() || providerProfile;
+              const stepPreviewProfile = providerProfilesQuery.isPlaceholderData
+                ? undefined
+                : (providerProfilesQuery.data || []).find(
+                    (profile) => profile.profile_id === stepPreviewProfileId,
+                  );
+              const stepTierPreview = previewModelTier(
+                stepPreviewProfile,
+                step.runtimeModelTier,
+              );
+              const isPentestTool = step.toolId.trim() === PENTEST_TOOL_ID;
+              const pentestScopeValues = isPentestTool
+                ? pentestGeneratedScopeValues(
+                    step.pentestScopeDraft,
+                    step.toolInputValues,
+                  )
+                : {};
+              const pentestWarnings = isPentestTool
+                ? [
+                    ...step.pentestScopeDraft.validationWarnings,
+                    ...pentestScopeWarnings(
                       step.pentestScopeDraft,
                       step.toolInputValues,
-                    )
-                  : {};
-                const pentestWarnings = isPentestTool
-                  ? [
-                      ...step.pentestScopeDraft.validationWarnings,
-                      ...pentestScopeWarnings(
-                        step.pentestScopeDraft,
-                        step.toolInputValues,
-                      ),
-                    ]
-                  : [];
-                const jiraTransitionState =
-                  jiraTransitionStateByStep[step.localId] || null;
-                const showJiraTransitionOptions =
-                  step.stepType === "tool" &&
-                  step.toolId.trim() === "jira.transition_issue";
-                const instructionPreview = deriveRuntimeCommandPreview({
-                  instructions: step.instructions,
-                  runtime,
-                  sourcePath:
-                    index === 0
-                      ? "objective.instructions"
-                      : `steps[${index - 1}].instructions`,
-                  config: dashboardConfig.system?.runtimeCommandPreview,
-                  storedRuntimeCommand: step.runtimeCommand,
-                });
-                const stepAttachmentTargetError =
-                  attachmentTargetErrors[attachmentTargetKey(step.localId)];
-                const stepContextAttachments: StepContextAttachmentItem[] = [
-                  ...(isPrimaryStep
-                    ? persistedObjectiveAttachments.map((attachment) => ({
-                        key: `objective-${attachment.artifactId}`,
-                        filename: attachment.filename,
-                        detail: formatAttachmentBytes(attachment.sizeBytes),
-                        targetLabel: "Objective",
-                        href: configuredArtifactDownloadUrl(
-                          artifactDownloadEndpoint,
-                          attachment.artifactId,
-                        ),
-                        download: attachment.filename,
-                        removeLabel: `Remove objective attachment ${attachment.filename}`,
-                        onRemove: () =>
-                          removePersistedObjectiveAttachment(
-                            attachment.artifactId,
-                          ),
-                      }))
-                    : []),
-                  ...step.inputAttachments.map((attachment) => ({
-                    key: `step-${step.localId}-${attachment.artifactId}`,
-                    filename: attachment.filename,
-                    detail: formatAttachmentBytes(attachment.sizeBytes),
-                    targetLabel: `Step ${index + 1}`,
-                    href: configuredArtifactDownloadUrl(
-                      artifactDownloadEndpoint,
-                      attachment.artifactId,
                     ),
-                    download: attachment.filename,
-                    removeLabel: `Remove Step ${index + 1} attachment ${attachment.filename}`,
-                    onRemove: () =>
-                      removePersistedStepAttachment(
-                        step.localId,
+                  ]
+                : [];
+              const jiraTransitionState =
+                jiraTransitionStateByStep[step.localId] || null;
+              const showJiraTransitionOptions =
+                step.stepType === "tool" &&
+                step.toolId.trim() === "jira.transition_issue";
+              const instructionPreview = deriveRuntimeCommandPreview({
+                instructions: step.instructions,
+                runtime,
+                sourcePath: index === 0
+                  ? "objective.instructions"
+                  : `steps[${index - 1}].instructions`,
+                config: dashboardConfig.system?.runtimeCommandPreview,
+                storedRuntimeCommand: step.runtimeCommand,
+              });
+              const stepAttachmentTargetError =
+                attachmentTargetErrors[attachmentTargetKey(step.localId)];
+              const stepContextAttachments: StepContextAttachmentItem[] = [
+                ...(isPrimaryStep
+                  ? persistedObjectiveAttachments.map((attachment) => ({
+                      key: `objective-${attachment.artifactId}`,
+                      filename: attachment.filename,
+                      detail: formatAttachmentBytes(attachment.sizeBytes),
+                      targetLabel: "Objective",
+                      href: configuredArtifactDownloadUrl(
+                        artifactDownloadEndpoint,
                         attachment.artifactId,
                       ),
-                  })),
-                  ...(selectedStepAttachmentFiles[step.localId] || []).map(
-                    (file) => ({
-                      key: `pending-${step.localId}-${file.name}-${file.size}-${file.lastModified}`,
-                      filename: file.name || "attachment",
-                      detail: `${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`,
-                      targetLabel: `Step ${index + 1}`,
-                      removeLabel: `Remove Step ${index + 1} attachment ${file.name}`,
-                      onRemove: () => removeStepAttachment(step.localId, file),
-                      ...(stepAttachmentTargetError
-                        ? {
-                            retryLabel: `Retry upload for Step ${index + 1} attachment ${file.name}`,
-                            onRetry: () =>
-                              clearAttachmentTargetError(
-                                attachmentTargetKey(step.localId),
-                              ),
-                          }
-                        : {}),
-                    }),
+                      download: attachment.filename,
+                      removeLabel: `Remove objective attachment ${attachment.filename}`,
+                      onRemove: () =>
+                        removePersistedObjectiveAttachment(
+                          attachment.artifactId,
+                        ),
+                    }))
+                  : []),
+                ...step.inputAttachments.map((attachment) => ({
+                  key: `step-${step.localId}-${attachment.artifactId}`,
+                  filename: attachment.filename,
+                  detail: formatAttachmentBytes(attachment.sizeBytes),
+                  targetLabel: `Step ${index + 1}`,
+                  href: configuredArtifactDownloadUrl(
+                    artifactDownloadEndpoint,
+                    attachment.artifactId,
                   ),
-                ];
-                return (
-                  <section
-                    key={step.localId}
-                    className="stack queue-step-section"
-                    data-step-index={index}
-                  >
-                    <div className="queue-step-header">
-                      <strong>{`Step ${index + 1}`}</strong>
-                      <div
-                        className="queue-step-controls"
-                        role="group"
-                        aria-label={`Step ${index + 1} controls`}
-                      >
-                        <button
-                          type="button"
-                          className="queue-step-icon-button"
-                          data-step-action="up"
-                          data-step-index={index}
-                          disabled={index === 0}
-                          aria-label="Move step up"
-                          title="Move step up"
-                          onClick={() => moveStep(index, -1)}
-                        >
-                          <ArrowUpIcon />
-                          <span className="sr-only">Move step up</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="queue-step-icon-button"
-                          data-step-action="down"
-                          data-step-index={index}
-                          disabled={index === steps.length - 1}
-                          aria-label="Move step down"
-                          title="Move step down"
-                          onClick={() => moveStep(index, 1)}
-                        >
-                          <ArrowDownIcon />
-                          <span className="sr-only">Move step down</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="queue-step-icon-button destructive"
-                          data-step-action="remove"
-                          data-step-index={index}
-                          aria-label="Remove step"
-                          title="Remove step"
-                          onClick={() => removeStep(index)}
-                        >
-                          <CloseIcon />
-                          <span className="sr-only">Remove step</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    <fieldset className="segmented-control-field">
-                      <legend className="sr-only">Step Type</legend>
-                      <div
-                        className="segmented-control"
-                        data-intensity="loud"
-                        style={
-                          {
-                            "--segmented-control-count":
-                              STEP_TYPE_OPTIONS.length,
-                          } as CSSProperties
+                  download: attachment.filename,
+                  removeLabel: `Remove Step ${index + 1} attachment ${attachment.filename}`,
+                  onRemove: () =>
+                    removePersistedStepAttachment(
+                      step.localId,
+                      attachment.artifactId,
+                    ),
+                })),
+                ...(selectedStepAttachmentFiles[step.localId] || []).map(
+                  (file) => ({
+                    key: `pending-${step.localId}-${file.name}-${file.size}-${file.lastModified}`,
+                    filename: file.name || "attachment",
+                    detail: `${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`,
+                    targetLabel: `Step ${index + 1}`,
+                    removeLabel: `Remove Step ${index + 1} attachment ${file.name}`,
+                    onRemove: () => removeStepAttachment(step.localId, file),
+                    ...(stepAttachmentTargetError
+                      ? {
+                          retryLabel: `Retry upload for Step ${index + 1} attachment ${file.name}`,
+                          onRetry: () =>
+                            clearAttachmentTargetError(
+                              attachmentTargetKey(step.localId),
+                            ),
                         }
+                      : {}),
+                  }),
+                ),
+              ];
+              return (
+                <section
+                  key={step.localId}
+                  className="stack queue-step-section"
+                  data-step-index={index}
+                >
+                  <div className="queue-step-header">
+                    <strong>{`Step ${index + 1}`}</strong>
+                    <div
+                      className="queue-step-controls"
+                      role="group"
+                      aria-label={`Step ${index + 1} controls`}
+                    >
+                      <button
+                        type="button"
+                        className="queue-step-icon-button"
+                        data-step-action="up"
+                        data-step-index={index}
+                        disabled={index === 0}
+                        aria-label="Move step up"
+                        title="Move step up"
+                        onClick={() => moveStep(index, -1)}
                       >
-                        {STEP_TYPE_OPTIONS.map((option) => {
-                          const Icon = option.Icon;
-                          return (
-                            <label
-                              key={option.value}
-                              className="segmented-control-item"
-                              title={STEP_TYPE_HELP_TEXT[option.value]}
-                            >
-                              <input
-                                type="radio"
-                                name={`queue-step-type-${step.localId}`}
-                                value={option.value}
-                                checked={step.stepType === option.value}
-                                data-step-field="stepType"
-                                data-step-index={String(index)}
-                                onChange={(event) =>
-                                  handleStepTypeChange(
-                                    step.localId,
-                                    event.target.value,
-                                  )
-                                }
-                              />
-                              <span className="segmented-control-item-icon">
-                                <Icon />
-                              </span>
-                              <span className="segmented-control-item-label">
-                                {option.label}
-                              </span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </fieldset>
-                    {step.stepType === "tool" ? (
-                      <div className="stack segmented-control-panel">
-                        <p className="small">
-                          Tool steps run typed governed operations with
-                          schema-backed inputs, authorization, capability,
-                          retry, binding, validation, and error contracts.
-                        </p>
-                        <label>
-                          Search Tools
-                          <input
-                            data-step-field="toolSearch"
-                            data-step-index={String(index)}
-                            placeholder="Search by integration, tool, or purpose"
-                            value={toolSearchText}
-                            onChange={(event) =>
-                              setToolSearchTextByStep((current) => ({
-                                ...current,
-                                [step.localId]: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                        {trustedToolsQuery.isLoading ||
-                        trustedToolsQuery.isFetching ? (
-                          <p className="small">Loading trusted Tools...</p>
-                        ) : trustedToolsQuery.isError ? (
-                          <p className="notice small">
-                            Trusted Tool discovery is unavailable. Manual Tool
-                            authoring remains available.
-                          </p>
-                        ) : toolChoiceGroups.length > 0 ? (
-                          <div className="queue-tool-choice-groups">
-                            {toolChoiceGroups.map((group) => (
-                              <div
-                                key={`${step.localId}-tool-group-${group.group}`}
-                                className="queue-tool-choice-group"
-                              >
-                                <strong>{group.group}</strong>
-                                <div className="queue-tool-choice-list">
-                                  {group.tools.map((tool) => {
-                                    const toolId = toolDefinitionId(tool);
-                                    return (
-                                      <button
-                                        key={`${step.localId}-tool-${toolId}`}
-                                        type="button"
-                                        className={
-                                          step.toolId.trim() === toolId
-                                            ? "secondary active"
-                                            : "secondary"
-                                        }
-                                        aria-pressed={
-                                          step.toolId.trim() === toolId
-                                        }
-                                        title={tool.description || toolId}
-                                        onClick={() =>
-                                          selectTrustedTool(
-                                            step.localId,
-                                            toolId,
-                                          )
-                                        }
-                                      >
-                                        {toolId}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : trustedToolDefinitions.length > 0 ? (
-                          <p className="small">
-                            No trusted Tools match this search.
-                          </p>
-                        ) : null}
-                        <label>
-                          Tool ID
-                          <input
-                            data-step-field="toolId"
-                            data-step-index={String(index)}
-                            placeholder="jira.get_issue"
-                            value={step.toolId}
-                            onChange={(event) =>
-                              selectTrustedTool(
-                                step.localId,
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </label>
-                        <p className="small">
-                          {toolContractSummary(selectedTrustedTool)}
-                        </p>
-                        {isPentestTool ? (
-                          <div className="notice small">
-                            Runs require an approved scope artifact. Inline
-                            scope is not accepted from workflow submission.
-                            External targets are disabled unless explicitly
-                            enabled by deployment policy. PentestGPT runs
-                            through the Claude OAuth runner profile.
-                          </div>
-                        ) : null}
-                        {selectedToolDetail &&
-                        visibleToolSchemaFields.length > 0 ? (
-                          <div className="stack">
-                            <SchemaCapabilityFields
-                              fields={requiredToolSchemaFields.filter(
-                                ([name]) =>
-                                  !(
-                                    isPentestTool &&
-                                    name === "scope_artifact_ref"
-                                  ),
-                              )}
-                              detail={selectedToolDetail}
-                              values={step.toolInputValues}
-                              errors={step.toolInputErrors}
-                              disabled={false}
-                              repositoryOptions={repositoryOptions}
-                              branchOptions={branchOptions}
-                              onChange={(name, value) =>
-                                updateToolInputValue(step.localId, name, value)
+                        <ArrowUpIcon />
+                        <span className="sr-only">Move step up</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="queue-step-icon-button"
+                        data-step-action="down"
+                        data-step-index={index}
+                        disabled={index === steps.length - 1}
+                        aria-label="Move step down"
+                        title="Move step down"
+                        onClick={() => moveStep(index, 1)}
+                      >
+                        <ArrowDownIcon />
+                        <span className="sr-only">Move step down</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="queue-step-icon-button destructive"
+                        data-step-action="remove"
+                        data-step-index={index}
+                        aria-label="Remove step"
+                        title="Remove step"
+                        onClick={() => removeStep(index)}
+                      >
+                        <CloseIcon />
+                        <span className="sr-only">Remove step</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <fieldset className="segmented-control-field">
+                    <legend className="sr-only">Step Type</legend>
+                    <div
+                      className="segmented-control"
+                      data-intensity="loud"
+                      style={{
+                        "--segmented-control-count": STEP_TYPE_OPTIONS.length,
+                      } as CSSProperties}
+                    >
+                      {STEP_TYPE_OPTIONS.map((option) => {
+                        const Icon = option.Icon;
+                        return (
+                          <label
+                            key={option.value}
+                            className="segmented-control-item"
+                            title={STEP_TYPE_HELP_TEXT[option.value]}
+                          >
+                            <input
+                              type="radio"
+                              name={`queue-step-type-${step.localId}`}
+                              value={option.value}
+                              checked={step.stepType === option.value}
+                              data-step-field="stepType"
+                              data-step-index={String(index)}
+                              onChange={(event) =>
+                                handleStepTypeChange(
+                                  step.localId,
+                                  event.target.value,
+                                )
                               }
                             />
-                            {isPentestTool ? (
-                              <div className="stack queue-tool-dynamic-options">
-                                <strong>Approved Scope</strong>
-                                <div
-                                  className="segmented-control"
-                                  data-intensity="loud"
-                                  role="radiogroup"
-                                  aria-label="Approved Scope mode"
-                                  style={
-                                    {
-                                      "--segmented-control-count": 3,
-                                    } as CSSProperties
-                                  }
-                                >
-                                  {[
-                                    ["generate", "Generate from fields"],
-                                    ["upload", "Upload JSON"],
-                                    ["existing", "Use existing artifact ref"],
-                                  ].map(([mode, label]) => (
-                                    <label
-                                      key={mode}
-                                      className="segmented-control-item"
+                            <span className="segmented-control-item-icon">
+                              <Icon />
+                            </span>
+                            <span className="segmented-control-item-label">
+                              {option.label}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </fieldset>
+                  {step.stepType === "tool" ? (
+                    <div className="stack segmented-control-panel">
+                      <p className="small">
+                        Tool steps run typed governed operations with schema-backed
+                        inputs, authorization, capability, retry, binding,
+                        validation, and error contracts.
+                      </p>
+                      <label>
+                        Search Tools
+                        <input
+                          data-step-field="toolSearch"
+                          data-step-index={String(index)}
+                          placeholder="Search by integration, tool, or purpose"
+                          value={toolSearchText}
+                          onChange={(event) =>
+                            setToolSearchTextByStep((current) => ({
+                              ...current,
+                              [step.localId]: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      {trustedToolsQuery.isLoading || trustedToolsQuery.isFetching ? (
+                        <p className="small">Loading trusted Tools...</p>
+                      ) : trustedToolsQuery.isError ? (
+                        <p className="notice small">
+                          Trusted Tool discovery is unavailable. Manual Tool
+                          authoring remains available.
+                        </p>
+                      ) : toolChoiceGroups.length > 0 ? (
+                        <div className="queue-tool-choice-groups">
+                          {toolChoiceGroups.map((group) => (
+                            <div
+                              key={`${step.localId}-tool-group-${group.group}`}
+                              className="queue-tool-choice-group"
+                            >
+                              <strong>{group.group}</strong>
+                              <div className="queue-tool-choice-list">
+                                {group.tools.map((tool) => {
+                                  const toolId = toolDefinitionId(tool);
+                                  return (
+                                    <button
+                                      key={`${step.localId}-tool-${toolId}`}
+                                      type="button"
+                                      className={
+                                        step.toolId.trim() === toolId
+                                          ? "secondary active"
+                                          : "secondary"
+                                      }
+                                      aria-pressed={step.toolId.trim() === toolId}
+                                      title={tool.description || toolId}
+                                      onClick={() =>
+                                        selectTrustedTool(step.localId, toolId)
+                                      }
                                     >
-                                      <input
-                                        type="radio"
-                                        name={`pentest-scope-mode-${step.localId}`}
-                                        value={mode}
-                                        checked={
-                                          step.pentestScopeDraft.mode === mode
-                                        }
-                                        onChange={(event) =>
-                                          updatePentestScopeDraft(
-                                            step.localId,
-                                            {
-                                              mode: event.target
-                                                .value as PentestScopeMode,
-                                              validationErrors: {},
-                                            },
-                                          )
-                                        }
-                                      />
-                                      <span className="segmented-control-item-label">
-                                        {label}
-                                      </span>
-                                    </label>
-                                  ))}
-                                </div>
-                                {step.pentestScopeDraft.mode === "generate" ? (
-                                  <div className="grid-2">
-                                    <label>
-                                      Scope title
-                                      <input
-                                        value={String(
-                                          pentestScopeValues.scope_title || "",
-                                        )}
-                                        onChange={(event) =>
-                                          updateGeneratedPentestScopeValue(
-                                            step.localId,
-                                            "scope_title",
-                                            event.target.value,
-                                          )
-                                        }
-                                      />
-                                    </label>
-                                    <label>
-                                      Environment
-                                      <select
-                                        value={String(
-                                          pentestScopeValues.environment ||
-                                            "development",
-                                        )}
-                                        onChange={(event) =>
-                                          updateGeneratedPentestScopeValue(
-                                            step.localId,
-                                            "environment",
-                                            event.target.value,
-                                          )
-                                        }
-                                      >
-                                        {[
-                                          "development",
-                                          "staging",
-                                          "internal",
-                                          "lab",
-                                          "production",
-                                        ].map((item) => (
-                                          <option key={item} value={item}>
-                                            {item}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </label>
-                                    <label>
-                                      Target URL
-                                      <input
-                                        value={String(
-                                          pentestScopeValues.target_url || "",
-                                        )}
-                                        onChange={(event) =>
-                                          updateGeneratedPentestScopeValue(
-                                            step.localId,
-                                            "target_url",
-                                            event.target.value,
-                                          )
-                                        }
-                                      />
-                                    </label>
-                                    <label>
-                                      Target host/FQDN
-                                      <input
-                                        value={String(
-                                          pentestScopeValues.target_host || "",
-                                        )}
-                                        onChange={(event) =>
-                                          updateGeneratedPentestScopeValue(
-                                            step.localId,
-                                            "target_host",
-                                            event.target.value,
-                                          )
-                                        }
-                                      />
-                                    </label>
-                                    <label>
-                                      Target class
-                                      <select
-                                        value={String(
-                                          pentestScopeValues.target_class ||
-                                            "lab",
-                                        )}
-                                        onChange={(event) =>
-                                          updateGeneratedPentestScopeValue(
-                                            step.localId,
-                                            "target_class",
-                                            event.target.value,
-                                          )
-                                        }
-                                      >
-                                        {[
-                                          "lab",
-                                          "internal_authorized",
-                                          "external_authorized",
-                                        ].map((item) => (
-                                          <option key={item} value={item}>
-                                            {item}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </label>
-                                    <label>
-                                      Expires at
-                                      <input
-                                        type="datetime-local"
-                                        value={String(
-                                          pentestScopeValues.expires_at || "",
-                                        )}
-                                        onChange={(event) =>
-                                          updateGeneratedPentestScopeValue(
-                                            step.localId,
-                                            "expires_at",
-                                            event.target.value,
-                                          )
-                                        }
-                                      />
-                                    </label>
-                                    <label>
-                                      Approval ticket / reason
-                                      <input
-                                        value={String(
-                                          pentestScopeValues.approval_ticket ||
-                                            "",
-                                        )}
-                                        onChange={(event) =>
-                                          updateGeneratedPentestScopeValue(
-                                            step.localId,
-                                            "approval_ticket",
-                                            event.target.value,
-                                          )
-                                        }
-                                      />
-                                    </label>
-                                    <label>
-                                      Allowed actions
-                                      <select
-                                        value={String(
-                                          Array.isArray(
-                                            pentestScopeValues.allowed_actions,
-                                          )
-                                            ? pentestScopeValues.allowed_actions.join(
-                                                ",",
-                                              )
-                                            : PENTEST_BASELINE_ACTIONS.join(
-                                                ",",
-                                              ),
-                                        )}
-                                        onChange={(event) =>
-                                          updateGeneratedPentestScopeValue(
-                                            step.localId,
-                                            "allowed_actions",
-                                            event.target.value
-                                              .split(",")
-                                              .filter(Boolean),
-                                          )
-                                        }
-                                      >
-                                        <option
-                                          value={PENTEST_BASELINE_ACTIONS.join(
-                                            ",",
-                                          )}
-                                        >
-                                          First-pass baseline
-                                        </option>
-                                        <option
-                                          value={PENTEST_VALIDATE_ACTIONS.join(
-                                            ",",
-                                          )}
-                                        >
-                                          Validate hypothesis
-                                        </option>
-                                        {String(
-                                          step.toolInputValues.operation_mode ||
-                                            "",
-                                        ) === "full_authorized" ? (
-                                          <option
-                                            value={PENTEST_SCOPE_ACTIONS.join(
-                                              ",",
-                                            )}
-                                          >
-                                            Full authorized
-                                          </option>
-                                        ) : null}
-                                      </select>
-                                    </label>
-                                    <label>
-                                      Application stack
-                                      <input
-                                        value={String(
-                                          pentestScopeValues.application_stack ||
-                                            "",
-                                        )}
-                                        onChange={(event) =>
-                                          updateGeneratedPentestScopeValue(
-                                            step.localId,
-                                            "application_stack",
-                                            event.target.value,
-                                          )
-                                        }
-                                      />
-                                    </label>
-                                  </div>
-                                ) : null}
-                                {step.pentestScopeDraft.mode === "upload" ? (
-                                  <div className="stack">
-                                    <label>
-                                      Upload approved scope JSON
-                                      <input
-                                        type="file"
-                                        accept="application/json,.json"
-                                        onChange={(event) => {
-                                          void handlePentestScopeFile(
-                                            step.localId,
-                                            event.currentTarget.files?.[0],
-                                          );
-                                          event.currentTarget.value = "";
-                                        }}
-                                      />
-                                    </label>
-                                    {step.pentestScopeDraft
-                                      .uploadedScopeFileName ? (
-                                      <p className="small">
-                                        {`Selected: ${step.pentestScopeDraft.uploadedScopeFileName}`}
-                                      </p>
-                                    ) : null}
-                                  </div>
-                                ) : null}
-                                {step.pentestScopeDraft.mode === "existing" ? (
-                                  <label>
-                                    Approved scope artifact
+                                      {toolId}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : trustedToolDefinitions.length > 0 ? (
+                        <p className="small">No trusted Tools match this search.</p>
+                      ) : null}
+                      <label>
+                        Tool ID
+                        <input
+                          data-step-field="toolId"
+                          data-step-index={String(index)}
+                          placeholder="jira.get_issue"
+                          value={step.toolId}
+                          onChange={(event) =>
+                            selectTrustedTool(step.localId, event.target.value)
+                          }
+                        />
+                      </label>
+                      <p className="small">
+                        {toolContractSummary(selectedTrustedTool)}
+                      </p>
+                      {isPentestTool ? (
+                        <div className="notice small">
+                          Runs require an approved scope artifact. Inline scope is
+                          not accepted from workflow submission. External targets
+                          are disabled unless explicitly enabled by deployment
+                          policy. PentestGPT runs through the Claude OAuth
+                          runner profile.
+                        </div>
+                      ) : null}
+                      {selectedToolDetail && visibleToolSchemaFields.length > 0 ? (
+                        <div className="stack">
+                          <SchemaCapabilityFields
+                            fields={requiredToolSchemaFields.filter(
+                              ([name]) =>
+                                !(isPentestTool && name === "scope_artifact_ref"),
+                            )}
+                            detail={selectedToolDetail}
+                            values={step.toolInputValues}
+                            errors={step.toolInputErrors}
+                            disabled={false}
+                            repositoryOptions={repositoryOptions}
+                            branchOptions={branchOptions}
+                            onChange={(name, value) =>
+                              updateToolInputValue(step.localId, name, value)
+                            }
+                          />
+                          {isPentestTool ? (
+                            <div className="stack queue-tool-dynamic-options">
+                              <strong>Approved Scope</strong>
+                              <div
+                                className="segmented-control"
+                                data-intensity="loud"
+                                role="radiogroup"
+                                aria-label="Approved Scope mode"
+                                style={{
+                                  "--segmented-control-count": 3,
+                                } as CSSProperties}
+                              >
+                                {[
+                                  ["generate", "Generate from fields"],
+                                  ["upload", "Upload JSON"],
+                                  ["existing", "Use existing artifact ref"],
+                                ].map(([mode, label]) => (
+                                  <label
+                                    key={mode}
+                                    className="segmented-control-item"
+                                  >
                                     <input
-                                      value={String(
-                                        step.toolInputValues
-                                          .scope_artifact_ref || "",
-                                      )}
-                                      placeholder="art_..."
-                                      aria-invalid={Boolean(
-                                        step.toolInputErrors.scope_artifact_ref,
-                                      )}
+                                      type="radio"
+                                      name={`pentest-scope-mode-${step.localId}`}
+                                      value={mode}
+                                      checked={step.pentestScopeDraft.mode === mode}
                                       onChange={(event) =>
-                                        updateToolInputValue(
+                                        updatePentestScopeDraft(step.localId, {
+                                          mode: event.target.value as PentestScopeMode,
+                                          validationErrors: {},
+                                        })
+                                      }
+                                    />
+                                    <span className="segmented-control-item-label">
+                                      {label}
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                              {step.pentestScopeDraft.mode === "generate" ? (
+                                <div className="grid-2">
+                                  <label>
+                                    Scope title
+                                    <input
+                                      value={String(pentestScopeValues.scope_title || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
                                           step.localId,
-                                          "scope_artifact_ref",
+                                          "scope_title",
                                           event.target.value,
                                         )
                                       }
                                     />
-                                    <span className="small">
-                                      ArtifactRef for the approved pentest scope
-                                      document.
-                                    </span>
                                   </label>
-                                ) : null}
+                                  <label>
+                                    Environment
+                                    <select
+                                      value={String(pentestScopeValues.environment || "development")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "environment",
+                                          event.target.value,
+                                        )
+                                      }
+                                    >
+                                      {["development", "staging", "internal", "lab", "production"].map((item) => (
+                                        <option key={item} value={item}>
+                                          {item}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label>
+                                    Target URL
+                                    <input
+                                      value={String(pentestScopeValues.target_url || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "target_url",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Target host/FQDN
+                                    <input
+                                      value={String(pentestScopeValues.target_host || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "target_host",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Target class
+                                    <select
+                                      value={String(pentestScopeValues.target_class || "lab")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "target_class",
+                                          event.target.value,
+                                        )
+                                      }
+                                    >
+                                      {["lab", "internal_authorized", "external_authorized"].map((item) => (
+                                        <option key={item} value={item}>
+                                          {item}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label>
+                                    Expires at
+                                    <input
+                                      type="datetime-local"
+                                      value={String(pentestScopeValues.expires_at || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "expires_at",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Approval ticket / reason
+                                    <input
+                                      value={String(pentestScopeValues.approval_ticket || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "approval_ticket",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Allowed actions
+                                    <select
+                                      value={String(
+                                        Array.isArray(pentestScopeValues.allowed_actions)
+                                          ? pentestScopeValues.allowed_actions.join(",")
+                                          : PENTEST_BASELINE_ACTIONS.join(","),
+                                      )}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "allowed_actions",
+                                          event.target.value.split(",").filter(Boolean),
+                                        )
+                                      }
+                                    >
+                                      <option value={PENTEST_BASELINE_ACTIONS.join(",")}>
+                                        First-pass baseline
+                                      </option>
+                                      <option value={PENTEST_VALIDATE_ACTIONS.join(",")}>
+                                        Validate hypothesis
+                                      </option>
+                                      {String(step.toolInputValues.operation_mode || "") ===
+                                      "full_authorized" ? (
+                                        <option value={PENTEST_SCOPE_ACTIONS.join(",")}>
+                                          Full authorized
+                                        </option>
+                                      ) : null}
+                                    </select>
+                                  </label>
+                                  <label>
+                                    Application stack
+                                    <input
+                                      value={String(pentestScopeValues.application_stack || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "application_stack",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                </div>
+                              ) : null}
+                              {step.pentestScopeDraft.mode === "upload" ? (
+                                <div className="stack">
+                                  <label>
+                                    Upload approved scope JSON
+                                    <input
+                                      type="file"
+                                      accept="application/json,.json"
+                                      onChange={(event) => {
+                                        void handlePentestScopeFile(
+                                          step.localId,
+                                          event.currentTarget.files?.[0],
+                                        );
+                                        event.currentTarget.value = "";
+                                      }}
+                                    />
+                                  </label>
+                                  {step.pentestScopeDraft.uploadedScopeFileName ? (
+                                    <p className="small">
+                                      {`Selected: ${step.pentestScopeDraft.uploadedScopeFileName}`}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                              {step.pentestScopeDraft.mode === "existing" ? (
                                 <label>
+                                  Approved scope artifact
                                   <input
-                                    type="checkbox"
-                                    checked={
-                                      step.pentestScopeDraft.confirmAuthorized
-                                    }
+                                    value={String(step.toolInputValues.scope_artifact_ref || "")}
+                                    placeholder="art_..."
+                                    aria-invalid={Boolean(step.toolInputErrors.scope_artifact_ref)}
                                     onChange={(event) =>
-                                      updatePentestScopeDraft(step.localId, {
-                                        confirmAuthorized: event.target.checked,
-                                        validationErrors: {},
-                                      })
-                                    }
-                                  />
-                                  I confirm I am authorized to test this target
-                                  within the selected scope.
-                                </label>
-                                {step.pentestScopeDraft.mode === "generate" ? (
-                                  <button
-                                    type="button"
-                                    className="secondary"
-                                    disabled={
-                                      step.pentestScopeDraft.uploadStatus ===
-                                      "uploading"
-                                    }
-                                    onClick={() =>
-                                      void attachGeneratedPentestScope(
+                                      updateToolInputValue(
                                         step.localId,
+                                        "scope_artifact_ref",
+                                        event.target.value,
                                       )
                                     }
-                                  >
-                                    Generate and attach scope
-                                  </button>
-                                ) : null}
-                                {step.pentestScopeDraft.mode === "upload" ? (
-                                  <button
-                                    type="button"
-                                    className="secondary"
-                                    disabled={
-                                      step.pentestScopeDraft.uploadStatus ===
-                                      "uploading"
-                                    }
-                                    onClick={() =>
-                                      void attachUploadedPentestScope(
-                                        step.localId,
-                                      )
-                                    }
-                                  >
-                                    Upload and attach scope
-                                  </button>
-                                ) : null}
-                                {step.pentestScopeDraft.attachedArtifactId ? (
-                                  <p className="notice small">
-                                    {`Approved scope attached: ${step.pentestScopeDraft.attachedArtifactId}`}
-                                  </p>
-                                ) : null}
-                                {Object.values(
-                                  step.pentestScopeDraft.validationErrors,
-                                ).map((error) => (
-                                  <p key={error} className="notice small">
-                                    {error}
-                                  </p>
-                                ))}
-                                {pentestWarnings.map((warning) => (
-                                  <p key={warning} className="notice small">
-                                    {warning}
-                                  </p>
-                                ))}
-                              </div>
-                            ) : null}
-                            {optionalToolSchemaFields.length > 0 ? (
-                              <details>
-                                <summary>Optional inputs</summary>
-                                <SchemaCapabilityFields
-                                  fields={optionalToolSchemaFields.filter(
-                                    ([name]) =>
-                                      !(
-                                        isPentestTool &&
-                                        name === "approved_scope"
-                                      ),
-                                  )}
-                                  detail={selectedToolDetail}
-                                  values={step.toolInputValues}
-                                  errors={step.toolInputErrors}
-                                  disabled={false}
-                                  repositoryOptions={repositoryOptions}
-                                  branchOptions={branchOptions}
-                                  onChange={(name, value) =>
-                                    updateToolInputValue(
-                                      step.localId,
-                                      name,
-                                      value,
-                                    )
-                                  }
-                                />
-                              </details>
-                            ) : null}
-                            <details open={step.toolJsonMode}>
-                              <summary
-                                onClick={(event) => {
-                                  event.preventDefault();
-                                  updateStep(step.localId, {
-                                    toolJsonMode: !step.toolJsonMode,
-                                  });
-                                }}
-                              >
-                                Edit JSON
-                              </summary>
-                              {step.toolJsonMode ? (
-                                <label>
-                                  Tool Inputs (JSON object)
-                                  <textarea
-                                    data-step-field="toolInputs"
-                                    data-step-index={String(index)}
-                                    placeholder='{"issueKey":"MM-563"}'
-                                    value={step.toolInputs}
-                                    onChange={(event) => {
-                                      const text = event.target.value;
-                                      const parsed = parseToolInputsText(text);
-                                      updateStep(step.localId, {
-                                        toolInputs: text,
-                                        ...(parsed.ok
-                                          ? {
-                                              toolInputValues: parsed.value,
-                                              toolInputErrors: {},
-                                            }
-                                          : {}),
-                                      });
-                                    }}
                                   />
+                                  <span className="small">
+                                    ArtifactRef for the approved pentest scope document.
+                                  </span>
                                 </label>
                               ) : null}
-                            </details>
-                          </div>
-                        ) : (
-                          <label>
-                            Tool Inputs (JSON object)
-                            <textarea
-                              data-step-field="toolInputs"
-                              data-step-index={String(index)}
-                              placeholder='{"issueKey":"MM-563"}'
-                              value={step.toolInputs}
-                              onChange={(event) =>
-                                updateStep(step.localId, {
-                                  toolInputs: event.target.value,
-                                })
-                              }
-                            />
-                          </label>
-                        )}
-                        {showJiraTransitionOptions ? (
-                          <div className="stack queue-tool-dynamic-options">
-                            <button
-                              type="button"
-                              className="secondary"
-                              aria-busy={Boolean(
-                                jiraTransitionState?.isLoading,
-                              )}
-                              disabled={Boolean(jiraTransitionState?.isLoading)}
-                              onClick={() =>
-                                void loadJiraTransitionOptions(step)
-                              }
-                            >
-                              Load Jira target statuses
-                            </button>
-                            {jiraTransitionState?.error ? (
-                              <p className="notice small">
-                                {jiraTransitionState.error}
-                              </p>
-                            ) : null}
-                            {jiraTransitionState?.options.length ? (
                               <label>
-                                Jira Target Status
-                                <select
-                                  value=""
+                                <input
+                                  type="checkbox"
+                                  checked={step.pentestScopeDraft.confirmAuthorized}
                                   onChange={(event) =>
-                                    applyJiraTransitionId(
-                                      step.localId,
-                                      event.target.value,
-                                    )
+                                    updatePentestScopeDraft(step.localId, {
+                                      confirmAuthorized: event.target.checked,
+                                      validationErrors: {},
+                                    })
                                   }
+                                />
+                                I confirm I am authorized to test this target within the selected scope.
+                              </label>
+                              {step.pentestScopeDraft.mode === "generate" ? (
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  disabled={step.pentestScopeDraft.uploadStatus === "uploading"}
+                                  onClick={() => void attachGeneratedPentestScope(step.localId)}
                                 >
-                                  <option value="">
-                                    Select returned status...
-                                  </option>
-                                  {jiraTransitionState.options.map((option) => (
-                                    <option key={option.id} value={option.id}>
-                                      {option.name}
-                                    </option>
-                                  ))}
-                                </select>
+                                  Generate and attach scope
+                                </button>
+                              ) : null}
+                              {step.pentestScopeDraft.mode === "upload" ? (
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  disabled={step.pentestScopeDraft.uploadStatus === "uploading"}
+                                  onClick={() => void attachUploadedPentestScope(step.localId)}
+                                >
+                                  Upload and attach scope
+                                </button>
+                              ) : null}
+                              {step.pentestScopeDraft.attachedArtifactId ? (
+                                <p className="notice small">
+                                  {`Approved scope attached: ${step.pentestScopeDraft.attachedArtifactId}`}
+                                </p>
+                              ) : null}
+                              {Object.values(step.pentestScopeDraft.validationErrors).map((error) => (
+                                <p key={error} className="notice small">
+                                  {error}
+                                </p>
+                              ))}
+                              {pentestWarnings.map((warning) => (
+                                <p key={warning} className="notice small">
+                                  {warning}
+                                </p>
+                              ))}
+                            </div>
+                          ) : null}
+                          {optionalToolSchemaFields.length > 0 ? (
+                            <details>
+                              <summary>Optional inputs</summary>
+                              <SchemaCapabilityFields
+                                fields={optionalToolSchemaFields.filter(
+                                  ([name]) =>
+                                    !(isPentestTool && name === "approved_scope"),
+                                )}
+                                detail={selectedToolDetail}
+                                values={step.toolInputValues}
+                                errors={step.toolInputErrors}
+                                disabled={false}
+                                repositoryOptions={repositoryOptions}
+                                branchOptions={branchOptions}
+                                onChange={(name, value) =>
+                                  updateToolInputValue(step.localId, name, value)
+                                }
+                              />
+                            </details>
+                          ) : null}
+                          <details open={step.toolJsonMode}>
+                            <summary
+                              onClick={(event) => {
+                                event.preventDefault();
+                                updateStep(step.localId, {
+                                  toolJsonMode: !step.toolJsonMode,
+                                });
+                              }}
+                            >
+                              Edit JSON
+                            </summary>
+                            {step.toolJsonMode ? (
+                              <label>
+                                Tool Inputs (JSON object)
+                                <textarea
+                                  data-step-field="toolInputs"
+                                  data-step-index={String(index)}
+                                  placeholder='{"issueKey":"MM-563"}'
+                                  value={step.toolInputs}
+                                  onChange={(event) => {
+                                    const text = event.target.value;
+                                    const parsed = parseToolInputsText(text);
+                                    updateStep(step.localId, {
+                                      toolInputs: text,
+                                      ...(parsed.ok
+                                        ? {
+                                            toolInputValues: parsed.value,
+                                            toolInputErrors: {},
+                                          }
+                                        : {}),
+                                    });
+                                  }}
+                                />
                               </label>
                             ) : null}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-
-                    {step.stepType === "skill" ? (
-                      <div className="stack segmented-control-panel">
-                        <div className="field">
-                          <label
-                            htmlFor={`queue-step-${step.localId}-skill-id`}
-                          >
-                            Skill (optional)
-                          </label>
-                          <SkillCombobox
-                            inputId={`queue-step-${step.localId}-skill-id`}
-                            value={step.skillId}
-                            options={skillComboboxOptions}
-                            dataStepIndex={String(index)}
-                            ariaLabel={`Step ${index + 1} skill`}
-                            placeholder={
-                              isPrimaryStep
-                                ? "auto (default), moonspec-orchestrate, ..."
-                                : "optional Skill name"
-                            }
-                            onChange={(nextValue) =>
-                              updateStep(step.localId, {
-                                skillId: nextValue,
-                                skillInputContractDigest:
-                                  skillsQuery.data?.detailsById[nextValue]
-                                    ?.contractDigest || "",
-                                skillInputContractNotice: null,
-                              })
-                            }
-                          />
-                          {isPrimaryStep ? null : (
-                            <span className="small">
-                              Leave skill blank to run this step without a
-                              selected Skill.
-                            </span>
-                          )}
+                          </details>
                         </div>
-                        {selectedSkillDetail &&
-                        visibleSkillSchemaFields.length === 0 ? (
-                          <div
-                            className="notice small"
-                            data-testid={`skill-schema-fallback-${index}`}
-                          >
-                            <strong>{selectedSkillDetail.id}</strong>
-                            {selectedSkillDetail.description ? (
-                              <span>{`: ${selectedSkillDetail.description}`}</span>
-                            ) : null}
-                            <span>
-                              {" "}
-                              This Skill does not publish structured input
-                              fields.
-                            </span>
-                          </div>
-                        ) : null}
-
-                        {showSkillArgsField ? (
-                          <label
-                            className="queue-step-skill-args-field"
-                            data-skill-args-index={String(index)}
-                          >
-                            {`Step ${index + 1} Skill Args (optional JSON object)`}
-                            <textarea
-                              className="queue-step-skill-args"
-                              data-step-field="skillArgs"
-                              data-step-index={String(index)}
-                              placeholder='{"notes":"optional context"}'
-                              value={step.skillArgs}
-                              onChange={(event) =>
-                                updateStep(step.localId, {
-                                  skillArgs: event.target.value,
-                                })
-                              }
-                            />
-                          </label>
-                        ) : null}
-                        {selectedSkillDetail ? (
-                          <>
-                            {skillContractNotice ? (
-                              <p
-                                className="queue-submit-message notice pending"
-                                role="status"
-                                aria-live="polite"
-                              >
-                                {skillContractNotice}
-                              </p>
-                            ) : null}
-                            <SchemaCapabilityFields
-                              fields={visibleSkillSchemaFields}
-                              detail={selectedSkillDetail}
-                              values={step.presetInputValues}
-                              errors={step.presetInputErrors}
-                              disabled={false}
-                              repositoryOptions={repositoryOptions}
-                              branchOptions={branchOptions}
-                              onChange={(name, value) =>
-                                updateStepPresetInputValue(
-                                  step.localId,
-                                  { name },
-                                  value,
-                                )
-                              }
-                            />
-                          </>
-                        ) : null}
-                      </div>
-                    ) : null}
-
-                    {step.stepType === "preset" ? (
-                      <div
-                        className="stack segmented-control-panel"
-                        aria-label="Step Preset"
-                      >
+                      ) : (
                         <label>
-                          Preset Template
-                          <select
-                            data-step-field="presetKey"
+                          Tool Inputs (JSON object)
+                          <textarea
+                            data-step-field="toolInputs"
                             data-step-index={String(index)}
-                            value={step.presetKey}
-                            disabled={isApplyingPreset}
-                            aria-disabled={isApplyingPreset}
-                            onChange={(event) => {
-                              void handleStepPresetSelectionChange(
-                                step.localId,
-                                event.target.value,
-                              );
-                            }}
-                          >
-                            <option value="">Select preset...</option>
-                            {templateItems.map((item) => (
-                              <option key={item.key} value={item.key}>
-                                {`${item.title} (${scopeLabel(item.scope)})`}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
-                    ) : null}
-
-                    {showAdvancedStepOptions ? (
-                      <div
-                        className="grid-2"
-                        aria-label={`Step ${index + 1} runtime selection`}
-                      >
-                        <label>
-                          {`Step ${index + 1} Runtime`}
-                          <select
-                            data-step-field="runtimeMode"
-                            data-step-index={String(index)}
-                            value={step.runtimeMode}
+                            placeholder='{"issueKey":"MM-563"}'
+                            value={step.toolInputs}
                             onChange={(event) =>
                               updateStep(step.localId, {
-                                runtimeMode: event.target.value,
-                              })
-                            }
-                          >
-                            <option value="">Inherit agent runtime</option>
-                            {supportedAgentRuntimes.map((runtimeOption) => (
-                              <option key={runtimeOption} value={runtimeOption}>
-                                {formatRuntimeLabel(runtimeOption)}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>
-                          {`Step ${index + 1} Provider profile`}
-                          <input
-                            data-step-field="runtimeProviderProfile"
-                            data-step-index={String(index)}
-                            value={step.runtimeProviderProfile}
-                            placeholder="inherit workflow profile"
-                            onChange={(event) =>
-                              updateStep(step.localId, {
-                                runtimeProviderProfile: event.target.value,
+                                toolInputs: event.target.value,
                               })
                             }
                           />
                         </label>
-                        <label>
-                          {`Step ${index + 1} Model tier intent`}
-                          <input
-                            data-step-field="runtimeModelTier"
-                            data-step-index={String(index)}
-                            type="number"
-                            min="1"
-                            value={step.runtimeModelTier}
-                            placeholder={
-                              isPrimaryStep
-                                ? "inherit workflow tier"
-                                : "inherit"
-                            }
-                            onChange={(event) =>
-                              updateStep(step.localId, {
-                                runtimeModelTier: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          {`Step ${index + 1} Tier fallback`}
-                          <select
-                            data-step-field="runtimeTierFallback"
-                            data-step-index={String(index)}
-                            value={step.runtimeTierFallback}
-                            onChange={(event) =>
-                              updateStep(step.localId, {
-                                runtimeTierFallback:
-                                  event.target.value === "strict"
-                                    ? "strict"
-                                    : "clamp",
-                              })
-                            }
-                          >
-                            <option value="clamp">
-                              Clamp to configured tiers
-                            </option>
-                            <option value="strict">
-                              Reject if unavailable
-                            </option>
-                          </select>
-                        </label>
-                        {stepTierPreview ? (
-                          <div
-                            className={`runtime-command-preview${stepTierPreview.warning ? " runtime-command-preview--warning" : ""}`}
-                            aria-label={`Step ${index + 1} model tier preview`}
-                          >
-                            <span className="runtime-command-preview-label">
-                              {`Tier ${stepTierPreview.requestedTier} · ${stepTierPreview.label} · ${stepTierPreview.model} · ${stepTierPreview.effort}`}
-                            </span>
-                            {stepTierPreview.warning ? (
-                              <span className="runtime-command-preview-description">
-                                {stepTierPreview.warning}
-                              </span>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        <label>
-                          {`Step ${index + 1} Hard override model`}
-                          <input
-                            data-step-field="runtimeModel"
-                            data-step-index={String(index)}
-                            list={MODEL_OPTIONS_DATALIST_ID}
-                            value={step.runtimeModel}
-                            placeholder="runtime default"
-                            onChange={(event) =>
-                              updateStep(step.localId, {
-                                runtimeModel: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          {`Step ${index + 1} Hard override effort`}
-                          <input
-                            data-step-field="runtimeEffort"
-                            data-step-index={String(index)}
-                            list={EFFORT_OPTIONS_DATALIST_ID}
-                            value={step.runtimeEffort}
-                            placeholder="runtime default"
-                            onChange={(event) =>
-                              updateStep(step.localId, {
-                                runtimeEffort: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                    ) : null}
-
-                    <div className="stack">
-                      <div className="queue-field-heading">
-                        <label
-                          htmlFor={`queue-step-instructions-${step.localId}`}
-                        >
-                          {usesGenericInstructionsLabel(step.stepType)
-                            ? "Instructions"
-                            : `Step ${index + 1} Instructions`}
-                        </label>
-                        <JiraProvenanceChip
-                          label={`Step ${index + 1} instructions`}
-                          provenance={stepJiraProvenance[step.localId]}
-                        />
-                        {jiraIntegration?.enabled ? (
+                      )}
+                      {showJiraTransitionOptions ? (
+                        <div className="stack queue-tool-dynamic-options">
                           <button
                             type="button"
-                            className="secondary jira-browse-button"
-                            aria-label={`Browse Jira issues for Step ${index + 1} instructions`}
-                            title={`Browse Jira issues for Step ${index + 1} instructions`}
-                            onClick={() =>
-                              openJiraBrowser({
-                                kind: "step",
-                                localId: step.localId,
-                              })
-                            }
+                            className="secondary"
+                            aria-busy={Boolean(jiraTransitionState?.isLoading)}
+                            disabled={Boolean(jiraTransitionState?.isLoading)}
+                            onClick={() => void loadJiraTransitionOptions(step)}
                           >
-                            Browse Jira issue
+                            Load Jira target statuses
                           </button>
-                        ) : null}
-                      </div>
-                      <textarea
-                        id={`queue-step-instructions-${step.localId}`}
-                        className="queue-step-instructions"
-                        data-step-field="instructions"
-                        data-step-index={String(index)}
-                        placeholder={
-                          isPrimaryStep
-                            ? "Describe the workflow to execute against the repository."
-                            : "Step-specific instructions (leave blank to continue from the workflow objective)."
-                        }
-                        value={step.instructions}
-                        onChange={(event) =>
-                          handleStepInstructionsChange(
-                            step.localId,
-                            event.target.value,
-                          )
-                        }
-                      />
-                      <RuntimeCommandPreviewMessage
-                        preview={instructionPreview}
-                      />
-                      <div
-                        className="queue-step-context"
-                        aria-label={`Add to Step ${index + 1}`}
-                      >
-                        <StepAddMenu
-                          stepNumber={index + 1}
-                          attachmentPolicy={attachmentPolicy}
-                          presentCapabilityTokens={stepCapabilityTokens}
-                          onAddImage={() =>
-                            document
-                              .getElementById(
-                                `queue-step-attachments-${step.localId}`,
-                              )
-                              ?.click()
-                          }
-                          onAddCapability={(token) =>
-                            addStepCapabilities(step.localId, [token])
-                          }
-                          onAddCustomCapability={() =>
-                            promptForCustomStepCapability(step.localId)
-                          }
-                        />
-                        <StepContextBar
-                          stepNumber={index + 1}
-                          attachments={stepContextAttachments}
-                          capabilityChips={stepCapabilityChips}
-                          onRemoveCapability={(token) =>
-                            removeStepCapability(step.localId, token)
-                          }
-                        />
-                      </div>
-                      {attachmentPolicy.enabled ? (
-                        <div className="queue-step-attachments">
-                          <input
-                            id={`queue-step-attachments-${step.localId}`}
-                            className="sr-only"
-                            type="file"
-                            data-step-field="attachments"
-                            data-step-index={String(index)}
-                            accept={attachmentPolicy.allowedContentTypes.join(
-                              ",",
-                            )}
-                            multiple
-                            aria-label={attachmentFilePickerLabel(
-                              attachmentPolicy,
-                              index + 1,
-                            )}
-                            onChange={(event) => {
-                              updateStepAttachments(
-                                step.localId,
-                                Array.from(event.currentTarget.files || []),
-                              );
-                              event.currentTarget.value = "";
-                            }}
-                          />
-                          {stepAttachmentTargetError ? (
-                            <p className="notice error">
-                              {stepAttachmentTargetError}
+                          {jiraTransitionState?.error ? (
+                            <p className="notice small">
+                              {jiraTransitionState.error}
                             </p>
+                          ) : null}
+                          {jiraTransitionState?.options.length ? (
+                            <label>
+                              Jira Target Status
+                              <select
+                                value=""
+                                onChange={(event) =>
+                                  applyJiraTransitionId(
+                                    step.localId,
+                                    event.target.value,
+                                  )
+                                }
+                              >
+                                <option value="">Select returned status...</option>
+                                {jiraTransitionState.options.map((option) => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
                           ) : null}
                         </div>
                       ) : null}
                     </div>
+                  ) : null}
 
-                    {step.stepType === "preset" ? (
-                      <div
-                        className="stack queue-step-preset-options"
-                        aria-label="Step Preset Options"
-                      >
-                        {visiblePresetSchemaFields.length > 0 &&
-                        step.presetDetail ? (
-                          <SchemaCapabilityFields
-                            fields={visiblePresetSchemaFields}
-                            detail={step.presetDetail}
-                            values={step.presetInputValues}
-                            errors={step.presetInputErrors}
-                            disabled={isApplyingPreset}
-                            repositoryOptions={repositoryOptions}
-                            branchOptions={branchOptions}
-                            onChange={(name, value) =>
-                              updateStepPresetInputValue(
-                                step.localId,
-                                { name },
-                                value,
-                              )
+                  {step.stepType === "skill" ? (
+                    <div className="stack segmented-control-panel">
+                      <div className="field">
+                        <label htmlFor={`queue-step-${step.localId}-skill-id`}>
+                          Skill (optional)
+                        </label>
+                        <SkillCombobox
+                          inputId={`queue-step-${step.localId}-skill-id`}
+                          value={step.skillId}
+                          options={skillComboboxOptions}
+                          dataStepIndex={String(index)}
+                          ariaLabel={`Step ${index + 1} skill`}
+                          placeholder={
+                            isPrimaryStep
+                              ? "auto (default), moonspec-orchestrate, ..."
+                              : "optional Skill name"
+                          }
+                          onChange={(nextValue) =>
+                            updateStep(step.localId, {
+                              skillId: nextValue,
+                              skillInputContractDigest:
+                                skillsQuery.data?.detailsById[nextValue]
+                                  ?.contractDigest || "",
+                              skillInputContractNotice: null,
+                            })
+                          }
+                        />
+                        {isPrimaryStep ? null : (
+                          <span className="small">
+                            Leave skill blank to run this step without a selected Skill.
+                          </span>
+                        )}
+                      </div>
+                      {selectedSkillDetail && visibleSkillSchemaFields.length === 0 ? (
+                        <div
+                          className="notice small"
+                          data-testid={`skill-schema-fallback-${index}`}
+                        >
+                          <strong>{selectedSkillDetail.id}</strong>
+                          {selectedSkillDetail.description ? (
+                            <span>{`: ${selectedSkillDetail.description}`}</span>
+                          ) : null}
+                          <span>
+                            {" "}
+                            This Skill does not publish structured input fields.
+                          </span>
+                        </div>
+                      ) : null}
+
+                      {showSkillArgsField ? (
+                        <label
+                          className="queue-step-skill-args-field"
+                          data-skill-args-index={String(index)}
+                        >
+                          {`Step ${index + 1} Skill Args (optional JSON object)`}
+                          <textarea
+                            className="queue-step-skill-args"
+                            data-step-field="skillArgs"
+                            data-step-index={String(index)}
+                            placeholder='{"notes":"optional context"}'
+                            value={step.skillArgs}
+                            onChange={(event) =>
+                              updateStep(step.localId, {
+                                skillArgs: event.target.value,
+                              })
                             }
                           />
-                        ) : visiblePresetInputs.length > 0 ? (
-                          <div className="grid-2">
-                            {visiblePresetInputs.map((definition) => {
+                        </label>
+                      ) : null}
+                      {selectedSkillDetail ? (
+                        <>
+                          {skillContractNotice ? (
+                            <p
+                              className="queue-submit-message notice pending"
+                              role="status"
+                              aria-live="polite"
+                            >
+                              {skillContractNotice}
+                            </p>
+                          ) : null}
+                        <SchemaCapabilityFields
+                          fields={visibleSkillSchemaFields}
+                          detail={selectedSkillDetail}
+                          values={step.presetInputValues}
+                          errors={step.presetInputErrors}
+                          disabled={false}
+                          repositoryOptions={repositoryOptions}
+                          branchOptions={branchOptions}
+                          onChange={(name, value) =>
+                            updateStepPresetInputValue(
+                              step.localId,
+                              { name },
+                              value,
+                            )
+                          }
+                        />
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {step.stepType === "preset" ? (
+                    <div
+                      className="stack segmented-control-panel"
+                      aria-label="Step Preset"
+                    >
+                      <label>
+                        Preset Template
+                        <select
+                          data-step-field="presetKey"
+                          data-step-index={String(index)}
+                          value={step.presetKey}
+                          disabled={isApplyingPreset}
+                          aria-disabled={isApplyingPreset}
+                          onChange={(event) => {
+                            void handleStepPresetSelectionChange(
+                              step.localId,
+                              event.target.value,
+                            );
+                          }}
+                        >
+                          <option value="">Select preset...</option>
+                          {templateItems.map((item) => (
+                            <option key={item.key} value={item.key}>
+                              {`${item.title} (${scopeLabel(item.scope)})`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  ) : null}
+
+                  {showAdvancedStepOptions ? (
+                    <div
+                      className="grid-2"
+                      aria-label={`Step ${index + 1} runtime selection`}
+                    >
+                      <label>
+                        {`Step ${index + 1} Runtime`}
+                        <select
+                          data-step-field="runtimeMode"
+                          data-step-index={String(index)}
+                          value={step.runtimeMode}
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              runtimeMode: event.target.value,
+                            })
+                          }
+                        >
+                          <option value="">Inherit agent runtime</option>
+                          {supportedAgentRuntimes.map((runtimeOption) => (
+                            <option key={runtimeOption} value={runtimeOption}>
+                              {formatRuntimeLabel(runtimeOption)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        {`Step ${index + 1} Provider profile`}
+                        <input
+                          data-step-field="runtimeProviderProfile"
+                          data-step-index={String(index)}
+                          value={step.runtimeProviderProfile}
+                          placeholder="inherit workflow profile"
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              runtimeProviderProfile: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        {`Step ${index + 1} Model tier intent`}
+                        <input
+                          data-step-field="runtimeModelTier"
+                          data-step-index={String(index)}
+                          type="number"
+                          min="1"
+                          value={step.runtimeModelTier}
+                          placeholder={isPrimaryStep ? "inherit workflow tier" : "inherit"}
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              runtimeModelTier: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        {`Step ${index + 1} Tier fallback`}
+                        <select
+                          data-step-field="runtimeTierFallback"
+                          data-step-index={String(index)}
+                          value={step.runtimeTierFallback}
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              runtimeTierFallback:
+                                event.target.value === "strict" ? "strict" : "clamp",
+                            })
+                          }
+                        >
+                          <option value="clamp">Clamp to configured tiers</option>
+                          <option value="strict">Reject if unavailable</option>
+                        </select>
+                      </label>
+                      {stepTierPreview ? (
+                        <div
+                          className={`runtime-command-preview${stepTierPreview.warning ? " runtime-command-preview--warning" : ""}`}
+                          aria-label={`Step ${index + 1} model tier preview`}
+                        >
+                          <span className="runtime-command-preview-label">
+                            {`Tier ${stepTierPreview.requestedTier} · ${stepTierPreview.label} · ${stepTierPreview.model} · ${stepTierPreview.effort}`}
+                          </span>
+                          {stepTierPreview.warning ? (
+                            <span className="runtime-command-preview-description">
+                              {stepTierPreview.warning}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <label>
+                        {`Step ${index + 1} Hard override model`}
+                        <input
+                          data-step-field="runtimeModel"
+                          data-step-index={String(index)}
+                          list={MODEL_OPTIONS_DATALIST_ID}
+                          value={step.runtimeModel}
+                          placeholder="runtime default"
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              runtimeModel: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        {`Step ${index + 1} Hard override effort`}
+                        <input
+                          data-step-field="runtimeEffort"
+                          data-step-index={String(index)}
+                          list={EFFORT_OPTIONS_DATALIST_ID}
+                          value={step.runtimeEffort}
+                          placeholder="runtime default"
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              runtimeEffort: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+
+                  <div className="stack">
+                    <div className="queue-field-heading">
+                      <label htmlFor={`queue-step-instructions-${step.localId}`}>
+                        {usesGenericInstructionsLabel(step.stepType)
+                          ? "Instructions"
+                          : `Step ${index + 1} Instructions`}
+                      </label>
+                      <JiraProvenanceChip
+                        label={`Step ${index + 1} instructions`}
+                        provenance={stepJiraProvenance[step.localId]}
+                      />
+                      {jiraIntegration?.enabled ? (
+                        <button
+                          type="button"
+                          className="secondary jira-browse-button"
+                          aria-label={`Browse Jira issues for Step ${index + 1} instructions`}
+                          title={`Browse Jira issues for Step ${index + 1} instructions`}
+                          onClick={() =>
+                            openJiraBrowser({
+                              kind: "step",
+                              localId: step.localId,
+                            })
+                          }
+                        >
+                          Browse Jira issue
+                        </button>
+                      ) : null}
+                    </div>
+                    <textarea
+                      id={`queue-step-instructions-${step.localId}`}
+                      className="queue-step-instructions"
+                      data-step-field="instructions"
+                      data-step-index={String(index)}
+                      placeholder={
+                        isPrimaryStep
+                          ? "Describe the workflow to execute against the repository."
+                          : "Step-specific instructions (leave blank to continue from the workflow objective)."
+                      }
+                      value={step.instructions}
+                      onChange={(event) =>
+                        handleStepInstructionsChange(
+                          step.localId,
+                          event.target.value,
+                        )
+                      }
+                    />
+                    <RuntimeCommandPreviewMessage preview={instructionPreview} />
+                    <div
+                      className="queue-step-context"
+                      aria-label={`Add to Step ${index + 1}`}
+                    >
+                      <StepAddMenu
+                        stepNumber={index + 1}
+                        attachmentPolicy={attachmentPolicy}
+                        presentCapabilityTokens={stepCapabilityTokens}
+                        onAddImage={() =>
+                          document
+                            .getElementById(
+                              `queue-step-attachments-${step.localId}`,
+                            )
+                            ?.click()
+                        }
+                        onAddCapability={(token) =>
+                          addStepCapabilities(step.localId, [token])
+                        }
+                        onAddCustomCapability={() =>
+                          promptForCustomStepCapability(step.localId)
+                        }
+                      />
+                      <StepContextBar
+                        stepNumber={index + 1}
+                        attachments={stepContextAttachments}
+                        capabilityChips={stepCapabilityChips}
+                        onRemoveCapability={(token) =>
+                          removeStepCapability(step.localId, token)
+                        }
+                      />
+                    </div>
+                    {attachmentPolicy.enabled ? (
+                      <div className="queue-step-attachments">
+                        <input
+                          id={`queue-step-attachments-${step.localId}`}
+                          className="sr-only"
+                          type="file"
+                          data-step-field="attachments"
+                          data-step-index={String(index)}
+                          accept={attachmentPolicy.allowedContentTypes.join(",")}
+                          multiple
+                          aria-label={attachmentFilePickerLabel(
+                            attachmentPolicy,
+                            index + 1,
+                          )}
+                          onChange={(event) => {
+                            updateStepAttachments(
+                              step.localId,
+                              Array.from(event.currentTarget.files || []),
+                            );
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                        {stepAttachmentTargetError ? (
+                          <p className="notice error">
+                            {stepAttachmentTargetError}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {step.stepType === "preset" ? (
+                    <div
+                      className="stack queue-step-preset-options"
+                      aria-label="Step Preset Options"
+                    >
+                      {visiblePresetSchemaFields.length > 0 && step.presetDetail ? (
+                        <SchemaCapabilityFields
+                          fields={visiblePresetSchemaFields}
+                          detail={step.presetDetail}
+                          values={step.presetInputValues}
+                          errors={step.presetInputErrors}
+                          disabled={isApplyingPreset}
+                          repositoryOptions={repositoryOptions}
+                          branchOptions={branchOptions}
+                          onChange={(name, value) =>
+                            updateStepPresetInputValue(
+                              step.localId,
+                              { name },
+                              value,
+                            )
+                          }
+                        />
+                      ) : visiblePresetInputs.length > 0 ? (
+                        <div className="grid-2">
+                          {visiblePresetInputs.map((definition) => {
                               const inputId = `queue-step-${step.localId}-preset-input-${definition.name}`;
                               const value = stepTemplateInputDisplayValue(
                                 step,
@@ -13136,10 +12641,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                               );
                               if (definition.type === "enum") {
                                 return (
-                                  <label
-                                    key={definition.name}
-                                    htmlFor={inputId}
-                                  >
+                                  <label key={definition.name} htmlFor={inputId}>
                                     {definition.label}
                                     <select
                                       id={inputId}
@@ -13153,26 +12655,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                                         )
                                       }
                                     >
-                                      {(definition.options || []).map(
-                                        (option) => (
-                                          <option key={option} value={option}>
-                                            {templateEnumOptionLabel(
-                                              definition,
-                                              option,
-                                            )}
-                                          </option>
-                                        ),
-                                      )}
+                                      {(definition.options || []).map((option) => (
+                                        <option key={option} value={option}>
+                                          {templateEnumOptionLabel(
+                                            definition,
+                                            option,
+                                          )}
+                                        </option>
+                                      ))}
                                     </select>
                                   </label>
                                 );
                               }
                               if (definition.type === "boolean") {
                                 return (
-                                  <label
-                                    key={definition.name}
-                                    htmlFor={inputId}
-                                  >
+                                  <label key={definition.name} htmlFor={inputId}>
                                     {definition.label}
                                     <input
                                       id={inputId}
@@ -13195,10 +12692,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                                 definition.type === "markdown"
                               ) {
                                 return (
-                                  <label
-                                    key={definition.name}
-                                    htmlFor={inputId}
-                                  >
+                                  <label key={definition.name} htmlFor={inputId}>
                                     {definition.label}
                                     <textarea
                                       id={inputId}
@@ -13236,743 +12730,729 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                                 </label>
                               );
                             })}
-                          </div>
-                        ) : null}
-                        <button
-                          type="button"
-                          aria-disabled={isApplyingPreset || !step.presetKey}
-                          aria-busy={isApplyingPreset}
-                          title={expandStepPresetTooltip}
-                          disabled={isApplyingPreset || !step.presetKey}
-                          onClick={() => handleExpandStepPreset(step.localId)}
-                        >
-                          Expand
-                        </button>
-                        {stepPresetStatusText(step) ? (
-                          <p className="small">{stepPresetStatusText(step)}</p>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </section>
-                );
-              })}
-
-              <div className="queue-step-extension">
-                <button
-                  type="button"
-                  className="queue-step-extension-button"
-                  data-step-action="add"
-                  title="Add another workflow step"
-                  onClick={addStep}
-                >
-                  <span
-                    className="queue-step-extension-plus"
-                    aria-hidden="true"
-                  >
-                    +
-                  </span>
-                  <span>Add Step</span>
-                </button>
-              </div>
-
-              {presetCatalogEnabled && presetSaveEnabled ? (
-                <div className="stack queue-preset-management-block">
-                  <div
-                    className="actions queue-template-actions queue-preset-management-inline"
-                    aria-label="Preset Management"
-                  >
-                    <strong>Preset Management</strong>
-                    <button
-                      type="button"
-                      id="queue-template-save-current"
-                      className="queue-step-icon-button"
-                      aria-label="Save preset"
-                      title="Save the current steps as a preset"
-                      aria-busy={isSavingPreset}
-                      disabled={isSavingPreset}
-                      onClick={openPresetSaveDialog}
-                    >
-                      <SaveIcon />
-                    </button>
-                    <button
-                      type="button"
-                      id="queue-template-delete-current"
-                      className="queue-step-icon-button destructive"
-                      aria-label="Delete preset"
-                      aria-busy={isDeletingPreset}
-                      title="Delete a personal preset by name"
-                      disabled={isDeletingPreset}
-                      onClick={openPresetDeleteDialog}
-                    >
-                      <TrashIcon />
-                    </button>
-                  </div>
-                  {presetReapplyNeeded ? (
-                    <p className="small notice" id="queue-template-message">
-                      {PRESET_REAPPLY_REQUIRED_MESSAGE}
-                    </p>
-                  ) : templateMessage ? (
-                    <p className="small" id="queue-template-message">
-                      {templateMessage}
-                    </p>
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        aria-disabled={
+                          isApplyingPreset ||
+                          !step.presetKey
+                        }
+                        aria-busy={isApplyingPreset}
+                        title={expandStepPresetTooltip}
+                        disabled={
+                          isApplyingPreset ||
+                          !step.presetKey
+                        }
+                        onClick={() => handleExpandStepPreset(step.localId)}
+                      >
+                        Expand
+                      </button>
+                      {stepPresetStatusText(step) ? (
+                        <p className="small">{stepPresetStatusText(step)}</p>
+                      ) : null}
+                    </div>
                   ) : null}
-                </div>
-              ) : null}
-            </div>
-          </section>
+                </section>
+              );
+            })}
 
-          <section
-            className="stack"
-            data-canonical-create-section="Execution context"
-            aria-label="Execution context"
-          >
-            <div className={providerOptions.length > 0 ? "grid-2" : "stack"}>
-              <label>
-                Runtime
-                <select
-                  name="runtime"
-                  value={runtime}
-                  onChange={(event) => setRuntime(event.target.value)}
-                >
-                  {supportedAgentRuntimes.map((runtimeOption) => (
-                    <option key={runtimeOption} value={runtimeOption}>
-                      {formatRuntimeLabel(runtimeOption)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {providerOptions.length > 0 ? (
-                <div id="queue-provider-profile-wrap">
-                  <label>
-                    Provider profile
-                    <select
-                      name="providerProfile"
-                      value={providerProfile}
-                      onChange={(event) =>
-                        setProviderProfile(event.target.value)
-                      }
-                      // While a runtime switch refetch is in flight, `keepPreviousData`
-                      // keeps the previous runtime's profiles in `data` only so the row
-                      // layout stays stable. Those profiles do not belong to the newly
-                      // selected runtime, so the control is disabled and the stale
-                      // options are withheld to prevent selecting/submitting them.
-                      disabled={providerProfilesQuery.isPlaceholderData}
-                    >
-                      {providerProfilesQuery.isPlaceholderData ? (
-                        <option value="">Loading profiles…</option>
-                      ) : (
-                        providerOptions.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {option.isDefault
-                              ? `${option.label} (Default)`
-                              : option.label}
-                          </option>
-                        ))
-                      )}
-                    </select>
-                  </label>
-                  {providerProfilesQuery.isError ? (
-                    <p className="small" id="queue-auth-profile-hint">
-                      Failed to load provider profiles.
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="grid-2" aria-label="Workflow model tier intent">
-              <label>
-                Model tier intent
-                <input
-                  name="modelTier"
-                  type="number"
-                  min="1"
-                  value={modelTier}
-                  onChange={(event) => setModelTier(event.target.value)}
-                />
-              </label>
-              <label>
-                Tier fallback
-                <select
-                  name="tierFallback"
-                  value={tierFallback}
-                  onChange={(event) =>
-                    setTierFallback(
-                      event.target.value === "strict" ? "strict" : "clamp",
-                    )
-                  }
-                >
-                  <option value="clamp">Clamp to configured tiers</option>
-                  <option value="strict">Reject if unavailable</option>
-                </select>
-              </label>
-            </div>
-            {workflowTierPreview ? (
-              <div
-                className={`runtime-command-preview${workflowTierPreview.warning ? " runtime-command-preview--warning" : ""}`}
-                aria-label="Workflow model tier preview"
+            <div className="queue-step-extension">
+              <button
+                type="button"
+                className="queue-step-extension-button"
+                data-step-action="add"
+                title="Add another workflow step"
+                onClick={addStep}
               >
-                <span className="runtime-command-preview-label">
-                  {`Tier ${workflowTierPreview.requestedTier} · ${workflowTierPreview.label} · ${workflowTierPreview.model} · ${workflowTierPreview.effort}`}
+                <span className="queue-step-extension-plus" aria-hidden="true">
+                  +
                 </span>
-                {workflowTierPreview.warning ? (
-                  <span className="runtime-command-preview-description">
-                    {workflowTierPreview.warning}
-                  </span>
+                <span>Add Step</span>
+              </button>
+            </div>
+
+            {presetCatalogEnabled && presetSaveEnabled ? (
+              <div className="stack queue-preset-management-block">
+                <div
+                  className="actions queue-template-actions queue-preset-management-inline"
+                  aria-label="Preset Management"
+                >
+                  <strong>Preset Management</strong>
+                  <button
+                    type="button"
+                    id="queue-template-save-current"
+                    className="queue-step-icon-button"
+                    aria-label="Save preset"
+                    title="Save the current steps as a preset"
+                    aria-busy={isSavingPreset}
+                    disabled={isSavingPreset}
+                    onClick={openPresetSaveDialog}
+                  >
+                    <SaveIcon />
+                  </button>
+                  <button
+                    type="button"
+                    id="queue-template-delete-current"
+                    className="queue-step-icon-button destructive"
+                    aria-label="Delete preset"
+                    aria-busy={isDeletingPreset}
+                    title="Delete a personal preset by name"
+                    disabled={isDeletingPreset}
+                    onClick={openPresetDeleteDialog}
+                  >
+                    <TrashIcon />
+                  </button>
+                </div>
+                {presetReapplyNeeded ? (
+                  <p className="small notice" id="queue-template-message">
+                    {PRESET_REAPPLY_REQUIRED_MESSAGE}
+                  </p>
+                ) : templateMessage ? (
+                  <p className="small" id="queue-template-message">
+                    {templateMessage}
+                  </p>
                 ) : null}
               </div>
             ) : null}
 
-            <div className="grid-2">
-              <label>
-                Hard override model
-                <input
-                  name="model"
-                  list={MODEL_OPTIONS_DATALIST_ID}
-                  value={model}
-                  placeholder="runtime default"
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    setModel(next);
-                    setModelManualOverride(next !== "");
-                  }}
-                />
-              </label>
-              <label>
-                Hard override effort
-                <input
-                  name="effort"
-                  list={EFFORT_OPTIONS_DATALIST_ID}
-                  value={effort}
-                  placeholder="runtime default"
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    setEffort(next);
-                    setEffortManualOverride(next !== "");
-                  }}
-                />
-              </label>
-            </div>
-          </section>
+          </div>
+        </section>
 
-          <section
-            className="stack"
-            data-canonical-create-section="Execution controls"
-            aria-label="Execution controls"
-          >
-            {showAdvancedStepOptions ? (
-              <div className="grid-2" data-runtime-visibility="worker">
-                <label>
-                  Priority
-                  <div className="priority-slider-container">
-                    <input
-                      type="range"
-                      name="priority"
-                      min="-10"
-                      max="10"
-                      value={priority}
-                      onChange={(event) =>
-                        setPriority(Number(event.target.value))
-                      }
-                    />
-                    <output>{priority}</output>
-                  </div>
-                </label>
-                <label>
-                  Max Attempts
-                  <input
-                    type="number"
-                    min="1"
-                    name="maxAttempts"
-                    value={maxAttempts}
-                    onChange={(event) =>
-                      setMaxAttempts(Number(event.target.value))
-                    }
-                  />
-                </label>
-              </div>
-            ) : null}
-
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                name="proposeTasks"
-                checked={proposeTasks}
-                onChange={(event) => setProposeTasks(event.target.checked)}
-              />
-              Propose follow-up work
-            </label>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={produceReport}
-                aria-label="Produce report artifact"
-                onChange={(event) => setProduceReport(event.target.checked)}
-              />
-              Report
-            </label>
-            <div className="queue-advanced-row">
-              <label className="checkbox queue-advanced-checkbox">
-                <input
-                  type="checkbox"
-                  checked={showAdvancedStepOptions}
-                  onChange={(event) => {
-                    setShowAdvancedStepOptions(event.target.checked);
-                    updateDashboardPreferences({
-                      createExpertMode: event.target.checked,
-                    });
-                  }}
-                />
-                Advanced mode
-              </label>
-              <button
-                type="button"
-                className="queue-step-icon-button queue-info-toggle queue-advanced-info-toggle"
-                aria-label="Advanced mode info"
-                aria-expanded={advancedInfoOpen}
-                aria-controls="queue-advanced-info-panel"
-                title="About advanced mode"
-                onClick={() => setAdvancedInfoOpen((open) => !open)}
-              >
-                <InfoIcon />
-              </button>
-            </div>
-            {advancedInfoOpen ? (
-              <div
-                id="queue-advanced-info-panel"
-                className="notice queue-advanced-info-panel"
-                role="note"
-              >
-                <p className="small">
-                  Adds skill args and required capabilities to each step.
-                  Optional worker routing overrides; runtime, publish mode,
-                  skills, and presets already add the common capabilities
-                  automatically.
-                </p>
-              </div>
-            ) : null}
-          </section>
-
-          {pageMode.mode === "create" ? (
-            <section
-              className="stack"
-              id="schedule-panel"
-              data-canonical-create-section="Schedule"
-              aria-label="Schedule"
+        <section
+          className="stack"
+          data-canonical-create-section="Execution context"
+          aria-label="Execution context"
+        >
+        <div className={providerOptions.length > 0 ? "grid-2" : "stack"}>
+          <label>
+            Runtime
+            <select
+              name="runtime"
+              value={runtime}
+              onChange={(event) => setRuntime(event.target.value)}
             >
-              <strong>Schedule</strong>
-              <div className="stack">
-                <label>
-                  Schedule Mode
-                  <select
-                    name="scheduleMode"
-                    id="schedule-mode-select"
-                    value={scheduleMode}
-                    onChange={(event) =>
-                      setScheduleMode(event.target.value as ScheduleMode)
-                    }
-                  >
-                    <option value="immediate">Immediate</option>
-                    <option value="once">
-                      Deferred (run once at a specific time)
-                    </option>
-                    <option value="deferred_minutes">
-                      Deferred (run in N minutes)
-                    </option>
-                    <option value="recurring">
-                      Recurring (create a cron schedule)
-                    </option>
-                  </select>
-                </label>
+              {supportedAgentRuntimes.map((runtimeOption) => (
+                <option key={runtimeOption} value={runtimeOption}>
+                  {formatRuntimeLabel(runtimeOption)}
+                </option>
+              ))}
+            </select>
+          </label>
 
-                <div
-                  id="schedule-once-fields"
-                  className={scheduleMode === "once" ? "" : "hidden"}
+          {providerOptions.length > 0 ? (
+            <div id="queue-provider-profile-wrap">
+              <label>
+                Provider profile
+                <select
+                  name="providerProfile"
+                  value={providerProfile}
+                  onChange={(event) => setProviderProfile(event.target.value)}
+                  // While a runtime switch refetch is in flight, `keepPreviousData`
+                  // keeps the previous runtime's profiles in `data` only so the row
+                  // layout stays stable. Those profiles do not belong to the newly
+                  // selected runtime, so the control is disabled and the stale
+                  // options are withheld to prevent selecting/submitting them.
+                  disabled={providerProfilesQuery.isPlaceholderData}
                 >
-                  <label>
-                    Scheduled For
-                    <input
-                      type="datetime-local"
-                      name="scheduledFor"
-                      id="schedule-datetime"
-                      value={scheduledFor}
-                      onChange={(event) => setScheduledFor(event.target.value)}
-                    />
-                  </label>
-                </div>
-
-                <div
-                  id="schedule-deferred-minutes-fields"
-                  className={
-                    scheduleMode === "deferred_minutes" ? "" : "hidden"
-                  }
-                >
-                  <label>
-                    Minutes from now
-                    <input
-                      type="number"
-                      name="scheduleDeferredMinutes"
-                      min="1"
-                      max="525600"
-                      step="1"
-                      placeholder="e.g. 15"
-                      value={scheduleDeferredMinutes}
-                      onChange={(event) =>
-                        setScheduleDeferredMinutes(event.target.value)
-                      }
-                    />
-                  </label>
-                </div>
-
-                <div
-                  id="schedule-recurring-fields"
-                  className={scheduleMode === "recurring" ? "stack" : "hidden"}
-                >
-                  <label>
-                    Cron Expression
-                    <input
-                      name="scheduleCron"
-                      placeholder="*/30 * * * *"
-                      value={scheduleCron}
-                      onChange={(event) => setScheduleCron(event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Timezone
-                    <input
-                      name="scheduleTimezone"
-                      placeholder="UTC"
-                      value={scheduleTimezone}
-                      onChange={(event) =>
-                        setScheduleTimezone(event.target.value)
-                      }
-                    />
-                  </label>
-                  <label>
-                    Schedule Name
-                    <input
-                      name="scheduleName"
-                      placeholder="My recurring workflow"
-                      value={scheduleName}
-                      onChange={(event) => setScheduleName(event.target.value)}
-                    />
-                  </label>
-                </div>
-              </div>
-            </section>
-          ) : null}
-
-          <section
-            className="stack"
-            data-canonical-create-section="Dependencies"
-            aria-label="Dependencies"
-          >
-            <div className="queue-dependencies-heading">
-              <strong>Dependencies</strong>
-              <button
-                type="button"
-                className="queue-step-icon-button queue-info-toggle queue-dependencies-info-toggle"
-                aria-label="Dependencies info"
-                aria-expanded={dependencyInfoOpen}
-                aria-controls="queue-dependencies-info-panel"
-                title="About dependencies"
-                onClick={() => setDependencyInfoOpen((open) => !open)}
-              >
-                <InfoIcon />
-              </button>
-            </div>
-            {dependencyInfoOpen ? (
-              <div
-                id="queue-dependencies-info-panel"
-                className="notice queue-dependencies-info-panel"
-                role="note"
-              >
-                <p className="small">
-                  Add up to {DEPENDENCY_LIMIT} existing{" "}
-                  <code>MoonMind.UserWorkflow</code> prerequisites. The new run
-                  stays blocked until each prerequisite finishes in{" "}
-                  <code>completed</code> state.
-                </p>
-                <p className="small">
-                  Direct dependencies only. The new run stays blocked while a
-                  prerequisite is running, failed, canceled, terminated, timed
-                  out, or unresolvable, and unblocks once the prerequisite
-                  completes successfully. Cancel this run or bypass the
-                  dependency to proceed without that prerequisite.
-                </p>
-                <p className="small">
-                  {dependencyOptionsQuery.isLoading
-                    ? "Loading recent runs..."
-                    : dependencyOptionsQuery.isError
-                      ? "Failed to load recent runs. You can still start the workflow without dependencies, or try refreshing."
-                      : `${availableDependencyOptions.length} recent runs available.`}
-                </p>
-              </div>
-            ) : null}
-            <label htmlFor="queue-dependency-picker">
-              Prerequisite
-              <select
-                id="queue-dependency-picker"
-                value={selectedDependencyWorkflowId}
-                onChange={(event) => {
-                  const workflowId = event.target.value;
-                  if (workflowId) {
-                    addDependency(workflowId);
-                  } else {
-                    setSelectedDependencyWorkflowId("");
-                    setDependencyMessage(null);
-                  }
-                }}
-              >
-                <option value="">Select prerequisite to add...</option>
-                {availableDependencyOptions.map((item) => (
-                  <option
-                    key={dependencyWorkflowId(item)}
-                    value={dependencyWorkflowId(item)}
-                  >
-                    {`${item.title} (${dependencyWorkflowId(item)})`}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {selectedDependencies.length > 0 ? (
-              <ul className="list" id="queue-dependency-list">
-                {selectedDependencies.map((workflowId) => {
-                  const match = (dependencyOptionsQuery.data || []).find(
-                    (item) => dependencyWorkflowId(item) === workflowId,
-                  );
-                  return (
-                    <li key={workflowId}>
-                      <span>
-                        <strong>{match?.title || workflowId}</strong>{" "}
-                        <code>{workflowId}</code>
-                      </span>
-                      <button
-                        type="button"
-                        className="queue-step-icon-button destructive"
-                        aria-label={`Remove prerequisite ${workflowId}`}
-                        title={`Remove prerequisite ${workflowId}`}
-                        onClick={() => removeDependency(workflowId)}
-                      >
-                        <CloseIcon />
-                        <span className="sr-only">{`Remove prerequisite ${workflowId}`}</span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : null}
-            {dependencyMessage ? (
-              <p className="notice error">{dependencyMessage}</p>
-            ) : null}
-          </section>
-
-          <section
-            className="stack"
-            data-canonical-create-section="Submit"
-            aria-label="Submit"
-          >
-            {submitMessage && submitErrorDetail ? (
-              <DashboardErrorDetails
-                className="queue-submit-message"
-                message={submitMessage}
-                endpoint={submitErrorDetail.endpoint}
-                status={submitErrorDetail.status}
-                requestId={submitErrorDetail.requestId}
-                rawError={submitErrorDetail.rawError}
-              />
-            ) : submitMessage ? (
-              <p
-                id="queue-submit-message"
-                role={submitMessageTone === "error" ? "alert" : "status"}
-                aria-live={
-                  submitMessageTone === "error" ? "assertive" : "polite"
-                }
-                className={
-                  submitMessageTone === "pending"
-                    ? "queue-submit-message notice pending"
-                    : submitMessageTone === "ok"
-                      ? "queue-submit-message notice ok"
-                      : "queue-submit-message notice error"
-                }
-              >
-                {submitMessage}
-              </p>
-            ) : null}
-            <div
-              className="queue-floating-bar queue-floating-bar--liquid-glass queue-step-actions queue-step-submit-actions"
-              role="group"
-              aria-label="Workflow submission controls"
-            >
-              {branchStatusMessage ? (
-                <p
-                  className={
-                    branchOptionsQuery.isError || selectedBranchIsStale
-                      ? "queue-authoring-controls-status notice error"
-                      : "queue-authoring-controls-status small"
-                  }
-                >
-                  {branchStatusMessage}
+                  {providerProfilesQuery.isPlaceholderData ? (
+                    <option value="">Loading profiles…</option>
+                  ) : (
+                    providerOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.isDefault
+                          ? `${option.label} (Default)`
+                          : option.label}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+              {providerProfilesQuery.isError ? (
+                <p className="small" id="queue-auth-profile-hint">
+                  Failed to load provider profiles.
                 </p>
               ) : null}
-              <div className="queue-floating-bar-row">
-                <div
-                  className="queue-inline-selector queue-inline-selector--repo"
-                  title={repositoryTooltip}
-                >
-                  <RepoIcon />
-                  <input
-                    name="repository"
-                    aria-label="GitHub Repo"
-                    title={repositoryTooltip}
-                    list={REPOSITORY_OPTIONS_DATALIST_ID}
-                    value={repository}
-                    placeholder="owner/repo"
-                    onChange={(event) =>
-                      handleRepositoryChange(event.target.value)
-                    }
-                  />
-                </div>
-                <div
-                  className="queue-inline-selector queue-inline-selector--branch"
-                  title={branchTooltip}
-                >
-                  <BranchIcon />
-                  <input
-                    name="branch"
-                    aria-label="Branch"
-                    title={branchTooltip}
-                    list={BRANCH_OPTIONS_DATALIST_ID}
-                    value={branch}
-                    placeholder={
-                      branchOptionsQuery.isLoading
-                        ? "Loading branches..."
-                        : "Branch"
-                    }
-                    disabled={branchControlDisabled}
-                    onChange={(event) => {
-                      setBranchTouched(true);
-                      setBranch(event.target.value);
-                    }}
-                  />
-                </div>
-                <div
-                  className="queue-inline-selector queue-inline-selector--publish"
-                  title={publishModeTooltip}
-                >
-                  <PublishIcon />
-                  <select
-                    name="publishMode"
-                    aria-label="Publish Mode"
-                    title={publishModeTooltip}
-                    value={publishMode}
-                    onChange={(event) => setPublishMode(event.target.value)}
-                  >
-                    <option
-                      value="auto"
-                      disabled={!autoPublishAvailable}
-                      title="Auto — selected skill decides"
-                    >
-                      Auto
-                    </option>
-                    <option value="none">None</option>
-                    <option value="branch" disabled={!mergeAutomationAvailable}>
-                      Branch
-                    </option>
-                    <option value="pr" disabled={!mergeAutomationAvailable}>
-                      PR
-                    </option>
-                    <option
-                      value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}
-                      disabled={!mergeAutomationAvailable}
-                    >
-                      PR with Merge Automation
-                    </option>
-                  </select>
-                </div>
-                <button
-                  type="submit"
-                  ref={submitButtonRef}
-                  className={
-                    showPrimaryCtaArrow
-                      ? `queue-submit-primary queue-submit-primary--icon${
-                          isSubmitArrowExiting
-                            ? " queue-submit-primary--arrow-exit"
-                            : ""
-                        }`
-                      : "queue-submit-primary queue-submit-primary--with-arrow"
-                  }
-                  disabled={isTemporalFormBlocked}
-                  aria-disabled={isSubmitting || isTemporalFormBlocked}
-                  aria-busy={isSubmitting}
-                  aria-label={primaryCta}
-                  title={primaryCtaTooltip}
-                  onPointerDown={(event) => {
-                    if (event.button !== 0) return;
-                    if (isTemporalFormBlocked) return;
-                    const rect =
-                      submitButtonRef.current?.getBoundingClientRect() ?? null;
-                    setSubmitRippleRect(rect);
-                    setSubmitRippleKey((value) => value + 1);
-                    setIsSubmitArrowExiting(true);
-                    scheduleSubmitArrowExitClear();
-                  }}
-                >
-                  {showPrimaryCtaArrow ? (
-                    <span
-                      aria-hidden="true"
-                      className="queue-submit-primary-arrow"
-                      data-submit-arrow="right"
-                      onAnimationEnd={clearSubmitArrowExit}
-                    >
-                      <span
-                        className="queue-submit-primary-arrow-glyph"
-                        data-submit-icon="arrow"
-                      >
-                        <ArrowRightIcon />
-                      </span>
-                      <span
-                        className="queue-submit-primary-arrow-glyph queue-submit-primary-arrow-glyph--check"
-                        data-submit-icon="check"
-                      >
-                        <CheckIcon />
-                      </span>
-                    </span>
-                  ) : (
-                    <span>{primaryCta}</span>
-                  )}
-                </button>
-                {showPrimaryCtaArrow &&
-                submitRippleKey > 0 &&
-                submitRippleRect &&
-                typeof document !== "undefined"
-                  ? createPortal(
-                      <span
-                        key={submitRippleKey}
-                        aria-hidden="true"
-                        style={{
-                          position: "fixed",
-                          top: submitRippleRect.top,
-                          left: submitRippleRect.left,
-                          width: submitRippleRect.width,
-                          height: submitRippleRect.height,
-                          pointerEvents: "none",
-                          borderRadius: 999,
-                          zIndex: 41,
-                        }}
-                      >
-                        <span
-                          className="queue-submit-primary-ripple"
-                          onAnimationEnd={() => setSubmitRippleKey(0)}
-                        />
-                      </span>,
-                      document.body,
-                    )
-                  : null}
-              </div>
             </div>
-          </section>
+          ) : null}
+        </div>
+
+        <div className="grid-2" aria-label="Workflow model tier intent">
+          <label>
+            Model tier intent
+            <input
+              name="modelTier"
+              type="number"
+              min="1"
+              value={modelTier}
+              onChange={(event) => setModelTier(event.target.value)}
+            />
+          </label>
+          <label>
+            Tier fallback
+            <select
+              name="tierFallback"
+              value={tierFallback}
+              onChange={(event) =>
+                setTierFallback(event.target.value === "strict" ? "strict" : "clamp")
+              }
+            >
+              <option value="clamp">Clamp to configured tiers</option>
+              <option value="strict">Reject if unavailable</option>
+            </select>
+          </label>
+        </div>
+        {workflowTierPreview ? (
+          <div
+            className={`runtime-command-preview${workflowTierPreview.warning ? " runtime-command-preview--warning" : ""}`}
+            aria-label="Workflow model tier preview"
+          >
+            <span className="runtime-command-preview-label">
+              {`Tier ${workflowTierPreview.requestedTier} · ${workflowTierPreview.label} · ${workflowTierPreview.model} · ${workflowTierPreview.effort}`}
+            </span>
+            {workflowTierPreview.warning ? (
+              <span className="runtime-command-preview-description">
+                {workflowTierPreview.warning}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="grid-2">
+          <label>
+            Hard override model
+            <input
+              name="model"
+              list={MODEL_OPTIONS_DATALIST_ID}
+              value={model}
+              placeholder="runtime default"
+              onChange={(event) => {
+                const next = event.target.value;
+                setModel(next);
+                setModelManualOverride(next !== "");
+              }}
+            />
+          </label>
+          <label>
+            Hard override effort
+            <input
+              name="effort"
+              list={EFFORT_OPTIONS_DATALIST_ID}
+              value={effort}
+              placeholder="runtime default"
+              onChange={(event) => {
+                const next = event.target.value;
+                setEffort(next);
+                setEffortManualOverride(next !== "");
+              }}
+            />
+          </label>
+        </div>
+
+        </section>
+
+        <section
+          className="stack"
+          data-canonical-create-section="Execution controls"
+          aria-label="Execution controls"
+        >
+        {showAdvancedStepOptions ? (
+          <div className="grid-2" data-runtime-visibility="worker">
+            <label>
+              Priority
+              <div className="priority-slider-container">
+                <input
+                  type="range"
+                  name="priority"
+                  min="-10"
+                  max="10"
+                  value={priority}
+                  onChange={(event) => setPriority(Number(event.target.value))}
+                />
+                <output>{priority}</output>
+              </div>
+            </label>
+            <label>
+              Max Attempts
+              <input
+                type="number"
+                min="1"
+                name="maxAttempts"
+                value={maxAttempts}
+                onChange={(event) => setMaxAttempts(Number(event.target.value))}
+              />
+            </label>
+          </div>
+        ) : null}
+
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            name="proposeTasks"
+            checked={proposeTasks}
+            onChange={(event) => setProposeTasks(event.target.checked)}
+          />
+          Propose follow-up work
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={produceReport}
+            aria-label="Produce report artifact"
+            onChange={(event) => setProduceReport(event.target.checked)}
+          />
+          Report
+        </label>
+        <div className="queue-advanced-row">
+          <label className="checkbox queue-advanced-checkbox">
+            <input
+              type="checkbox"
+              checked={showAdvancedStepOptions}
+              onChange={(event) => {
+                setShowAdvancedStepOptions(event.target.checked);
+                updateDashboardPreferences({
+                  createExpertMode: event.target.checked,
+                });
+              }}
+            />
+            Advanced mode
+          </label>
+          <button
+            type="button"
+            className="queue-step-icon-button queue-info-toggle queue-advanced-info-toggle"
+            aria-label="Advanced mode info"
+            aria-expanded={advancedInfoOpen}
+            aria-controls="queue-advanced-info-panel"
+            title="About advanced mode"
+            onClick={() => setAdvancedInfoOpen((open) => !open)}
+          >
+            <InfoIcon />
+          </button>
+        </div>
+        {advancedInfoOpen ? (
+          <div
+            id="queue-advanced-info-panel"
+            className="notice queue-advanced-info-panel"
+            role="note"
+          >
+            <p className="small">
+              Adds skill args and required capabilities to each step. Optional
+              worker routing overrides; runtime, publish mode, skills, and
+              presets already add the common capabilities automatically.
+            </p>
+          </div>
+        ) : null}
+        </section>
+
+        {pageMode.mode === "create" ? (
+        <section
+          className="stack"
+          id="schedule-panel"
+          data-canonical-create-section="Schedule"
+          aria-label="Schedule"
+        >
+          <strong>Schedule</strong>
+          <div className="stack">
+            <label>
+              Schedule Mode
+              <select
+                name="scheduleMode"
+                id="schedule-mode-select"
+                value={scheduleMode}
+                onChange={(event) =>
+                  setScheduleMode(event.target.value as ScheduleMode)
+                }
+              >
+                <option value="immediate">Immediate</option>
+                <option value="once">
+                  Deferred (run once at a specific time)
+                </option>
+                <option value="deferred_minutes">
+                  Deferred (run in N minutes)
+                </option>
+                <option value="recurring">
+                  Recurring (create a cron schedule)
+                </option>
+              </select>
+            </label>
+
+            <div
+              id="schedule-once-fields"
+              className={scheduleMode === "once" ? "" : "hidden"}
+            >
+              <label>
+                Scheduled For
+                <input
+                  type="datetime-local"
+                  name="scheduledFor"
+                  id="schedule-datetime"
+                  value={scheduledFor}
+                  onChange={(event) => setScheduledFor(event.target.value)}
+                />
+              </label>
+            </div>
+
+            <div
+              id="schedule-deferred-minutes-fields"
+              className={scheduleMode === "deferred_minutes" ? "" : "hidden"}
+            >
+              <label>
+                Minutes from now
+                <input
+                  type="number"
+                  name="scheduleDeferredMinutes"
+                  min="1"
+                  max="525600"
+                  step="1"
+                  placeholder="e.g. 15"
+                  value={scheduleDeferredMinutes}
+                  onChange={(event) =>
+                    setScheduleDeferredMinutes(event.target.value)
+                  }
+                />
+              </label>
+            </div>
+
+            <div
+              id="schedule-recurring-fields"
+              className={scheduleMode === "recurring" ? "stack" : "hidden"}
+            >
+              <label>
+                Cron Expression
+                <input
+                  name="scheduleCron"
+                  placeholder="*/30 * * * *"
+                  value={scheduleCron}
+                  onChange={(event) => setScheduleCron(event.target.value)}
+                />
+              </label>
+              <label>
+                Timezone
+                <input
+                  name="scheduleTimezone"
+                  placeholder="UTC"
+                  value={scheduleTimezone}
+                  onChange={(event) => setScheduleTimezone(event.target.value)}
+                />
+              </label>
+              <label>
+                Schedule Name
+                <input
+                  name="scheduleName"
+                  placeholder="My recurring workflow"
+                  value={scheduleName}
+                  onChange={(event) => setScheduleName(event.target.value)}
+                />
+              </label>
+            </div>
+          </div>
+        </section>
+        ) : null}
+
+        <section
+          className="stack"
+          data-canonical-create-section="Dependencies"
+          aria-label="Dependencies"
+        >
+          <div className="queue-dependencies-heading">
+            <strong>Dependencies</strong>
+            <button
+              type="button"
+              className="queue-step-icon-button queue-info-toggle queue-dependencies-info-toggle"
+              aria-label="Dependencies info"
+              aria-expanded={dependencyInfoOpen}
+              aria-controls="queue-dependencies-info-panel"
+              title="About dependencies"
+              onClick={() => setDependencyInfoOpen((open) => !open)}
+            >
+              <InfoIcon />
+            </button>
+          </div>
+          {dependencyInfoOpen ? (
+            <div
+              id="queue-dependencies-info-panel"
+              className="notice queue-dependencies-info-panel"
+              role="note"
+            >
+              <p className="small">
+                Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.UserWorkflow</code>{" "}
+                prerequisites. The new run stays blocked until each
+                prerequisite finishes in <code>completed</code> state.
+              </p>
+              <p className="small">
+                Direct dependencies only. The new run stays blocked while a
+                prerequisite is running, failed, canceled, terminated, timed
+                out, or unresolvable, and unblocks once the prerequisite
+                completes successfully. Cancel this run or bypass the
+                dependency to proceed without that prerequisite.
+              </p>
+              <p className="small">
+                {dependencyOptionsQuery.isLoading
+                  ? "Loading recent runs..."
+                  : dependencyOptionsQuery.isError
+                    ? "Failed to load recent runs. You can still start the workflow without dependencies, or try refreshing."
+                    : `${availableDependencyOptions.length} recent runs available.`}
+              </p>
+            </div>
+          ) : null}
+          <label htmlFor="queue-dependency-picker">
+            Prerequisite
+            <select
+              id="queue-dependency-picker"
+              value={selectedDependencyWorkflowId}
+              onChange={(event) => {
+                const workflowId = event.target.value;
+                if (workflowId) {
+                  addDependency(workflowId);
+                } else {
+                  setSelectedDependencyWorkflowId("");
+                  setDependencyMessage(null);
+                }
+              }}
+            >
+              <option value="">Select prerequisite to add...</option>
+              {availableDependencyOptions.map((item) => (
+                <option key={dependencyWorkflowId(item)} value={dependencyWorkflowId(item)}>
+                  {`${item.title} (${dependencyWorkflowId(item)})`}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedDependencies.length > 0 ? (
+            <ul className="list" id="queue-dependency-list">
+              {selectedDependencies.map((workflowId) => {
+                const match = (dependencyOptionsQuery.data || []).find(
+                  (item) => dependencyWorkflowId(item) === workflowId,
+                );
+                return (
+                  <li key={workflowId}>
+                    <span>
+                      <strong>{match?.title || workflowId}</strong>{" "}
+                      <code>{workflowId}</code>
+                    </span>
+                    <button
+                      type="button"
+                      className="queue-step-icon-button destructive"
+                      aria-label={`Remove prerequisite ${workflowId}`}
+                      title={`Remove prerequisite ${workflowId}`}
+                      onClick={() => removeDependency(workflowId)}
+                    >
+                      <CloseIcon />
+                      <span className="sr-only">{`Remove prerequisite ${workflowId}`}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          {dependencyMessage ? (
+            <p className="notice error">{dependencyMessage}</p>
+          ) : null}
+        </section>
+
+        <section
+          className="stack"
+          data-canonical-create-section="Submit"
+          aria-label="Submit"
+        >
+        {submitMessage && submitErrorDetail ? (
+          <DashboardErrorDetails
+            className="queue-submit-message"
+            message={submitMessage}
+            endpoint={submitErrorDetail.endpoint}
+            status={submitErrorDetail.status}
+            requestId={submitErrorDetail.requestId}
+            rawError={submitErrorDetail.rawError}
+          />
+        ) : submitMessage ? (
+          <p
+            id="queue-submit-message"
+            role={submitMessageTone === "error" ? "alert" : "status"}
+            aria-live={submitMessageTone === "error" ? "assertive" : "polite"}
+            className={
+              submitMessageTone === "pending"
+                ? "queue-submit-message notice pending"
+                : submitMessageTone === "ok"
+                  ? "queue-submit-message notice ok"
+                  : "queue-submit-message notice error"
+            }
+          >
+            {submitMessage}
+          </p>
+        ) : null}
+        <div
+          className="queue-floating-bar queue-floating-bar--liquid-glass queue-step-actions queue-step-submit-actions"
+          role="group"
+          aria-label="Workflow submission controls"
+        >
+          {branchStatusMessage ? (
+            <p
+              className={
+                branchOptionsQuery.isError || selectedBranchIsStale
+                  ? "queue-authoring-controls-status notice error"
+                  : "queue-authoring-controls-status small"
+              }
+            >
+              {branchStatusMessage}
+            </p>
+          ) : null}
+          <div className="queue-floating-bar-row">
+            <div
+              className="queue-inline-selector queue-inline-selector--repo"
+              title={repositoryTooltip}
+            >
+              <RepoIcon />
+              <input
+                name="repository"
+                aria-label="GitHub Repo"
+                title={repositoryTooltip}
+                list={REPOSITORY_OPTIONS_DATALIST_ID}
+                value={repository}
+                placeholder="owner/repo"
+                onChange={(event) =>
+                  handleRepositoryChange(event.target.value)
+                }
+              />
+            </div>
+            <div
+              className="queue-inline-selector queue-inline-selector--branch"
+              title={branchTooltip}
+            >
+              <BranchIcon />
+              <input
+                name="branch"
+                aria-label="Branch"
+                title={branchTooltip}
+                list={BRANCH_OPTIONS_DATALIST_ID}
+                value={branch}
+                placeholder={
+                  branchOptionsQuery.isLoading
+                    ? "Loading branches..."
+                    : "Branch"
+                }
+                disabled={branchControlDisabled}
+                onChange={(event) => {
+                  setBranchTouched(true);
+                  setBranch(event.target.value);
+                }}
+              />
+            </div>
+            <div
+              className="queue-inline-selector queue-inline-selector--publish"
+              title={publishModeTooltip}
+            >
+              <PublishIcon />
+              <select
+                name="publishMode"
+                aria-label="Publish Mode"
+                title={publishModeTooltip}
+                value={publishMode}
+                onChange={(event) => setPublishMode(event.target.value)}
+              >
+                <option
+                  value="auto"
+                  disabled={!autoPublishAvailable}
+                  title="Auto — selected skill decides"
+                >
+                  Auto
+                </option>
+                <option value="none">None</option>
+                <option value="branch" disabled={!mergeAutomationAvailable}>
+                  Branch
+                </option>
+                <option value="pr" disabled={!mergeAutomationAvailable}>
+                  PR
+                </option>
+                <option
+                  value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}
+                  disabled={!mergeAutomationAvailable}
+                >
+                  PR with Merge Automation
+                </option>
+              </select>
+            </div>
+            <button
+              type="submit"
+              ref={submitButtonRef}
+              className={
+                showPrimaryCtaArrow
+                  ? `queue-submit-primary queue-submit-primary--icon${
+                      isSubmitArrowExiting
+                        ? " queue-submit-primary--arrow-exit"
+                        : ""
+                    }`
+                  : "queue-submit-primary queue-submit-primary--with-arrow"
+              }
+              disabled={isTemporalFormBlocked}
+              aria-disabled={isSubmitting || isTemporalFormBlocked}
+              aria-busy={isSubmitting}
+              aria-label={primaryCta}
+              title={primaryCtaTooltip}
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                if (isTemporalFormBlocked) return;
+                const rect =
+                  submitButtonRef.current?.getBoundingClientRect() ?? null;
+                setSubmitRippleRect(rect);
+                setSubmitRippleKey((value) => value + 1);
+                setIsSubmitArrowExiting(true);
+                scheduleSubmitArrowExitClear();
+              }}
+            >
+              {showPrimaryCtaArrow ? (
+                <span
+                  aria-hidden="true"
+                  className="queue-submit-primary-arrow"
+                  data-submit-arrow="right"
+                  onAnimationEnd={clearSubmitArrowExit}
+                >
+                  <span
+                    className="queue-submit-primary-arrow-glyph"
+                    data-submit-icon="arrow"
+                  >
+                    <ArrowRightIcon />
+                  </span>
+                  <span
+                    className="queue-submit-primary-arrow-glyph queue-submit-primary-arrow-glyph--check"
+                    data-submit-icon="check"
+                  >
+                    <CheckIcon />
+                  </span>
+                </span>
+              ) : (
+                <span>{primaryCta}</span>
+              )}
+            </button>
+            {showPrimaryCtaArrow &&
+            submitRippleKey > 0 &&
+            submitRippleRect &&
+            typeof document !== "undefined"
+              ? createPortal(
+                  <span
+                    key={submitRippleKey}
+                    aria-hidden="true"
+                    style={{
+                      position: "fixed",
+                      top: submitRippleRect.top,
+                      left: submitRippleRect.left,
+                      width: submitRippleRect.width,
+                      height: submitRippleRect.height,
+                      pointerEvents: "none",
+                      borderRadius: 999,
+                      zIndex: 41,
+                    }}
+                  >
+                    <span
+                      className="queue-submit-primary-ripple"
+                      onAnimationEnd={() => setSubmitRippleKey(0)}
+                    />
+                  </span>,
+                  document.body,
+                )
+              : null}
+          </div>
+        </div>
+        </section>
         </fieldset>
       </form>
       {presetDialogMode ? (
@@ -13985,7 +13465,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           >
             <div className="queue-step-header">
               <h3 id="queue-preset-dialog-title">
-                {presetDialogMode === "save" ? "Save preset" : "Delete preset"}
+                {presetDialogMode === "save"
+                  ? "Save preset"
+                  : "Delete preset"}
               </h3>
               <button
                 type="button"
@@ -14043,7 +13525,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     : "Confirm delete preset"
                 }
                 title={
-                  presetDialogMode === "save" ? "Save preset" : "Delete preset"
+                  presetDialogMode === "save"
+                    ? "Save preset"
+                    : "Delete preset"
                 }
                 disabled={!presetDialogName.trim()}
                 onClick={() => {
@@ -14073,18 +13557,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   );
 }
 
-function WorkflowStartPageWithRouterLocation({
-  payload,
-}: {
-  payload: BootPayload;
-}) {
+function WorkflowStartPageWithRouterLocation({ payload }: { payload: BootPayload }) {
   const { search: searchString } = useLocation();
-  return (
-    <WorkflowStartPageWithSearch
-      payload={payload}
-      searchString={searchString}
-    />
-  );
+  return <WorkflowStartPageWithSearch payload={payload} searchString={searchString} />;
 }
 
 function WorkflowStartPageWithSearch({
@@ -14103,9 +13578,8 @@ function WorkflowStartPageWithSearch({
     return <WorkflowStartPageContent payload={payload} />;
   }
   const cfg = readWorkflowStartDashboardConfig(payload);
-  const sidebarVisible =
-    displayMode === "sidebar" &&
-    cfg?.features?.temporalDashboard?.listEnabled !== false;
+  const sidebarVisible = displayMode === "sidebar"
+    && cfg?.features?.temporalDashboard?.listEnabled !== false;
 
   return (
     <div
@@ -14114,17 +13588,9 @@ function WorkflowStartPageWithSearch({
       data-workflow-list-display-mode={displayMode}
     >
       {sidebarVisible ? (
-        <WorkflowWorkspaceSidebarPanel
-          payload={payload}
-          search={search}
-          defaultSource="temporal"
-        />
+        <WorkflowWorkspaceSidebarPanel payload={payload} search={search} defaultSource="temporal" />
       ) : (
-        <div
-          className="workflow-workspace-sidebar-slot"
-          hidden
-          aria-hidden="true"
-        />
+        <div className="workflow-workspace-sidebar-slot" hidden aria-hidden="true" />
       )}
       <main className="workflow-start-primary" aria-label="Create workflow">
         <WorkflowStartPageContent payload={payload} />
