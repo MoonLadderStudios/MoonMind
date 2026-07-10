@@ -11,11 +11,15 @@ Also tests that `normalize_runtime_id` applies aliases correctly.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
-from moonmind.workflows.executions.model_resolver import resolve_effective_model
+from moonmind.workflows.executions.model_resolver import (
+    resolve_effective_model,
+    resolve_model_effort,
+)
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 
 # ---------------------------------------------------------------------------
@@ -233,3 +237,197 @@ class TestPrecedenceOrder:
         )
         assert model == "gpt-5.5"
         assert source == "runtime_default"
+
+
+class TestResolveModelEffortTiers:
+    def _profile(self, **overrides):
+        profile = {
+            "enabled": True,
+            "auth_state": "connected",
+            "default_model": None,
+            "default_effort": None,
+            "model_tiers": [
+                {"label": "Tier 1", "model": "tier-1-model", "effort": "low"},
+                {"label": "Tier 2", "model": "tier-2-model", "effort": "high"},
+            ],
+            "default_model_tier": 1,
+        }
+        profile.update(overrides)
+        return profile
+
+    def test_requested_tier_2_resolves_to_model_tiers_index_1(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(default_model_tier=1),
+            requested_model_tier=2,
+            env={},
+        )
+
+        assert resolved.model == "tier-2-model"
+        assert resolved.effort == "high"
+        assert resolved.requested_model_tier == 2
+        assert resolved.effective_model_tier == 2
+        assert resolved.tier_label == "Tier 2"
+        assert resolved.model_source == "requested_tier"
+        assert resolved.effort_source == "requested_tier"
+        assert resolved.fallback_reason is None
+        assert resolved.effort_application_status == "unknown"
+
+    def test_requested_tier_does_not_use_default_model_tier(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(default_model_tier=1),
+            requested_model_tier=2,
+            env={},
+        )
+
+        assert resolved.effective_model_tier == 2
+        assert resolved.model == "tier-2-model"
+
+    def test_requested_tier_above_configured_range_clamps_by_default(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(),
+            requested_model_tier=3,
+            env={},
+        )
+
+        assert resolved.requested_model_tier == 3
+        assert resolved.effective_model_tier == 2
+        assert resolved.model == "tier-2-model"
+        assert resolved.fallback_reason == "requested_tier_above_configured_range"
+
+    def test_strict_tier_fallback_rejects_unavailable_requested_tier(self):
+        with pytest.raises(ValueError, match="requested_model_tier_unavailable"):
+            resolve_model_effort(
+                runtime_id="codex_cli",
+                profile=self._profile(),
+                requested_model_tier=3,
+                tier_fallback="strict",
+                env={},
+            )
+
+    def test_explicit_model_and_effort_bypass_tier_policy(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(),
+            requested_model_tier=2,
+            requested_model="task-model",
+            requested_effort="xhigh",
+            env={},
+        )
+
+        assert resolved.model == "task-model"
+        assert resolved.effort == "xhigh"
+        assert resolved.effective_model_tier is None
+        assert resolved.tier_label is None
+        assert resolved.model_source == "task_override"
+        assert resolved.effort_source == "task_override"
+        assert resolved.fallback_reason is None
+
+    def test_explicit_model_only_bypasses_tier_policy_independently(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(default_effort="profile-effort"),
+            requested_model_tier=2,
+            requested_model="task-model",
+            env={},
+        )
+
+        assert resolved.model == "task-model"
+        assert resolved.effort == "profile-effort"
+        assert resolved.effective_model_tier is None
+        assert resolved.tier_label is None
+        assert resolved.model_source == "task_override"
+        assert resolved.effort_source == "provider_profile_default"
+        assert resolved.fallback_reason is None
+
+    def test_explicit_effort_only_preserves_requested_tier_model(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(default_model="profile-model"),
+            requested_model_tier=2,
+            requested_effort="xhigh",
+            env={},
+        )
+
+        assert resolved.model == "tier-2-model"
+        assert resolved.effort == "xhigh"
+        assert resolved.effective_model_tier == 2
+        assert resolved.tier_label == "Tier 2"
+        assert resolved.model_source == "requested_tier"
+        assert resolved.effort_source == "task_override"
+        assert resolved.fallback_reason is None
+
+    @pytest.mark.parametrize("bad_tier", [0, -1, 1.5, "2", True])
+    def test_model_tier_must_be_integer_greater_than_or_equal_to_1(self, bad_tier):
+        with pytest.raises(ValueError, match="modelTier"):
+            resolve_model_effort(
+                runtime_id="codex_cli",
+                profile=self._profile(),
+                requested_model_tier=bad_tier,  # type: ignore[arg-type]
+                env={},
+            )
+
+    def test_missing_selected_profile_fails_explicitly(self):
+        with pytest.raises(ValueError, match="selected provider profile is required"):
+            resolve_model_effort(
+                runtime_id="codex_cli",
+                profile=None,
+                requested_model_tier=1,
+                env={},
+            )
+
+    @pytest.mark.parametrize(
+        "profile",
+        [
+            {"enabled": False, "auth_state": "connected", "model_tiers": []},
+            {"enabled": True, "auth_state": "disconnected", "model_tiers": []},
+            {
+                "enabled": True,
+                "auth_state": "connected",
+                "disabled_reason": "user_disabled",
+                "model_tiers": [],
+            },
+        ],
+    )
+    def test_launch_unready_selected_profile_fails_explicitly(self, profile):
+        with pytest.raises(ValueError, match="not launch-ready"):
+            resolve_model_effort(
+                runtime_id="codex_cli",
+                profile=profile,
+                requested_model_tier=1,
+                env={},
+            )
+
+    def test_launch_unready_object_profile_checks_camel_case_attributes(self):
+        profile = SimpleNamespace(
+            enabled=True,
+            authState="disconnected",
+            model_tiers=[],
+        )
+
+        with pytest.raises(ValueError, match="not launch-ready"):
+            resolve_model_effort(
+                runtime_id="codex_cli",
+                profile=profile,
+                requested_model_tier=1,
+                env={},
+            )
+
+    def test_legacy_profile_and_runtime_defaults_remain_after_tiers(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(
+                model_tiers=[{"label": "Tier 1", "model": None, "effort": None}],
+                default_model="legacy-model",
+                default_effort="legacy-effort",
+            ),
+            requested_model_tier=1,
+            env={},
+        )
+
+        assert resolved.model == "legacy-model"
+        assert resolved.effort == "legacy-effort"
+        assert resolved.model_source == "provider_profile_default"
+        assert resolved.effort_source == "provider_profile_default"
