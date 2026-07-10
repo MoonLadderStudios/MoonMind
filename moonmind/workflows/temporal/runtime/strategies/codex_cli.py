@@ -179,6 +179,12 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
 
         return cmd
 
+    def effort_application_status(self, effort: str | None) -> str:
+        # The managed Codex CLI command path currently has no effort flag or
+        # generated config mapping. Keep the resolved value in diagnostics,
+        # but never claim that it reached the CLI.
+        return "not_supported" if effort else "metadata_only"
+
     @classmethod
     def _sanitize_command_template(cls, command_template: list[str]) -> list[str]:
         """Drop sandbox/approval flags so managed policy comes only from config."""

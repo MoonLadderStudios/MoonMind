@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import runpy
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -255,7 +257,8 @@ def test_build_queue_request_child_payload_shape() -> None:
         "maxIterations": 3,
     }
     assert task["git"]["startingBranch"] == "dependabot/pip/anthropic-0.107.1"
-    assert task["git"]["targetBranch"] == "dependabot/pip/anthropic-0.107.1"
+    assert task["git"]["branch"] == "dependabot/pip/anthropic-0.107.1"
+    assert "targetBranch" not in task["git"]
     assert task["publish"]["mode"] == "auto"
     assert task["runtime"]["mode"] == "codex"
     assert payload["targetRuntime"] == "codex"
@@ -296,6 +299,94 @@ def test_build_queue_request_runtime_inheritance_opt_in() -> None:
         inherit_runtime_from_caller=True,
     )
     assert request["payload"]["runtimeInheritance"] == "caller"
+
+
+def test_submit_jobs_requires_and_verifies_workflow_id() -> None:
+    module = _load_module()
+    request = module["_build_queue_request"](
+        "MoonLadderStudios/MoonMind",
+        42,
+        "dependabot/pip/x",
+        head_sha="abc",
+        runtime=module["RuntimeSelection"](mode="codex"),
+        merge_method="squash",
+        max_iterations=3,
+        priority=0,
+        max_attempts=3,
+    )
+    submission = module["JobSubmission"](
+        queue_request=request,
+        pr_number=42,
+        branch="dependabot/pip/x",
+    )
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json = MagicMock(
+        return_value={
+            "workflowId": "mm:dependabot-child",
+            "runId": "run-1",
+            "state": "initializing",
+            "temporalStatus": "running",
+        }
+    )
+    get_paths: list[str] = []
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            pass
+
+        async def post(self, _path: str, **_kwargs: Any) -> Any:
+            return fake_response
+
+        async def get(self, path: str) -> Any:
+            get_paths.append(path)
+            return fake_response
+
+    with patch.object(module["httpx"], "AsyncClient", FakeAsyncClient):
+        created, errors = asyncio.run(
+            module["_submit_jobs_via_http"](
+                [submission],
+                moonmind_url="http://api:8000",
+                worker_token=None,
+            )
+        )
+
+    assert errors == []
+    assert created[0]["workflowId"] == "mm:dependabot-child"
+    assert created[0]["runId"] == "run-1"
+    assert get_paths == ["/api/executions/mm%3Adependabot-child"]
+
+
+def test_verify_execution_visible_rejects_terminated_workflow() -> None:
+    module = _load_module()
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json = MagicMock(
+        return_value={
+            "workflowId": "mm:terminated",
+            "state": "terminated",
+        }
+    )
+
+    class FakeClient:
+        async def get(self, _path: str) -> Any:
+            return fake_response
+
+    with pytest.raises(RuntimeError, match="terminal state terminated"):
+        asyncio.run(
+            module["_verify_execution_visible"](
+                FakeClient(),
+                "mm:terminated",
+                attempts=1,
+                delay_seconds=0,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +523,9 @@ def test_write_run_artifacts_skips_no_op_on_errors(tmp_path: Path) -> None:
         "errors": [{"pr": 9, "branch": "dependabot/pip/x", "error": "boom"}],
     }
     module["_write_run_artifacts"](tmp_path, payload)
-    assert not (tmp_path / "skill_outcome.json").exists()
+    outcome = json.loads((tmp_path / "skill_outcome.json").read_text())
+    assert outcome["status"] == "failed"
+    assert outcome["reason"] == "child_workflow_queue_failed"
 
 
 # ---------------------------------------------------------------------------

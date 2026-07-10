@@ -73,6 +73,30 @@ def _build_request_for_step(
         )
 
 
+def test_run_request_preserves_model_tier_intent_for_launch_resolution() -> None:
+    wf = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="collect-evidence",
+            tool_name="codex_cli",
+            workflow_parameters={
+                "task": _task_payload(),
+                "model": "resolved-tier-model",
+                "requestedModel": None,
+                "modelTier": 2,
+                "tierFallback": "strict",
+            },
+        )
+
+    assert request.parameters["model"] == "resolved-tier-model"
+    assert request.parameters["modelTier"] == 2
+    assert request.parameters["tierFallback"] == "strict"
+
+
 def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
     request = _build_request_for_step("collect-evidence")
 

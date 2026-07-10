@@ -247,8 +247,18 @@ class TestResolveModelEffortTiers:
             "default_model": None,
             "default_effort": None,
             "model_tiers": [
-                {"label": "Tier 1", "model": "tier-1-model", "effort": "low"},
-                {"label": "Tier 2", "model": "tier-2-model", "effort": "high"},
+                {
+                    "label": "Tier 1",
+                    "model": "tier-1-model",
+                    "effort": "low",
+                    "parameters": {"temperature": 0},
+                },
+                {
+                    "label": "Tier 2",
+                    "model": "tier-2-model",
+                    "effort": "high",
+                    "parameters": {"temperature": 1},
+                },
             ],
             "default_model_tier": 1,
         }
@@ -272,6 +282,7 @@ class TestResolveModelEffortTiers:
         assert resolved.effort_source == "requested_tier"
         assert resolved.fallback_reason is None
         assert resolved.effort_application_status == "unknown"
+        assert resolved.tier_parameters == {"temperature": 1}
 
     def test_requested_tier_does_not_use_default_model_tier(self):
         resolved = resolve_model_effort(

@@ -80,10 +80,15 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
      - `payload.task.publish.mode`: `auto`
      - `payload.task.skill.name`: `pr-resolver`
      - `payload.task.inputs`: `{ repo, pr, branch, mergeMethod, maxIterations }`
-   - Submit via the internal Temporal execution API (`POST /api/executions`);
+   - Submit via the internal Temporal execution API (`POST /api/executions`),
+     require the canonical `workflowId` in the response, and verify that ID via
+     `GET /api/executions/{workflowId}` before counting it as queued;
      `MOONMIND_URL` must point at the MoonMind API from the managed session.
 4. Write one summary artifact at `batch_pr_resolver_result.json` under the managed session artifact spool path when available, otherwise under the configured `--artifacts-dir`.
-5. Print a short count summary to stdout (`queued`, `skipped`, `errors`).
+5. On any submission or verification error, write `skill_outcome.json` with a
+   `failed` or `partial` status so the managed runtime cannot report the batch
+   as successful.
+6. Print a short count summary to stdout (`queued`, `skipped`, `errors`).
 
 ## Safety constraints
 
