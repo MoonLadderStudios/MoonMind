@@ -15,7 +15,8 @@ On desktop, `/skills` is a list–detail workspace that reuses the dashboard's e
 
 ## 2. Goals
 
-- Dedicated dashboard entry point for skills (route `/skills`).
+- Dedicated dashboard entry point for skills (route `/skills`) in the shared far-left application rail.
+- Reuse the geometry and neutral primitives in [`CollectionWorkspaceLayout.md`](CollectionWorkspaceLayout.md).
 - Reuse the shared workspace/sidebar foundation defined by [`WorkflowWorkspaceSidebar.md`](WorkflowWorkspaceSidebar.md) and [`WorkflowListDisplayModes.md`](WorkflowListDisplayModes.md); do not create a parallel Skills-only sidebar implementation or copy its CSS.
 - List skills in the shared sidebar and preview the selected skill's `SKILL.md` content (Markdown → HTML) in the main pane.
 - Create flow: name + Markdown body persisted under `.agents/skills/local/{name}/SKILL.md` while the skills sidebar remains available.
@@ -26,14 +27,15 @@ On desktop, `/skills` is a list–detail workspace that reuses the dashboard's e
 
 ### 3.1 Navigation
 
-- Top-level nav pill **Skills** in `.route-nav` → `/skills`, consistent with `/workflows`, `/workflows/new`, etc.
+- Top-level **Skills** destination in the shared application rail → `/skills`, using the same icon/label, active, hover, focus, tooltip, and responsive behavior as Workflows and Recurring.
 - The Skills sidebar is page-local content navigation. It complements rather than replaces the top-level **Skills** route entry.
 - Reusing the sidebar does not make Skills part of the workflow `hidden` / `sidebar` / `table` display-mode state machine. Unless that system is explicitly generalized later, `/skills` owns its own skills list and does not show workflow-list controls or workflow rows.
 
 ### 3.2 Desktop Workspace Layout
 
-- `/skills` uses the same top-level split-workspace composition as other dashboard sidebar surfaces: a left sidebar sibling and a right primary pane.
-- The sidebar starts at the dashboard content area's left edge and follows the shared sidebar width, divider, row-height, and independent-scroll behavior.
+- `/skills` uses the shared `CollectionWorkspace`: the Skills sidebar is the first content-region column immediately right of the far-left application rail, and the primary pane is its sibling.
+- The Skills sidebar is always present for desktop preview and create states; it is not optional Workflow list-display state.
+- The sidebar starts at the dashboard content region's far-left edge and is never inside a centered/max-width page wrapper and follows the shared sidebar width, divider, row-height, and independent-scroll behavior.
 - The primary pane uses the remaining width for the selected skill preview or create form. Readable-width constraints may be applied inside the pane, but not around the entire split workspace.
 - The left side must not render a bespoke **Available Skills** card or a vertical stack of primary/secondary buttons as a second navigation design.
 - **View mode:** the selected skill renders `SKILL.md` as HTML using the shared Markdown component. Rendered, raw, and metadata views may remain tabs inside the primary pane.
@@ -61,7 +63,7 @@ Rules:
 2. All workflow-specific visible and accessible copy must be parameterized. The Skills page must not announce `Workflow`, `Workflow navigation`, or `Workflow filter`.
 3. Sidebar rows contain skills, not workflows. They must not render workflow status icons, execution state, workflow IDs, or workflow actions unless a future skill-specific contract defines equivalent data.
 4. Selecting a row updates the skill shown in the primary pane and applies the shared active-row styling. Same-route selection uses appropriate selected-item semantics; a future route-backed skill detail link may use `aria-current="page"`.
-5. Filtering narrows the skill rows without clearing the selected detail. If the selected skill is outside the filtered result window, the shared pinned-row behavior may show **Current skill** rather than implying the skill matches the filter.
+5. Filtering narrows the skill rows without clearing the selected detail. If the selected skill is outside the filtered result window, the shared pinned-row behavior must show **Current skill** rather than implying the skill matches the filter.
 6. Sidebar query failure must not erase an already loaded skill preview, and detail-content failure must not erase a successfully loaded skill list.
 7. **Create New Skill** is a page action, not a replacement for the sidebar's **Skill** column header. Place it in the Skills page header, the primary pane, or a shared utility slot that preserves the standard header row.
 
@@ -77,7 +79,7 @@ Rules:
 
 - Follow [`DashboardDesignSystem.md`](DashboardDesignSystem.md): `queue-submit-primary` for primary save, `mm-glass` / `mm-glass-strong` containers, and `markdown-body` or equivalent prose styling for preview (dark-mode safe).
 - The desktop sidebar should visually match the app sidebar closely enough that switching between Workflows and Skills changes the data and header, not the navigation pattern.
-- At breakpoints where the desktop sidebar cannot remain usable, use a single-column Skills list/detail presentation or mobile list-to-detail transition. Preserve the **Skill** header, filtering, active selection, and accessible names rather than squeezing the desktop rail beside the preview.
+- Below the shared desktop workspace breakpoint (initially `lg`), where the sidebar and primary pane cannot both remain usable, use a single-column Skills list/detail presentation or mobile list-to-detail transition. Preserve the **Skill** header, filtering, active selection, and accessible names rather than squeezing the desktop rail beside the preview.
 
 ## 4. API & Backend
 

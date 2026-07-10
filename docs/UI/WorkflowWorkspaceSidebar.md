@@ -2,7 +2,7 @@
 
 Status: Proposed SPA desired-state contract
 Owners: MoonMind Engineering
-Last updated: 2026-06-29
+Last updated: 2026-07-10
 Canonical for: desktop workflow workspace layout, SPA list-to-detail transitions, workflow sidebar navigation, and mobile workflow list/detail behavior where not superseded by the workflow list display mode contract
 
 **Implementation tracking:** Rollout notes, task breakdowns, and local-only handoffs belong under `docs/tmp/`, Jira, or gitignored implementation notes. This document defines the durable product and UI contract for the workspace/sidebar behavior that unifies the Workflows list and Workflow Details surfaces.
@@ -17,7 +17,7 @@ Canonical for: desktop workflow workspace layout, SPA list-to-detail transitions
 
 MoonMind should make desktop workflow browsing feel like one continuous workspace.
 
-In the default desktop state, `/workflows` shows the full Workflows list with the table, filters, toolbar, pagination, and list-level scanning affordances. When a user clicks a workflow title, the same workspace should transition in place: the list compresses into a compact sidebar pinned to the far left of the dashboard content area, and the selected Workflow Details surface loads into the space that opens to the right. The browser URL changes to the canonical workflow detail URL, but the SPA shell does not reload.
+In the default desktop state, `/workflows` shows the full Workflows list with the table, filters, toolbar, pagination, and list-level scanning affordances. When a user clicks a workflow title, the same workspace should transition in place: the list compresses into a compact sidebar pinned to the far-left edge of the dashboard content region, immediately right of the application rail, and the selected Workflow Details surface loads into the space that opens to the right. The browser URL changes to the canonical workflow detail URL, but the SPA shell does not reload.
 
 When the user chooses to expand the workflow list back to full screen, the selected detail view closes. The route returns to `/workflows`, the full list occupies the workspace again, and no hidden selected detail remains active in the UI.
 
@@ -25,6 +25,7 @@ On mobile, the split workspace is not used. Mobile keeps the straightforward car
 
 This document amends the existing UI contracts without replacing them:
 
+- `docs/UI/CollectionWorkspaceLayout.md` is canonical for the far-left application rail, shared collection-sidebar component, and shared entity-detail frame.
 - `docs/UI/DashboardSPAArchitecture.md` is canonical for the persistent SPA shell, client routing authority, route fallback, providers, and same-origin API model.
 - `docs/UI/WorkflowsListPage.md` remains canonical for full Workflows list content, filters, table columns, pagination, and mobile cards.
 - `docs/UI/WorkflowDetailsPage.md` remains canonical for detail content, tabs, actions, evidence sections, logs, artifacts, and recovery flows.
@@ -132,7 +133,7 @@ Rules:
 
 In selected-detail workspace state, the workspace renders:
 
-1. a compact workflow sidebar pinned to the far left of the dashboard content area;
+1. a compact workflow sidebar pinned to the far-left edge of the dashboard content region, immediately right of the application rail;
 2. the selected Workflow Details surface in the main pane;
 3. any right rail already owned by the Workflow Details page, if available and if width allows.
 
@@ -333,7 +334,7 @@ Rules:
 8. `aria-current="page"` marks the active workflow row/link.
 9. Sidebar rows support keyboard navigation as ordinary links, with visible focus states.
 10. Sidebar state must not mutate detail state except by explicit workflow navigation.
-11. The sidebar must be mounted at the workspace grid level so its left edge aligns with the dashboard content area's left edge.
+11. The sidebar must be mounted at the workspace grid level so its left edge aligns with the dashboard content region's far-left edge immediately right of the application rail.
 
 ---
 
@@ -384,9 +385,11 @@ Visual posture:
 Layout rules:
 
 1. Use a top-level workspace grid or flex layout owned by `WorkflowsWorkspacePage`.
-2. In selected-detail workspace mode, the sidebar column starts at the dashboard content area's left edge.
+2. In selected-detail workspace mode, the sidebar column starts at the dashboard content region's far-left edge immediately right of the application rail.
 3. The detail pane starts immediately after the sidebar gutter.
 4. The split workspace must not be horizontally centered inside a narrow detail-page container.
+5. There is no decorative or layout gutter between the application rail and the collection sidebar beyond the shared shell divider.
+6. Workflow and Recurring sidebars share the neutral `CollectionSidebar` shell and state components; workflow-specific adapters provide row data and copy.
 5. Full list mode uses the same workspace root and expands to one column.
 6. The detail pane may contain nested readable-width sections for logs, evidence, markdown, or dense tables, but those constraints apply inside the pane rather than to the entire workspace.
 7. Recommended initial sidebar width is approximately `280-340px`.
@@ -508,7 +511,7 @@ Implementation should add or preserve tests for these behaviors:
 2. Desktop workflow title links point to canonical detail URLs.
 3. Clicking a workflow title uses SPA routing and does not reload the document.
 4. `DashboardShell` and `QueryClientProvider` remain mounted across `/workflows` to `/workflows/{workflowId}` transitions.
-5. Desktop selecting a workflow renders the compact sidebar at the far left of the dashboard content area.
+5. Desktop selecting a workflow renders the compact sidebar at the far-left edge of the dashboard content region, immediately right of the application rail.
 6. Desktop selecting a workflow renders existing Workflow Details content in the main pane.
 7. The split workspace is not wrapped in the detail page's centered max-width container.
 8. Detail loading appears in the detail pane while sidebar/list context remains visible.

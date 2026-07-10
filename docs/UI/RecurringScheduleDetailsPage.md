@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Owner:** MoonMind Engineering
-**Last Updated:** 2026-06-26
+**Last Updated:** 2026-07-10
 **Audience:** UI developers, backend developers, operators
 
 ## 1. Purpose
@@ -13,6 +13,8 @@ The design intent is simple: a recurring schedule detail page should feel like a
 
 ## 2. Related Docs
 
+- `docs/UI/CollectionWorkspaceLayout.md` — shared far-left workspace geometry and `EntityDetailFrame`.
+- `docs/UI/WorkflowDetailsPage.md` — entity-detail content conventions shared with schedules.
 - `docs/Temporal/WorkflowSchedulingGuide.md` — scheduling flows, API contracts, and runtime config
 - `docs/Temporal/TemporalScheduling.md` — Temporal-native scheduling desired state
 - `docs/UI/WorkflowConsoleArchitecture.md` — dashboard route model and workflow detail conventions
@@ -50,7 +52,7 @@ Navigation rules:
 
 ## 5. Page Composition
 
-The recurring schedule detail page should be implemented as a schedule-flavored derivative of the workflow detail page.
+The recurring schedule detail page is a schedule adapter rendered through the same `EntityDetailFrame` as Workflow detail. The Recurring sidebar is a workspace sibling at the far-left content edge immediately right of the application rail; it is never mounted inside the frame or a centered/max-width wrapper.
 
 Reuse from workflow detail:
 
@@ -79,31 +81,15 @@ The page should not invent a completely separate visual language. Users should u
 
 ## 6. Default Detail Layout
 
-Suggested layout:
-
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ Breadcrumb: Schedules / Nightly code scan                    │
-│ Title: Nightly code scan                         [Active]    │
-│ Description or target summary                                │
-│ [Edit schedule] [Run now] [Pause/Resume] [Delete]            │
-├──────────────────────────────────────────────────────────────┤
-│ Summary cards: Next run | Cadence | Last run | Attention     │
-├───────────────────────┬──────────────────────────────────────┤
-│ Main panel             │ Facts rail                           │
-│ - Overview             │ - Definition ID                      │
-│ - Runs                 │ - Temporal Schedule ID               │
-│ - Configuration        │ - Scope / owner                      │
-│ - Activity             │ - Target workflow/runtime/repo       │
-└───────────────────────┴──────────────────────────────────────┘
+┌──────────────────┬──────────────────────────┬───────────────────────────────────────────┐
+│ Application rail │ Recurring sidebar        │ Shared EntityDetailFrame                  │
+│ viewport far-left│ content-region far-left  │ breadcrumb + title/state + actions        │
+│                  │                          │ summary/facts + tabs + main + facts rail  │
+└──────────────────┴──────────────────────────┴───────────────────────────────────────────┘
 ```
 
-Default tab behavior:
-
-- **Overview** shows the schedule summary, next run, cadence, timezone, target, policy, and latest dispatch status.
-- **Runs** shows recent and historical runs from `/api/recurring-workflows/{definitionId}/runs`; each run links to its workflow detail page.
-- **Configuration** shows editable schedule fields in read-only form until the user chooses Edit.
-- **Activity** is optional and can show audit events, reconciliation warnings, and last Temporal describe metadata when available.
+The frame uses the same header spacing, panel rhythm, status family, action placement, summary strip, tabs, facts rail, loading states, error states, and responsive stacking as Workflow detail. Schedule-specific tabs remain Overview, Runs, Configuration, and optional Activity. Workflow-only steps, artifacts, logs, and remediation are not copied onto the schedule definition.
 
 ---
 
@@ -253,6 +239,7 @@ Authorization should match recurring schedule ownership rules:
 ## 13. Non-Goals
 
 - Do not make schedule details a separate product surface with a unique design system.
+- Do not render the Recurring sidebar inside the detail frame or a centered/max-width wrapper with a large left margin.
 - Do not duplicate workflow execution steps, artifacts, logs, or proposals on the schedule page.
 - Do not delete historical workflow executions when deleting a recurring schedule.
 - Do not require a user to create a new schedule just to change a cadence or policy value.

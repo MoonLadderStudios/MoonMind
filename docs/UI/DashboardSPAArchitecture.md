@@ -2,8 +2,8 @@
 
 Status: **Target Architecture**
 Owners: MoonMind Engineering
-Last Updated: 2026-06-29
-Related: `docs/UI/WorkflowConsoleArchitecture.md`, `docs/UI/TypeScriptSystem.md`, `docs/UI/DashboardDesignSystem.md`, `docs/UI/WorkflowWorkspaceSidebar.md`, `docs/Observability/LiveLogs.md`, `docs/Temporal/VisibilityAndUiQueryModel.md`
+Last Updated: 2026-07-10
+Related: `docs/UI/CollectionWorkspaceLayout.md`, `docs/UI/WorkflowConsoleArchitecture.md`, `docs/UI/TypeScriptSystem.md`, `docs/UI/DashboardDesignSystem.md`, `docs/UI/WorkflowWorkspaceSidebar.md`, `docs/Observability/LiveLogs.md`, `docs/Temporal/VisibilityAndUiQueryModel.md`
 
 **Implementation tracking:** rollout checklists, Jira work breakdowns, and tactical migration notes belong in Jira, `docs/tmp/`, or gitignored handoffs. This document defines the durable target architecture.
 
@@ -203,25 +203,17 @@ Rules:
 
 ---
 
-## 8. Shell and navigation
+## 8. Shell, application rail, and collection workspaces
 
-The dashboard masthead, navigation, alerts, layout rails, and global providers should be React-owned.
+The React-owned `DashboardShell` provides global providers plus a persistent application rail. On desktop, that rail is the first column at the viewport's far-left edge; it contains the brand and top-level links, including Workflows, Create, Recurring, and Skills. Primary navigation is not a centered masthead pill row.
 
-The shell should provide:
+Immediately to the right, the dashboard content region hosts route-family workspaces. A collection workspace may render a collection sidebar as its first column and a primary pane as its second. The workspace grid is fluid and must not be nested in a centered/max-width page wrapper. Readable-width limits belong inside the primary pane.
 
-- `QueryClientProvider`;
-- router provider;
-- UI info/capability provider;
-- theme provider;
-- global alert/toast provider;
-- live update provider;
-- route-level loading and error boundaries;
-- optional command palette provider;
-- shared workspace layout state.
+`docs/UI/CollectionWorkspaceLayout.md` is canonical for geometry, shared sidebar anatomy, and the common Workflow/Recurring detail frame. Navigation uses router-native links and route-derived active state. List-display controls for participating collections live in the shell/workspace utility area associated with that collection.
 
-Navigation should use router-native links (`Link`, `NavLink`, or equivalent). Active state should come from the current route, not direct DOM mutation.
+Required shell primitives include `ApplicationRail`, `DashboardContent`, `CollectionWorkspace`, `CollectionSidebar`, and `EntityDetailFrame`. Workflows, Recurring, and Skills supply adapters rather than copying layout or CSS.
 
-Server-rendered navigation partials should be removed after the SPA shell owns the masthead.
+On tablet/mobile the rail and collection sidebar may collapse into drawers or list-to-detail flows. Non-rendered desktop controls must be absent from the accessibility tree.
 
 ---
 
@@ -394,7 +386,7 @@ Shared components should accept product-neutral inputs where practical, but shou
 MoonMind can be considered fully converted when:
 
 1. Dashboard routes are client-routed after initial shell load.
-2. The dashboard navigation is React-owned.
+2. The dashboard navigation is React-owned and renders as the far-left desktop application rail.
 3. Internal dashboard route transitions do not reload the document.
 4. Direct refresh of supported dashboard deep links returns the SPA shell and renders the correct client route.
 5. FastAPI API/auth/health/static/artifact routes are never captured by SPA fallback.
@@ -405,6 +397,8 @@ MoonMind can be considered fully converted when:
 10. Live update lifecycle is owned by the persistent shell with compact polling fallback.
 11. Shared code seams for Omnigent alignment are explicit and isolated.
 12. Tests cover client routing, direct deep links, API fallback exclusion, navigation, query persistence, and feature-gated routes.
+13. Workflows, Recurring, and Skills use the shared collection-sidebar primitive at the content edge.
+14. Workflow and Recurring detail routes use the shared entity-detail frame and are never wrapped with their sidebar inside a centered page container.
 
 ---
 
@@ -414,7 +408,9 @@ Frontend tests should cover:
 
 - route rendering under the client router;
 - internal navigation without `window.location.assign`;
-- active nav state;
+- active application-rail state and shared Workflows/Recurring/Skills navigation;
+- far-left application-rail and collection-sidebar geometry;
+- shared Workflow/Recurring detail-frame composition;
 - QueryClient persistence across route changes;
 - page-level error boundaries;
 - capability endpoint loading/failure states;

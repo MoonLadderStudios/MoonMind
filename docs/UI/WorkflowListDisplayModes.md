@@ -2,7 +2,7 @@
 
 Status: Proposed declarative UI contract  
 Owners: MoonMind Engineering  
-Last updated: 2026-07-03  
+Last updated: 2026-07-10  
 Canonical for: Workflows/Create list display modes, masthead list-mode control, workflow sidebar/table visual continuity, and first-workflow selection fallback when the list is hidden
 
 **Implementation tracking:** Rollout task lists, ticket breakdowns, and local handoff notes belong under `docs/tmp/`, Jira, or gitignored implementation notes. This document defines the durable product and UI contract for the shared workflow-list display system.
@@ -37,6 +37,7 @@ This document narrows and supersedes only the list-display mode and masthead con
 
 Use these documents together:
 
+- `docs/UI/CollectionWorkspaceLayout.md` is canonical for the far-left application rail, shared collection-sidebar primitive, and workspace geometry.
 - `docs/UI/DashboardSPAArchitecture.md` remains canonical for the persistent SPA shell, route ownership, providers, and same-origin API model.
 - `docs/UI/DashboardDesignSystem.md` remains canonical for visual language, focus states, motion posture, glass/matte treatment, and shared tokens.
 - `docs/UI/WorkflowsListPage.md` remains canonical for table columns, filters, sorting, pagination, mobile cards, row data, and list API behavior.
@@ -168,38 +169,17 @@ Rules:
 
 ---
 
-## 6. Masthead radio control
+## 6. Shell/workspace list display control
 
-The list display control belongs in the global dashboard masthead immediately to the right of the MoonMind title.
-
-Placement:
+The list display selector belongs to the current collection's shell/workspace utility region. It must remain adjacent to collection context without becoming a centered masthead element or moving into page content, the collection sidebar, or a table toolbar.
 
 ```text
-[MoonMind logo + MoonMind title] [list display radio group] [route nav links] [version/meta]
+[far-left application rail] [collection sidebar when visible] [collection utility + primary pane]
 ```
 
-For the current masthead layout, this means the control is visually attached to the brand area before the route navigation begins. It should not be placed inside page content, inside the workflow sidebar, or inside the Workflows table toolbar.
+The control remains one accessible radio group with `No list`, `Sidebar list`, and `Full screen table` options using `Square`, `PanelLeft`, and `Rows3`. The selected option reflects resolved route state; keyboard users enter with Tab and use arrow keys. On routes without a declared contract, hide it. On mobile, hide desktop-only modes until a mobile contract exists.
 
-Control contract:
-
-| Mode | Icon | Accessible label | Tooltip/title |
-| --- | --- | --- | --- |
-| `hidden` | `Square` | `No list` | `No list` |
-| `sidebar` | `PanelLeft` | `Sidebar list` | `Sidebar list` |
-| `table` | `Rows3` | `Full screen table` | `Full screen table` |
-
-Rules:
-
-1. Use Lucide icons with the canonical icon names `Square`, `PanelLeft`, and `Rows3`.
-2. The control is a radio group, not three unrelated buttons.
-3. It should expose `role="radiogroup"` with an accessible name such as `Workflow list display`.
-4. Each option should expose native radio semantics or `role="radio"` with `aria-checked`.
-5. The selected option is the resolved current mode after navigation settles.
-6. Keyboard users can use Tab to enter the group and arrow keys to move between options.
-7. Each icon-only control needs an accessible name and visible focus state.
-8. Hover, selected, and focus states use the dashboard control styling tokens.
-9. On pages that do not participate in this system yet, the control may be hidden or disabled. Hiding is preferred until a page declares mode behavior.
-10. On mobile, the first implementation may hide the control and keep the existing mobile card/detail model. If shown later, it must not expose desktop-only sidebar affordances that do not render.
+The shell supplies common control styling and placement; each collection supplies its accessible name and route resolution. Workflow and Recurring preferences remain separate.
 
 ---
 
@@ -228,6 +208,7 @@ Rules:
 Rules:
 
 1. The sidebar is owned by the workspace/layout composition layer, not by the detail page body.
+2. It is the first dashboard-content column immediately right of the far-left application rail; it is never inside the detail page's centered/max-width wrapper.
 2. Sidebar row links navigate to canonical workflow detail URLs.
 3. The active workflow row uses `aria-current="page"`.
 4. Sidebar list failures do not prevent the selected detail from rendering.
