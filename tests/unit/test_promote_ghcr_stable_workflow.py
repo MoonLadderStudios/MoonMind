@@ -71,7 +71,11 @@ def test_promote_workflow_is_manual_dispatch_only_with_typed_inputs() -> None:
 def test_promote_workflow_uses_minimal_permissions_and_serial_concurrency() -> None:
     workflow = _load_workflow()
 
-    assert workflow["permissions"] == {"contents": "read", "packages": "write"}
+    assert workflow["permissions"] == {
+        "actions": "read",
+        "contents": "read",
+        "packages": "write",
+    }
     assert workflow["concurrency"] == {
         "group": "promote-ghcr-${{ inputs.image }}-${{ inputs.channel }}",
         "cancel-in-progress": False,
@@ -119,10 +123,9 @@ def test_app_promotion_requires_codex_conformance_result_for_exact_digest() -> N
     assert install["if"] == "inputs.image == 'app'"
     assert "pydantic" in install["run"]
 
-    download_current = _promote_step("Download current-run Codex conformance artifact")
-    assert download_current["if"].startswith("inputs.image == 'app'")
-    assert download_current["uses"].startswith("actions/download-artifact@")
-    assert download_current["with"]["name"] == "${{ inputs.codex_conformance_artifact_name }}"
+    require_run_id = _promote_step("Require Codex conformance run id for artifact download")
+    assert require_run_id["if"].startswith("inputs.image == 'app'")
+    assert "codex_conformance_run_id is required" in require_run_id["run"]
 
     download_prior = _promote_step("Download prior-run Codex conformance artifact")
     assert download_prior["with"]["run-id"] == "${{ inputs.codex_conformance_run_id }}"

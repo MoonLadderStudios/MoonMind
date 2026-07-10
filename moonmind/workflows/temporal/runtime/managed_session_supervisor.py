@@ -447,15 +447,6 @@ class ManagedSessionSupervisor:
             if cls._is_tool_event(event) and timestamp is not None:
                 tool_event_timestamps.append(timestamp)
 
-        if "resumable_process_handle" not in protocol_events and tool_event_timestamps:
-            protocol_events.append("resumable_process_handle")
-            timestamps.setdefault("firstToolYield", tool_event_timestamps[0])
-        if (
-            "poll_after_yield" not in protocol_events
-            and len(tool_event_timestamps) >= 2
-        ):
-            protocol_events.append("poll_after_yield")
-            timestamps.setdefault("subsequentPoll", tool_event_timestamps[1])
         return protocol_events, timestamps
 
     @staticmethod
@@ -530,6 +521,12 @@ class ManagedSessionSupervisor:
         return {
             "schemaVersion": "v1",
             "scenarioVersion": CANARY_SCENARIO_VERSION,
+            "testedImageDigest": str(
+                record.metadata.get("testedImageDigest")
+                or record.metadata.get("runtimeImageDigest")
+                or record.metadata.get("candidateImageDigest")
+                or ""
+            ).strip(),
             "sessionId": record.session_id,
             "sessionIdsObserved": cls._session_ids_observed(record, events),
             "turnId": turn_id,
@@ -594,6 +591,7 @@ class ManagedSessionSupervisor:
         )
         if observation is None:
             return None
+        observation["marker"] = marker
         evidence_payload = {
             "codexConformanceCanary": observation,
             "marker": marker,
@@ -615,8 +613,10 @@ class ManagedSessionSupervisor:
         stderr_ref: str,
         diagnostics_ref: str | None,
         error_message: str | None,
+        canary_observation: dict[str, Any] | None = None,
+        marker: dict[str, Any] | None = None,
     ) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "sessionId": record.session_id,
             "sessionEpoch": record.session_epoch,
             "containerId": record.container_id,
@@ -627,6 +627,15 @@ class ManagedSessionSupervisor:
             "diagnosticsRef": diagnostics_ref,
             "errorMessage": error_message,
         }
+        if canary_observation is not None:
+            payload["metadata"] = {
+                "codexConformanceCanary": canary_observation,
+                "canaryEvidence": {
+                    "codexConformanceCanary": canary_observation,
+                    "marker": marker or {},
+                },
+            }
+        return payload
 
     @staticmethod
     def _checkpoint_payload(
@@ -636,8 +645,9 @@ class ManagedSessionSupervisor:
         stdout_ref: str,
         stderr_ref: str,
         diagnostics_ref: str | None,
+        canary_observation: dict[str, Any] | None = None,
     ) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "sessionState": record.session_state().model_dump(
                 mode="json", by_alias=True, exclude_none=True
             ),
@@ -649,6 +659,9 @@ class ManagedSessionSupervisor:
             },
             "recordUpdatedAt": datetime.now(tz=UTC).isoformat(),
         }
+        if canary_observation is not None:
+            payload["metadata"] = {"codexConformanceCanary": canary_observation}
+        return payload
 
     async def _publish_record(
         self,
@@ -748,6 +761,12 @@ class ManagedSessionSupervisor:
                 stderr_ref=stderr_ref,
                 diagnostics_ref=diagnostics_ref,
                 error_message=error_message,
+                canary_observation=canary_observation,
+                marker=(
+                    canary_observation.get("marker")
+                    if isinstance(canary_observation, dict)
+                    else None
+                ),
             ),
         )
         checkpoint_ref = self._write_json_artifact(
@@ -759,6 +778,7 @@ class ManagedSessionSupervisor:
                 stdout_ref=stdout_ref,
                 stderr_ref=stderr_ref,
                 diagnostics_ref=diagnostics_ref,
+                canary_observation=canary_observation,
             ),
         )
         observability_events_ref = await asyncio.to_thread(

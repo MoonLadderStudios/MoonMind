@@ -41,11 +41,12 @@ on:
         required: false
         type: string
       codex_conformance_run_id:
-        description: "Optional workflow run id that published the Codex canary artifact"
+        description: "Required with artifact name: workflow run id that published the Codex canary artifact"
         required: false
         type: string
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
@@ -126,12 +127,12 @@ jobs:
           echo "source_ref=${source_ref}" >> "$GITHUB_OUTPUT"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
-      - name: Download current-run Codex conformance artifact
+      - name: Require Codex conformance run id for artifact download
         if: inputs.image == 'app' && inputs.codex_conformance_result_path == '' && inputs.codex_conformance_artifact_name != '' && inputs.codex_conformance_run_id == ''
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ inputs.codex_conformance_artifact_name }}
-          path: /tmp/codex-conformance
+        shell: bash
+        run: |
+          echo "::error::codex_conformance_run_id is required when codex_conformance_artifact_name is supplied without codex_conformance_result_path."
+          exit 1
 
       - name: Download prior-run Codex conformance artifact
         if: inputs.image == 'app' && inputs.codex_conformance_result_path == '' && inputs.codex_conformance_artifact_name != '' && inputs.codex_conformance_run_id != ''

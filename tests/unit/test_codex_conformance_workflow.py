@@ -46,10 +46,12 @@ def test_codex_canary_job_publishes_versioned_compact_evidence() -> None:
     assert run_step["env"]["MOONMIND_API_TOKEN"] == "${{ secrets.MOONMIND_CODEX_CANARY_API_TOKEN }}"
 
     validate_step = next(step for step in steps if step.get("name") == "Validate compact evidence")
+    assert validate_step["if"] == "always()"
     assert "pytest tests/provider/codex" in validate_step["run"]
     assert "provider_verification and codex" in validate_step["run"]
 
     upload_step = next(step for step in steps if step.get("name") == "Upload conformance result")
+    assert upload_step["if"] == "always()"
     assert upload_step["uses"].startswith("actions/upload-artifact@")
     assert upload_step["with"]["path"] == "artifacts/codex-conformance/canary-result.json"
     assert upload_step["with"]["retention-days"] == 30

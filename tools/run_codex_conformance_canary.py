@@ -27,6 +27,7 @@ from moonmind.codex_conformance.canary import (
     CANARY_PROVIDER_UNAVAILABLE,
     CANARY_SCENARIO_VERSION,
     CANARY_TERMINAL_MARKER_MISSING,
+    CANARY_TIMEOUT,
     CANARY_TOOL_PROTOCOL_INCOMPATIBLE,
     DEFAULT_MARKER_PATH,
     canary_prompt,
@@ -72,7 +73,7 @@ def _workflow_payload(*, nonce: str, profile_ref: str | None) -> dict[str, Any]:
         },
     }
     if profile_ref:
-        workflow["runtime"]["profileRef"] = profile_ref
+        workflow["runtime"]["providerProfileRef"] = profile_ref
     return {
         "type": "workflow",
         "payload": {
@@ -103,6 +104,13 @@ def _first_mapping_field(
             for key in keys:
                 value = mapping.get(key)
                 if isinstance(value, dict):
+                    if key in {"canaryEvidence", "canary_evidence"}:
+                        nested = (
+                            value.get("codexConformanceCanary")
+                            or value.get("codex_conformance_canary")
+                        )
+                        if isinstance(nested, dict):
+                            return nested
                     return value
     return None
 
@@ -161,13 +169,48 @@ def _agent_run_context(
     return contexts
 
 
+def _validate_marker(marker: Any, *, nonce: str) -> dict[str, Any]:
+    if not isinstance(marker, dict):
+        raise RuntimeError("Canary marker artifact is not a JSON object.")
+    if marker.get("nonce") != nonce:
+        raise RuntimeError("Canary marker nonce does not match this run.")
+    if marker.get("scenarioVersion") != CANARY_SCENARIO_VERSION:
+        raise RuntimeError("Canary marker scenario version is invalid.")
+    return marker
+
+
+def _marker_from_contexts(
+    contexts: list[dict[str, Any]],
+    *,
+    marker_ref: str,
+) -> dict[str, Any] | None:
+    for mapping in _walk_mappings(contexts):
+        marker = mapping.get("marker")
+        if not isinstance(marker, dict):
+            continue
+        candidate_ref = str(
+            mapping.get("markerArtifactRef")
+            or mapping.get("artifactRef")
+            or mapping.get("ref")
+            or ""
+        ).strip()
+        if not candidate_ref or candidate_ref == marker_ref:
+            return marker
+    return None
+
+
 def _fetch_marker(
     client: httpx.Client,
     *,
     api_url: str,
     marker_ref: str,
     nonce: str,
+    contexts: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    marker = _marker_from_contexts(contexts, marker_ref=marker_ref)
+    if marker is not None:
+        return _validate_marker(marker, nonce=nonce)
+
     artifact_id = _artifact_id_from_ref(marker_ref)
     if not artifact_id or artifact_id == DEFAULT_MARKER_PATH:
         raise RuntimeError("Canary marker artifact ref is missing.")
@@ -179,13 +222,7 @@ def _fetch_marker(
     except httpx.HTTPError as exc:
         raise RuntimeError("Canary marker artifact could not be read.") from exc
     marker = response.json()
-    if not isinstance(marker, dict):
-        raise RuntimeError("Canary marker artifact is not a JSON object.")
-    if marker.get("nonce") != nonce:
-        raise RuntimeError("Canary marker nonce does not match this run.")
-    if marker.get("scenarioVersion") != CANARY_SCENARIO_VERSION:
-        raise RuntimeError("Canary marker scenario version is invalid.")
-    return marker
+    return _validate_marker(marker, nonce=nonce)
 
 
 def _required_str(source: dict[str, Any], key: str) -> str:
@@ -214,6 +251,23 @@ def _required_bool(source: dict[str, Any], key: str) -> bool:
     if not isinstance(value, bool):
         raise RuntimeError(f"Canary observation is missing {key}.")
     return value
+
+
+def _verified_candidate_digest(
+    observation: dict[str, Any],
+    *,
+    candidate_digest: str,
+) -> str:
+    for key in ("testedImageDigest", "runtimeImageDigest", "candidateImageDigest"):
+        value = str(observation.get(key) or "").strip()
+        if not value:
+            continue
+        if value != candidate_digest:
+            raise RuntimeError(
+                f"Canary observation {key} does not match requested candidate digest."
+            )
+        return value
+    raise RuntimeError("Canary observation is missing tested runtime image digest.")
 
 
 def _required_timestamps(
@@ -284,8 +338,18 @@ def _assemble_success_evidence(
     observation = _first_mapping_field(contexts, _CANARY_OBSERVATION_KEYS)
     if observation is None:
         raise RuntimeError("Canary execution did not publish authoritative canary observations.")
+    verified_digest = _verified_candidate_digest(
+        observation,
+        candidate_digest=candidate_digest,
+    )
     marker_ref = _required_str(observation, "markerArtifactRef")
-    marker = _fetch_marker(client, api_url=api_url, marker_ref=marker_ref, nonce=nonce)
+    marker = _fetch_marker(
+        client,
+        api_url=api_url,
+        marker_ref=marker_ref,
+        nonce=nonce,
+        contexts=contexts,
+    )
     timestamps = _required_timestamps(observation, marker)
     protocol_events = _required_list(observation, "protocolEvents")
 
@@ -293,7 +357,7 @@ def _assemble_success_evidence(
         "schemaVersion": "v1",
         "issueRef": "MoonLadderStudios/MoonMind#3150",
         "scenarioVersion": CANARY_SCENARIO_VERSION,
-        "candidateImageDigest": candidate_digest,
+        "candidateImageDigest": verified_digest,
         "candidateImageRef": candidate_ref,
         "codexCliVersion": os.environ.get("CODEX_CLI_VERSION", "unknown"),
         "codexAppServerVersion": os.environ.get("CODEX_APP_SERVER_VERSION"),
@@ -512,7 +576,16 @@ def _main(argv: list[str]) -> int:
                     else CANARY_TOOL_PROTOCOL_INCOMPATIBLE,
                     message=f"{exc.__class__.__name__}: {exc}",
                 )
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
+    except TimeoutError as exc:
+        return _canary_failure_evidence(
+            candidate_digest=args.candidate_digest,
+            candidate_ref=args.candidate_ref,
+            output_path=args.output,
+            nonce=nonce,
+            reason_code=CANARY_TIMEOUT,
+            message=f"{exc.__class__.__name__}: {exc}",
+        )
+    except (httpx.HTTPError, RuntimeError) as exc:
         return _provider_failure_evidence(
             candidate_digest=args.candidate_digest,
             candidate_ref=args.candidate_ref,

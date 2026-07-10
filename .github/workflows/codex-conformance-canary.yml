@@ -92,12 +92,14 @@ jobs:
             --output artifacts/codex-conformance/canary-result.json
 
       - name: Validate compact evidence
+        if: always()
         env:
           MOONMIND_CODEX_CANARY_CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
           MOONMIND_CODEX_CANARY_RESULT_PATH: artifacts/codex-conformance/canary-result.json
         run: pytest tests/provider/codex -m 'provider_verification and codex' -q --tb=short -s
 
       - name: Upload conformance result
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: codex-conformance-${{ github.run_id }}

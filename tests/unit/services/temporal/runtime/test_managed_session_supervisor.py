@@ -60,6 +60,7 @@ def _record(tmp_path: Path) -> CodexManagedSessionRecord:
         workspacePath=str(workspace),
         sessionWorkspacePath=str(session_workspace),
         artifactSpoolPath=str(spool),
+        metadata={"candidateImageDigest": "sha256:" + "b" * 64},
         startedAt=datetime(2026, 4, 6, 12, 0, tzinfo=UTC),
     )
 
@@ -85,6 +86,7 @@ def _canary_events(*, session_id: str = "sess-1") -> list[dict[str, object]]:
             "text": "Tool call started.",
             "sessionId": session_id,
             "turnId": "turn-1",
+            "metadata": {"codexCanaryProtocolEvent": "resumable_process_handle"},
         },
         {
             "stream": "session",
@@ -93,6 +95,7 @@ def _canary_events(*, session_id: str = "sess-1") -> list[dict[str, object]]:
             "text": "Tool call completed.",
             "sessionId": session_id,
             "turnId": "turn-1",
+            "metadata": {"codexCanaryProtocolEvent": "poll_after_yield"},
         },
         {
             "stream": "session",
@@ -605,10 +608,25 @@ async def test_publish_snapshot_publishes_codex_canary_observation_from_runtime_
     assert observation["markerArtifactRef"] == "sess-1/codex_conformance_canary.marker.json"
     assert observation["evidenceArtifactRef"] == "sess-1/codex_conformance_canary.evidence.json"
     assert observation["sessionIdsObserved"] == ["sess-1"]
+    assert observation["testedImageDigest"] == "sha256:" + "b" * 64
+    assert observation["marker"] == _canary_marker()
     assert observation["protocolEvents"] == [
         "resumable_process_handle",
         "poll_after_yield",
     ]
+    summary_payload = json.loads(
+        artifact_storage.resolve_storage_path("sess-1/session.summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert (
+        summary_payload["metadata"]["codexConformanceCanary"]["markerArtifactRef"]
+        == "sess-1/codex_conformance_canary.marker.json"
+    )
+    assert (
+        summary_payload["metadata"]["canaryEvidence"]["marker"]
+        == _canary_marker()
+    )
     marker_artifact = artifact_storage.resolve_storage_path(
         "sess-1/codex_conformance_canary.marker.json"
     )
@@ -646,6 +664,7 @@ def test_codex_canary_observation_requires_resumable_handle(tmp_path: Path) -> N
             **event,
             "kind": "assistant_message",
             "text": "Assistant message completed.",
+            "metadata": {},
         }
         for event in _canary_events()
     ]
@@ -661,6 +680,33 @@ def test_codex_canary_observation_requires_resumable_handle(tmp_path: Path) -> N
     )
 
     assert observation is None
+
+
+def test_codex_canary_observation_does_not_synthesize_protocol_from_plain_tool_events(
+    tmp_path: Path,
+) -> None:
+    record = _record(tmp_path)
+    events = [
+        {
+            key: value
+            for key, value in event.items()
+            if key != "metadata"
+        }
+        for event in _canary_events()
+    ]
+
+    observation = ManagedSessionSupervisor._build_codex_canary_observation(
+        record=record,
+        status="terminated",
+        marker_ref="sess-1/codex_conformance_canary.marker.json",
+        evidence_ref="sess-1/codex_conformance_canary.evidence.json",
+        events=events,
+        marker=_canary_marker(),
+        cleanup_timestamp="2026-07-10T12:00:07Z",
+    )
+
+    assert observation is None
+
 
 def test_codex_canary_observation_requires_poll_after_yield(tmp_path: Path) -> None:
     record = _record(tmp_path)
@@ -714,7 +760,7 @@ def test_codex_canary_observation_preserves_duplicate_counts(
 ) -> None:
     record = _record(tmp_path)
     events = _canary_events()
-    events[0]["metadata"] = metadata
+    events[0]["metadata"] = {**dict(events[0]["metadata"]), **metadata}
     observation = ManagedSessionSupervisor._build_codex_canary_observation(
         record=record,
         status="terminated",

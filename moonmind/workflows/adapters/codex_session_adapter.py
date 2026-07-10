@@ -152,6 +152,8 @@ _SESSION_ARTIFACT_METADATA_FIELDS = (
     "stderrArtifactRef",
     "diagnosticsRef",
     "observabilityEventsRef",
+    "codexConformanceCanary",
+    "canaryEvidence",
 )
 _TURN_METADATA_SCALAR_FIELDS = (
     "reason",
@@ -355,7 +357,12 @@ def _compact_session_ref_payload(
     if isinstance(raw_metadata, Mapping):
         metadata: dict[str, Any] = {}
         for key in _SESSION_ARTIFACT_METADATA_FIELDS:
-            compact_value = _compact_metadata_scalar(raw_metadata.get(key))
+            raw_value = raw_metadata.get(key)
+            if key in {"codexConformanceCanary", "canaryEvidence"}:
+                if isinstance(raw_value, Mapping):
+                    metadata[key] = dict(raw_value)
+                continue
+            compact_value = _compact_metadata_scalar(raw_value)
             if compact_value is not None:
                 metadata[key] = compact_value
         if metadata:
