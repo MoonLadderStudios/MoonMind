@@ -13,6 +13,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
+import { requestWorkflowStartRouteChange } from "../lib/workflowStartRouteGuard";
 import {
   buildTemporalArtifactEditUpdatePayload,
   buildRuntimeCommandVersionWarnings,
@@ -386,6 +387,61 @@ describe("WorkflowStartPage workflow list display modes", () => {
     expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
     expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
     expect(document.querySelector(".workflow-start-workspace")?.getAttribute("data-sidebar-collapsed")).toBe("true");
+  });
+
+  it("guards ordinary dashboard links when the Create draft has changed", async () => {
+    renderWorkflowStartPage({ ...mockPayload, initialData: { ...(mockPayload.initialData as Record<string, unknown>), workflowListDisplayMode: "hidden" } });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep this draft before leaving." } });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const link = document.createElement("a");
+    link.href = "/settings";
+    document.body.appendChild(link);
+    expect(link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }))).toBe(false);
+    expect(confirmSpy).toHaveBeenCalledWith("Leave Create? Unsaved workflow draft changes may be lost.");
+    link.remove();
+    confirmSpy.mockRestore();
+  });
+
+  it("does not guard hash-only links or navigation canceled by a local handler", () => {
+    renderWorkflowStartPage({ ...mockPayload, initialData: { ...(mockPayload.initialData as Record<string, unknown>), workflowListDisplayMode: "hidden" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep this draft." } });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const hashLink = document.createElement("a");
+    hashLink.href = "#details";
+    document.body.appendChild(hashLink);
+    hashLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    const canceledLink = document.createElement("a");
+    canceledLink.href = "/settings";
+    canceledLink.addEventListener("click", (event) => event.preventDefault());
+    document.body.appendChild(canceledLink);
+    canceledLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    hashLink.remove();
+    canceledLink.remove();
+    confirmSpy.mockRestore();
+  });
+
+  it("does not prompt twice when a component route guard already approved the link", () => {
+    renderWorkflowStartPage({ ...mockPayload, initialData: { ...(mockPayload.initialData as Record<string, unknown>), workflowListDisplayMode: "hidden" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep this draft." } });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    expect(requestWorkflowStartRouteChange("/workflows/example")).toBe(true);
+    const link = document.createElement("a");
+    link.href = "/workflows/example";
+    document.body.appendChild(link);
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    link.remove();
+    confirmSpy.mockRestore();
+  });
+
+  it("registers browser-exit protection only after the Create draft changes", async () => {
+    renderWorkflowStartPage({ ...mockPayload, initialData: { ...(mockPayload.initialData as Record<string, unknown>), workflowListDisplayMode: "hidden" } });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Protect this browser exit." } });
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
   });
 });
 
