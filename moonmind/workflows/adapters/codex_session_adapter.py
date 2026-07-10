@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +56,9 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     _current_time,
     _generate_run_id,
     _is_generic_process_exit_summary,
+    _load_auto_publish_result_payload,
+    _load_pr_resolver_terminal_result,
+    _pr_resolver_disposition,
     build_managed_profile_launch_context,
     default_credential_source_for_runtime,
 )
@@ -170,6 +174,10 @@ _TURN_METADATA_SCALAR_FIELDS = (
     "cost_estimate_usd",
     "estimatedCostUsd",
     "estimated_cost_usd",
+    "failureCode",
+    "terminalContractContinuationCount",
+    "terminalContractReason",
+    "terminalContractRecoveryOutcome",
 )
 _SESSION_INTERVENTION_FIELDS = (
     "action",
@@ -180,6 +188,8 @@ _SESSION_INTERVENTION_FIELDS = (
     "toSessionEpoch",
 )
 _EMPTY_ASSISTANT_MAX_CLEAR_SESSION_ATTEMPTS = 2
+_MAX_INCOMPLETE_TERMINAL_CONTRACT_CONTINUATIONS = 2
+_INCOMPLETE_TERMINAL_CONTRACT_FAILURE_CODE = "INCOMPLETE_TERMINAL_CONTRACT"
 _JIRA_CREATED_ISSUE_KEYS_PATTERN = re.compile(
     r"\b(?:created\s+(?:jira\s+)?(?:issues?|stories?|tickets?)|"
     r"created\s+(?:issue\s+)?keys?|issue\s+keys?\s+created)\b"
@@ -187,6 +197,40 @@ _JIRA_CREATED_ISSUE_KEYS_PATTERN = re.compile(
     re.IGNORECASE,
 )
 logger = logging.getLogger(__name__)
+
+
+def _pr_resolver_terminal_contract(
+    workspace_path: str,
+) -> tuple[bool, list[str], dict[str, Any]]:
+    """Evaluate authoritative PR-resolver terminal evidence.
+
+    Attempt files are intentionally used only for compact diagnostics by
+    ``_derive_pr_resolver_metadata`` and can never satisfy this contract.
+    """
+    evidence = _load_pr_resolver_terminal_result(workspace_path)
+    missing: list[str] = []
+    if evidence.payload is None:
+        missing.append("var/pr_resolver/result.json")
+    else:
+        disposition = _pr_resolver_disposition(
+            evidence.payload, merge_gate_owned=False
+        )
+        if disposition in {"merged", "already_merged"} and (
+            _load_auto_publish_result_payload(workspace_path) is None
+        ):
+            missing.append("artifacts/publish_result.json")
+    metadata = _derive_pr_resolver_metadata(workspace_path)
+    return not missing, missing, metadata
+
+
+def _terminal_contract_continuation_instruction(missing: list[str]) -> str:
+    evidence = ", ".join(f"`{path}`" for path in missing)
+    return (
+        "The selected skill has not satisfied its terminal contract. "
+        f"Missing required evidence: {evidence}. Resume the still-running "
+        "resolver if possible; otherwise rerun it from durable attempt state. "
+        "Do not declare completion until the terminal result contract is satisfied."
+    )
 
 def _result_ref_metadata(
     *,
@@ -242,6 +286,24 @@ def _compact_turn_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]
     interventions = _compact_session_interventions(metadata.get("sessionInterventions"))
     if interventions:
         compact["sessionInterventions"] = interventions
+    missing = metadata.get("terminalContractMissingEvidence")
+    if isinstance(missing, list | tuple):
+        compact["terminalContractMissingEvidence"] = [
+            str(item)[:_COMPACT_METADATA_TEXT_CHARS]
+            for item in missing[:4]
+            if str(item).strip()
+        ]
+    history = metadata.get("terminalContractContinuationHistory")
+    if isinstance(history, list | tuple):
+        compact["terminalContractContinuationHistory"] = [
+            {
+                str(key): _compact_metadata_scalar(value)
+                for key, value in item.items()
+                if key in {"continuation", "reason", "outcome"}
+            }
+            for item in history[:_MAX_INCOMPLETE_TERMINAL_CONTRACT_CONTINUATIONS]
+            if isinstance(item, Mapping)
+        ]
     return compact
 
 
@@ -585,6 +647,18 @@ class CodexSessionAdapter(ManagedAgentAdapter):
 
         run_id = _generate_run_id()
         started_at = _current_time()
+        raw_timeout_seconds = request.timeout_policy.get(
+            "timeout_seconds", request.timeout_policy.get("timeoutSeconds")
+        )
+        try:
+            execution_timeout_seconds = float(raw_timeout_seconds)
+        except (TypeError, ValueError):
+            execution_timeout_seconds = 0.0
+        execution_deadline = (
+            time.monotonic() + execution_timeout_seconds
+            if execution_timeout_seconds > 0
+            else None
+        )
         original_instruction_ref = str(request.instruction_ref or "").strip() or None
         original_skillset_ref = str(request.resolved_skillset_ref or "").strip() or None
         workspace_path = self._workspace_path_for_request(
@@ -671,6 +745,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             containerId=current_locator.container_id,
                             threadId=current_locator.thread_id,
                             instructions=instructions,
+                            requestId=f"{request.idempotency_key}:initial",
                         )
                     )
                 )
@@ -889,6 +964,88 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 runtime_epoch=turn_response.session_state.session_epoch,
             )
             current_active_turn_id = turn_response.session_state.active_turn_id
+            selected_skill = selected_agent_skill(request.parameters)
+            continuation_history: list[dict[str, Any]] = []
+            terminal_contract_metadata: dict[str, Any] = {}
+            if turn_response.status == "completed" and selected_skill == "pr-resolver":
+                contract_satisfied, missing_evidence, terminal_contract_metadata = (
+                    _pr_resolver_terminal_contract(workspace_path)
+                )
+                for continuation_index in range(
+                    1, _MAX_INCOMPLETE_TERMINAL_CONTRACT_CONTINUATIONS + 1
+                ):
+                    if contract_satisfied:
+                        break
+                    continuation_reason = "missing_terminal_evidence"
+                    continuation_history.append(
+                        {
+                            "continuation": continuation_index,
+                            "reason": continuation_reason,
+                            "missingEvidence": list(missing_evidence),
+                            "outcome": "requested",
+                        }
+                    )
+                    continuation_call = self._coerce_turn_response(
+                        self._send_turn(
+                            SendCodexManagedSessionTurnRequest(
+                                sessionId=current_locator.session_id,
+                                sessionEpoch=current_locator.session_epoch,
+                                containerId=current_locator.container_id,
+                                threadId=current_locator.thread_id,
+                                instructions=_terminal_contract_continuation_instruction(
+                                    missing_evidence
+                                ),
+                                reason="incomplete_terminal_contract",
+                                requestId=(
+                                    f"{request.idempotency_key}:terminal-contract:"
+                                    f"{continuation_index}"
+                                ),
+                            )
+                        )
+                    )
+                    if execution_deadline is None:
+                        turn_response = await continuation_call
+                    else:
+                        remaining_seconds = execution_deadline - time.monotonic()
+                        if remaining_seconds <= 0:
+                            continuation_history[-1]["outcome"] = "deadline_exhausted"
+                            break
+                        try:
+                            turn_response = await asyncio.wait_for(
+                                continuation_call, timeout=remaining_seconds
+                            )
+                        except TimeoutError:
+                            continuation_history[-1]["outcome"] = "deadline_exhausted"
+                            break
+                    turn_id = turn_response.turn_id
+                    current_locator = self._locator_from_state(
+                        session_state=turn_response.session_state,
+                        runtime_epoch=turn_response.session_state.session_epoch,
+                    )
+                    current_active_turn_id = turn_response.session_state.active_turn_id
+                    if turn_response.status != "completed":
+                        continuation_history[-1]["outcome"] = turn_response.status
+                        break
+                    contract_satisfied, missing_evidence, terminal_contract_metadata = (
+                        _pr_resolver_terminal_contract(workspace_path)
+                    )
+                    continuation_history[-1]["outcome"] = (
+                        "recovered" if contract_satisfied else "incomplete"
+                    )
+                if not contract_satisfied and turn_response.status == "completed":
+                    incomplete_metadata = {
+                        **dict(turn_response.metadata or {}),
+                        **terminal_contract_metadata,
+                        "failureCode": _INCOMPLETE_TERMINAL_CONTRACT_FAILURE_CODE,
+                        "terminalContractContinuationCount": len(continuation_history),
+                        "terminalContractReason": "missing_terminal_evidence",
+                        "terminalContractMissingEvidence": list(missing_evidence),
+                        "terminalContractContinuationHistory": continuation_history,
+                        "terminalContractRecoveryOutcome": "exhausted",
+                    }
+                    turn_response = turn_response.model_copy(
+                        update={"status": "failed", "metadata": incomplete_metadata}
+                    )
             if turn_response.status != "completed":
                 raw_reason = turn_response.metadata.get("reason")
                 reason = _clamp_agent_run_result_summary(
@@ -1010,6 +1167,17 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     ),
                     "turnId": turn_id,
                 }
+                if continuation_history:
+                    result_metadata.update(terminal_contract_metadata)
+                    result_metadata.update(
+                        {
+                            "terminalContractContinuationCount": len(continuation_history),
+                            "terminalContractReason": "missing_terminal_evidence",
+                            "terminalContractMissingEvidence": [],
+                            "terminalContractContinuationHistory": continuation_history,
+                            "terminalContractRecoveryOutcome": "recovered",
+                        }
+                    )
                 if disposition:
                     result_metadata["outcomeDisposition"] = disposition
                     if disposition_reason:
@@ -2124,6 +2292,18 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             compact_turn_metadata = _compact_turn_metadata(turn_metadata)
             if compact_turn_metadata:
                 metadata["turnMetadata"] = compact_turn_metadata
+            failure_code = _compact_metadata_scalar(turn_metadata.get("failureCode"))
+            if failure_code is not None:
+                metadata["failureCode"] = failure_code
+            for key in (
+                "terminalContractContinuationCount",
+                "terminalContractReason",
+                "terminalContractMissingEvidence",
+                "terminalContractContinuationHistory",
+                "terminalContractRecoveryOutcome",
+            ):
+                if key in compact_turn_metadata:
+                    metadata[key] = compact_turn_metadata[key]
         if session_artifacts is not None:
             metadata["sessionArtifacts"] = _compact_session_artifacts_metadata(
                 session_artifacts

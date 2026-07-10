@@ -39,6 +39,8 @@ from moonmind.workflows.adapters.codex_session_adapter import (
     CodexSessionAdapter,
     CodexSessionRunFailedError,
     _jira_skill_blocker_summary,
+    _pr_resolver_terminal_contract,
+    _terminal_contract_continuation_instruction,
 )
 from moonmind.workflows.temporal.managed_session_errors import (
     is_managed_session_locator_mismatch_error,
@@ -49,6 +51,34 @@ from moonmind.workflows.temporal.runtime.codex_session_runtime import (
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 pytestmark = [pytest.mark.asyncio]
+
+
+def test_pr_resolver_terminal_contract_ignores_attempt_artifacts(tmp_path: Path) -> None:
+    attempts = tmp_path / "var" / "pr_resolver" / "attempts"
+    attempts.mkdir(parents=True)
+    (attempts / "attempt-1.json").write_text('{"status":"merged"}', encoding="utf-8")
+
+    satisfied, missing, metadata = _pr_resolver_terminal_contract(str(tmp_path))
+
+    assert satisfied is False
+    assert missing == ["var/pr_resolver/result.json"]
+    assert metadata["prResolverLatestAttempt"]["attemptCount"] == 1
+
+
+def test_pr_resolver_terminal_contract_requires_publish_evidence_for_merge(
+    tmp_path: Path,
+) -> None:
+    result_path = tmp_path / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text('{"status":"merged"}', encoding="utf-8")
+
+    satisfied, missing, _metadata = _pr_resolver_terminal_contract(str(tmp_path))
+
+    assert satisfied is False
+    assert missing == ["artifacts/publish_result.json"]
+    instruction = _terminal_contract_continuation_instruction(missing)
+    assert "artifacts/publish_result.json" in instruction
+    assert "Do not declare completion" in instruction
 
 def _fake_profiles(profiles: list[dict[str, Any]]):
     async def _fetcher(*, runtime_id: str):
