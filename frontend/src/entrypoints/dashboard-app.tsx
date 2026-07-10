@@ -676,6 +676,8 @@ function DashboardNavigation({
   onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const navRef = useRef<HTMLElement>(null);
   const location = useLocation();
   const isWorkflowStart = location.pathname.replace(/\/$/, '') === '/workflows/new';
   const isWorkflowDetail = location.pathname.startsWith('/workflows/') && !isWorkflowStart;
@@ -684,6 +686,61 @@ function DashboardNavigation({
   useEffect(() => {
     setOpen(false);
   }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+    const mobileNavigation = window.matchMedia('(max-width: 1180px)');
+    const closeOnDesktop = (event: MediaQueryListEvent) => {
+      if (!event.matches) {
+        setOpen(false);
+      }
+    };
+    mobileNavigation.addEventListener('change', closeOnDesktop);
+    return () => mobileNavigation.removeEventListener('change', closeOnDesktop);
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const focusable = () => Array.from(
+      navRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [],
+    );
+    focusable()[0]?.focus();
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpen(false);
+        menuButtonRef.current?.focus();
+        return;
+      }
+      if (event.key !== 'Tab') {
+        return;
+      }
+      const items = focusable();
+      if (items.length === 0) {
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
 
   return (
     <header className="masthead">
@@ -711,6 +768,7 @@ function DashboardNavigation({
       ) : null}
 
       <button
+        ref={menuButtonRef}
         className="nav-hamburger"
         type="button"
         aria-expanded={open}
@@ -721,8 +779,22 @@ function DashboardNavigation({
         <span className="nav-hamburger-icon" aria-hidden="true" />
       </button>
 
+      {open ? (
+        <button
+          className="dashboard-nav-backdrop"
+          type="button"
+          aria-label="Close navigation menu"
+          tabIndex={-1}
+          onClick={() => {
+            setOpen(false);
+            menuButtonRef.current?.focus();
+          }}
+        />
+      ) : null}
+
       <div className="masthead-nav">
         <nav
+          ref={navRef}
           className={`route-nav${open ? ' route-nav--open' : ''}`}
           id="dashboard-nav"
           aria-label="MoonMind navigation"

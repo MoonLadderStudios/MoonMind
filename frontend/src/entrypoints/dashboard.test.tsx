@@ -386,6 +386,75 @@ describe('Dashboard shared entry', () => {
     expect(animatedNavIconMocks.settingsStop).toHaveBeenCalledTimes(1);
   });
 
+  it('MM-1192 traps mobile navigation focus, locks scrolling, and restores focus on Escape', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const trigger = screen.getByRole('button', { name: 'Toggle navigation menu' });
+    fireEvent.click(trigger);
+
+    const workflowsLink = screen.getByRole('link', { name: 'Workflows' });
+    const settingsLink = screen.getByRole('link', { name: 'Settings' });
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Close navigation menu' })).toBeTruthy();
+    expect(document.body.style.overflow).toBe('hidden');
+    expect(document.activeElement).toBe(workflowsLink);
+
+    settingsLink.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(document.activeElement).toBe(workflowsLink);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('button', { name: 'Close navigation menu' })).toBeNull();
+    expect(document.body.style.overflow).toBe('');
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('MM-1192 closes the mobile navigation backdrop and restores the trigger', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const trigger = screen.getByRole('button', { name: 'Toggle navigation menu' });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('button', { name: 'Close navigation menu' }));
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(document.body.style.overflow).toBe('');
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('MM-1192 clears mobile navigation modal state at the desktop breakpoint', async () => {
+    let onChange: ((event: MediaQueryListEvent) => void) | undefined;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => ({
+        matches: true,
+        media: '(max-width: 1180px)',
+        addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+          onChange = listener;
+        },
+        removeEventListener: vi.fn(),
+      })),
+    });
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const trigger = screen.getByRole('button', { name: 'Toggle navigation menu' });
+    fireEvent.click(trigger);
+    expect(document.body.style.overflow).toBe('hidden');
+
+    onChange?.({ matches: false } as MediaQueryListEvent);
+
+    await waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
+    expect(document.body.style.overflow).toBe('');
+    expect(screen.queryByRole('button', { name: 'Close navigation menu' })).toBeNull();
+  });
+
   it('MM-1167 switches the full-screen workflow list to the sidebar when navigating to Create', async () => {
     window.history.replaceState({}, '', '/workflows');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
@@ -3039,7 +3108,7 @@ describe('Dashboard shared entry', () => {
           block.includes('top: 7rem;') &&
           block.includes('left: 0.875rem;') &&
           block.includes('right: 0.875rem;') &&
-          block.includes('z-index: 50;'),
+          block.includes('z-index: 51;'),
       ),
     ).toBe(true);
   });
