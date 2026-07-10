@@ -24,10 +24,9 @@ import {
 export const DASHBOARD_PREFERENCES_STORAGE_KEY = 'moonmind.dashboard.preferences';
 export const DASHBOARD_PREFERENCES_CHANGED_EVENT = 'moonmind:dashboard-preferences-changed';
 
-// Bump only when the stored shape changes in a way the validator cannot
-// reconcile from defaults. A mismatched or missing version is treated as an
-// invalid blob and reset to defaults rather than migrated.
-export const DASHBOARD_PREFERENCES_VERSION = 1;
+// Version 2 replaces the workflow-only collapse boolean with the same typed
+// display-mode contract used by every collection. Version 1 is migrated below.
+export const DASHBOARD_PREFERENCES_VERSION = 2;
 
 export type WorkflowListDensity = 'comfortable' | 'compact';
 
@@ -73,8 +72,8 @@ export type DashboardPreferences = {
   createExpertMode: boolean;
   /** Whether diagnostic debug fields are surfaced on the workflow detail page. */
   debugFieldsVisible: boolean;
-  /** Whether the desktop workflow detail sidebar is collapsed on reload. */
-  workflowWorkspaceSidebarCollapsed: boolean;
+  /** Persisted Workflow collection list display mode. */
+  workflowListDisplayMode: WorkflowListDisplayMode;
   /** Last workflow explicitly opened by the operator. */
   lastSelectedWorkflowId: string;
   /**
@@ -109,7 +108,7 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   liveUpdatesEnabled: true,
   createExpertMode: false,
   debugFieldsVisible: true,
-  workflowWorkspaceSidebarCollapsed: false,
+  workflowListDisplayMode: 'sidebar',
   lastSelectedWorkflowId: '',
   recurringListDisplayMode: 'table',
   lastSelectedDefinitionId: '',
@@ -182,6 +181,12 @@ function sanitizeRecurringListDisplayMode(value: unknown): WorkflowListDisplayMo
     : DEFAULT_DASHBOARD_PREFERENCES.recurringListDisplayMode;
 }
 
+function sanitizeWorkflowListDisplayMode(value: unknown): WorkflowListDisplayMode {
+  return typeof value === 'string' && isWorkflowListDisplayMode(value)
+    ? value
+    : DEFAULT_DASHBOARD_PREFERENCES.workflowListDisplayMode;
+}
+
 /**
  * Coerce an arbitrary parsed value into a fully-populated, valid preferences
  * object. Unknown, missing, or wrong-typed fields fall back to their defaults
@@ -208,10 +213,7 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
       value.debugFieldsVisible,
       DEFAULT_DASHBOARD_PREFERENCES.debugFieldsVisible,
     ),
-    workflowWorkspaceSidebarCollapsed: sanitizeBoolean(
-      value.workflowWorkspaceSidebarCollapsed,
-      DEFAULT_DASHBOARD_PREFERENCES.workflowWorkspaceSidebarCollapsed,
-    ),
+    workflowListDisplayMode: sanitizeWorkflowListDisplayMode(value.workflowListDisplayMode),
     lastSelectedWorkflowId: sanitizeString(value.lastSelectedWorkflowId),
     recurringListDisplayMode: sanitizeRecurringListDisplayMode(value.recurringListDisplayMode),
     lastSelectedDefinitionId: sanitizeString(value.lastSelectedDefinitionId),
@@ -227,6 +229,18 @@ type StoredEnvelope = {
   preferences: unknown;
 };
 
+function migrateStoredPreferences(envelope: Partial<StoredEnvelope>): unknown {
+  if (envelope.version === DASHBOARD_PREFERENCES_VERSION) return envelope.preferences;
+  if (envelope.version !== 1 || !isPlainObject(envelope.preferences)) return null;
+
+  const legacy = envelope.preferences;
+  return {
+    ...legacy,
+    workflowListDisplayMode:
+      legacy.workflowWorkspaceSidebarCollapsed === true ? 'hidden' : 'sidebar',
+  };
+}
+
 /**
  * Read the persisted dashboard preferences. Any failure — unavailable storage,
  * unparseable JSON, a version mismatch, or an invalid shape — resolves to the
@@ -239,10 +253,10 @@ export function readDashboardPreferences(): DashboardPreferences {
     const parsed = JSON.parse(raw) as unknown;
     if (!isPlainObject(parsed)) return { ...DEFAULT_DASHBOARD_PREFERENCES };
     const envelope = parsed as Partial<StoredEnvelope>;
-    if (envelope.version !== DASHBOARD_PREFERENCES_VERSION) {
-      return { ...DEFAULT_DASHBOARD_PREFERENCES };
-    }
-    return sanitizeDashboardPreferences(envelope.preferences);
+    const migrated = migrateStoredPreferences(envelope);
+    return migrated === null
+      ? { ...DEFAULT_DASHBOARD_PREFERENCES }
+      : sanitizeDashboardPreferences(migrated);
   } catch {
     return { ...DEFAULT_DASHBOARD_PREFERENCES };
   }

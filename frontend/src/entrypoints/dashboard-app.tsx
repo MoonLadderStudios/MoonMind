@@ -949,7 +949,7 @@ function RoutedDashboardPage({
   const navigate = useNavigate();
   const pendingRequestRef = useRef<symbol | null>(null);
   const [requestedMode, setRequestedMode] = useState<WorkflowListDisplayMode>(() => (
-    readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
+    readDashboardPreferences().workflowListDisplayMode
   ));
   const [requestedRecurringMode, setRequestedRecurringMode] = useState<WorkflowListDisplayMode>(
     () => readDashboardPreferences().recurringListDisplayMode,
@@ -1013,13 +1013,13 @@ function RoutedDashboardPage({
       const prefs = readDashboardPreferences();
       const normalizedPath = window.location.pathname.replace(/\/$/, '');
       // The `/workflows` route is always the full-screen table surface, and
-      // `table` is not representable in the persisted collapse boolean. Deriving
-      // the mode from that boolean here would clobber the table selection back to
+      // The route-owned mode must not be replaced by the persisted detail mode;
+      // doing so would clobber the table selection back to
       // `sidebar` whenever a preference change fires (for example when the
       // already-selected "Full screen table" button re-persists preferences),
       // so leave the route-owned `table` mode untouched on this surface.
       if (normalizedPath !== '/workflows') {
-        setRequestedMode(prefs.workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar');
+        setRequestedMode(prefs.workflowListDisplayMode);
       }
       setLastSelectedWorkflowId(prefs.lastSelectedWorkflowId.trim() || null);
       // Recurring preferences are seeded into local state on mount, so a
@@ -1055,7 +1055,7 @@ function RoutedDashboardPage({
       setRequestedMode('table');
     } else if (normalizedPath.startsWith('/workflows/')) {
       if (requestedMode === 'table') {
-        updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
+        updateDashboardPreferences({ workflowListDisplayMode: 'sidebar' });
       }
       setRequestedMode((mode) => (mode === 'table' ? 'sidebar' : mode));
     } else if (normalizedPath === '/schedules') {
@@ -1085,6 +1085,10 @@ function RoutedDashboardPage({
           const authorizedRememberedId = rememberedId
             ? await authorizedRecurringDefinitionId(apiBase, rememberedId)
             : null;
+          if (rememberedId && !authorizedRememberedId) {
+            setLastSelectedDefinitionId(null);
+            updateDashboardPreferences({ lastSelectedDefinitionId: '' });
+          }
           if (pendingRequestRef.current !== requestId) {
             return;
           }
@@ -1141,7 +1145,7 @@ function RoutedDashboardPage({
     if (location.pathname.replace(/\/$/, '') === '/workflows' && selectedMode !== 'table') {
       const requestId = Symbol();
       pendingRequestRef.current = requestId;
-      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
+      updateDashboardPreferences({ workflowListDisplayMode: selectedMode });
       setRequestedMode(selectedMode);
       setResolutionStatus('Opening first workflow...');
       try {
@@ -1149,6 +1153,10 @@ function RoutedDashboardPage({
         const authorizedRememberedId = rememberedId
           ? await authorizedWorkflowId(apiBase, rememberedId, search)
           : null;
+        if (rememberedId && !authorizedRememberedId) {
+          setLastSelectedWorkflowId(null);
+          updateDashboardPreferences({ lastSelectedWorkflowId: '' });
+        }
         if (pendingRequestRef.current !== requestId) {
           return;
         }
@@ -1161,6 +1169,7 @@ function RoutedDashboardPage({
           return;
         }
         setLastSelectedWorkflowId(targetWorkflowId);
+        updateDashboardPreferences({ lastSelectedWorkflowId: targetWorkflowId });
         setResolutionStatus(null);
         navigate(workflowDetailHref(targetWorkflowId, search));
       } catch {
@@ -1193,10 +1202,10 @@ function RoutedDashboardPage({
       ) {
         return;
       }
-      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
+      updateDashboardPreferences({ workflowListDisplayMode: selectedMode });
       navigate(resolved.targetPath);
     } else {
-      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
+      updateDashboardPreferences({ workflowListDisplayMode: selectedMode });
     }
   };
 

@@ -238,7 +238,7 @@ export function WorkflowWorkspaceShell({
 }) {
   const cfg = readDashboardConfig(payload);
   const effectiveDisplayMode = displayMode ?? (
-    readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
+    readDashboardPreferences().workflowListDisplayMode
   );
   const sourceTemporal = search.get('source') === 'temporal';
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
