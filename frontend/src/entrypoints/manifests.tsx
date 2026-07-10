@@ -139,6 +139,7 @@ function manifestNameFromPath(pathname: string): string {
 
 export function ManifestsPage({ payload }: { payload: BootPayload }) {
   const routedManifestName = manifestNameFromPath(window.location.pathname);
+  const [previousRoutedManifestName, setPreviousRoutedManifestName] = useState(routedManifestName);
   const [manifestName, setManifestName] = useState('');
   const [action, setAction] = useState('run');
   const [sourceKind, setSourceKind] = useState<SourceKind>('registry');
@@ -152,6 +153,12 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
   const [statusFilter, setStatusFilter] = useState('all');
   const [manifestFilter, setManifestFilter] = useState(routedManifestName);
   const [searchFilter, setSearchFilter] = useState('');
+
+  if (routedManifestName !== previousRoutedManifestName) {
+    setPreviousRoutedManifestName(routedManifestName);
+    setRegistryName(routedManifestName);
+    setManifestFilter(routedManifestName);
+  }
 
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['manifests'],
