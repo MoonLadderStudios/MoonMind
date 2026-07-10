@@ -39,7 +39,7 @@ def test_unit_fast_physically_ignores_heavy_collection_paths() -> None:
     assert "--junitxml=artifacts/pytest-unit-fast.xml" in command
 
 
-def test_unit_workflow_keeps_api_and_temporal_boundary_ownership() -> None:
+def test_unit_workflow_keeps_api_and_temporal_ownership() -> None:
     api_command = _run_command("api-component", "Run API/component suite")
     temporal_command = _run_command("temporal-boundary", "Run Temporal boundary suite")
 
@@ -49,7 +49,8 @@ def test_unit_workflow_keeps_api_and_temporal_boundary_ownership() -> None:
     assert "--junitxml=artifacts/pytest-api-component.xml" in api_command
 
     assert "python -m pytest tests/unit/workflows/temporal" in temporal_command
-    assert '-m "temporal_boundary and not slow"' in temporal_command
+    assert '-m "not slow"' in temporal_command
+    assert "temporal_boundary and not slow" not in temporal_command
     assert "--junitxml=artifacts/pytest-temporal-boundary.xml" in temporal_command
 
 

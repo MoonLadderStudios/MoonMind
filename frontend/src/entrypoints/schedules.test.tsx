@@ -797,6 +797,13 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={detailPayload} />);
 
     expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    expect(document.querySelector('[data-entity-detail-frame="recurring"]')).not.toBeNull();
+    expect(screen.getByRole("navigation", { name: "Schedule detail sections" })).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Overview" }).getAttribute("href")).toBe("#schedule-overview");
+    expect(screen.getByRole("link", { name: "Runs" }).getAttribute("href")).toBe("#schedule-runs");
+    expect(screen.getByRole("link", { name: "Configuration" }).getAttribute("href")).toBe("#schedule-configuration");
+    expect(document.querySelector("#schedule-overview")?.getAttribute("aria-label")).toBe("Schedule detail summary");
+    expect(document.querySelector("#schedule-configuration")?.getAttribute("aria-label")).toBe("Schedule configuration");
     expect((screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByRole("button", { name: "Delete schedule" })).toBeNull();
@@ -819,6 +826,10 @@ describe("SchedulesPage", () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha")).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha/runs?limit=200")).toBe(true);
     expect(screen.getByRole("complementary", { name: "Recurring schedule navigation" })).not.toBeNull();
+    const sidebarTable = screen.getByRole("table", { name: "Recurring schedule list table slice" });
+    expect(sidebarTable).not.toBeNull();
+    expect(within(sidebarTable).getByRole("columnheader").textContent).toContain("Recurring");
+    expect(screen.getByRole("searchbox", { name: "Recurring schedule sidebar filter" })).not.toBeNull();
     expect(screen.getByRole("link", { name: /Nightly detail sweep/ }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("button", { name: "Edit schedule" })).not.toBeNull();
     expect(screen.getByRole("button", { name: "Run now" })).not.toBeNull();

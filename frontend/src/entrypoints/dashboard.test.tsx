@@ -386,6 +386,91 @@ describe('Dashboard shared entry', () => {
     expect(animatedNavIconMocks.settingsStop).toHaveBeenCalledTimes(1);
   });
 
+  it('MM-1192 traps mobile navigation focus, locks scrolling, and restores focus on Escape', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const trigger = screen.getByRole('button', { name: 'Toggle navigation menu' });
+    fireEvent.click(trigger);
+
+    const workflowsLink = screen.getByRole('link', { name: 'Workflows' });
+    const settingsLink = screen.getByRole('link', { name: 'Settings' });
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Close navigation menu' })).toBeTruthy();
+    expect(document.body.style.overflow).toBe('hidden');
+    expect(document.activeElement).toBe(workflowsLink);
+
+    settingsLink.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(document.activeElement).toBe(workflowsLink);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('button', { name: 'Close navigation menu' })).toBeNull();
+    expect(document.body.style.overflow).toBe('');
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('MM-1192 closes the mobile navigation backdrop and restores the trigger', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const trigger = screen.getByRole('button', { name: 'Toggle navigation menu' });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('button', { name: 'Close navigation menu' }));
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(document.body.style.overflow).toBe('');
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('MM-1192 clears mobile navigation modal state at the desktop breakpoint', async () => {
+    let onChange: ((event: MediaQueryListEvent) => void) | undefined;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => ({
+        matches: true,
+        media: '(max-width: 1180px)',
+        addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+          onChange = listener;
+        },
+        removeEventListener: vi.fn(),
+      })),
+    });
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const trigger = screen.getByRole('button', { name: 'Toggle navigation menu' });
+    fireEvent.click(trigger);
+    expect(document.body.style.overflow).toBe('hidden');
+
+    onChange?.({ matches: false } as MediaQueryListEvent);
+
+    await waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
+    expect(document.body.style.overflow).toBe('');
+    expect(screen.queryByRole('button', { name: 'Close navigation menu' })).toBeNull();
+  });
+
+  it('switches the full-screen workflow list to hidden when navigating to Create', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(screen.getByRole('link', { name: 'Create' }));
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+    });
+    expect(window.location.pathname).toBe('/workflows/new');
+  });
+
   it('renders dashboard alerts and lazy-loads the requested page component', async () => {
     window.history.replaceState({}, '', '/workflows');
     const payload: BootPayload = {
@@ -402,7 +487,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
-    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(5);
+    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(6);
     expect(screen.getByText('vtest-build')).toBeTruthy();
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
@@ -1213,6 +1298,36 @@ describe('Dashboard shared entry', () => {
     expect(window.location.search).toBe('?source=temporal');
   });
 
+  it('maps a persisted table mode to hidden on the Create route', async () => {
+    window.history.replaceState({}, '', '/workflows/new?source=temporal');
+    updateDashboardPreferences({ workflowListDisplayMode: 'table' });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+    await waitFor(() => {
+      expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
+    });
+  });
+
+  it('preserves the Create hidden mode when preferences change', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('link', { name: 'Create' }));
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'preference-sync' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+    });
+  });
+
   it('MM-1029 navigateTo uses the SPA route event for dashboard-internal URLs', async () => {
     window.history.replaceState({}, '', '/workflows/new');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
@@ -1320,7 +1435,7 @@ describe('Dashboard shared entry', () => {
     expect(window.location.search).toContain('source=temporal');
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/remembered-123?source=temporal');
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions?'))).toBe(false);
-    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
   });
 
   it('MM-1113 keeps a route-selected workflow when switching detail-compatible modes', async () => {
@@ -1334,7 +1449,7 @@ describe('Dashboard shared entry', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
 
     await waitFor(() => {
-      expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+      expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
     });
     expect(window.location.pathname).toBe('/workflows/route-123');
     expect(window.location.search).toBe('?stateIn=failed&limit=10');
@@ -1412,8 +1527,8 @@ describe('Dashboard shared entry', () => {
       expect(window.location.pathname).toBe('/workflows/visible-456');
     });
     expect(window.location.pathname).not.toBe('/workflows/unauthorized-123');
-    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(false);
-    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('unauthorized-123');
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('sidebar');
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('visible-456');
   });
 
   it('MM-1113 never navigates to or renders an unauthorized remembered workflow during fallback', async () => {
@@ -1447,7 +1562,7 @@ describe('Dashboard shared entry', () => {
     });
     expect(window.location.pathname).not.toBe('/workflows/secret-remembered');
     expect(screen.queryByText(/secret-remembered/i)).toBeNull();
-    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('secret-remembered');
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('authorized-row');
   });
 
   it('MM-1113 selects only returned authorized first-row data', async () => {
@@ -1690,6 +1805,10 @@ describe('Dashboard shared entry', () => {
     expect(shellBlock).toContain('--workflow-list-slab-bleed-inline: 1rem');
     expect(shellBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
     expect(shellBlock).toContain('[content-start] min(var(--mm-content-max), calc(100% - 2rem))');
+
+    const skillsWorkspaceBlock = cssRuleBlock(dashboardCss, '.skills-page.collection-workspace');
+    expect(skillsWorkspaceBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
+    expect(skillsWorkspaceBlock).toContain('--mm-rail-bleed: 1rem');
 
     // The rail stays fixed to the shared workflow-column width and bleeds left
     // by the same amount as the data slab, so its painted edge reaches x:0.
@@ -3005,7 +3124,7 @@ describe('Dashboard shared entry', () => {
           block.includes('top: 7rem;') &&
           block.includes('left: 0.875rem;') &&
           block.includes('right: 0.875rem;') &&
-          block.includes('z-index: 50;'),
+          block.includes('z-index: 51;'),
       ),
     ).toBe(true);
   });
@@ -3072,7 +3191,7 @@ describe('Dashboard shared entry', () => {
       /@media \(max-width: 767px\)\s*\{[\s\S]*\.workflow-list-display-control\s*\{[^}]*display:\s*none/s,
     );
     expect(dashboardCss).toMatch(
-      /@media \(max-width: 720px\)\s*\{[\s\S]*\.recurring-schedule-sidebar\s*\{[^}]*display:\s*none/s,
+      /@media \(max-width: 720px\)\s*\{[\s\S]*\[data-recurring-list-display-mode="sidebar"\] \.collection-sidebar\s*\{[^}]*display:\s*none/s,
     );
     expect(dashboardCss).toMatch(
       /@media \(max-width: 900px\)\s*\{[\s\S]*\.grid-2\s*\{/,

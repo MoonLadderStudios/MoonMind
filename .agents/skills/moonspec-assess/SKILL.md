@@ -10,9 +10,11 @@ metadata:
 
 Use this skill after `moonspec-specify` and before `moonspec-plan` when a source-backed spec may include `artifacts/moonspec/source-acceptance.json`.
 
+Before assessing, resolve the active feature directory and feature identifier from `.specify/feature.json` or the selected `specs/<feature>/spec.md`. Consume `artifacts/moonspec/source-acceptance.json` only when its `featureId` matches the active feature. If the artifact is absent or belongs to a different feature, report `not_applicable` and do not write or require an assessment artifact for this story.
+
 ## Output
 
-Write `artifacts/moonspec/acceptance-assessment.json` with schema version `v1`.
+Write `artifacts/moonspec/acceptance-assessment.json` with schema version `v1` and the same `featureId` as the active feature and source acceptance matrix.
 
 External systems can provide a matrix, but MoonSpec stays provider neutral.
 

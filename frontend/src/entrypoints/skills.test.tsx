@@ -117,6 +117,22 @@ describe('Skills Entrypoint', () => {
     });
   });
 
+  it('names the skill navigation, exposes selection, and focuses the selected detail', async () => {
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    const navigation = await screen.findByRole('navigation', { name: 'Skill navigation' });
+    expect(navigation).toBeTruthy();
+    const skill = await screen.findByRole('button', { name: 'pr-resolver' });
+    expect(skill.getAttribute('aria-current')).toBeNull();
+
+    fireEvent.click(skill);
+
+    await waitFor(() => {
+      expect(skill.getAttribute('aria-current')).toBe('true');
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'pr-resolver' }));
+    });
+  });
+
   it('renders inline markdown inside list items and preserves code language classes', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -233,7 +249,7 @@ describe('Skills Entrypoint', () => {
     expect(await screen.findByRole('button', { name: 'speckit-orchestrate' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'pr-resolver' })).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText('Filter skills by ID'), {
+    fireEvent.change(screen.getByLabelText('Skill filter'), {
       target: { value: 'pr-' },
     });
 
@@ -242,13 +258,27 @@ describe('Skills Entrypoint', () => {
       expect(screen.getByRole('button', { name: 'pr-resolver' })).toBeTruthy();
     });
 
-    fireEvent.change(screen.getByLabelText('Filter skills by ID'), {
+    fireEvent.change(screen.getByLabelText('Skill filter'), {
       target: { value: 'does-not-exist' },
     });
 
     await waitFor(() => {
       expect(screen.getByText('No skills match your filter.')).toBeTruthy();
+      expect(screen.getByRole('rowgroup', { name: 'Current skill' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Current skill: speckit-orchestrate' })).toBeTruthy();
     });
+  });
+
+  it('keeps the shared skill sidebar mounted while create and upload are open', async () => {
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+
+    expect(screen.getByRole('dialog', { name: 'Create or upload skill' })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Skill navigation' })).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'Skill list table slice' })).toBeTruthy();
+    expect(screen.queryByText('Available Skills')).toBeNull();
+    expect(screen.queryByText('Workflow')).toBeNull();
   });
 
   it('shows the raw markdown and metadata preview tabs', async () => {
@@ -359,6 +389,31 @@ describe('Skills Entrypoint', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Create or upload skill' })).toBeNull();
     });
+  });
+
+  it('traps focus in the create drawer and restores it to the trigger', async () => {
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    const trigger = await screen.findByRole('button', { name: 'Create New Skill' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Create or upload skill' });
+    const close = screen.getByRole('button', { name: 'Close create skill' });
+    const lastAction = screen.getByRole('button', { name: 'Upload Zip' });
+    dialog.querySelectorAll<HTMLElement>('button, input, textarea, select').forEach((element) => {
+      Object.defineProperty(element, 'offsetWidth', { configurable: true, value: 1 });
+    });
+
+    close.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(lastAction);
+
+    lastAction.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(document.activeElement).toBe(close);
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it('renders markdown without unsafe HTML or links', async () => {

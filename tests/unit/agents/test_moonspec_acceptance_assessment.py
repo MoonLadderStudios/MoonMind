@@ -87,8 +87,8 @@ def test_mm1135_downstream_skills_consume_assessment_artifacts() -> None:
     expected = {
         "moonspec-orchestrate": [
             "moonspec-assess",
-            "The original source acceptance matrix",
-            "A single story may span multiple implementation surfaces",
+            "the original source acceptance matrix",
+            "a single story may span multiple implementation surfaces",
         ],
         "moonspec-plan": [
             "artifacts/moonspec/source-acceptance.json",
@@ -97,7 +97,7 @@ def test_mm1135_downstream_skills_consume_assessment_artifacts() -> None:
         ],
         "moonspec-tasks": [
             "## Source Acceptance Coverage",
-            "Every missing, partial, conflict, or required-unverified row",
+            "every missing, partial, conflict, or required-unverified row",
             "Each negative constraint row",
         ],
         "moonspec-implement": [

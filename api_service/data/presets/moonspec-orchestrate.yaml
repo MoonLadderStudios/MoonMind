@@ -50,15 +50,13 @@ steps:
       When source-backed requirements are present, ensure moonspec-specify writes artifacts/moonspec/source-acceptance.json for the assessment stage.
       Do not classify this input into a different workflow and do not run moonspec-breakdown from this preset; any story splitting must already be complete before MoonSpec Orchestrate starts.
       Preserve the original request or source design in spec.md so final verification can compare against it.
-      When source-backed requirements are present, ensure moonspec-specify writes artifacts/moonspec/source-acceptance.json for the assessment stage.
-      When source-backed requirements are present, ensure moonspec-specify writes artifacts/moonspec/source-acceptance.json for the assessment stage.
     skill:
       id: moonspec-specify
       args: {}
   - title: Assess source acceptance coverage
     instructions: |-
-      Run moonspec-assess after moonspec-specify when artifacts/moonspec/source-acceptance.json exists or when the spec preserves source-backed requirements.
-      Verify artifacts/moonspec/acceptance-assessment.json exists before planning continues.
+      Run moonspec-assess after moonspec-specify only when artifacts/moonspec/source-acceptance.json exists and its featureId matches the active feature. If no matching source acceptance matrix exists, report that source assessment is not applicable and continue to planning without requiring artifacts/moonspec/acceptance-assessment.json.
+      When a matching source acceptance matrix exists, verify artifacts/moonspec/acceptance-assessment.json exists and has the same featureId before planning continues.
       Treat the assessment bounded backlog as the authoritative bridge from source acceptance rows into planning.
     skill:
       id: moonspec-assess
@@ -100,6 +98,7 @@ steps:
     enabled: "{% if inputs.run_verify %}true{% endif %}"  # renders an empty (falsy) string when run_verify is false; a quoted "false" string would be truthy
     instructions: |-
       Run moonspec-verify as the final read-only gate unless an up-to-date verification report already covers the current code and artifacts.
+      Treat this workflow step text as operational guidance, not as the source-direct verification baseline; verify against the original request, source design, or active feature spec.
       If the verdict is ADDITIONAL_WORK_NEEDED, use the report as the remaining-work list and run at most two bounded implementation and verification cycles.
       If the remaining work is dominated by documentation-type gaps — the canonical document, not the code, blocks completion — run moonspec-doc-reconcile in escalate-only mode instead of another remediation cycle, then stop and report that outcome.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context.

@@ -1,7 +1,7 @@
 description = "Assess MoonSpec source acceptance coverage."
 
 prompt = """
-Use the `moonspec-assess` skill to produce `artifacts/moonspec/acceptance-assessment.json`.
+Use the `moonspec-assess` skill to produce `artifacts/moonspec/acceptance-assessment.json` from source acceptance evidence whose `featureId` matches the active feature.
 
 User input:
 {{args}}

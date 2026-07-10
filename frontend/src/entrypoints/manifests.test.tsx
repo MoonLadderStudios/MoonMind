@@ -120,6 +120,38 @@ describe('Manifests Entrypoint', () => {
     });
   });
 
+  it('hydrates manifest context from a safe deep link', async () => {
+    window.history.pushState({}, 'Manifest', '/manifests/nightly-docs');
+
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    await screen.findByText('mm:existing-manifest');
+    expect((screen.getByLabelText('Registry Manifest Name') as HTMLInputElement).value).toBe(
+      'nightly-docs',
+    );
+    expect((screen.getByLabelText('Filter by manifest') as HTMLInputElement).value).toBe(
+      'nightly-docs',
+    );
+    expect(screen.queryByText('registry-refresh')).toBeNull();
+  });
+
+  it('updates manifest context when client-side navigation changes the deep link', async () => {
+    window.history.pushState({}, 'Manifest', '/manifests/nightly-docs');
+    const { rerender } = renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    await screen.findByText('mm:existing-manifest');
+    window.history.pushState({}, 'Manifest', '/manifests/registry-refresh');
+    rerender(<ManifestsPage payload={mockPayload} />);
+
+    expect((screen.getByLabelText('Registry Manifest Name') as HTMLInputElement).value).toBe(
+      'registry-refresh',
+    );
+    expect((screen.getByLabelText('Filter by manifest') as HTMLInputElement).value).toBe(
+      'registry-refresh',
+    );
+    expect(screen.queryByText('nightly-docs')).toBeNull();
+  });
+
   it('shows manifest run details, stage-aware status, timing, and accessible row actions', async () => {
     renderWithClient(<ManifestsPage payload={mockPayload} />);
 

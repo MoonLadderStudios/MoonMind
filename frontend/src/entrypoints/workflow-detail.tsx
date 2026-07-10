@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { ExecutionStatusPill, StepExecutionStatusPill, StepLedgerStatusPill } from '../components/ExecutionStatusPill';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
+import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import {
   DashboardToastProvider,
   useDashboardToast,
@@ -237,7 +238,7 @@ export function WorkflowWorkspaceShell({
 }) {
   const cfg = readDashboardConfig(payload);
   const effectiveDisplayMode = displayMode ?? (
-    readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
+    readDashboardPreferences().workflowListDisplayMode
   );
   const sourceTemporal = search.get('source') === 'temporal';
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
@@ -9071,7 +9072,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   return (
     <DashboardToastProvider>
-      <WorkflowDetailPageContent payload={payload} />
+      <EntityDetailFrame entity="workflow" main={<WorkflowDetailPageContent payload={payload} />} />
     </DashboardToastProvider>
   );
 }

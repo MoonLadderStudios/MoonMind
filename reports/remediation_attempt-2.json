@@ -1,0 +1,45 @@
+{
+  "artifact_type": "remediation.attempt",
+  "attempt": 2,
+  "issue_ref": "MoonLadderStudios/MoonMind#3140",
+  "source_verification_artifact": "artifacts/github-issue-implement-verify.json",
+  "source_verdict": "ADDITIONAL_WORK_NEEDED",
+  "summary": "Terminal artifact validation now rejects parseable payloads unless they contain a recognized terminal status or a recognized terminal disposition. A focused regression test covers an arbitrary parseable object while preserving established status-based and disposition-only result shapes.",
+  "changed_files": [
+    "moonmind/workflows/adapters/managed_agent_adapter.py",
+    "tests/unit/workflows/adapters/test_managed_agent_adapter.py",
+    "reports/remediation_attempt-2.json"
+  ],
+  "gap_statuses": [
+    {
+      "requirement": "A terminal result must have a recognized terminal status/disposition",
+      "gap_type": "implementation",
+      "status": "fixed",
+      "evidence": "Terminal loading now requires membership in the recognized terminal-status or terminal-disposition sets; empty and arbitrary dispositions cannot become authoritative evidence."
+    },
+    {
+      "requirement": "Unrecognized parseable terminal evidence must be covered",
+      "gap_type": "verification",
+      "status": "fixed",
+      "evidence": "test_pr_resolver_rejects_unrecognized_terminal_evidence writes a valid JSON object without terminal semantics and asserts rejection plus the compact validation failure."
+    }
+  ],
+  "targeted_checks": [
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py && git diff --check",
+      "result": "FAIL",
+      "notes": "The first run exposed four established reenter-gate cases that use recognized terminal statuses while disposition derivation is context-dependent. Validation was narrowed to accept recognized statuses or a recognized disposition."
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py && git diff --check",
+      "result": "PASS",
+      "notes": "79 Python tests passed with five non-blocking pytest marker warnings. Automatic frontend phase passed 63 files and 972 tests with 238 skipped. Diff hygiene passed."
+    }
+  ],
+  "remaining_work": [],
+  "scope_controls": {
+    "pull_request_created": false,
+    "github_issue_status_changed": false,
+    "scope_broadened": false
+  }
+}

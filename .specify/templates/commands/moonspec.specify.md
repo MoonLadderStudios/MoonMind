@@ -14,6 +14,8 @@ $ARGUMENTS
 
 You **MUST** consider the user input before proceeding (if not empty).
 
+If the request is backed by a source document, issue, or external acceptance record, preserve its acceptance rows in `artifacts/moonspec/source-acceptance.json` using `"schemaVersion": "v1"` and a `featureId` matching the active feature directory so `/moonspec.assess` can safely consume the matrix before planning.
+
 ## Pre-Execution Checks
 
 **Check for extension hooks (before specification)**:

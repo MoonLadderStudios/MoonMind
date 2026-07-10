@@ -1,89 +1,57 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issue_ref": "MM-1172",
-  "issue_url": "https://moonladder.atlassian.net/browse/MM-1172",
-  "source_verification_artifact": "artifacts/jira-implement-verify.json",
+  "issue_ref": "MoonLadderStudios/MoonMind#3140",
+  "source_verification_artifact": "artifacts/github-issue-implement-verify.json",
   "source_verdict": "ADDITIONAL_WORK_NEEDED",
-  "brief_truncated": false,
-  "summary": "Remediated the verifier-reported execution-router gaps for provider profile model tier launch metadata. Legacy provider profiles that only expose default_model/default_effort now preserve the compatibility modelSource provider_profile_default instead of being reclassified as profile_default_tier. Execution launch paths now record modelTierResolution only when tier policy is actually involved: an explicit modelTier, an advisory tierPreview, or a provider profile with configured model_tiers. Added focused launch-path coverage proving stale tierPreview data is advisory, backend resolution re-runs against the current profile policy, and modelTierResolution.previewMismatch is recorded.",
+  "summary": "Corrected stale terminal evidence coverage and resolved focused adapter-suite failures exposed once the documented test dependencies were installed. Terminal failures now retain manual-review disposition, and terminal artifact freshness allows a one-second precision boundary between filesystem timestamps and run-store start timestamps while still rejecting genuinely stale evidence.",
   "changed_files": [
-    "api_service/api/routers/executions.py",
-    "moonmind/workflows/executions/model_resolver.py",
-    "tests/unit/api/routers/test_executions.py",
+    "moonmind/workflows/adapters/managed_agent_adapter.py",
+    "tests/unit/workflows/adapters/test_managed_agent_adapter.py",
     "reports/remediation_attempt-1.json"
   ],
   "gap_statuses": [
     {
-      "requirement": "Preview output is advisory and does not replace launch-time backend resolution.",
+      "requirement": "Add coverage for stale terminal evidence",
       "gap_type": "verification",
       "status": "fixed",
-      "evidence": [
-        "api_service/api/routers/executions.py now gates modelTierResolution emission through _should_record_model_tier_resolution so ordinary non-tier launch payloads retain their prior shape while tier-policy launches still record resolved metadata.",
-        "tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_records_tier_preview_mismatch submits stale tierPreview data and verifies launch-time backend resolution stores the current profile model/effort instead of trusting the preview snapshot.",
-        "./tools/test_unit.sh tests/unit/api/routers/test_executions.py passed."
-      ]
+      "evidence": "The malformed-and-stale test now uses the current run identity and asserts 'stale terminal artifact', reaching the freshness rejection branch."
     },
     {
-      "requirement": "Backend can detect and record preview mismatch when submitted preview state differs from current profile policy.",
+      "requirement": "Run the focused adapter unit and boundary coverage",
       "gap_type": "verification",
       "status": "fixed",
-      "evidence": [
-        "tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_records_tier_preview_mismatch asserts modelTierResolution.previewMismatch is true in initial_parameters when the submitted preview model differs from the resolver output.",
-        "The same test asserts requestedModelTier, effectiveModelTier, resolvedModel, resolvedEffort, modelSource, effortSource, and fallbackReason in the recorded modelTierResolution payload."
-      ]
+      "evidence": "Installed the declared tests extra and the exact focused runner completed successfully: 78 Python tests passed; the automatic frontend phase also passed."
     },
     {
-      "requirement": "Provider profile default compatibility during migration.",
+      "requirement": "Preserve established manual-review terminal result behavior",
       "gap_type": "implementation",
       "status": "fixed",
-      "evidence": [
-        "moonmind/workflows/executions/model_resolver.py now distinguishes explicitly configured model_tiers from tiers derived from legacy default_model/default_effort fields.",
-        "Legacy profiles without configured model_tiers continue to resolve modelSource=provider_profile_default unless an explicit requested model tier is supplied.",
-        "Previously failing tests test_step_runtime_inherits_task_profile_default_model and test_create_task_shaped_execution_accepts_provider_profile_alias now pass in ./tools/test_unit.sh tests/unit/api/routers/test_executions.py."
-      ]
+      "evidence": "Focused execution revealed that failed, blocked, and attempts_exhausted terminal results lost mergeAutomationDisposition. They now derive manual_review unless an owned merge gate derives reenter_gate."
+    },
+    {
+      "requirement": "Reject stale artifacts without rejecting run-boundary writes",
+      "gap_type": "implementation",
+      "status": "fixed",
+      "evidence": "Freshness validation now permits a one-second filesystem/run-store timestamp precision tolerance; the explicit 2020 stale artifact remains rejected."
     }
-  ],
-  "unchanged_verified_requirements": [
-    "Provider Profile create/update accepts model_tiers and default_model_tier.",
-    "Provider Profile responses include tier policy plus compatibility fields during migration.",
-    "The preview endpoint returns requested tier, effective tier, model, effort, and fallback reason for each requested step.",
-    "Use backend resolver logic for preview parity.",
-    "Do not require presets to name concrete models for preview."
   ],
   "targeted_checks": [
     {
-      "command": "./tools/test_unit.sh tests/unit/api/routers/test_executions.py",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py",
       "result": "PASS",
-      "notes": "357 Python tests passed, including the new launch-path preview mismatch coverage and the four previously failing execution-router tests. The runner UI phase also passed: 60 files passed, 942 tests passed, 238 skipped. Warnings were existing Starlette deprecation, AsyncMock resource, and jsdom canvas getContext warnings."
-    },
-    {
-      "command": "./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/workflows/executions/test_model_resolver.py",
-      "result": "PASS",
-      "notes": "82 Python tests passed for provider profile API and model resolver coverage. The runner UI phase also passed: 60 files passed, 942 tests passed, 238 skipped. Warnings were existing google.generativeai deprecation and jsdom canvas getContext warnings."
+      "notes": "78 Python tests passed with four non-blocking pytest marker warnings. Automatic frontend phase: 63 files passed; 972 tests passed and 238 skipped."
     },
     {
       "command": "git diff --check",
       "result": "PASS",
-      "notes": "No whitespace errors reported for the working tree diff."
+      "notes": "No whitespace errors."
     }
   ],
   "remaining_work": [],
-  "environment_notes": [
-    {
-      "item": "MoonMind RAG retrieved context",
-      "status": "NOT_USED",
-      "detail": "Retrieved context was delivered in degraded local fallback mode and was not needed for this bounded remediation; direct repository files and the authoritative verifier artifact controlled the work."
-    },
-    {
-      "item": "Stale prior artifact overwritten",
-      "status": "NOTE",
-      "detail": "reports/remediation_attempt-1.json previously described MM-1146. It was replaced with this MM-1172 remediation attempt record."
-    }
-  ],
   "scope_controls": {
     "pull_request_created": false,
-    "jira_status_changed": false,
+    "github_issue_status_changed": false,
     "scope_broadened": false
   }
 }

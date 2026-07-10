@@ -225,7 +225,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pytest tests/unit/workflows/temporal \
-            -m "temporal_boundary and not slow" \
+            -m "not slow" \
             -q --durations=25 \
             --junitxml=artifacts/pytest-temporal-boundary.xml
 

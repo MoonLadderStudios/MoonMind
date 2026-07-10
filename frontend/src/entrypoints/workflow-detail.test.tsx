@@ -797,7 +797,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
 
-  it('MM-1116 renders the sidebar workflow list as a table slice with a filterable header', async () => {
+  it('MM-1186 renders the Workflow adapter through the shared collection sidebar', async () => {
     window.history.pushState({}, 'Workspace Table Slice Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -805,6 +805,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(sidebar.classList.contains('collection-sidebar')).toBe(true);
     const table = await within(sidebar).findByRole('table', { name: 'Workflow list table slice' });
     const header = within(table).getByRole('columnheader', { name: 'Workflow' });
     expect(header.closest('.workflow-workspace-sidebar-header-row')).toBeTruthy();
@@ -1221,7 +1222,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     cleanup();
     window.localStorage.clear();
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
 
     const secondRender = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
@@ -1236,7 +1237,7 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState({}, 'Workspace Reopen Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
 
     renderWithClient(
       <WorkflowDetailEntrypoint
@@ -1260,7 +1261,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(sidebar).toBeTruthy();
-    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
     expect(
       fetchSpy.mock.calls.filter(
         ([input]) => String(input) === '/api/executions/test-123?source=temporal',
@@ -1272,7 +1273,7 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState({}, 'Workspace Mobile Collapse Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(false);
     mockWorkflowWorkspaceFetches();
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
@@ -1360,7 +1361,7 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState({}, 'Workspace Motion Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
 
     const { container } = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 

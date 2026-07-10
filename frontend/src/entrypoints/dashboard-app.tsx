@@ -21,7 +21,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
+import { Archive, Bot, PanelLeft, Rows3, ScrollText, ShieldCheck, Square, Wrench } from 'lucide-react';
 import {
   MoonIcon,
   type MoonIconHandle,
@@ -68,9 +68,12 @@ type PageComponent = ComponentType<{ payload: BootPayload }>;
 type PageImport = () => Promise<{ default: PageComponent }>;
 
 const PAGE_IMPORTS = {
+  artifacts: () => import('./artifacts'),
   'index-health': () => import('./index-health'),
   manifests: () => import('./manifests'),
+  'omnigent-inventory': () => import('./omnigent-inventory'),
   'oauth-terminal': () => import('./oauth-terminal'),
+  remediations: () => import('./remediations'),
   schedules: () => import('./schedules'),
   settings: () => import('./settings'),
   skills: () => import('./skills'),
@@ -127,6 +130,10 @@ type AnimatedNavIconProps = NavIconProps & {
 
 function WorkflowsNavIcon({ className }: NavIconProps) {
   return <ScrollText size={NAV_ICON_SIZE} className={className} aria-hidden="true" />;
+}
+
+function RemediationsNavIcon({ className }: NavIconProps) {
+  return <Wrench size={NAV_ICON_SIZE} className={className} aria-hidden="true" />;
 }
 
 function StartWorkflowNavIcon({ className, iconRef }: AnimatedNavIconProps) {
@@ -669,6 +676,8 @@ function DashboardNavigation({
   onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const navRef = useRef<HTMLElement>(null);
   const location = useLocation();
   const isWorkflowStart = location.pathname.replace(/\/$/, '') === '/workflows/new';
   const isWorkflowDetail = location.pathname.startsWith('/workflows/') && !isWorkflowStart;
@@ -677,6 +686,61 @@ function DashboardNavigation({
   useEffect(() => {
     setOpen(false);
   }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+    const mobileNavigation = window.matchMedia('(max-width: 1180px)');
+    const closeOnDesktop = (event: MediaQueryListEvent) => {
+      if (!event.matches) {
+        setOpen(false);
+      }
+    };
+    mobileNavigation.addEventListener('change', closeOnDesktop);
+    return () => mobileNavigation.removeEventListener('change', closeOnDesktop);
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const focusable = () => Array.from(
+      navRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [],
+    );
+    focusable()[0]?.focus();
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpen(false);
+        menuButtonRef.current?.focus();
+        return;
+      }
+      if (event.key !== 'Tab') {
+        return;
+      }
+      const items = focusable();
+      if (items.length === 0) {
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
 
   return (
     <header className="masthead">
@@ -704,6 +768,7 @@ function DashboardNavigation({
       ) : null}
 
       <button
+        ref={menuButtonRef}
         className="nav-hamburger"
         type="button"
         aria-expanded={open}
@@ -714,8 +779,22 @@ function DashboardNavigation({
         <span className="nav-hamburger-icon" aria-hidden="true" />
       </button>
 
+      {open ? (
+        <button
+          className="dashboard-nav-backdrop"
+          type="button"
+          aria-label="Close navigation menu"
+          tabIndex={-1}
+          onClick={() => {
+            setOpen(false);
+            menuButtonRef.current?.focus();
+          }}
+        />
+      ) : null}
+
       <div className="masthead-nav">
         <nav
+          ref={navRef}
           className={`route-nav${open ? ' route-nav--open' : ''}`}
           id="dashboard-nav"
           aria-label="MoonMind navigation"
@@ -735,6 +814,18 @@ function DashboardNavigation({
           >
             Create
           </AnimatedRouteNavLink>
+          {uiInfo?.features?.omnigentAgents === true ? (
+            <NavLink to="/omnigent/agents" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+              <Bot size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
+              Omnigent Agents
+            </NavLink>
+          ) : null}
+          {uiInfo?.features?.omnigentPolicies === true ? (
+            <NavLink to="/omnigent/policies" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+              <ShieldCheck size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
+              Omnigent Policies
+            </NavLink>
+          ) : null}
           <AnimatedRouteNavLink
             to="/schedules"
             icon={SchedulesNavIcon}
@@ -749,6 +840,17 @@ function DashboardNavigation({
           >
             Skills
           </AnimatedRouteNavLink>
+          {uiInfo?.features?.artifacts !== false ? (
+            <NavLink
+              to="/artifacts"
+              className={({ isActive }) => (
+                isActive || location.pathname === '/observability' ? 'active' : undefined
+              )}
+            >
+              <Archive size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
+              Artifacts
+            </NavLink>
+          ) : null}
           <AnimatedRouteNavLink
             to="/settings"
             icon={SettingsNavIcon}
@@ -756,6 +858,15 @@ function DashboardNavigation({
           >
             Settings
           </AnimatedRouteNavLink>
+          {uiInfo?.features?.remediationCollection === true ? (
+            <NavLink
+              to="/remediations"
+              className={({ isActive }) => (isActive ? 'active' : undefined)}
+            >
+              <RemediationsNavIcon className="route-nav-icon" />
+              Remediation
+            </NavLink>
+          ) : null}
         </nav>
       </div>
 
@@ -838,7 +949,7 @@ function RoutedDashboardPage({
   const navigate = useNavigate();
   const pendingRequestRef = useRef<symbol | null>(null);
   const [requestedMode, setRequestedMode] = useState<WorkflowListDisplayMode>(() => (
-    readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
+    readDashboardPreferences().workflowListDisplayMode
   ));
   const [requestedRecurringMode, setRequestedRecurringMode] = useState<WorkflowListDisplayMode>(
     () => readDashboardPreferences().recurringListDisplayMode,
@@ -902,13 +1013,13 @@ function RoutedDashboardPage({
       const prefs = readDashboardPreferences();
       const normalizedPath = window.location.pathname.replace(/\/$/, '');
       // The `/workflows` route is always the full-screen table surface, and
-      // `table` is not representable in the persisted collapse boolean. Deriving
-      // the mode from that boolean here would clobber the table selection back to
+      // The route-owned mode must not be replaced by the persisted detail mode;
+      // doing so would clobber the table selection back to
       // `sidebar` whenever a preference change fires (for example when the
       // already-selected "Full screen table" button re-persists preferences),
       // so leave the route-owned `table` mode untouched on this surface.
       if (normalizedPath !== '/workflows') {
-        setRequestedMode(prefs.workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar');
+        setRequestedMode(prefs.workflowListDisplayMode);
       }
       setLastSelectedWorkflowId(prefs.lastSelectedWorkflowId.trim() || null);
       // Recurring preferences are seeded into local state on mount, so a
@@ -942,7 +1053,15 @@ function RoutedDashboardPage({
     const normalizedPath = location.pathname.replace(/\/$/, '');
     if (normalizedPath === '/workflows') {
       setRequestedMode('table');
-    } else if (normalizedPath.startsWith('/workflows/') && normalizedPath !== '/workflows/new') {
+    } else if (normalizedPath === '/workflows/new') {
+      if (requestedMode === 'table') {
+        updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
+      }
+      setRequestedMode((mode) => (mode === 'table' ? 'hidden' : mode));
+    } else if (normalizedPath.startsWith('/workflows/')) {
+      if (requestedMode === 'table') {
+        updateDashboardPreferences({ workflowListDisplayMode: 'sidebar' });
+      }
       setRequestedMode((mode) => (mode === 'table' ? 'sidebar' : mode));
     } else if (normalizedPath === '/schedules') {
       setRequestedRecurringMode('table');
@@ -973,6 +1092,10 @@ function RoutedDashboardPage({
             : null;
           if (pendingRequestRef.current !== requestId) {
             return;
+          }
+          if (rememberedId && !authorizedRememberedId) {
+            setLastSelectedDefinitionId(null);
+            updateDashboardPreferences({ lastSelectedDefinitionId: '' });
           }
           const targetDefinitionId = authorizedRememberedId || await firstVisibleRecurringDefinitionId(apiBase);
           if (pendingRequestRef.current !== requestId) {
@@ -1027,7 +1150,7 @@ function RoutedDashboardPage({
     if (location.pathname.replace(/\/$/, '') === '/workflows' && selectedMode !== 'table') {
       const requestId = Symbol();
       pendingRequestRef.current = requestId;
-      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
+      updateDashboardPreferences({ workflowListDisplayMode: selectedMode });
       setRequestedMode(selectedMode);
       setResolutionStatus('Opening first workflow...');
       try {
@@ -1038,6 +1161,10 @@ function RoutedDashboardPage({
         if (pendingRequestRef.current !== requestId) {
           return;
         }
+        if (rememberedId && !authorizedRememberedId) {
+          setLastSelectedWorkflowId(null);
+          updateDashboardPreferences({ lastSelectedWorkflowId: '' });
+        }
         const targetWorkflowId = authorizedRememberedId || await firstVisibleWorkflowId(apiBase, search);
         if (pendingRequestRef.current !== requestId) {
           return;
@@ -1047,6 +1174,7 @@ function RoutedDashboardPage({
           return;
         }
         setLastSelectedWorkflowId(targetWorkflowId);
+        updateDashboardPreferences({ lastSelectedWorkflowId: targetWorkflowId });
         setResolutionStatus(null);
         navigate(workflowDetailHref(targetWorkflowId, search));
       } catch {
@@ -1079,10 +1207,10 @@ function RoutedDashboardPage({
       ) {
         return;
       }
-      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
+      updateDashboardPreferences({ workflowListDisplayMode: selectedMode });
       navigate(resolved.targetPath);
     } else {
-      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
+      updateDashboardPreferences({ workflowListDisplayMode: selectedMode });
     }
   };
 
@@ -1215,6 +1343,8 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       <Route path="/workflows/:workflowId/artifacts" element={routedDashboardPage} />
       <Route path="/workflows/:workflowId/runs" element={routedDashboardPage} />
       <Route path="/workflows/:workflowId/debug" element={routedDashboardPage} />
+      <Route path="/omnigent/agents" element={routedDashboardPage} />
+      <Route path="/omnigent/policies" element={routedDashboardPage} />
       <Route path="/schedules" element={routedDashboardPage} />
       <Route path="/schedules/:definitionId" element={routedDashboardPage} />
       <Route path="/skills/*" element={routedDashboardPage} />
@@ -1223,6 +1353,9 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       <Route path="/manifests/:manifestName" element={routedDashboardPage} />
       <Route path="/oauth-terminal" element={routedDashboardPage} />
       <Route path="/index-health" element={routedDashboardPage} />
+      <Route path="/remediations" element={routedDashboardPage} />
+      <Route path="/artifacts" element={routedDashboardPage} />
+      <Route path="/observability" element={routedDashboardPage} />
       <Route
         path="*"
         element={

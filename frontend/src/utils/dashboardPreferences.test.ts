@@ -44,7 +44,7 @@ describe('dashboardPreferences', () => {
         liveUpdatesEnabled: false,
         createExpertMode: true,
         debugFieldsVisible: false,
-        workflowWorkspaceSidebarCollapsed: true,
+        workflowListDisplayMode: 'hidden',
         preferredDetailTab: 'steps',
         lastSelectedWorkflowId: 'workflow-123',
         defaultRuntime: 'codex_cli',
@@ -57,7 +57,7 @@ describe('dashboardPreferences', () => {
       expect(reloaded.workflowListColumnVisibility.progress).toBe(false);
       expect(reloaded.createExpertMode).toBe(true);
       expect(reloaded.debugFieldsVisible).toBe(false);
-      expect(reloaded.workflowWorkspaceSidebarCollapsed).toBe(true);
+      expect(reloaded.workflowListDisplayMode).toBe('hidden');
       expect(reloaded.lastSelectedWorkflowId).toBe('workflow-123');
       expect(reloaded.preferredDetailTab).toBe('steps');
     });
@@ -67,6 +67,29 @@ describe('dashboardPreferences', () => {
       const parsed = JSON.parse(storedRaw() ?? '{}');
       expect(parsed.version).toBe(DASHBOARD_PREFERENCES_VERSION);
       expect(parsed.preferences.createExpertMode).toBe(true);
+    });
+
+    it('MM-1185 migrates the version 1 collection fields without losing unrelated preferences', () => {
+      window.localStorage.setItem(
+        DASHBOARD_PREFERENCES_STORAGE_KEY,
+        JSON.stringify({
+          version: 1,
+          preferences: {
+            workflowWorkspaceSidebarCollapsed: true,
+            recurringListDisplayMode: 'sidebar',
+            lastSelectedWorkflowId: 'workflow-one',
+            lastSelectedDefinitionId: 'schedule-one',
+            workflowListDensity: 'compact',
+          },
+        }),
+      );
+
+      const migrated = readDashboardPreferences();
+      expect(migrated.workflowListDisplayMode).toBe('hidden');
+      expect(migrated.recurringListDisplayMode).toBe('sidebar');
+      expect(migrated.lastSelectedWorkflowId).toBe('workflow-one');
+      expect(migrated.lastSelectedDefinitionId).toBe('schedule-one');
+      expect(migrated.workflowListDensity).toBe('compact');
     });
 
     it('applies a partial patch on top of stored preferences', () => {
@@ -111,7 +134,7 @@ describe('dashboardPreferences', () => {
             workflowListPageSize: 7, // unsupported page size
             preferredDetailTab: 'nope', // invalid enum
             liveUpdatesEnabled: 'yes', // wrong type
-            workflowWorkspaceSidebarCollapsed: 'yes', // wrong type
+            workflowListDisplayMode: 'yes', // wrong type
             lastSelectedWorkflowId: '  workflow-456  ',
             createExpertMode: true, // valid
             workflowListColumnVisibility: { repository: false, bogus: true },
@@ -125,7 +148,7 @@ describe('dashboardPreferences', () => {
       expect(prefs.workflowListPageSize).toBe(DEFAULT_DASHBOARD_PREFERENCES.workflowListPageSize);
       expect(prefs.preferredDetailTab).toBe('overview'); // reset
       expect(prefs.liveUpdatesEnabled).toBe(true); // reset to default
-      expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(false); // reset to default
+      expect(prefs.workflowListDisplayMode).toBe('sidebar'); // reset to default
       expect(prefs.lastSelectedWorkflowId).toBe('workflow-456'); // trimmed
       expect(prefs.createExpertMode).toBe(true); // kept
       expect(prefs.workflowListColumnVisibility.repository).toBe(false); // kept
@@ -187,12 +210,12 @@ describe('dashboardPreferences', () => {
       expect(parsed.preferences.workflowListColumnVisibility).not.toHaveProperty('nextAction');
     });
 
-    it('MM-1000 keeps a valid persisted workflow workspace sidebar collapse preference', () => {
+    it('MM-1185 keeps a valid persisted Workflow collection display mode', () => {
       const prefs = sanitizeDashboardPreferences({
-        workflowWorkspaceSidebarCollapsed: true,
+        workflowListDisplayMode: 'hidden',
       });
 
-      expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(true);
+      expect(prefs.workflowListDisplayMode).toBe('hidden');
     });
 
     it('MM-1113 keeps a valid last selected workflow preference', () => {

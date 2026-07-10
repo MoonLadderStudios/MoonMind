@@ -128,6 +128,86 @@ async def test_step_execution_manifest_refs_are_append_only_for_reexecution(
     assert step["lastError"] == "missing_required_checkpoint_evidence"
 
 
+async def test_moonspec_contract_repair_manifest_uses_fresh_source_without_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    writes: list[dict[str, Any]] = []
+    now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return f"artifact-execution-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "verify",
+                "tool": {"type": "agent_runtime", "name": "claude_code"},
+                "inputs": {
+                    "title": "Verify completion",
+                    "selectedSkill": "moonspec-verify",
+                },
+            }
+        ],
+        dependency_map={"verify": []},
+        updated_at=now,
+    )
+
+    workflow._mark_step_running("verify", updated_at=now, summary="Initial verify")
+    await workflow._record_step_execution_manifest(
+        "verify",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+    workflow._mark_step_terminal(
+        "verify",
+        status="completed",
+        updated_at=now,
+        summary="Structured gate artifact missing",
+    )
+    workflow._prepare_moonspec_contract_repair_attempt("verify")
+    workflow._mark_step_running("verify", updated_at=now, summary="Repair gate")
+    await workflow._record_step_execution_manifest(
+        "verify",
+        phase="start",
+        updated_at=now,
+        reason="quality_gate_failed",
+    )
+
+    repair_manifest = writes[1]["payload"]
+    assert repair_manifest["executionOrdinal"] == 2
+    assert repair_manifest["reason"] == "quality_gate_failed"
+    assert repair_manifest["workspace"]["policy"] == "fresh_branch_from_source"
+    assert repair_manifest["workspace"]["evidenceRequired"] is False
+    assert repair_manifest["workspace"]["evidenceAccepted"] is True
+    assert repair_manifest["workspace"]["sourceExecutionOrdinal"] == {
+        "workflowId": "wf-boundary",
+        "runId": "run-boundary",
+        "logicalStepId": "verify",
+        "executionOrdinal": 1,
+    }
+    assert repair_manifest["status"] == "running"
+    assert "terminalDisposition" not in repair_manifest
+    assert workflow.get_step_ledger()["steps"][0]["status"] == "executing"
+
+
 async def test_recovery_step_execution_manifest_carries_lineage_without_large_payloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

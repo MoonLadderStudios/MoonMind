@@ -1439,6 +1439,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/remediations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Remediation Collection
+         * @description List only remediation relationships whose two executions are visible.
+         */
+        get: operations["list_remediation_collection_api_executions_remediations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/remediations": {
         parameters: {
             query?: never;
@@ -3014,6 +3034,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/remediations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Remediations Route
+         * @description Serve the capability-gated remediation inventory shell.
+         */
+        get: operations["remediations_route_remediations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/observability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Artifact Collection Route
+         * @description Serve the capability-gated artifact and observability collection shell.
+         */
+        get: operations["artifact_collection_route_observability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Artifact Collection Route
+         * @description Serve the capability-gated artifact and observability collection shell.
+         */
+        get: operations["artifact_collection_route_artifacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workers": {
         parameters: {
             query?: never;
@@ -3086,6 +3166,46 @@ export interface paths {
          * @description Serve the OAuth terminal shell launched from Settings.
          */
         get: operations["oauth_terminal_route_oauth_terminal_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/omnigent/policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Omnigent Inventory Route
+         * @description Serve reloadable capability-gated Omnigent inventory routes.
+         */
+        get: operations["omnigent_inventory_route_omnigent_policies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/omnigent/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Omnigent Inventory Route
+         * @description Serve reloadable capability-gated Omnigent inventory routes.
+         */
+        get: operations["omnigent_inventory_route_omnigent_agents_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3491,6 +3611,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/artifacts/collection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Artifact Collection
+         * @description List authorized evidence without storage paths, principals, or bodies.
+         */
+        get: operations["list_artifact_collection_api_artifacts_collection_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/artifacts/{artifact_id}": {
         parameters: {
             query?: never;
@@ -3755,6 +3895,68 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * ArtifactCollectionResponse
+         * @description Paged compact rows for one independently gated evidence surface.
+         */
+        ArtifactCollectionResponse: {
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "artifacts" | "reports" | "observability";
+            /** Items */
+            items?: components["schemas"]["ArtifactCollectionRowModel"][];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset: number;
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /**
+             * Refreshed At
+             * Format: date-time
+             */
+            refreshed_at: string;
+        };
+        /**
+         * ArtifactCollectionRowModel
+         * @description Compact, identity-safe row for dashboard evidence collections.
+         */
+        ArtifactCollectionRowModel: {
+            /** Artifact Id */
+            artifact_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Content Type */
+            content_type?: string | null;
+            /** Size Bytes */
+            size_bytes?: number | null;
+            status: components["schemas"]["TemporalArtifactStatus"];
+            retention_class: components["schemas"]["TemporalArtifactRetentionClass"];
+            /** Link Type */
+            link_type?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Workflow Id */
+            workflow_id?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Download Url */
+            download_url: string;
+        };
         /**
          * ArtifactCreateExecutionLinkRequest
          * @description Optional initial execution linkage for artifact creation.
@@ -8979,6 +9181,47 @@ export interface components {
             /** Maxbudgetusd */
             maxBudgetUsd?: number | null;
         };
+        /** RemediationCollectionItemModel */
+        RemediationCollectionItemModel: {
+            /** Remediationworkflowid */
+            remediationWorkflowId: string;
+            /** Title */
+            title: string;
+            /** Status */
+            status: string;
+            /**
+             * Attentionrequired
+             * @default false
+             */
+            attentionRequired: boolean;
+            /** Targetworkflowid */
+            targetWorkflowId: string;
+            /** Targettitle */
+            targetTitle: string;
+            /** Authoritymode */
+            authorityMode: string;
+            /** Mode */
+            mode: string;
+            /** Latestactionsummary */
+            latestActionSummary?: string | null;
+            /** Resolution */
+            resolution?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** RemediationCollectionResponseModel */
+        RemediationCollectionResponseModel: {
+            /** Items */
+            items: components["schemas"]["RemediationCollectionItemModel"][];
+        };
         /** RemediationLinkSummaryModel */
         RemediationLinkSummaryModel: {
             /** Remediationworkflowid */
@@ -13623,6 +13866,26 @@ export interface operations {
             };
         };
     };
+    list_remediation_collection_api_executions_remediations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemediationCollectionResponseModel"];
+                };
+            };
+        };
+    };
     list_execution_remediations_api_executions__workflow_id__remediations_get: {
         parameters: {
             query?: {
@@ -16882,6 +17145,66 @@ export interface operations {
             };
         };
     };
+    remediations_route_remediations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    artifact_collection_route_observability_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    artifact_collection_route_artifacts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
     task_workers_route_workers_get: {
         parameters: {
             query?: never;
@@ -16980,6 +17303,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    omnigent_inventory_route_omnigent_policies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    omnigent_inventory_route_omnigent_agents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
                 };
             };
         };
@@ -17767,6 +18130,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArtifactRefModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_artifact_collection_api_artifacts_collection_get: {
+        parameters: {
+            query?: {
+                category?: "artifacts" | "reports" | "observability";
+                q?: string | null;
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactCollectionResponse"];
                 };
             };
             /** @description Validation Error */

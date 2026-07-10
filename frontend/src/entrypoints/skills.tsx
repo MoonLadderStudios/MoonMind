@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { marked } from 'marked';
 
@@ -205,6 +205,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
 
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const drawerTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const detailHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
   const skillsQuery = useQuery({
     queryKey: ['skills', 'detail'],
@@ -232,6 +233,12 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
     return skills.filter((item) => item.id.toLowerCase().includes(needle));
   }, [filterText, skills]);
 
+  const selectedSkillIsFilteredOut = Boolean(
+    selectedSkillId
+      && skills.some((item) => item.id === selectedSkillId)
+      && !filteredSkills.some((item) => item.id === selectedSkillId),
+  );
+
   useEffect(() => {
     if (!selectedSkillId && skills.length > 0) {
       setSelectedSkillId(skills[0]?.id || '');
@@ -250,6 +257,13 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
     setIsDrawerOpen(true);
   }, []);
 
+  const selectSkill = useCallback((skillId: string) => {
+    setSelectedSkillId(skillId);
+    setPreviewTab('rendered');
+    setMessage(null);
+    window.requestAnimationFrame(() => detailHeadingRef.current?.focus({ preventScroll: true }));
+  }, []);
+
   // Focus the first field when the drawer opens so keyboard users land inside
   // the dialog rather than the inert background.
   useEffect(() => {
@@ -263,6 +277,43 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
     const firstField = root.querySelector<HTMLElement>('input, textarea, select, button');
     firstField?.focus();
   }, [isDrawerOpen]);
+
+  const handleDrawerKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      closeDrawer();
+      return;
+    }
+    if (event.key !== 'Tab') {
+      return;
+    }
+    const focusable = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    ) ?? []).filter((element) => {
+      const isVisible = element.offsetWidth > 0 || element.offsetHeight > 0;
+      const isNotAriaHidden = element.getAttribute('aria-hidden') !== 'true';
+      const isNotTabIndexMinusOne = element.getAttribute('tabindex') !== '-1';
+      return isVisible && isNotAriaHidden && isNotTabIndexMinusOne;
+    });
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!first || !last) {
+      event.preventDefault();
+      return;
+    }
+    if (!drawerRef.current?.contains(document.activeElement)) {
+      event.preventDefault();
+      first.focus();
+      return;
+    }
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }, [closeDrawer]);
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -351,9 +402,63 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
   );
 
   return (
-    <div className="skills-page mx-auto w-full max-w-7xl px-2 py-4 sm:px-6 sm:py-6 lg:px-8">
-      <div className="space-y-5 sm:space-y-6">
-        <header className="px-1 sm:px-0">
+    <div className="skills-page collection-workspace">
+      <nav className="workflow-workspace-sidebar collection-sidebar" aria-label="Skill navigation">
+        <div role="table" aria-label="Skill list table slice" className="workflow-workspace-sidebar-table">
+          <div role="rowgroup" className="workflow-workspace-sidebar-header">
+            <div role="row" className="workflow-workspace-sidebar-header-row">
+              <div role="columnheader" className="workflow-workspace-sidebar-header-cell">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="workflow-workspace-sidebar-header-title">Skill</span>
+                  <label className="min-w-0 text-xs font-normal">
+                    <span className="sr-only">Skill</span>
+                    <input
+                      type="search"
+                      className="w-full min-w-0"
+                      placeholder="Filter skills"
+                      value={filterText}
+                      onChange={(event) => setFilterText(event.target.value)}
+                      aria-label="Skill filter"
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+          {selectedSkillIsFilteredOut ? (
+            <div role="rowgroup" className="workflow-workspace-sidebar-list workflow-workspace-sidebar-pinned-list" aria-label="Current skill">
+              <div role="row" className="workflow-workspace-sidebar-row-frame">
+                <div role="cell" className="workflow-workspace-sidebar-cell">
+                  <button type="button" aria-current="true" aria-label={`Current skill: ${selectedSkillId}`} className="workflow-workspace-sidebar-row workflow-workspace-sidebar-row-pinned w-full text-left" onClick={() => selectSkill(selectedSkillId)}>
+                    <span className="workflow-workspace-sidebar-row-main"><span className="workflow-workspace-sidebar-kicker">Current skill</span><span className="workflow-workspace-sidebar-title">{selectedSkillId}</span></span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          <div role="rowgroup" className="workflow-workspace-sidebar-list" data-testid="skill-list" aria-busy={skillsQuery.isLoading}>
+            {skillsQuery.isLoading ? (
+              <div role="row" className="workflow-workspace-sidebar-row-frame"><div role="cell" className="workflow-workspace-sidebar-cell"><div className="workflow-workspace-sidebar-state"><LoadingPlaceholder surface="skills" region="catalog" variant="catalog" density="compact" preserveContext /></div></div></div>
+            ) : skillsQuery.isError && skills.length === 0 ? (
+              <div role="row" className="workflow-workspace-sidebar-row-frame"><div role="cell" className="workflow-workspace-sidebar-cell"><div className="workflow-workspace-sidebar-state" role="alert"><span>Failed to load skills.</span><button type="button" className="secondary" onClick={() => skillsQuery.refetch()}>Retry</button></div></div></div>
+            ) : skills.length === 0 ? (
+              <div role="row" className="workflow-workspace-sidebar-row-frame"><div role="cell" className="workflow-workspace-sidebar-cell"><div className="workflow-workspace-sidebar-state" role="status">No skills available yet.</div></div></div>
+            ) : filteredSkills.length === 0 ? (
+              <div role="row" className="workflow-workspace-sidebar-row-frame"><div role="cell" className="workflow-workspace-sidebar-cell"><div className="workflow-workspace-sidebar-state" role="status">No skills match your filter.</div></div></div>
+            ) : filteredSkills.map((skillItem) => (
+              <div role="row" className="workflow-workspace-sidebar-row-frame" key={skillItem.id}><div role="cell" className="workflow-workspace-sidebar-cell">
+                <button type="button" aria-current={selectedSkillId === skillItem.id ? 'true' : undefined} className="workflow-workspace-sidebar-row w-full text-left" onClick={() => selectSkill(skillItem.id)}>
+                  <span className="workflow-workspace-sidebar-row-main"><span className="workflow-workspace-sidebar-title">{skillItem.id}</span></span>
+                </button>
+              </div></div>
+            ))}
+          </div>
+        </div>
+      </nav>
+      <main className="skills-primary workflow-workspace-detail px-4 py-4 sm:px-6 sm:py-6">
+        <div className="space-y-5 sm:space-y-6">
+        <header className="flex items-start justify-between gap-4 px-1 sm:px-0">
+          <div>
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
             Agent Skills
           </p>
@@ -363,69 +468,9 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
           <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
             Inspect runtime-visible skills and create local additions without the legacy dashboard renderer.
           </p>
+          </div>
+          <button ref={drawerTriggerRef} type="button" className="queue-submit-primary shrink-0" onClick={openDrawer}>Create New Skill</button>
         </header>
-
-        <div className="grid gap-5 sm:gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
-          <section className="min-w-0 rounded-2xl border border-mm-border/80 bg-transparent p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-base font-semibold text-slate-900 dark:text-white">Available Skills</h3>
-              <button ref={drawerTriggerRef} type="button" className="secondary" onClick={openDrawer}>
-                Create New Skill
-              </button>
-            </div>
-
-            <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-              Filter skills
-              <input
-                type="search"
-                className="mt-1 w-full font-normal normal-case tracking-normal"
-                placeholder="Filter skills by ID"
-                value={filterText}
-                onChange={(event) => setFilterText(event.target.value)}
-                aria-label="Filter skills by ID"
-              />
-            </label>
-
-            <div className="mt-4 grid gap-2" data-testid="skill-list">
-              {skillsQuery.isLoading ? (
-                <LoadingPlaceholder
-                  surface="skills"
-                  region="catalog"
-                  variant="catalog"
-                  density="compact"
-                  preserveContext
-                />
-              ) : skillsQuery.isError ? (
-                <div className="space-y-2">
-                  <p className="text-sm text-mm-danger">Failed to load skills.</p>
-                  <button type="button" className="secondary" onClick={() => skillsQuery.refetch()}>
-                    Retry
-                  </button>
-                </div>
-              ) : skills.length === 0 ? (
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  No skills available yet. Create one to get started.
-                </p>
-              ) : filteredSkills.length === 0 ? (
-                <p className="text-sm text-slate-500 dark:text-slate-400">No skills match your filter.</p>
-              ) : (
-                filteredSkills.map((skillItem) => (
-                  <button
-                    key={skillItem.id}
-                    type="button"
-                    className={selectedSkillId === skillItem.id ? 'queue-submit-primary' : 'secondary'}
-                    onClick={() => {
-                      setSelectedSkillId(skillItem.id);
-                      setPreviewTab('rendered');
-                      setMessage(null);
-                    }}
-                  >
-                    {skillItem.id}
-                  </button>
-                ))
-              )}
-            </div>
-          </section>
 
           <section className="min-w-0 rounded-2xl border border-mm-border/80 bg-transparent p-4 shadow-sm sm:p-6">
             {selectedSkill ? (
@@ -434,7 +479,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
                   <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
                     Skill Preview
                   </p>
-                  <h3 className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                  <h3 ref={detailHeadingRef} tabIndex={-1} className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
                     {selectedSkill.id}
                   </h3>
                 </div>
@@ -514,8 +559,8 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
               </p>
             )}
           </section>
-        </div>
       </div>
+      </main>
 
       {isDrawerOpen ? (
         <div
@@ -532,12 +577,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
             aria-modal="true"
             aria-label="Create or upload skill"
             className="flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-mm-border/80 bg-[rgb(var(--mm-panel))] p-5 shadow-2xl"
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.stopPropagation();
-                closeDrawer();
-              }
-            }}
+            onKeyDown={handleDrawerKeyDown}
           >
             <header className="flex items-center justify-between gap-3">
               <h3 className="text-xl font-semibold text-slate-900 dark:text-white">Create Skill</h3>
