@@ -4074,6 +4074,56 @@ async def test_checkpoint_capture_rejects_workspace_outside_approved_roots(
         )
 
 
+async def test_checkpoint_capture_rejects_shared_managed_workspace_levels(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    managed_workspace_root = tmp_path / "agent_jobs"
+    managed_workspace_root.mkdir()
+    job_root = managed_workspace_root / "mm:workflow-1"
+    job_root.mkdir()
+    activities = TemporalSandboxActivities(
+        workspace_root=workspace_root,
+        managed_workspace_root=managed_workspace_root,
+    )
+
+    for unsafe_workspace in (managed_workspace_root, job_root):
+        with pytest.raises(
+            TemporalActivityRuntimeError,
+            match="escapes approved checkpoint roots",
+        ):
+            await activities.workspace_capture_checkpoint(
+                {
+                    "identity": {
+                        "workflowId": "workflow-1",
+                        "runId": "run-1",
+                        "logicalStepId": "implement",
+                        "executionOrdinal": 1,
+                    },
+                    "boundary": "after_execution",
+                    "kind": "worktree_archive",
+                    "workspacePath": str(unsafe_workspace),
+                    "artifactNamespace": "checkpoint",
+                    "idempotencyKey": (
+                        f"workflow-1:checkpoint:{unsafe_workspace.name}"
+                    ),
+                }
+            )
+
+
+async def test_managed_workspace_root_expands_user_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    activities = TemporalSandboxActivities(
+        workspace_root=tmp_path / "workspaces",
+        managed_workspace_root="~/agent_jobs",
+    )
+
+    assert activities._managed_workspace_root == tmp_path / "agent_jobs"
+
+
 async def test_sandbox_checkout_rejects_local_path_outside_workspace_root(
     tmp_path: Path,
 ):

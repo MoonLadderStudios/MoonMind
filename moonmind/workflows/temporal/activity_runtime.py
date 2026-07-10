@@ -3033,7 +3033,7 @@ class TemporalSandboxActivities:
         self._managed_workspace_root = Path(
             managed_workspace_root
             or os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
-        ).resolve()
+        ).expanduser().resolve()
 
     async def _put_checkpoint_bytes(
         self,
@@ -3861,9 +3861,18 @@ class TemporalSandboxActivities:
     ) -> Path:
         workspace = Path(workspace_ref).expanduser().resolve()
         sandbox_root = (self._workspace_root / "temporal_sandbox").resolve()
+        try:
+            managed_relative = workspace.relative_to(self._managed_workspace_root)
+        except ValueError:
+            managed_relative = None
+        is_managed_repo_workspace = (
+            managed_relative is not None
+            and len(managed_relative.parts) == 2
+            and managed_relative.parts[1] == "repo"
+        )
         if not (
             workspace.is_relative_to(sandbox_root)
-            or workspace.is_relative_to(self._managed_workspace_root)
+            or is_managed_repo_workspace
         ):
             raise TemporalActivityRuntimeError(
                 f"workspace path escapes approved checkpoint roots: {workspace}"

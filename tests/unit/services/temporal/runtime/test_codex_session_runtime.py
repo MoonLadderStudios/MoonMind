@@ -26,6 +26,7 @@ from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexSessionRuntimeState,
     _ROLLOUT_RECOVERY_MAX_BYTES,
     _RolloutLiveMirror,
+    _is_empty_assistant_failure_reason,
     _run_ready,
 )
 from tests.helpers.codex_session_runtime import (
@@ -364,6 +365,13 @@ def test_redaction_preserves_falsy_non_none_values() -> None:
     assert CodexManagedSessionRuntime._redact_diagnostic_text(False) == "False"
 
 
+def test_empty_assistant_failure_reason_normalizes_text() -> None:
+    assert _is_empty_assistant_failure_reason(
+        "  Codex app-server turn/completed produced no assistant output  "
+    )
+    assert not _is_empty_assistant_failure_reason("provider request failed")
+
+
 def test_runtime_send_turn_mirrors_rollout_updates_to_stdout_spool(
     tmp_path: Path,
 ) -> None:
@@ -574,6 +582,84 @@ def test_runtime_rollout_live_mirror_keeps_repeated_identical_tool_events(
     assert (runtime._artifact_spool_path / "stdout.log").read_text(
         encoding="utf-8"
     ) == stdout_text
+
+
+def test_runtime_live_mirror_caches_only_active_turn_assistant_text(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime_for_rollout_mirror(tmp_path)
+    rollout_path = (
+        runtime._codex_home_path
+        / "sessions"
+        / "2026"
+        / "07"
+        / "10"
+        / "rollout-2026-07-10T18-34-47-vendor-thread-1.jsonl"
+    )
+    rollout_path.parent.mkdir(parents=True)
+    entries = [
+        {
+            "timestamp": _iso_timestamp(minutes_offset=0),
+            "type": "event_msg",
+            "payload": {
+                "type": "agent_message",
+                "message": "Delayed previous-turn message",
+            },
+        },
+        {
+            "timestamp": _iso_timestamp(minutes_offset=0),
+            "type": "event_msg",
+            "payload": {
+                "type": "task_started",
+                "turn_id": "vendor-turn-1",
+            },
+        },
+        {
+            "timestamp": _iso_timestamp(minutes_offset=0),
+            "type": "event_msg",
+            "payload": {
+                "type": "agent_message",
+                "message": "Active-turn message",
+            },
+        },
+        {
+            "timestamp": _iso_timestamp(minutes_offset=0),
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "turn_id": "vendor-turn-1",
+            },
+        },
+        {
+            "timestamp": _iso_timestamp(minutes_offset=0),
+            "type": "event_msg",
+            "payload": {
+                "type": "agent_message",
+                "message": "Delayed message after completion",
+            },
+        },
+    ]
+    rollout_path.write_text(
+        "".join(f"{json.dumps(entry)}\n" for entry in entries),
+        encoding="utf-8",
+    )
+    mirror = _RolloutLiveMirror(
+        path=str(rollout_path),
+        offset=0,
+        turn_started_at=time.time(),
+    )
+
+    runtime._publish_rollout_live_updates(
+        state=_rollout_state(rollout_path=rollout_path),
+        vendor_turn_id="vendor-turn-1",
+        thread_payload={},
+        mirror=mirror,
+    )
+
+    assert mirror.last_assistant_text == "Active-turn message"
+    assert mirror.last_assistant_text_matches_active_turn is True
+    assert mirror.inside_active_turn is False
+
 
 def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_output(
     tmp_path: Path,
@@ -1092,6 +1178,7 @@ def test_runtime_send_turn_preserves_live_assistant_output_outside_scan_tail(
             last_assistant_text=(
                 "Implemented and verified the requested change."
             ),
+            last_assistant_text_matches_active_turn=True,
         ),
     )
 

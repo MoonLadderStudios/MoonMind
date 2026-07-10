@@ -69,6 +69,13 @@ _EMPTY_ASSISTANT_FAILURE_REASONS: tuple[str, ...] = (
     "codex app-server task_complete produced no assistant output",
     "codex app-server turn/completed produced no assistant output",
 )
+
+
+def _is_empty_assistant_failure_reason(value: str | None) -> bool:
+    return bool(
+        value
+        and value.strip().lower() in _EMPTY_ASSISTANT_FAILURE_REASONS
+    )
 _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON = (
     "Codex provider reported no remaining credits (usage limit reached); "
     "retry after a profile cooldown or update the provider profile."
@@ -167,6 +174,8 @@ class _RolloutLiveMirror:
     offset: int = 0
     turn_started_at: float | None = None
     last_assistant_text: str = ""
+    last_assistant_text_matches_active_turn: bool = False
+    inside_active_turn: bool = False
     emitted_assistant_texts: set[str] = field(default_factory=set)
     emitted_live_keys: set[str] = field(default_factory=set)
 
@@ -1294,6 +1303,20 @@ class CodexManagedSessionRuntime:
                         payload,
                         vendor_turn_id,
                     )
+                    entry_type = str(payload.get("type") or "").strip().lower()
+                    event_payload = payload.get("payload")
+                    event_type = ""
+                    if entry_type == "event_msg" and isinstance(
+                        event_payload, Mapping
+                    ):
+                        event_type = str(
+                            event_payload.get("type") or ""
+                        ).strip().lower()
+                    if event_type == "task_started" and references_turn:
+                        mirror.inside_active_turn = True
+                    belongs_to_active_turn = (
+                        references_turn or mirror.inside_active_turn
+                    )
                     if (
                         mirror.turn_started_at is not None
                         and (
@@ -1326,13 +1349,16 @@ class CodexManagedSessionRuntime:
                     mirror.emitted_live_keys.add(live_key)
                     if label == "assistant":
                         normalized_text = text.removeprefix("assistant: ").strip()
-                        if normalized_text:
+                        if normalized_text and belongs_to_active_turn:
                             mirror.last_assistant_text = normalized_text
+                            mirror.last_assistant_text_matches_active_turn = True
                         if normalized_text in mirror.emitted_assistant_texts:
                             mirror.offset = handle.tell()
                             continue
                         mirror.emitted_assistant_texts.add(normalized_text)
                     updates.append((stream_name, text))
+                    if event_type == "task_complete" and belongs_to_active_turn:
+                        mirror.inside_active_turn = False
                     mirror.offset = handle.tell()
                 for stream_name in ("stdout", "stderr"):
                     stream_text = "".join(
@@ -2777,8 +2803,9 @@ class CodexManagedSessionRuntime:
         completed_turn_inspection: _CompletedTurnInspection | None = None
         if (
             status == "failed"
-            and error_text in _EMPTY_ASSISTANT_FAILURE_REASONS
+            and _is_empty_assistant_failure_reason(error_text)
             and rollout_mirror.last_assistant_text
+            and rollout_mirror.last_assistant_text_matches_active_turn
         ):
             status = "completed"
             error_text = None
@@ -2820,7 +2847,7 @@ class CodexManagedSessionRuntime:
             metadata["reason"] = error_text
         if status == "failed" and failure_class:
             metadata["failureClass"] = failure_class
-            if error_text in _EMPTY_ASSISTANT_FAILURE_REASONS:
+            if _is_empty_assistant_failure_reason(error_text):
                 evidence_rollout_scan = (
                     completed_turn_inspection.rollout_scan
                     if completed_turn_inspection is not None
