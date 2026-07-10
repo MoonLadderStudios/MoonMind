@@ -109,6 +109,84 @@ async def test_launch_records_model_tier_resolution_with_runtime_effort_status(
     }
     assert resolution["effortApplicationStatus"] == "unknown"
 
+
+@pytest.mark.asyncio
+async def test_launch_resolves_raw_model_tier_and_emits_after_spool_reset(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    events: list[str] = []
+
+    class _RecorderLogStreamer:
+        def emit_system_annotation(self, **kwargs: object) -> None:
+            if kwargs.get("annotation_type") == "model_tier_resolution":
+                events.append("emit")
+                recorded = kwargs["metadata"]["modelTierResolution"]
+                assert recorded["requestedModelTier"] == 2
+                assert recorded["resolvedModel"] == "gpt-tier-2"
+                assert recorded["effortApplicationStatus"] == "not_supported"
+
+    class _FakeProcess:
+        pid = 1175
+        returncode = 0
+        stdout = asyncio.StreamReader()
+        stderr = asyncio.StreamReader()
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        log_streamer=_RecorderLogStreamer(),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_reset_live_log_spool",
+        lambda _workspace_path: events.append("reset"),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    await launcher.launch(
+        run_id="run-raw-tier",
+        request=_make_request(
+            instruction_ref="Implement the issue",
+            parameters={"modelTier": 2, "tierFallback": "clamp"},
+        ),
+        profile=_make_profile(
+            runtime_id="codex",
+            profile_id="codex-profile",
+            model_tiers=[
+                {"label": "Fast", "model": "gpt-tier-1", "effort": "medium"},
+                {"label": "Deep", "model": "gpt-tier-2", "effort": "xhigh"},
+            ],
+        ),
+        workspace_path=str(workspace),
+    )
+
+    assert events == ["reset", "emit"]
+
+
+def test_compact_model_tier_resolution_bounds_profile_controlled_strings():
+    compact = ManagedRuntimeLauncher._compact_model_tier_resolution(
+        {
+            "tierLabel": "x" * 9000,
+            "resolvedModel": "gpt-5.5",
+            "providerControlledExtra": "y" * 9000,
+        }
+    )
+
+    assert len(compact["tierLabel"]) == 1024
+    assert compact["resolvedModel"] == "gpt-5.5"
+    assert compact["truncatedFields"] == ["tierLabel"]
+    assert "providerControlledExtra" not in compact
+
 @pytest.mark.asyncio
 async def test_claude_workspace_trust_config_merges_existing_projects(tmp_path):
     store = ManagedRunStore(tmp_path / "managed_runs")
