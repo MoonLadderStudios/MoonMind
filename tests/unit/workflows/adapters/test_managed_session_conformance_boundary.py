@@ -24,6 +24,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionTurnResponse,
     InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
+    PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
 )
@@ -193,13 +194,16 @@ def _descriptor_invocation(behavior: str) -> str | None:
     return support.invocation
 
 
-async def test_launch_and_turn_boundary_shapes_and_correlation(tmp_path: Path) -> None:
+async def test_session_state_checkpoint_boundary_invocation_and_evidence(
+    tmp_path: Path,
+) -> None:
     from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
     binding = _binding()
     workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     launch_calls: list[Any] = []
     send_turn_calls: list[Any] = []
+    publication_calls: list[Any] = []
     control_calls: list[dict[str, Any]] = []
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
@@ -221,11 +225,14 @@ async def test_launch_and_turn_boundary_shapes_and_correlation(tmp_path: Path) -
         )
 
     async def _fetch_summary(_request: Any) -> CodexManagedSessionSummary:
-        return _summary(binding=binding, container_id="container-1", thread_id="thread-1")
+        return _summary(
+            binding=binding, container_id="container-1", thread_id="thread-1"
+        )
 
     async def _publish_artifacts(
-        _request: Any,
+        publication_request: Any,
     ) -> CodexManagedSessionArtifactsPublication:
+        publication_calls.append(publication_request)
         return _publication(
             binding=binding, container_id="container-1", thread_id="thread-1"
         )
@@ -276,7 +283,9 @@ async def test_launch_and_turn_boundary_shapes_and_correlation(tmp_path: Path) -
     # --- turn-control boundary invocation shape ---
     assert len(send_turn_calls) == 1
     assert isinstance(send_turn_calls[0], SendCodexManagedSessionTurnRequest)
-    assert _descriptor_invocation("turn_control") == "SendCodexManagedSessionTurnRequest"
+    assert (
+        _descriptor_invocation("turn_control") == "SendCodexManagedSessionTurnRequest"
+    )
 
     # --- trace/artifact correlation ---
     assert request.correlation_id == "corr-1"
@@ -292,6 +301,20 @@ async def test_launch_and_turn_boundary_shapes_and_correlation(tmp_path: Path) -
     assert (
         result.metadata["sessionArtifacts"]["latestCheckpointRef"]
         == "artifact:session-checkpoint"
+    )
+    assert len(publication_calls) == 1
+    assert isinstance(publication_calls[0], PublishCodexManagedSessionArtifactsRequest)
+    assert publication_calls[0].session_id == binding.session_id
+    checkpoint_support = CodexSessionAdapter.managed_session_capabilities().behavior(
+        "session_state_checkpoint"
+    )
+    assert checkpoint_support is not None
+    assert checkpoint_support.invocation == "PublishCodexManagedSessionArtifactsRequest"
+    assert checkpoint_support.owner == "CodexSessionAdapter.fetch_result"
+    assert checkpoint_support.workspace_authorities == ("managed_runtime",)
+    assert checkpoint_support.checkpoint_kinds == (
+        "session_state_ref",
+        "session_reset_boundary_ref",
     )
     # control events correlate to the same session container/thread.
     start_event = next(c for c in control_calls if c["action"] == "start_session")
@@ -344,7 +367,9 @@ async def test_interrupt_boundary_invocation_shape() -> None:
     control_calls: list[dict[str, Any]] = []
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
-        return _snapshot(binding=binding, container_id="container-1", thread_id="thread-1")
+        return _snapshot(
+            binding=binding, container_id="container-1", thread_id="thread-1"
+        )
 
     async def _interrupt_turn(request: Any) -> CodexManagedSessionTurnResponse:
         interrupt_calls.append(request)
@@ -373,7 +398,9 @@ async def test_interrupt_boundary_invocation_shape() -> None:
     assert isinstance(interrupt_calls[0], InterruptCodexManagedSessionTurnRequest)
     assert interrupt_calls[0].turn_id == "turn-1"
     assert response.status == "interrupted"
-    assert _descriptor_invocation("interrupt") == "InterruptCodexManagedSessionTurnRequest"
+    assert (
+        _descriptor_invocation("interrupt") == "InterruptCodexManagedSessionTurnRequest"
+    )
     assert any(c["action"] == "interrupt_turn" for c in control_calls)
 
 
@@ -383,7 +410,9 @@ async def test_reset_epoch_boundary_invocation_shape() -> None:
     control_calls: list[dict[str, Any]] = []
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
-        return _snapshot(binding=binding, container_id="container-1", thread_id="thread-1")
+        return _snapshot(
+            binding=binding, container_id="container-1", thread_id="thread-1"
+        )
 
     async def _clear_remote_session(request: Any) -> CodexManagedSessionHandle:
         clear_calls.append(request)
@@ -425,7 +454,9 @@ async def test_terminate_boundary_invocation_shape() -> None:
     control_calls: list[dict[str, Any]] = []
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
-        return _snapshot(binding=binding, container_id="container-1", thread_id="thread-1")
+        return _snapshot(
+            binding=binding, container_id="container-1", thread_id="thread-1"
+        )
 
     async def _terminate_remote_session(request: Any) -> CodexManagedSessionHandle:
         terminate_calls.append(request)
@@ -463,4 +494,7 @@ async def test_adapter_capability_descriptor_runs_conformance_at_boundary() -> N
 
     assert capabilities.runtime_id == "codex_cli"
     assert report["sessionCapable"] is True
-    assert report["capabilityGaps"] == []
+    assert {gap["behavior"] for gap in report["capabilityGaps"]} == {
+        "step_workspace_checkpoint_capture",
+        "step_workspace_checkpoint_restore",
+    }

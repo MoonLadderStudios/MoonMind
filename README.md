@@ -66,7 +66,7 @@ Where this is headed: typed policy envelopes that declare per-run what an agent 
 
 Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Every run is backed by [Temporal](https://temporal.io/), so workflows survive container crashes, worker restarts, and host reboots:
 
-- **Durable step ledger and checkpoints.** Long workflows are decomposed into steps whose state, attempts, and outputs are persisted as immutable artifacts. When a step fails, you resume from the last good checkpoint — completed work is never re-bought.
+- **Durable step ledger and step-boundary checkpoints.** Long workflows are decomposed into steps whose state, attempts, and outputs are persisted as immutable artifacts. When compatible workspace capture and restore evidence exists, a failed step can resume from the last good step boundary — completed work is never re-bought.
 - **Stuck detection and escalating intervention.** MoonMind detects looping or silently stalled agents and applies escalating responses — soft reset, hard reset, termination — before they burn through your API budget.
 - **Rate limits as a first-class citizen.** Runtime strategies recognize provider rate-limit signals in live output and respond with slot-based concurrency control and cooldowns instead of blind retry storms.
 - **Idempotent by design.** Externally visible side effects — starting runs, publishing results, posting to GitHub or Jira — are retry-safe, so a crash mid-operation never produces duplicates.

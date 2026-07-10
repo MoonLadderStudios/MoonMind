@@ -183,6 +183,39 @@ Automatic step recovery therefore has two layers:
   Temporal versioning or a reset/resume operation from a safe parent/child
   boundary.
 
+### 2.6 Checkpoint capability layers
+
+Runtime descriptors and conformance reports use distinct checkpoint capabilities:
+
+* `session_state_checkpoint` publishes and retrieves durable session, thread,
+  epoch, or external-provider state refs. It proves session continuity only.
+* `step_workspace_checkpoint_capture` captures the workspace owned by a completed
+  Step Execution. Its descriptor names the request type, activity/adapter owner,
+  workspace locator authority, supported checkpoint kinds, evidence, retry and
+  idempotency behavior, security boundary, and boundary test.
+* `step_workspace_checkpoint_restore` restores or materializes a declared
+  workspace checkpoint kind for explicitly compatible workspace policies. It is
+  a separate invocation and claim from capture.
+
+A session-state checkpoint ref is never evidence of local workspace capture or
+restore. An `external_state_ref` can preserve provider continuity without being
+locally restorable. Policy decides whether a workspace capability gap blocks the
+requested execution or only reduces recoverability; the gap is not itself a
+generic runtime failure.
+
+Codex currently conforms for `session_state_checkpoint`. Until the managed
+runtime workspace lane has its own real capture and restore invocations and
+boundary tests, its `step_workspace_checkpoint_capture` and
+`step_workspace_checkpoint_restore` decisions remain explicit capability gaps.
+
+Serialized managed-session conformance reports use `reportSchemaVersion: 2`.
+Readers of an unversioned/v1 report must migrate the former generic `checkpoint`
+decision to `session_state_checkpoint` only and add workspace capture and restore
+as capability gaps. They must never promote `latestCheckpointRef` or
+`latestResetBoundaryRef` into workspace claims. Producers write v2; external
+consumers should accept v1 during their read migration window and persist or
+forward only v2 after conversion. Unknown future report versions fail closed.
+
 ---
 
 ## 3. Canonical contract rule

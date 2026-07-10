@@ -233,11 +233,18 @@ Artifact-backed logs and diagnostics remain authoritative even when live streami
 
 Every managed Codex step must remain execution-centric even when a container is reused across steps.
 
-At minimum, each step must produce durable evidence through the existing artifact system, including step outputs and runtime diagnostics. Session continuity should be represented with summary, checkpoint, and control-boundary artifacts rather than inferred from container state.
+At minimum, each step must produce durable evidence through the existing artifact
+system, including step outputs and runtime diagnostics. Session continuity is
+represented with a session summary, session-state checkpoint refs, and
+control/reset-boundary artifacts rather than inferred from container state.
+These refs do not assert that the Codex runtime captured the Step Execution
+workspace as a `git_patch` or `worktree_archive`, and they do not assert that a
+workspace can be restored or materialized later.
 
 For the current production path, `managed_session_controller` plus the managed-session
-supervisor are the production artifact publishers for summary/checkpoint/control/reset
-refs and related session observability. The transitional in-container
+supervisor are the production artifact publishers for session summary,
+session-state checkpoint, control, and reset-boundary refs and related session
+observability. The transitional in-container
 `fetch_session_summary()` and `publish_session_artifacts()` helpers may still exist as
 fallback or bring-up helpers, but they are not the production publication path while
 they return empty publication refs.
