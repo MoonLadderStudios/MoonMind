@@ -12,6 +12,7 @@ import posixpath
 import re
 import shlex
 import shutil
+import stat
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -2055,6 +2056,35 @@ class DockerCodexManagedSessionController:
             git_env=git_env,
         )
 
+    async def ensure_repo_artifacts_writable_by_runtime_user(
+        self,
+        workspace_path: str,
+        /,
+    ) -> None:
+        """Normalize repo-local artifacts created after session launch."""
+
+        resolved_workspace = Path(workspace_path).expanduser().resolve()
+        if not self._is_within_workspace_root(resolved_workspace):
+            raise RuntimeError(
+                "managed session workspace path must be within the configured "
+                f"workspace root: {resolved_workspace}"
+            )
+
+        artifacts_path = resolved_workspace / "artifacts"
+        try:
+            artifacts_stat = artifacts_path.lstat()
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(artifacts_stat.st_mode):
+            raise RuntimeError(
+                f"repo-local artifacts path must not be a symlink: {artifacts_path}"
+            )
+        if not stat.S_ISDIR(artifacts_stat.st_mode):
+            raise RuntimeError(
+                f"repo-local artifacts path must be a directory: {artifacts_path}"
+            )
+        self._normalize_container_directory_ownership_no_follow(artifacts_path)
+
     def _collect_managed_support_paths(
         self,
         *,
@@ -2205,6 +2235,54 @@ class DockerCodexManagedSessionController:
                     DockerCodexManagedSessionController._chown_path(root_path / dirname)
                 for filename in filenames:
                     DockerCodexManagedSessionController._chown_path(root_path / filename)
+
+    @staticmethod
+    def _normalize_container_directory_ownership_no_follow(path: Path) -> None:
+        if (
+            not DockerCodexManagedSessionController
+            ._can_normalize_container_path_ownership()
+        ):
+            return
+        directory_flag = getattr(os, "O_DIRECTORY", None)
+        no_follow_flag = getattr(os, "O_NOFOLLOW", None)
+        if directory_flag is None or no_follow_flag is None:
+            raise RuntimeError(
+                "managed session artifact ownership repair requires "
+                "O_DIRECTORY and O_NOFOLLOW support"
+            )
+        try:
+            root_fd = os.open(path, os.O_RDONLY | directory_flag | no_follow_flag)
+        except OSError as exc:
+            raise RuntimeError(
+                "repo-local artifacts path could not be opened without following "
+                f"symlinks: {path}"
+            ) from exc
+        try:
+            if not stat.S_ISDIR(os.fstat(root_fd).st_mode):
+                raise RuntimeError(
+                    f"repo-local artifacts path must be a directory: {path}"
+                )
+            os.fchown(
+                root_fd,
+                _MANAGED_SESSION_CONTAINER_UID,
+                _MANAGED_SESSION_CONTAINER_GID,
+            )
+            for _root, dirnames, filenames, directory_fd in os.fwalk(
+                ".",
+                topdown=True,
+                follow_symlinks=False,
+                dir_fd=root_fd,
+            ):
+                for name in (*dirnames, *filenames):
+                    os.chown(
+                        name,
+                        _MANAGED_SESSION_CONTAINER_UID,
+                        _MANAGED_SESSION_CONTAINER_GID,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+        finally:
+            os.close(root_fd)
 
     @staticmethod
     def _deduplicate_ownership_roots(paths: Sequence[Path]) -> list[Path]:

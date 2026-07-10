@@ -25,6 +25,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    literal_column,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
@@ -50,6 +51,38 @@ def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     """Return enum members as stored DB labels, not Python enum names."""
 
     return [member.value for member in enum_cls]
+
+def _runtime_default_model_tier() -> dict[str, Any]:
+    return {
+        "label": "Runtime default",
+        "model": None,
+        "effort": None,
+        "parameters": {},
+        "annotations": {},
+    }
+
+def _provider_profile_model_tiers_default_for_values(
+    default_model: str | None,
+    default_effort: str | None,
+) -> list[dict[str, Any]]:
+    if default_model is not None or default_effort is not None:
+        return [
+            {
+                "label": "Legacy default",
+                "model": default_model,
+                "effort": default_effort,
+                "parameters": {},
+                "annotations": {},
+            }
+        ]
+    return [_runtime_default_model_tier()]
+
+def _provider_profile_model_tiers_default(context: Any = None) -> list[dict[str, Any]]:
+    params = context.get_current_parameters() if context is not None else {}
+    return _provider_profile_model_tiers_default_for_values(
+        params.get("default_model"),
+        params.get("default_effort"),
+    )
 
 # Note: fastapi-users[sqlalchemy] uses GUID/UUID by default for id.
 # If you need an Integer ID, you would use SQLAlchemyBaseUserTable[int]
@@ -2388,6 +2421,10 @@ class ManagedAgentProviderProfile(Base):
             ")",
             name="ck_provider_profiles_last_auth_method",
         ),
+        CheckConstraint(
+            "default_model_tier >= 1",
+            name="ck_provider_profiles_default_model_tier_positive",
+        ),
         Index(
             "ux_provider_profiles_runtime_default",
             "runtime_id",
@@ -2403,22 +2440,27 @@ class ManagedAgentProviderProfile(Base):
     provider_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_effort: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    model_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     model_tiers: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
         nullable=False,
-        default=list,
-        server_default=text(
+        default=_provider_profile_model_tiers_default,
+        server_default=literal_column(
             """'[{"label":"Runtime default","model":null,"effort":null,"parameters":{},"annotations":{}}]'"""
         ),
     )
     default_model_tier: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-        default=1,
-        server_default=text("1"),
+        Integer, nullable=False, default=1, server_default=text("1")
     )
-    
+    model_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        if kwargs.get("model_tiers") is None:
+            self.model_tiers = _provider_profile_model_tiers_default_for_values(
+                self.default_model,
+                self.default_effort,
+            )
+
     credential_source: Mapped[ProviderCredentialSource] = mapped_column(
         Enum(
             ProviderCredentialSource,
