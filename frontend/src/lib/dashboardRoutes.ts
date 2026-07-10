@@ -124,10 +124,10 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
     return { page: 'skills', dataWidePanel: false, currentPath: path };
   }
   if (path === '/schedules' || isDetailPath(path, 'schedules')) {
-    return { page: 'schedules', dataWidePanel: false, currentPath: path };
+    return { page: 'schedules', dataWidePanel: true, currentPath: path };
   }
   if (path === '/manifests' || isDetailPath(path, 'manifests')) {
-    return { page: 'manifests', dataWidePanel: false, currentPath: path };
+    return { page: 'manifests', dataWidePanel: true, currentPath: path };
   }
   if (path === '/omnigent/agents' || path === '/omnigent/policies') {
     return { page: 'omnigent-inventory', dataWidePanel: true, currentPath: path };
