@@ -6,6 +6,7 @@ import { DataTable } from '../components/tables/DataTable';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { CollectionSidebar, type CollectionSidebarRow } from '../components/CollectionSidebar';
+import { CollectionWorkspace } from '../components/CollectionWorkspace';
 import { WorkflowColumnFilterButton, WorkflowColumnHeader } from '../components/WorkflowColumnHeader';
 
 import { z } from 'zod';
@@ -920,19 +921,24 @@ function RecurringScheduleWorkspace({
     return <>{children}</>;
   }
   return (
-    <div className="workflow-workspace-shell" data-recurring-list-display-mode="sidebar">
-      <RecurringScheduleSidebar
+    <CollectionWorkspace
+      collection="recurring"
+      mode="sidebar"
+      className="workflow-workspace-shell"
+      primaryAs="div"
+      primaryClassName="workflow-workspace-detail"
+      data-recurring-list-display-mode="sidebar"
+      sidebar={<RecurringScheduleSidebar
         definitionId={definitionId}
         schedules={schedules}
         isLoading={isLoading}
         error={error}
         pinnedSchedule={pinnedSchedule ?? null}
         {...(onRetry ? { onRetry } : {})}
-      />
-      <div className="workflow-workspace-detail">
-        {children}
-      </div>
-    </div>
+      />}
+    >
+      {children}
+    </CollectionWorkspace>
   );
 }
 

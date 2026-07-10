@@ -17,6 +17,7 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { ExecutionStatusPill, StepExecutionStatusPill, StepLedgerStatusPill } from '../components/ExecutionStatusPill';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
+import { CollectionWorkspace } from '../components/CollectionWorkspace';
 import {
   DashboardToastProvider,
   useDashboardToast,
@@ -255,14 +256,10 @@ export function WorkflowWorkspaceShell({
     : null;
 
   return (
-    <div
-      className="workflow-workspace-shell"
-      data-sidebar-collapsed={effectiveDisplayMode === 'sidebar' ? 'false' : 'true'}
-      data-workflow-list-display-mode={effectiveDisplayMode}
-      data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008 MM-1138"
-      data-source-issue="MM-975"
-    >
-      {effectiveDisplayMode === 'sidebar' ? (
+    <CollectionWorkspace
+      collection="workflow"
+      mode={effectiveDisplayMode === 'sidebar' ? 'sidebar' : 'detail'}
+      sidebar={effectiveDisplayMode === 'sidebar' ? (
         <WorkflowWorkspaceSidebarPanel
           payload={payload}
           activeWorkflowId={workflowId}
@@ -270,10 +267,16 @@ export function WorkflowWorkspaceShell({
           search={search}
         />
       ) : null}
-      <main className="workflow-workspace-detail" aria-label="Workflow detail">
-        <WorkflowDetailPage payload={payload} />
-      </main>
-    </div>
+      className="workflow-workspace-shell"
+      primaryClassName="workflow-workspace-detail"
+      primaryLabel="Workflow detail"
+      data-sidebar-collapsed={effectiveDisplayMode === 'sidebar' ? 'false' : 'true'}
+      data-workflow-list-display-mode={effectiveDisplayMode}
+      data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008 MM-1138"
+      data-source-issue="MM-975"
+    >
+      <WorkflowDetailPage payload={payload} />
+    </CollectionWorkspace>
   );
 }
 

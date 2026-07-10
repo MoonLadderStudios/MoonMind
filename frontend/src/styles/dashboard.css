@@ -7614,6 +7614,44 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   max-width: none;
 }
 
+.collection-workspace {
+  --mm-collection-sidebar-width: var(--workflow-list-column-workflow-width);
+  --mm-workspace-divider: var(--mm-border, rgba(148, 163, 184, 0.24));
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
+.collection-workspace--single {
+  display: block;
+}
+
+.collection-workspace--with-sidebar {
+  display: grid;
+  grid-template-columns:
+    [sidebar-start] var(--mm-collection-sidebar-width)
+    [primary-start] minmax(0, 1fr)
+    [primary-end];
+  align-items: start;
+  column-gap: 1.25rem;
+}
+
+.collection-workspace--with-sidebar > .collection-sidebar {
+  grid-column: sidebar-start / primary-start;
+}
+
+.collection-workspace__primary {
+  grid-column: primary-start / primary-end;
+  min-width: 0;
+}
+
+.collection-workspace__utilities {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  min-width: 0;
+}
+
 .workflow-start-workspace {
   --mm-content-max: 72rem;
   --workflow-start-primary-offset: calc(
