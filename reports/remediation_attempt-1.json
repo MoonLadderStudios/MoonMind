@@ -1,46 +1,39 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issue_ref": "MoonLadderStudios/MoonMind#3140",
+  "issue_ref": "MoonLadderStudios/MoonMind#3141",
   "source_verification_artifact": "artifacts/github-issue-implement-verify.json",
   "source_verdict": "ADDITIONAL_WORK_NEEDED",
-  "summary": "Corrected stale terminal evidence coverage and resolved focused adapter-suite failures exposed once the documented test dependencies were installed. Terminal failures now retain manual-review disposition, and terminal artifact freshness allows a one-second precision boundary between filesystem timestamps and run-store start timestamps while still rejecting genuinely stale evidence.",
+  "summary": "Closed the bounded verification gaps by aligning non-allow-listed terminal reasons with execution_error, preserving the actionable_comments user_error case, and adding explicit missing-result/no-attempt continuation coverage.",
   "changed_files": [
-    "moonmind/workflows/adapters/managed_agent_adapter.py",
     "tests/unit/workflows/adapters/test_managed_agent_adapter.py",
     "reports/remediation_attempt-1.json"
   ],
   "gap_statuses": [
     {
-      "requirement": "Add coverage for stale terminal evidence",
+      "requirement": "user_error is emitted only from a validated terminal result with an explicitly user-actionable reason",
       "gap_type": "verification",
       "status": "fixed",
-      "evidence": "The malformed-and-stale test now uses the current run identity and asserts 'stale terminal artifact', reaching the freshness rejection branch."
+      "evidence": "Updated ci_failures, merge_conflicts, and free-form hard-failure expectations to execution_error; actionable_comments/manual_review remains explicitly asserted as user_error."
     },
     {
-      "requirement": "Run the focused adapter unit and boundary coverage",
+      "requirement": "Add unit tests for all seven named scenarios",
       "gap_type": "verification",
       "status": "fixed",
-      "evidence": "Installed the declared tests extra and the exact focused runner completed successfully: 78 Python tests passed; the automatic frontend phase also passed."
+      "evidence": "Added result-level no-terminal/no-attempt coverage asserting INCOMPLETE_TERMINAL_CONTRACT, missingEvidence, absent latestAttemptRef, and continue_same_session; existing attempt-present coverage asserts retry_new_session. Existing focused tests cover malformed, stale, actionable manual review, hard execution failure, and canonical serialization."
     },
     {
-      "requirement": "Preserve established manual-review terminal result behavior",
-      "gap_type": "implementation",
+      "requirement": "Relevant focused tests pass",
+      "gap_type": "environment",
       "status": "fixed",
-      "evidence": "Focused execution revealed that failed, blocked, and attempts_exhausted terminal results lost mergeAutomationDisposition. They now derive manual_review unless an owned merge gate derives reenter_gate."
-    },
-    {
-      "requirement": "Reject stale artifacts without rejecting run-boundary writes",
-      "gap_type": "implementation",
-      "status": "fixed",
-      "evidence": "Freshness validation now permits a one-second filesystem/run-store timestamp precision tolerance; the explicit 2020 stale artifact remains rejected."
+      "evidence": "Restored the declared pytest dependencies in the runtime and reran the exact verification command successfully."
     }
   ],
   "targeted_checks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py tests/unit/workflows/temporal/test_agent_runtime_activities.py",
       "result": "PASS",
-      "notes": "78 Python tests passed with four non-blocking pytest marker warnings. Automatic frontend phase: 63 files passed; 972 tests passed and 238 skipped."
+      "notes": "220 Python tests passed with 23 non-blocking warnings; automatic frontend phase passed 64 files with 980 tests passed and 238 skipped."
     },
     {
       "command": "git diff --check",

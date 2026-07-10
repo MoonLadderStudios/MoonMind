@@ -455,7 +455,7 @@ describe('Dashboard shared entry', () => {
     expect(screen.queryByRole('button', { name: 'Close navigation menu' })).toBeNull();
   });
 
-  it('MM-1167 switches the full-screen workflow list to the sidebar when navigating to Create', async () => {
+  it('switches the full-screen workflow list to hidden when navigating to Create', async () => {
     window.history.replaceState({}, '', '/workflows');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
@@ -466,7 +466,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
     });
     expect(window.location.pathname).toBe('/workflows/new');
   });
@@ -1298,21 +1298,33 @@ describe('Dashboard shared entry', () => {
     expect(window.location.search).toBe('?source=temporal');
   });
 
-  it('MM-1167 preserves the Create sidebar when preferences change', async () => {
+  it('maps a persisted table mode to hidden on the Create route', async () => {
+    window.history.replaceState({}, '', '/workflows/new?source=temporal');
+    updateDashboardPreferences({ workflowListDisplayMode: 'table' });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+    await waitFor(() => {
+      expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
+    });
+  });
+
+  it('preserves the Create hidden mode when preferences change', async () => {
     window.history.replaceState({}, '', '/workflows');
-    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fireEvent.click(screen.getByRole('link', { name: 'Create' }));
 
     expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
-    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
 
     updateDashboardPreferences({ lastSelectedWorkflowId: 'preference-sync' });
 
     await waitFor(() => {
-      expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
     });
   });
 
@@ -1423,7 +1435,7 @@ describe('Dashboard shared entry', () => {
     expect(window.location.search).toContain('source=temporal');
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/remembered-123?source=temporal');
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions?'))).toBe(false);
-    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
   });
 
   it('MM-1113 keeps a route-selected workflow when switching detail-compatible modes', async () => {
@@ -1437,7 +1449,7 @@ describe('Dashboard shared entry', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
 
     await waitFor(() => {
-      expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+      expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
     });
     expect(window.location.pathname).toBe('/workflows/route-123');
     expect(window.location.search).toBe('?stateIn=failed&limit=10');
@@ -1515,8 +1527,8 @@ describe('Dashboard shared entry', () => {
       expect(window.location.pathname).toBe('/workflows/visible-456');
     });
     expect(window.location.pathname).not.toBe('/workflows/unauthorized-123');
-    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(false);
-    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('unauthorized-123');
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('sidebar');
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('visible-456');
   });
 
   it('MM-1113 never navigates to or renders an unauthorized remembered workflow during fallback', async () => {
@@ -1550,7 +1562,7 @@ describe('Dashboard shared entry', () => {
     });
     expect(window.location.pathname).not.toBe('/workflows/secret-remembered');
     expect(screen.queryByText(/secret-remembered/i)).toBeNull();
-    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('secret-remembered');
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('authorized-row');
   });
 
   it('MM-1113 selects only returned authorized first-row data', async () => {
@@ -2580,14 +2592,14 @@ describe('Dashboard shared entry', () => {
     );
 
     expect(dashboardShellSource).toContain('className="dashboard-root"');
-    expect(dashboardShellSource).toContain('className="masthead"');
+    expect(dashboardShellSource).toContain('className="application-rail"');
     expect(dashboardShellSource).toContain('className={`route-nav');
     expect(dashboardShellSource).not.toContain('/proposals');
     expect(dashboardShellSource).not.toContain('Proposals');
 
     for (const selector of [
       '.dashboard-root',
-      '.masthead',
+      '.application-rail',
       '.route-nav',
       '.panel',
       '.card',
@@ -2606,6 +2618,30 @@ describe('Dashboard shared entry', () => {
     ]) {
       expect(cssRuleBlock(dashboardCss, selector)).not.toBe('');
     }
+  });
+
+  it('MM-1180 makes the application rail the first desktop column with non-color-only selection', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const root = document.querySelector('.dashboard-root');
+    const rail = screen.getByRole('complementary', { name: 'Application rail' });
+    expect(root?.firstElementChild).toBe(rail);
+    expect(screen.getByRole('link', { name: 'Workflows' }).classList.contains('active')).toBe(true);
+    expect(screen.queryByRole('link', { name: 'Omnigent Agents' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Settings' })).toBeTruthy();
+    expect(screen.getByText('vtest-build')).toBeTruthy();
+
+    expect(cssRuleBlock(dashboardCss, '.dashboard-root')).toContain(
+      'grid-template-columns: var(--mm-app-rail-width) minmax(0, 1fr);',
+    );
+    const activeRule = cssRuleBlock(dashboardCss, '.application-rail .route-nav a.active');
+    expect(activeRule).toContain('border-color: rgb(var(--mm-accent) / 0.5);');
+    expect(activeRule).toContain('box-shadow: inset 3px 0 0 rgb(var(--mm-accent));');
+    expect(cssRuleBlock(dashboardCss, '.application-rail .route-nav')).toContain(
+      'flex-wrap: nowrap;',
+    );
   });
 
   it('colors only Moon white in the masthead brand', async () => {
@@ -3147,6 +3183,20 @@ describe('Dashboard shared entry', () => {
     expect(
       activeBlocks.some(
         (block) =>
+          block.includes('background: linear-gradient(') &&
+          block.includes('var(--mm-mobile-nav-active-start)') &&
+          block.includes('inset 3px 0 0 var(--mm-mobile-nav-active-edge)'),
+      ),
+    ).toBe(true);
+
+    const scopedActiveBlocks = cssRuleBlocks(
+      dashboardCss,
+      '.application-rail .route-nav a.active',
+    );
+    expect(
+      scopedActiveBlocks.some(
+        (block) =>
+          block.includes('color: white;') &&
           block.includes('background: linear-gradient(') &&
           block.includes('var(--mm-mobile-nav-active-start)') &&
           block.includes('inset 3px 0 0 var(--mm-mobile-nav-active-edge)'),

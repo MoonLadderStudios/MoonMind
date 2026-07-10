@@ -662,18 +662,10 @@ function CollectionListDisplayModeControl({
   );
 }
 
-function DashboardNavigation({
+function ApplicationRail({
   uiInfo,
-  listDisplayAccessibleName,
-  workflowListMode,
-  workflowListDisplayStatus,
-  onWorkflowListModeSelect,
 }: {
   uiInfo: DashboardUiInfo | null;
-  listDisplayAccessibleName?: string | undefined;
-  workflowListMode: CollectionListDisplayMode | null;
-  workflowListDisplayStatus?: string | null | undefined;
-  onWorkflowListModeSelect: (mode: CollectionListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -743,7 +735,7 @@ function DashboardNavigation({
   }, [open]);
 
   return (
-    <header className="masthead">
+    <aside className="application-rail" aria-label="Application rail">
       <Link className="masthead-brand" to="/workflows" aria-label="MoonMind workflows">
         <img
           className="masthead-logo"
@@ -757,15 +749,6 @@ function DashboardNavigation({
           <span className="masthead-brand-mind">Mind</span>
         </h1>
       </Link>
-
-      {workflowListMode ? (
-        <CollectionListDisplayModeControl
-          {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
-          effectiveMode={workflowListMode}
-          status={workflowListDisplayStatus}
-          onSelect={onWorkflowListModeSelect}
-        />
-      ) : null}
 
       <button
         ref={menuButtonRef}
@@ -792,7 +775,7 @@ function DashboardNavigation({
         />
       ) : null}
 
-      <div className="masthead-nav">
+      <div className="application-rail-nav">
         <nav
           ref={navRef}
           className={`route-nav${open ? ' route-nav--open' : ''}`}
@@ -870,14 +853,14 @@ function DashboardNavigation({
         </nav>
       </div>
 
-      {buildId ? (
-        <div className="masthead-title-meta">
+      <div className="application-rail-utilities">
+        {buildId ? (
           <div className="version-badge" title="MoonMind image version">
             <span className="version-badge-value">v{buildId}</span>
           </div>
-        </div>
-      ) : null}
-    </header>
+        ) : null}
+      </div>
+    </aside>
   );
 }
 
@@ -901,36 +884,40 @@ function AppShell({
   return (
     <DashboardLiveUpdateProvider uiInfo={uiInfo}>
       <main className="dashboard-root">
-        <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
-          <p>
-            <span className="worker-pause-label" data-worker-pause-status>
-              Workers: Running
-            </span>
-            <span className="worker-pause-reason" data-worker-pause-reason />
-            <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
-              Manage operations
-            </Link>
-          </p>
-        </section>
+        <ApplicationRail uiInfo={uiInfo} />
+        <div className="dashboard-content">
+          <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
+            <p>
+              <span className="worker-pause-label" data-worker-pause-status>
+                Workers: Running
+              </span>
+              <span className="worker-pause-reason" data-worker-pause-reason />
+              <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
+                Manage operations
+              </Link>
+            </p>
+          </section>
 
-        <div className="dashboard-shell-full">
-          <DashboardNavigation
-            uiInfo={uiInfo}
-            listDisplayAccessibleName={listDisplayAccessibleName}
-            workflowListMode={workflowListMode}
-            workflowListDisplayStatus={workflowListDisplayStatus}
-            onWorkflowListModeSelect={onWorkflowListModeSelect}
-          />
-        </div>
+          {workflowListMode ? (
+            <div className="dashboard-collection-utilities">
+              <CollectionListDisplayModeControl
+                {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
+                effectiveMode={workflowListMode}
+                status={workflowListDisplayStatus}
+                onSelect={onWorkflowListModeSelect}
+              />
+            </div>
+          ) : null}
 
-        <div
-          className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
-        >
-          <DashboardAlerts />
+          <div
+            className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
+          >
+            <DashboardAlerts />
+          </div>
+          <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
+            {children}
+          </section>
         </div>
-        <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
-          {children}
-        </section>
       </main>
     </DashboardLiveUpdateProvider>
   );
@@ -949,7 +936,7 @@ function RoutedDashboardPage({
   const navigate = useNavigate();
   const pendingRequestRef = useRef<symbol | null>(null);
   const [requestedMode, setRequestedMode] = useState<CollectionListDisplayMode>(() => (
-    readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
+    readDashboardPreferences().workflowListDisplayMode
   ));
   const [requestedRecurringMode, setRequestedRecurringMode] = useState<CollectionListDisplayMode>(
     () => readDashboardPreferences().recurringListDisplayMode,
@@ -1013,13 +1000,13 @@ function RoutedDashboardPage({
       const prefs = readDashboardPreferences();
       const normalizedPath = window.location.pathname.replace(/\/$/, '');
       // The `/workflows` route is always the full-screen table surface, and
-      // `table` is not representable in the persisted collapse boolean. Deriving
-      // the mode from that boolean here would clobber the table selection back to
+      // The route-owned mode must not be replaced by the persisted detail mode;
+      // doing so would clobber the table selection back to
       // `sidebar` whenever a preference change fires (for example when the
       // already-selected "Full screen table" button re-persists preferences),
       // so leave the route-owned `table` mode untouched on this surface.
       if (normalizedPath !== '/workflows') {
-        setRequestedMode(prefs.workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar');
+        setRequestedMode(prefs.workflowListDisplayMode);
       }
       setLastSelectedWorkflowId(prefs.lastSelectedWorkflowId.trim() || null);
       // Recurring preferences are seeded into local state on mount, so a
@@ -1053,9 +1040,14 @@ function RoutedDashboardPage({
     const normalizedPath = location.pathname.replace(/\/$/, '');
     if (normalizedPath === '/workflows') {
       setRequestedMode('table');
+    } else if (normalizedPath === '/workflows/new') {
+      if (requestedMode === 'table') {
+        updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
+      }
+      setRequestedMode((mode) => (mode === 'table' ? 'hidden' : mode));
     } else if (normalizedPath.startsWith('/workflows/')) {
       if (requestedMode === 'table') {
-        updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
+        updateDashboardPreferences({ workflowListDisplayMode: 'sidebar' });
       }
       setRequestedMode((mode) => (mode === 'table' ? 'sidebar' : mode));
     } else if (normalizedPath === '/schedules') {
@@ -1087,6 +1079,10 @@ function RoutedDashboardPage({
             : null;
           if (pendingRequestRef.current !== requestId) {
             return;
+          }
+          if (rememberedId && !authorizedRememberedId) {
+            setLastSelectedDefinitionId(null);
+            updateDashboardPreferences({ lastSelectedDefinitionId: '' });
           }
           const targetDefinitionId = authorizedRememberedId || await firstVisibleRecurringDefinitionId(apiBase);
           if (pendingRequestRef.current !== requestId) {
@@ -1141,7 +1137,7 @@ function RoutedDashboardPage({
     if (location.pathname.replace(/\/$/, '') === '/workflows' && selectedMode !== 'table') {
       const requestId = Symbol();
       pendingRequestRef.current = requestId;
-      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
+      updateDashboardPreferences({ workflowListDisplayMode: selectedMode });
       setRequestedMode(selectedMode);
       setResolutionStatus('Opening first workflow...');
       try {
@@ -1152,6 +1148,10 @@ function RoutedDashboardPage({
         if (pendingRequestRef.current !== requestId) {
           return;
         }
+        if (rememberedId && !authorizedRememberedId) {
+          setLastSelectedWorkflowId(null);
+          updateDashboardPreferences({ lastSelectedWorkflowId: '' });
+        }
         const targetWorkflowId = authorizedRememberedId || await firstVisibleWorkflowId(apiBase, search);
         if (pendingRequestRef.current !== requestId) {
           return;
@@ -1161,6 +1161,7 @@ function RoutedDashboardPage({
           return;
         }
         setLastSelectedWorkflowId(targetWorkflowId);
+        updateDashboardPreferences({ lastSelectedWorkflowId: targetWorkflowId });
         setResolutionStatus(null);
         navigate(workflowDetailHref(targetWorkflowId, search));
       } catch {
@@ -1193,10 +1194,10 @@ function RoutedDashboardPage({
       ) {
         return;
       }
-      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
+      updateDashboardPreferences({ workflowListDisplayMode: selectedMode });
       navigate(resolved.targetPath);
     } else {
-      updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: selectedMode === 'hidden' });
+      updateDashboardPreferences({ workflowListDisplayMode: selectedMode });
     }
   };
 

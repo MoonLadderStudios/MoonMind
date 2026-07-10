@@ -38,6 +38,8 @@ from moonmind.auth.env_shaping import (
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ProfileResolutionError,
+    _derive_pr_resolver_failure,
+    _derive_pr_resolver_metadata,
     _load_pr_resolver_diagnostics,
     _load_pr_resolver_terminal_result,
     _pr_resolver_status,
@@ -71,6 +73,24 @@ def test_pr_resolver_attempts_are_diagnostic_only(tmp_path: Path) -> None:
     assert diagnostics.latest["reason"] == "ci_running"
 
 
+def test_pr_resolver_failure_reads_actionable_reason_from_nested_final(
+    tmp_path: Path,
+) -> None:
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    (resolver / "result.json").write_text(
+        '{"status":"blocked","mergeAutomationDisposition":"manual_review",'
+        '"final":{"reason":"actionable_comments"}}',
+        encoding="utf-8",
+    )
+
+    failure_class, summary = _derive_pr_resolver_failure(str(tmp_path))
+
+    assert failure_class == "user_error"
+    assert summary is not None
+    assert "actionable_comments" in summary
+
+
 def test_pr_resolver_terminal_result_wins_over_newer_attempt(tmp_path: Path) -> None:
     resolver = tmp_path / "var" / "pr_resolver"
     attempts = resolver / "attempts"
@@ -94,7 +114,7 @@ def test_pr_resolver_terminal_result_wins_over_newer_attempt(tmp_path: Path) -> 
 def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
     tmp_path: Path,
 ) -> None:
-    from datetime import UTC, datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     resolver = tmp_path / "var" / "pr_resolver"
     artifacts = tmp_path / "artifacts"
@@ -109,7 +129,7 @@ def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
     terminal = _load_pr_resolver_terminal_result(
         str(tmp_path),
         run_id="current",
-        not_before=datetime.now(tz=UTC) - timedelta(minutes=1),
+        not_before=datetime.now(tz=timezone.utc) - timedelta(minutes=1),
     )
 
     assert terminal.payload is None
@@ -117,6 +137,34 @@ def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
         "var/pr_resolver/result.json: malformed JSON object",
         "artifacts/pr_resolver_result.json: stale terminal artifact",
     )
+
+
+def test_pr_resolver_metadata_distinguishes_invalid_stale_and_missing(
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    result_path = resolver / "result.json"
+    result_path.write_text("not json", encoding="utf-8")
+    invalid = _derive_pr_resolver_metadata(str(tmp_path))
+    assert invalid["failureCode"] == "TERMINAL_ARTIFACT_INVALID"
+
+    result_path.write_text(
+        '{"status":"failed","timestamp":"2020-01-01T00:00:00Z"}',
+        encoding="utf-8",
+    )
+    stale = _derive_pr_resolver_metadata(
+        str(tmp_path),
+        not_before=datetime.now(tz=timezone.utc) - timedelta(minutes=1),
+    )
+    assert stale["failureCode"] == "TERMINAL_ARTIFACT_STALE"
+
+    result_path.unlink()
+    missing = _derive_pr_resolver_metadata(str(tmp_path), merge_gate_owned=True)
+    assert missing["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert missing["retryRecommendation"] == "continue_same_session"
 
 
 def test_pr_resolver_treats_naive_terminal_cutoff_as_utc(tmp_path: Path) -> None:
@@ -1987,7 +2035,7 @@ async def test_fetch_result_reports_standalone_pr_resolver_next_step_as_failure(
         pr_resolver_expected=True,
     )
 
-    assert result.failure_class == "user_error"
+    assert result.failure_class == "execution_error"
     assert result.summary is not None
     assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
     assert "ci_failures" in result.summary
@@ -2330,7 +2378,7 @@ async def test_fetch_result_does_not_let_merged_attempt_override_terminal_failur
     result = await adapter.fetch_result(
         "run-result-pr-merged-attempt", pr_resolver_expected=True
     )
-    assert result.failure_class == "user_error"
+    assert result.failure_class == "execution_error"
     assert "attempts_exhausted" in (result.summary or "")
     assert result.metadata["mergeAutomationDisposition"] == "manual_review"
 
@@ -2769,11 +2817,60 @@ async def test_fetch_result_fails_when_expected_pr_resolver_artifact_missing(
         "run-result-pr-missing-artifact", pr_resolver_expected=True
     )
 
-    assert result.failure_class == "user_error"
-    assert "pr-resolver result artifact missing" in (result.summary or "")
+    assert result.failure_class == "execution_error"
+    assert "pr-resolver execution incomplete" in (result.summary or "")
     assert "reported status 'blocked'" not in (result.summary or "")
+    assert result.retry_recommendation == "retry_new_session"
+    assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert result.metadata["contractId"] == "pr-resolver.v1"
+    assert result.metadata["terminalResultPresent"] is False
+    assert result.metadata["missingEvidence"] == ["var/pr_resolver/result.json"]
+    assert result.metadata["latestAttemptRef"].endswith("attempt-1.json")
     assert result.metadata["prResolverLatestAttempt"]["reason"] == "ci_running"
     assert "mergeAutomationDisposition" not in result.metadata
+
+
+async def test_fetch_result_fails_when_pr_resolver_artifact_and_attempts_missing(
+    tmp_path: Path,
+):
+    from datetime import datetime, timezone
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-no-evidence",
+            agent_id="codex_cli",
+            runtime_id="codex_cli",
+            status="completed",
+            started_at=datetime.now(tz=timezone.utc),
+            workspace_path=str(workspace_path),
+        )
+    )
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-no-evidence",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-no-evidence",
+        pr_resolver_expected=True,
+        pr_resolver_merge_gate_owned=True,
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.retry_recommendation == "continue_same_session"
+    assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert result.metadata["missingEvidence"] == ["var/pr_resolver/result.json"]
+    assert "latestAttemptRef" not in result.metadata
 
 async def test_fetch_result_maps_final_state_merged_pr_resolver_artifact_metadata(
     tmp_path: Path,
@@ -3192,6 +3289,7 @@ async def test_fetch_result_ignores_pr_resolver_artifact_when_not_expected(
     assert result.failure_class is None
     assert result.summary is not None
     assert "pr-resolver" not in result.summary
+    assert result.retry_recommendation is None
 
 # ---------------------------------------------------------------------------
 # Regression: env_overrides must be delta-only (not full shaped env)
