@@ -2,7 +2,7 @@
 
 Status: Proposed SPA desired-state contract
 Owners: MoonMind Engineering
-Last updated: 2026-06-29
+Last updated: 2026-07-10
 Canonical for: desktop workflow workspace layout, SPA list-to-detail transitions, workflow sidebar navigation, and mobile workflow list/detail behavior where not superseded by the workflow list display mode contract
 
 **Implementation tracking:** Rollout notes, task breakdowns, and local-only handoffs belong under `docs/tmp/`, Jira, or gitignored implementation notes. This document defines the durable product and UI contract for the workspace/sidebar behavior that unifies the Workflows list and Workflow Details surfaces.
@@ -17,7 +17,7 @@ Canonical for: desktop workflow workspace layout, SPA list-to-detail transitions
 
 MoonMind should make desktop workflow browsing feel like one continuous workspace.
 
-In the default desktop state, `/workflows` shows the full Workflows list with the table, filters, toolbar, pagination, and list-level scanning affordances. When a user clicks a workflow title, the same workspace should transition in place: the list compresses into a compact sidebar pinned to the far left of the dashboard content area, and the selected Workflow Details surface loads into the space that opens to the right. The browser URL changes to the canonical workflow detail URL, but the SPA shell does not reload.
+In the default desktop state, `/workflows` shows the full Workflows list with the table, filters, toolbar, pagination, and list-level scanning affordances. When a user clicks a workflow title, the same workspace should transition in place: the list compresses into a compact sidebar pinned to the far-left edge of the dashboard content region, immediately right of the application rail, and the selected Workflow Details surface loads into the space that opens to the right. The browser URL changes to the canonical workflow detail URL, but the SPA shell does not reload.
 
 When the user chooses to expand the workflow list back to full screen, the selected detail view closes. The route returns to `/workflows`, the full list occupies the workspace again, and no hidden selected detail remains active in the UI.
 
@@ -25,12 +25,13 @@ On mobile, the split workspace is not used. Mobile keeps the straightforward car
 
 This document amends the existing UI contracts without replacing them:
 
+- `docs/UI/CollectionWorkspaceLayout.md` is canonical for the far-left application rail, shared collection-sidebar component, and shared entity-detail frame.
 - `docs/UI/DashboardSPAArchitecture.md` is canonical for the persistent SPA shell, client routing authority, route fallback, providers, and same-origin API model.
 - `docs/UI/WorkflowsListPage.md` remains canonical for full Workflows list content, filters, table columns, pagination, and mobile cards.
 - `docs/UI/WorkflowDetailsPage.md` remains canonical for detail content, tabs, actions, evidence sections, logs, artifacts, and recovery flows.
 - `docs/UI/WorkflowConsoleArchitecture.md` remains canonical for API boundaries, workflow concepts, and backend ownership.
 - `docs/UI/DashboardDesignSystem.md` remains canonical for visual language, motion, and component styling rules.
-- `docs/UI/WorkflowListDisplayModes.md` is canonical for the three-mode list display system, the masthead list-mode control, and the sidebar-as-table-slice visual contract on participating Workflows and Create surfaces.
+- `docs/UI/WorkflowListDisplayModes.md` is canonical for the three-mode list display system, the shell/workspace list-mode control, and the sidebar-as-table-slice visual contract on participating Workflows and Create surfaces.
 
 ---
 
@@ -132,7 +133,7 @@ Rules:
 
 In selected-detail workspace state, the workspace renders:
 
-1. a compact workflow sidebar pinned to the far left of the dashboard content area;
+1. a compact workflow sidebar pinned to the far-left edge of the dashboard content region, immediately right of the application rail;
 2. the selected Workflow Details surface in the main pane;
 3. any right rail already owned by the Workflow Details page, if available and if width allows.
 
@@ -164,13 +165,13 @@ Rules:
 
 ### 5.4 Optional detail focus with sidebar hidden
 
-Hiding the sidebar while staying on a workflow detail route is optional and separate from expanding the list in this older workspace contract. On surfaces covered by `docs/UI/WorkflowListDisplayModes.md`, these separate controls are superseded by the masthead list display radio group.
+Hiding the sidebar while staying on a workflow detail route is optional and separate from expanding the list in this older workspace contract. On surfaces covered by `docs/UI/WorkflowListDisplayModes.md`, these separate controls are superseded by the shell/workspace list display radio group.
 
 Rules:
 
-1. For the three-mode system, `hidden` in the masthead radio group replaces `Hide workflow sidebar`.
-2. For the three-mode system, `sidebar` in the masthead radio group replaces `Open workflow sidebar`.
-3. For the three-mode system, `table` in the masthead radio group replaces `Expand workflow list`.
+1. For the three-mode system, `hidden` in the shell/workspace radio group replaces `Hide workflow sidebar`.
+2. For the three-mode system, `sidebar` in the shell/workspace radio group replaces `Open workflow sidebar`.
+3. For the three-mode system, `table` in the shell/workspace radio group replaces `Expand workflow list`.
 4. Outside the three-mode system, a `Hide workflow sidebar` or equivalent control may hide the sidebar without leaving `/workflows/{workflowId}`.
 5. Hiding the sidebar does not close the selected detail.
 6. A compact `Open workflow sidebar` control remains available only when this older optional focus mode is used.
@@ -225,8 +226,8 @@ DashboardShell
 
 Rules:
 
-1. `DashboardShell` owns global app providers, masthead, global navigation, route-level error boundaries, and capability state.
-2. `WorkflowsWorkspacePage` owns desktop workspace composition, route-derived workspace mode, list context, sidebar visibility preference, and split layout.
+1. `DashboardShell` owns global app providers, the application rail, global utilities, route-level error boundaries, and capability state.
+2. `WorkflowsWorkspacePage` owns desktop workspace composition, route-derived workspace mode, list context, sidebar visibility preference, split layout, and Workflow collection utility state.
 3. `WorkflowListSurface` owns full-list table/card rendering and can provide compact row data for the sidebar.
 4. `WorkflowSidebar` owns compact workflow navigation only.
 5. `WorkflowDetailSurface` adapts the existing detail page to the workspace pane and owns detail tabs/subroutes.
@@ -333,13 +334,13 @@ Rules:
 8. `aria-current="page"` marks the active workflow row/link.
 9. Sidebar rows support keyboard navigation as ordinary links, with visible focus states.
 10. Sidebar state must not mutate detail state except by explicit workflow navigation.
-11. The sidebar must be mounted at the workspace grid level so its left edge aligns with the dashboard content area's left edge.
+11. The sidebar must be mounted at the workspace grid level so its left edge aligns with the dashboard content region's far-left edge immediately right of the application rail.
 
 ---
 
 ## 10. Sidebar and workspace controls
 
-For surfaces covered by `docs/UI/WorkflowListDisplayModes.md`, the masthead list display radio group supersedes the separate controls in this section. Use `hidden`, `sidebar`, and `table` as the canonical controls for hiding the list, showing the sidebar list, and returning to the full-screen table.
+For surfaces covered by `docs/UI/WorkflowListDisplayModes.md`, the shell/workspace list display radio group supersedes the separate controls in this section. Use `hidden`, `sidebar`, and `table` as the canonical controls for hiding the list, showing the sidebar list, and returning to the full-screen table.
 
 Outside that three-mode system, the workspace controls must make three different concepts distinct.
 
@@ -371,7 +372,7 @@ The selected-detail workspace should fit the Dashboard Design System while solvi
 Visual posture:
 
 - desktop-only left rail;
-- far-left sidebar alignment within the dashboard content area;
+- far-left sidebar alignment within the dashboard content region immediately right of the application rail;
 - no detail-page max-width wrapper around the entire split workspace;
 - glass control shell where performance allows;
 - matte or satin row interiors for legibility;
@@ -384,15 +385,17 @@ Visual posture:
 Layout rules:
 
 1. Use a top-level workspace grid or flex layout owned by `WorkflowsWorkspacePage`.
-2. In selected-detail workspace mode, the sidebar column starts at the dashboard content area's left edge.
+2. In selected-detail workspace mode, the sidebar column starts at the dashboard content region's far-left edge immediately right of the application rail.
 3. The detail pane starts immediately after the sidebar gutter.
 4. The split workspace must not be horizontally centered inside a narrow detail-page container.
-5. Full list mode uses the same workspace root and expands to one column.
-6. The detail pane may contain nested readable-width sections for logs, evidence, markdown, or dense tables, but those constraints apply inside the pane rather than to the entire workspace.
-7. Recommended initial sidebar width is approximately `280-340px`.
-8. Minimum usable sidebar width is approximately `240px`.
-9. On medium desktop widths, prefer hiding optional sidebar metadata before shrinking titles below readability.
-10. On narrow tablets, prefer the mobile/standalone detail model unless both sidebar and detail remain usable.
+5. There is no decorative or layout gutter between the application rail and the collection sidebar beyond the shared shell divider.
+6. Workflow and Recurring sidebars share the neutral `CollectionSidebar` shell and state components; workflow-specific adapters provide row data and copy.
+7. Full-list mode uses the same workspace root and expands to one column.
+8. The detail pane may contain nested readable-width sections for logs, evidence, markdown, or dense tables, but those constraints apply inside the pane rather than to the entire workspace.
+9. Recommended initial sidebar width is approximately `280-340px`.
+10. Minimum usable sidebar width is approximately `240px`.
+11. On medium desktop widths, prefer hiding optional sidebar metadata before shrinking titles below readability.
+12. On narrow tablets, prefer the mobile/standalone detail model unless both sidebar and detail remain usable.
 
 ---
 
@@ -508,7 +511,7 @@ Implementation should add or preserve tests for these behaviors:
 2. Desktop workflow title links point to canonical detail URLs.
 3. Clicking a workflow title uses SPA routing and does not reload the document.
 4. `DashboardShell` and `QueryClientProvider` remain mounted across `/workflows` to `/workflows/{workflowId}` transitions.
-5. Desktop selecting a workflow renders the compact sidebar at the far left of the dashboard content area.
+5. Desktop selecting a workflow renders the compact sidebar at the far-left edge of the dashboard content region, immediately right of the application rail.
 6. Desktop selecting a workflow renders existing Workflow Details content in the main pane.
 7. The split workspace is not wrapped in the detail page's centered max-width container.
 8. Detail loading appears in the detail pane while sidebar/list context remains visible.
@@ -516,9 +519,9 @@ Implementation should add or preserve tests for these behaviors:
 10. The active workflow is highlighted in the sidebar.
 11. The active sidebar item exposes `aria-current="page"`.
 12. Clicking another sidebar workflow loads that workflow in the same detail pane through SPA routing.
-13. On surfaces covered by `docs/UI/WorkflowListDisplayModes.md`, the masthead `table` mode navigates to `/workflows`.
-14. On surfaces covered by `docs/UI/WorkflowListDisplayModes.md`, the masthead `table` mode unmounts or closes the selected detail UI.
-15. On surfaces covered by `docs/UI/WorkflowListDisplayModes.md`, the masthead `table` mode preserves list query state where possible.
+13. On surfaces covered by `docs/UI/WorkflowListDisplayModes.md`, the shell/workspace `table` mode navigates to `/workflows`.
+14. On surfaces covered by `docs/UI/WorkflowListDisplayModes.md`, the shell/workspace `table` mode unmounts or closes the selected detail UI.
+15. On surfaces covered by `docs/UI/WorkflowListDisplayModes.md`, the shell/workspace `table` mode preserves list query state where possible.
 16. Outside the superseding three-mode system, `Expand workflow list` navigates to `/workflows`.
 17. Outside the superseding three-mode system, `Expand workflow list` unmounts or closes the selected detail UI.
 18. Outside the superseding three-mode system, `Expand workflow list` preserves list query state where possible.
@@ -611,7 +614,7 @@ Recommended sequence for the SPA target:
 5. Preserve list query context and query cache when transitioning from full list to selected-detail workspace.
 6. Render the compact `WorkflowSidebar` from the shared list-row contract.
 7. Render existing `WorkflowDetailsPage` content in the workspace detail pane.
-8. For the superseding three-mode system, add the masthead `table` mode and make it navigate to `/workflows` while closing the visible detail.
+8. For the superseding three-mode system, add the shell/workspace `table` mode and make it navigate to `/workflows` while closing the visible detail.
 9. Outside the superseding three-mode system, add `Expand workflow list` and make it navigate to `/workflows` while closing the visible detail.
 10. Add optional sidebar hide/open controls only outside the superseding three-mode system and only after the core list-to-detail-to-list flow is correct.
 11. Add pinned current-workflow behavior when selected detail is outside the sidebar list.

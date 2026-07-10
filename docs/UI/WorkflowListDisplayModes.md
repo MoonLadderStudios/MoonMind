@@ -2,8 +2,8 @@
 
 Status: Proposed declarative UI contract  
 Owners: MoonMind Engineering  
-Last updated: 2026-07-03  
-Canonical for: Workflows/Create list display modes, masthead list-mode control, workflow sidebar/table visual continuity, and first-workflow selection fallback when the list is hidden
+Last updated: 2026-07-10  
+Canonical for: Workflows/Create list display modes, shell/workspace list-mode control, workflow sidebar/table visual continuity, and first-workflow selection fallback when the list is hidden
 
 **Implementation tracking:** Rollout task lists, ticket breakdowns, and local handoff notes belong under `docs/tmp/`, Jira, or gitignored implementation notes. This document defines the durable product and UI contract for the shared workflow-list display system.
 
@@ -33,10 +33,11 @@ The interaction should feel like changing how much of the same workflow list is 
 
 ## 2. Relationship to existing UI contracts
 
-This document narrows and supersedes only the list-display mode and masthead control portions of the existing workflow workspace design. It does not replace the page-specific content contracts.
+This document narrows and supersedes only the list-display mode and shell/workspace control portions of the existing workflow workspace design. It does not replace the page-specific content contracts.
 
 Use these documents together:
 
+- `docs/UI/CollectionWorkspaceLayout.md` is canonical for the far-left application rail, shared collection-sidebar primitive, and workspace geometry.
 - `docs/UI/DashboardSPAArchitecture.md` remains canonical for the persistent SPA shell, route ownership, providers, and same-origin API model.
 - `docs/UI/DashboardDesignSystem.md` remains canonical for visual language, focus states, motion posture, glass/matte treatment, and shared tokens.
 - `docs/UI/WorkflowsListPage.md` remains canonical for table columns, filters, sorting, pagination, mobile cards, row data, and list API behavior.
@@ -44,7 +45,7 @@ Use these documents together:
 - `docs/UI/CreatePage.md` remains canonical for workflow authoring, step composition, schema-driven inputs, publishing controls, and submission.
 - `docs/UI/WorkflowWorkspaceSidebar.md` remains canonical for the desktop list-to-detail workspace foundation where it does not conflict with this three-mode system.
 
-When this document conflicts with an older sidebar control rule, this document wins for the new system. In particular, the old separate `Hide workflow sidebar`, `Open workflow sidebar`, and `Expand workflow list` controls should collapse into the shared masthead radio group for pages covered by this design.
+When this document conflicts with an older sidebar control rule, this document wins for the new system. In particular, the old separate `Hide workflow sidebar`, `Open workflow sidebar`, and `Expand workflow list` controls should collapse into the shared shell/workspace radio group for pages covered by this design.
 
 ---
 
@@ -107,7 +108,7 @@ type ResolvedWorkflowListDisplay = {
 
 Rules:
 
-1. `requestedMode` is what the user selected in the masthead control.
+1. `requestedMode` is what the user selected in the shell/workspace control.
 2. `effectiveMode` is the mode that can actually render on the current route after required navigation or first-row resolution.
 3. `table` always means the Workflows list page as the primary surface.
 4. `sidebar` always means the workflow list is visible in a left rail and the current page's primary surface remains visible to the right.
@@ -168,17 +169,13 @@ Rules:
 
 ---
 
-## 6. Masthead radio control
+## 6. Shell/workspace list display control
 
-The list display control belongs in the global dashboard masthead immediately to the right of the MoonMind title.
-
-Placement:
+The list display selector belongs to the current collection's shell/workspace utility region. It remains adjacent to route and collection context without becoming a centered masthead element or moving into page content, the collection sidebar, or a table toolbar.
 
 ```text
-[MoonMind logo + MoonMind title] [list display radio group] [route nav links] [version/meta]
+[Application rail] [Workflow sidebar when visible] [Workflow utility + primary pane]
 ```
-
-For the current masthead layout, this means the control is visually attached to the brand area before the route navigation begins. It should not be placed inside page content, inside the workflow sidebar, or inside the Workflows table toolbar.
 
 Control contract:
 
@@ -190,16 +187,18 @@ Control contract:
 
 Rules:
 
-1. Use Lucide icons with the canonical icon names `Square`, `PanelLeft`, and `Rows3`.
-2. The control is a radio group, not three unrelated buttons.
-3. It should expose `role="radiogroup"` with an accessible name such as `Workflow list display`.
-4. Each option should expose native radio semantics or `role="radio"` with `aria-checked`.
-5. The selected option is the resolved current mode after navigation settles.
-6. Keyboard users can use Tab to enter the group and arrow keys to move between options.
-7. Each icon-only control needs an accessible name and visible focus state.
-8. Hover, selected, and focus states use the dashboard control styling tokens.
-9. On pages that do not participate in this system yet, the control may be hidden or disabled. Hiding is preferred until a page declares mode behavior.
-10. On mobile, the first implementation may hide the control and keep the existing mobile card/detail model. If shown later, it must not expose desktop-only sidebar affordances that do not render.
+1. Use the canonical Lucide icons `Square`, `PanelLeft`, and `Rows3`.
+2. The control is one radio group, not three unrelated buttons.
+3. On Workflow routes, expose a stable accessible name such as `Workflow list display`.
+4. Each option uses native radio semantics or `role="radio"` with `aria-checked`.
+5. The selected option reflects the resolved current mode after required navigation or selection resolution.
+6. Keyboard users Tab into the group and use arrow keys to move between options.
+7. Each icon-only option has an accessible name and visible focus state.
+8. Hover, selected, disabled, and focus states use shared dashboard control tokens.
+9. The shell supplies common placement and styling; each participating collection supplies its accessible name and route-resolution contract.
+10. Workflow and Recurring preferences remain independent.
+11. Routes without a declared display-mode contract hide the control.
+12. Mobile omits desktop-only modes until a mobile-specific contract exists.
 
 ---
 
@@ -214,7 +213,7 @@ Rules:
 1. No workflow list, sidebar, list header, or list divider is rendered.
 2. The Workflow Details route, tabs, actions, and data fetching remain unchanged.
 3. The detail page may use the width previously occupied by the sidebar.
-4. The masthead radio group remains available so the user can reopen the sidebar or return to the table.
+4. The shell/workspace radio group remains available so the user can reopen the sidebar or return to the table.
 5. The selected workflow ID remains the route parameter, not a hidden local-only state.
 
 ### 7.2 Workflows detail with sidebar list
@@ -228,10 +227,11 @@ Rules:
 Rules:
 
 1. The sidebar is owned by the workspace/layout composition layer, not by the detail page body.
-2. Sidebar row links navigate to canonical workflow detail URLs.
-3. The active workflow row uses `aria-current="page"`.
-4. Sidebar list failures do not prevent the selected detail from rendering.
-5. Detail failures do not erase a successfully loaded sidebar.
+2. It is the first dashboard-content column immediately right of the far-left application rail; it is never inside the detail page's centered/max-width wrapper.
+3. Sidebar row links navigate to canonical workflow detail URLs.
+4. The active workflow row uses `aria-current="page"`.
+5. Sidebar list failures do not prevent the selected detail from rendering.
+6. Detail failures do not erase a successfully loaded sidebar.
 
 ### 7.3 Create with no list
 
@@ -241,7 +241,7 @@ Rules:
 
 1. No workflow list, sidebar, list header, or list divider is rendered.
 2. Create page draft state, schema-driven forms, validation, and submit behavior remain owned by `docs/UI/CreatePage.md`.
-3. The masthead radio group remains available so the user can open the sidebar or navigate to the table.
+3. The shell/workspace radio group remains available so the user can open the sidebar or navigate to the table.
 
 ### 7.4 Create with sidebar list
 
@@ -341,7 +341,7 @@ Rules:
 7. In reduced-motion mode, the mode change snaps or uses near-instant opacity changes.
 8. When the same list query and row set are used, preserve vertical scroll position where practical.
 9. If table and sidebar cannot share scroll position because of pagination or virtualization, preserve the selected row and focus target instead.
-10. The route may change, but the dashboard shell and masthead remain mounted.
+10. The route may change, but `DashboardShell`, the application rail, and the collection utility region remain mounted.
 
 ---
 
@@ -383,7 +383,7 @@ Rules:
 3. The first-workflow fallback uses the same list query as the table the user was viewing.
 4. Selected detail data is fetched independently from list data.
 5. Create page data and draft state are independent from list data.
-6. List refetching must not steal focus from the Create form, Workflow Detail, or masthead mode control.
+6. List refetching must not steal focus from the Create form, Workflow Detail, or shell/workspace mode control.
 7. Live updates may refresh row content, but they must preserve active selection, row height, and focus.
 8. Sidebar empty, loading, and error states are scoped to the sidebar list region and do not blank the primary surface.
 9. Table empty, loading, and error states remain owned by the Workflows list page.
@@ -394,18 +394,18 @@ Rules:
 
 Rules:
 
-1. The masthead mode selector is reachable by keyboard immediately after the MoonMind brand link.
+1. The shell/workspace mode selector is keyboard reachable in the Workflow collection utility region after route/page context.
 2. The mode selector has a stable accessible name such as `Workflow list display`.
 3. Each option announces its label and checked state.
-4. Changing to a mode that navigates routes must move focus deterministically after navigation.
+4. Changing to a mode that navigates routes moves focus deterministically after navigation.
 5. Choosing `hidden` from `/workflows` with no prior selection announces first-workflow resolution or failure.
 6. The sidebar list has an accessible name such as `Workflow navigation`.
 7. The sidebar header row is not announced as a selectable workflow.
 8. Workflow row links include enough text to identify the workflow.
 9. Active workflow links expose `aria-current="page"`.
 10. Color is not the only active, hover, selected, or focus indicator.
-11. Mobile users must not encounter hidden desktop-only sidebar controls in the accessibility tree.
-12. Unsaved Create draft warnings, when required, must be accessible before route-changing mode changes complete.
+11. Mobile users do not encounter hidden desktop-only sidebar controls in the accessibility tree.
+12. Unsaved Create draft warnings, when required, are accessible before route-changing mode changes complete.
 
 ---
 
@@ -451,7 +451,7 @@ type WorkflowListDisplaySurfaceContract = {
 
 Rules:
 
-1. A page must declare mode behavior before the masthead control appears on that page.
+1. A page must declare mode behavior before the shell/workspace control appears for that page.
 2. Unsupported modes should not appear enabled.
 3. Pages outside Workflows/Create should not receive accidental workflow sidebars just because they are dashboard routes.
 4. Future non-workflow lists may reuse the visual pattern, but they should define their own list entity, route, and selection semantics.
@@ -463,7 +463,7 @@ Rules:
 
 Implementation should add or preserve tests for these behaviors:
 
-1. The masthead renders the list display radio group immediately after the MoonMind brand on Workflows and Create surfaces.
+1. The Workflow shell/workspace utility region renders the list display radio group on Workflows and Create surfaces.
 2. The radio group exposes `No list`, `Sidebar list`, and `Full screen table` options with the `Square`, `PanelLeft`, and `Rows3` icons.
 3. `/workflows` resolves to `table` mode.
 4. Choosing `hidden` from `/workflows` with a previously selected workflow navigates to that workflow detail and hides the list.
@@ -482,6 +482,6 @@ Implementation should add or preserve tests for these behaviors:
 17. Switching from sidebar to table preserves list query context where practical.
 18. Sidebar list failure does not prevent Workflow Detail or Create from rendering.
 19. Detail failure does not erase the sidebar list.
-20. Keyboard users can operate the masthead radio group and receive deterministic focus after navigation.
+20. Keyboard users can operate the shell/workspace radio group and receive deterministic focus after navigation.
 21. Reduced-motion settings disable large layout animations.
 22. Unauthorized workflows never appear in table rows, sidebar rows, first-row fallback, remembered selections, or pinned current rows.
