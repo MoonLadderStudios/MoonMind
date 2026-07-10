@@ -54,7 +54,8 @@ def upgrade() -> None:
             "model_tiers",
             _json_type(),
             nullable=False,
-            server_default=sa.text(_DEFAULT_MODEL_TIERS),
+            # TextClause treats the compact JSON's ``:null`` as a bind parameter.
+            server_default=sa.literal_column(_DEFAULT_MODEL_TIERS),
         ),
     )
     op.add_column(
