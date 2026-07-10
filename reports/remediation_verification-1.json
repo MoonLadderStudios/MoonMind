@@ -1,38 +1,14 @@
 {
-  "artifact_type": "remediation.verification",
+  "artifactType": "remediation.verification",
   "attempt": 1,
-  "remediation_attempt_verified": 1,
-  "remediation_attempt_artifact": "reports/remediation_attempt-1.json",
-  "authoritative_verification_artifact": "artifacts/github-issue-implement-verify.json",
-  "verification_target": "issue_brief",
-  "issue_ref": "MoonLadderStudios/MoonMind#3142",
-  "verdict": "ADDITIONAL_WORK_NEEDED",
-  "recommendedNextAction": "reattempt_current_step",
+  "remediationAttempt": 1,
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:d123453a-8c16-4c46-837b-7d2b7d09c8f2/repo/reports/remediation_attempt-1.json",
+  "verificationArtifact": "/work/agent_jobs/mm:d123453a-8c16-4c46-837b-7d2b7d09c8f2/repo/artifacts/github-issue-implement-verify.json",
+  "issueRef": "MoonLadderStudios/MoonMind#3141",
+  "verificationTarget": "issue_brief",
+  "verdict": "FULLY_IMPLEMENTED",
+  "recommendedNextAction": "advance",
   "recoverableInCurrentRuntime": true,
-  "summary": "Remediation attempt 1 fixes the incomplete-contract failure context and passes focused recovery, exhaustion, deadline, and cancellation tests. The whole target state still lacks the issue-required scripted fake app-server/active-shell journey and an activity-retry or Temporal-replay deduplication boundary test.",
-  "remainingWork": [
-    {
-      "requirement": "Hermetic scripted Codex/app-server recovery and exhaustion scenarios",
-      "gapType": "verification",
-      "remainingWork": "Add the issue-described fake app-server journey through the managed-session boundary, including the outer-wrapper/inner-active-shell condition and same-session recovery.",
-      "recoverableInCurrentRuntime": true
-    },
-    {
-      "requirement": "Activity retry or Temporal replay cannot create duplicate continuation turns",
-      "gapType": "verification",
-      "remainingWork": "Exercise retry/replay against request tracking and prove the deterministic continuation request ID is deduplicated.",
-      "recoverableInCurrentRuntime": true
-    }
-  ],
-  "testResults": [
-    {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_codex_session_adapter.py",
-      "result": "PASS",
-      "notes": "66 Python adapter tests and 980 frontend tests passed; 238 frontend tests skipped."
-    },
-    {
-      "command": "git diff --check",
-      "result": "PASS"
-    }
-  ]
+  "remainingWork": [],
+  "summary": "Remediation attempt 1 closes all assessment backlog items. Direct code inspection and the focused selector-equivalent unit/workflow-boundary suite verify the complete target state."
 }

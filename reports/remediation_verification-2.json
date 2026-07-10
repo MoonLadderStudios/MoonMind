@@ -3,19 +3,19 @@
   "attempt": 2,
   "remediation_attempt_verified": 2,
   "remediation_attempt_artifact": "reports/remediation_attempt-2.json",
-  "authoritative_verification_artifact": "artifacts/github-issue-implement-verify.json",
+  "verification_report_artifact": "artifacts/github-issue-implement-verify.json",
   "verification_target": "issue_brief",
-  "issue_ref": "MoonLadderStudios/MoonMind#3142",
+  "issue_ref": "MoonLadderStudios/MoonMind#3140",
   "verdict": "FULLY_IMPLEMENTED",
   "recommendedNextAction": "advance",
   "recoverableInCurrentRuntime": true,
-  "summary": "Remediation attempt 2 closes both prior verification gaps. The whole issue target state is implemented and all controlling targeted tests pass.",
+  "summary": "Remediation attempt 2 closes the final recognized-terminal validation and regression-test gaps. The authoritative verdict for the complete issue target state is FULLY_IMPLEMENTED.",
   "remainingWork": [],
   "testResults": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_codex_session_adapter.py tests/unit/workflows/temporal/workflows/test_agent_session.py",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py",
       "result": "PASS",
-      "notes": "100 Python tests and 980 frontend tests passed; 238 frontend tests skipped."
+      "notes": "79 Python tests passed; five non-blocking marker warnings."
     },
     {
       "command": "git diff --check",

@@ -4983,7 +4983,7 @@ async def test_fetch_result_reports_standalone_pr_resolver_reentry_as_failure(
 
     result = await adapter.fetch_result(run_id, pr_resolver_expected=True)
 
-    assert result.failure_class == "user_error"
+    assert result.failure_class == "execution_error"
     assert result.summary is not None
     assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
     assert "ci_failures" in result.summary

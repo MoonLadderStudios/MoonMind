@@ -1,51 +1,50 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issueRef": "MoonLadderStudios/MoonMind#3142",
-  "sourceVerificationArtifact": "artifacts/github-issue-implement-verify.json",
-  "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
-  "summary": "Remediated the bounded continuation failure-context and verification gaps reported by moonspec-verify.",
-  "changedFiles": [
-    "moonmind/workflows/adapters/codex_session_adapter.py",
-    "tests/unit/workflows/adapters/test_codex_session_adapter.py",
+  "issue_ref": "MoonLadderStudios/MoonMind#3141",
+  "source_verification_artifact": "artifacts/github-issue-implement-verify.json",
+  "source_verdict": "ADDITIONAL_WORK_NEEDED",
+  "summary": "Closed the bounded verification gaps by aligning non-allow-listed terminal reasons with execution_error, preserving the actionable_comments user_error case, and adding explicit missing-result/no-attempt continuation coverage.",
+  "changed_files": [
+    "tests/unit/workflows/adapters/test_managed_agent_adapter.py",
     "reports/remediation_attempt-1.json"
   ],
-  "gapStatuses": [
+  "gap_statuses": [
     {
-      "gap": "Provider/infrastructure failure during continuation retains incomplete-contract context",
+      "requirement": "user_error is emitted only from a validated terminal result with an explicitly user-actionable reason",
+      "gap_type": "verification",
       "status": "fixed",
-      "evidence": "Continuation exceptions and non-completed responses now flow through terminal-contract metadata composition; provider reason/type and any underlying failure code are preserved, while missing evidence, continuation history, and recovery outcome remain available."
+      "evidence": "Updated ci_failures, merge_conflicts, and free-form hard-failure expectations to execution_error; actionable_comments/manual_review remains explicitly asserted as user_error."
     },
     {
-      "gap": "Hermetic scripted recovery and exhaustion scenarios",
+      "requirement": "Add unit tests for all seven named scenarios",
+      "gap_type": "verification",
       "status": "fixed",
-      "evidence": "Added managed-session adapter journeys for same-session recovery after terminal evidence appears and for two-turn exhaustion with execution_error/INCOMPLETE_TERMINAL_CONTRACT metadata."
+      "evidence": "Added result-level no-terminal/no-attempt coverage asserting INCOMPLETE_TERMINAL_CONTRACT, missingEvidence, absent latestAttemptRef, and continue_same_session; existing attempt-present coverage asserts retry_new_session. Existing focused tests cover malformed, stale, actionable manual review, hard execution failure, and canonical serialization."
     },
     {
-      "gap": "Retry/replay idempotency and prompt cancellation/deadline termination",
+      "requirement": "Relevant focused tests pass",
+      "gap_type": "environment",
       "status": "fixed",
-      "evidence": "Boundary tests assert stable idempotency-derived request IDs, unchanged session/epoch/thread, original-deadline exhaustion, and CancelledError propagation during continuation. The deadline check now occurs before creating the continuation coroutine."
-    },
-    {
-      "gap": "Focused repo-local test evidence",
-      "status": "fixed",
-      "evidence": "Installed the declared pytest test dependencies in the managed environment and ran the verifier-named focused repository test command successfully."
+      "evidence": "Restored the declared pytest dependencies in the runtime and reran the exact verification command successfully."
     }
   ],
-  "targetedLocalChecks": [
+  "targeted_checks": [
     {
-      "command": "python -m py_compile moonmind/workflows/adapters/codex_session_adapter.py tests/unit/workflows/adapters/test_codex_session_adapter.py",
-      "status": "passed"
-    },
-    {
-      "command": "./tools/test_unit.sh tests/unit/workflows/adapters/test_codex_session_adapter.py",
-      "status": "passed",
-      "result": "66 Python adapter tests passed; the runner also completed 980 frontend tests with 238 skipped. Two pre-existing pytest warnings remain for synchronous tests under the module-level asyncio marker."
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py tests/unit/workflows/temporal/test_agent_runtime_activities.py",
+      "result": "PASS",
+      "notes": "220 Python tests passed with 23 non-blocking warnings; automatic frontend phase passed 64 files with 980 tests passed and 238 skipped."
     },
     {
       "command": "git diff --check",
-      "status": "passed"
+      "result": "PASS",
+      "notes": "No whitespace errors."
     }
   ],
-  "knownRemainingGaps": []
+  "remaining_work": [],
+  "scope_controls": {
+    "pull_request_created": false,
+    "github_issue_status_changed": false,
+    "scope_broadened": false
+  }
 }
