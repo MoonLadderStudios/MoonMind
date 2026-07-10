@@ -1278,7 +1278,7 @@ function ScheduleDetailPage({
         </div>
       )}
 
-      <section className="schedules-summary-grid" aria-label="Schedule detail summary">
+      <section id="schedule-overview" className="schedules-summary-grid" aria-label="Schedule detail summary">
         <div className="schedules-summary-item">
           <span>Next Run</span>
           <strong>{formatWhen(schedule.nextRunAt)}</strong>
@@ -1303,7 +1303,7 @@ function ScheduleDetailPage({
         <a href="#schedule-configuration">Configuration</a>
       </nav>
 
-      <div className="schedules-detail-grid" id="schedule-overview">
+      <div className="schedules-detail-grid">
         <section id="schedule-configuration" className="panel--data schedules-detail-panel" aria-label="Schedule configuration">
           <div className="section-heading-row">
             <h3>Configuration</h3>

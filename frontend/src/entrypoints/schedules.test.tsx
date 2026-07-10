@@ -802,6 +802,8 @@ describe("SchedulesPage", () => {
     expect(screen.getByRole("link", { name: "Overview" }).getAttribute("href")).toBe("#schedule-overview");
     expect(screen.getByRole("link", { name: "Runs" }).getAttribute("href")).toBe("#schedule-runs");
     expect(screen.getByRole("link", { name: "Configuration" }).getAttribute("href")).toBe("#schedule-configuration");
+    expect(document.querySelector("#schedule-overview")?.getAttribute("aria-label")).toBe("Schedule detail summary");
+    expect(document.querySelector("#schedule-configuration")?.getAttribute("aria-label")).toBe("Schedule configuration");
     expect((screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByRole("button", { name: "Delete schedule" })).toBeNull();

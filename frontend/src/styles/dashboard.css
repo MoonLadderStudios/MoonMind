@@ -1464,11 +1464,11 @@ h1 {
   display: flex;
   gap: 0.25rem;
   overflow-x: auto;
-  border-bottom: 1px solid var(--border-color, rgba(148, 163, 184, 0.25));
+  border-bottom: 1px solid rgb(var(--mm-border) / 0.5);
 }
 
 .entity-detail-frame__tabs a {
-  color: var(--text-secondary, #94a3b8);
+  color: rgb(var(--mm-muted));
   padding: 0.7rem 0.9rem;
   text-decoration: none;
   border-bottom: 2px solid transparent;
@@ -1476,7 +1476,7 @@ h1 {
 
 .entity-detail-frame__tabs a:hover,
 .entity-detail-frame__tabs a:focus-visible {
-  color: var(--text-primary, #f8fafc);
+  color: rgb(var(--mm-ink));
   border-bottom-color: currentColor;
 }
 
