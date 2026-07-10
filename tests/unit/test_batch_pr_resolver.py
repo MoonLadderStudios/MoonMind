@@ -114,7 +114,8 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["title"] == "feature/example"
     assert task["publish"]["mode"] == "auto"
     assert git["startingBranch"] == "feature/example"
-    assert git["targetBranch"] == "feature/example"
+    assert git["branch"] == "feature/example"
+    assert "targetBranch" not in git
 
 def test_build_queue_request_adds_batch_scoped_idempotency_key() -> None:
     module = _load_module()
@@ -604,7 +605,14 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
 
     fake_response = MagicMock()
     fake_response.raise_for_status = MagicMock()
-    fake_response.json = MagicMock(return_value={"taskId": "mm:uuid-1234", "status": "queued"})
+    fake_response.json = MagicMock(
+        return_value={
+            "workflowId": "mm:uuid-1234",
+            "runId": "run-1",
+            "state": "initializing",
+            "temporalStatus": "running",
+        }
+    )
 
     mock_post = AsyncMock(return_value=fake_response)
 
@@ -623,6 +631,9 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
         async def post(self, path: str, **kwargs: Any) -> Any:
             return await mock_post(path, **kwargs)
 
+        async def get(self, _path: str) -> Any:
+            return fake_response
+
     with patch.object(httpx, "AsyncClient", FakeAsyncClient):
         submission = _make_submission(module)
         created, errors = asyncio.run(
@@ -635,21 +646,22 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
 
     assert errors == []
     assert len(created) == 1
-    assert created[0]["jobId"] == "mm:uuid-1234"
+    assert created[0]["workflowId"] == "mm:uuid-1234"
+    assert created[0]["runId"] == "run-1"
     assert created[0]["pr"] == 42
     mock_post.assert_awaited_once()
     call_path = mock_post.await_args[0][0]
     assert call_path == "/api/executions"
 
-def test_submit_jobs_records_temporal_workflow_id(monkeypatch: Any) -> None:
-    """The Temporal executions API returns workflowId rather than legacy taskId."""
+def test_submit_jobs_rejects_create_without_workflow_id(monkeypatch: Any) -> None:
+    """The create response must carry the canonical workflow identity."""
     module = _load_module()
     submit_jobs_via_http = module["_submit_jobs_via_http"]
 
     fake_response = MagicMock()
     fake_response.raise_for_status = MagicMock()
     fake_response.json = MagicMock(
-        return_value={"workflowId": "mm:wf-123", "status": "queued"}
+        return_value={"taskId": "legacy-task-id", "status": "queued"}
     )
 
     mock_post = AsyncMock(return_value=fake_response)
@@ -679,8 +691,8 @@ def test_submit_jobs_records_temporal_workflow_id(monkeypatch: Any) -> None:
             )
         )
 
-    assert errors == []
-    assert created[0]["jobId"] == "mm:wf-123"
+    assert created == []
+    assert errors[0]["error"] == "create response did not include workflowId"
 
 def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     """_submit_jobs dispatches to HTTP when MOONMIND_URL is configured."""
@@ -697,7 +709,7 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
         requests: list, *, moonmind_url: str, worker_token: Any
     ) -> tuple:
         http_called.append(moonmind_url)
-        return [{"pr": 1, "branch": "b", "jobId": "x"}], []
+        return [{"pr": 1, "branch": "b", "workflowId": "x"}], []
 
     submission = _make_submission(module)
 
@@ -868,7 +880,9 @@ def test_write_run_artifacts_skips_no_op_when_errors_present(tmp_path: Path) -> 
     write(tmp_path, payload)
 
     assert (tmp_path / "batch_pr_resolver_result.json").exists()
-    assert not (tmp_path / "skill_outcome.json").exists()
+    outcome = json.loads((tmp_path / "skill_outcome.json").read_text())
+    assert outcome["status"] == "failed"
+    assert outcome["reason"] == "child_workflow_queue_failed"
 
 def test_write_run_artifacts_skips_no_op_when_executions_queued(tmp_path: Path) -> None:
     """When real work was queued, no skill_outcome.json is written."""
@@ -883,7 +897,7 @@ def test_write_run_artifacts_skips_no_op_when_executions_queued(tmp_path: Path) 
         "runtime": {"mode": "codex", "model": None, "effort": None, "executionProfileRef": None},
         "requested": 1,
         "created": 1,
-        "queued": [{"jobId": "mm:abc", "pr": 9, "branch": "feature/z"}],
+        "queued": [{"workflowId": "mm:abc", "pr": 9, "branch": "feature/z"}],
         "skipped": [],
         "errors": [],
     }
@@ -971,6 +985,9 @@ def test_submit_jobs_adds_task_workflow_header_when_in_managed_session(
         async def post(self, _path: str, **_kwargs: Any) -> Any:
             return fake_response
 
+        async def get(self, _path: str) -> Any:
+            return fake_response
+
     with patch.object(httpx, "AsyncClient", FakeAsyncClient):
         submission = _make_submission(module)
         asyncio.run(
@@ -1021,6 +1038,9 @@ def test_submit_jobs_omits_task_headers_without_env(monkeypatch: Any) -> None:
             pass
 
         async def post(self, _path: str, **_kwargs: Any) -> Any:
+            return fake_response
+
+        async def get(self, _path: str) -> Any:
             return fake_response
 
     with patch.object(httpx, "AsyncClient", FakeAsyncClient):

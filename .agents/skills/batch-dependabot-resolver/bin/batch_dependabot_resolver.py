@@ -621,7 +621,7 @@ def _build_queue_request(
             },
             "git": {
                 "startingBranch": branch,
-                "targetBranch": branch,
+                "branch": branch,
             },
             "publish": {"mode": publish_mode},
         },
@@ -842,7 +842,7 @@ def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _write_run_artifacts(artifacts_dir: Path, payload: dict[str, Any]) -> None:
-    """Write the result payload and (when applicable) the no-op outcome file.
+    """Write the result payload and its explicit non-success outcome marker.
 
     ``skill_outcome.json`` with ``status: "no_op"`` is written only when the run
     queued zero executions, hit no submission errors, and was not a dry run —
@@ -850,9 +850,24 @@ def _write_run_artifacts(artifacts_dir: Path, payload: dict[str, Any]) -> None:
     """
 
     _write_artifacts(artifacts_dir / "batch_dependabot_resolver_result.json", payload)
-    if (
-        payload.get("created") == 0
-        and not payload.get("errors")
+    errors = payload.get("errors") or []
+    created = int(payload.get("created") or 0)
+    if errors:
+        _write_artifacts(
+            artifacts_dir / "skill_outcome.json",
+            {
+                "schema_version": 1,
+                "status": "partial" if created else "failed",
+                "reason": "child_workflow_queue_failed",
+                "evidence": {
+                    "requested": payload.get("requested"),
+                    "created": created,
+                    "errors": errors,
+                },
+            },
+        )
+    elif (
+        created == 0
         and not payload.get("dryRun")
     ):
         _write_artifacts(

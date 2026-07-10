@@ -1278,6 +1278,50 @@ def test_runtime_no_op_signal_ignored_when_assistant_text_present(
     assert response.status == "completed"
     assert "disposition" not in response.metadata
 
+
+@pytest.mark.parametrize("declared_status", ["failed", "partial"])
+def test_runtime_skill_failure_signal_overrides_assistant_text(
+    tmp_path: Path,
+    declared_status: str,
+) -> None:
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="Queued 0 workflows after API validation errors.",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload={
+            "schema_version": 1,
+            "status": declared_status,
+            "reason": "child_workflow_queue_failed",
+            "evidence": {"requested": 2, "created": 0},
+        },
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "permanent"
+    assert response.metadata["reason"] == "child_workflow_queue_failed"
+
 def test_runtime_no_op_signal_ignored_when_schema_version_wrong(
     tmp_path: Path,
 ) -> None:

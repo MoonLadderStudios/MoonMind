@@ -89,7 +89,7 @@ python3 .agents/skills/batch-dependabot-resolver/bin/batch_dependabot_resolver.p
 
 4. For each matched PR, submit a `pr-resolver` task with the canonical `batch-pr-resolver`
    payload (`repository`, `task.inputs = { repo, pr, branch, mergeMethod, maxIterations }`,
-   `task.git.startingBranch/targetBranch`, `task.skill.name = pr-resolver`,
+   `task.git.startingBranch/branch`, `task.skill.name = pr-resolver`,
    `task.publish.mode = auto`, inherited runtime) and a stable idempotency key:
    `batch-dependabot-resolver:{repo}:pr:{number}:head:{headSha}`. Submit via
    `POST /api/executions` (`MOONMIND_URL` must point at the MoonMind API).
