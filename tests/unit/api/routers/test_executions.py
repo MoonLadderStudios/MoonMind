@@ -5458,6 +5458,72 @@ def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
     assert initial_parameters["modelSource"] == "provider_profile_default"
     app.dependency_overrides.clear()
 
+
+def test_create_task_shaped_execution_resolves_model_tier_against_profile() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.create_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(
+                profile_id="codex-provider-profile",
+                default_model=None,
+                default_effort=None,
+                model_tiers=[
+                    {"label": "Review", "model": "gpt-5-mini", "effort": "low"},
+                    {"label": "Implement", "model": "gpt-5.5", "effort": "high"},
+                ],
+                default_model_tier=1,
+            )
+        )
+    )
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex",
+                    "workflow": {
+                        "instructions": "Implement MM-1170.",
+                        "runtime": {
+                            "mode": "codex",
+                            "providerProfile": "codex-provider-profile",
+                            "modelTier": 2,
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    initial_parameters = mock_service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["model"] == "gpt-5.5"
+    assert initial_parameters["effort"] == "high"
+    assert initial_parameters["modelSource"] == "requested_tier"
+    assert initial_parameters["modelTierResolution"] == {
+        "requestedModelTier": 2,
+        "effectiveModelTier": 2,
+        "tierLabel": "Implement",
+        "fallbackReason": None,
+        "resolvedModel": "gpt-5.5",
+        "resolvedEffort": "high",
+        "modelSource": "requested_tier",
+        "effortSource": "requested_tier",
+        "effortApplicationStatus": "unknown",
+        "providerProfileId": "codex-provider-profile",
+    }
+    app.dependency_overrides.clear()
+
+
 def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
