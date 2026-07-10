@@ -64,7 +64,7 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
                 },
             )
 
-    assert expanded["title"] == "Batch GitHub Workflows"
+    assert expanded["appliedTemplate"]["slug"] == "batch-github-workflows"
     assert expanded["publish"] == {"mode": "none"}
     assert sorted(expanded["capabilities"]) == ["gh", "git"]
     assert len(expanded["steps"]) == 1
@@ -83,3 +83,29 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
     assert orchestration["publish"]["mode"] == "pr_with_merge_automation"
     assert orchestration["runtime"]["inherit"] == "caller"
     assert "--run-verify" in step["instructions"]
+
+
+async def test_batch_github_workflows_uses_repository_context(tmp_path):
+    async with _catalog_db(tmp_path) as sessions:
+        async with sessions() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+
+            expanded = await service.expand_template(
+                slug="batch-github-workflows",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "issue_range": "3142-3150",
+                    "run_ref": "preset:github-issue-implement",
+                },
+                context={"repository": "MoonLadderStudios/MoonMind"},
+            )
+
+    source = expanded["steps"][0]["batchOrchestration"]["source"]
+    assert source["githubIssueRange"]["repository"] == (
+        "MoonLadderStudios/MoonMind"
+    )
+    assert expanded["steps"][0]["skill"]["id"] == (
+        "queue-moonmind-workflows"
+    )

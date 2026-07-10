@@ -12,7 +12,7 @@ requiredCapabilities:
 - git
 - gh
 annotations:
-  sourceSkill: batch-workflows
+  sourceSkill: queue-moonmind-workflows
   output: child-workflows
   runtimeInheritance: caller
   workflowPublish:
@@ -151,7 +151,9 @@ steps:
     CLI to read each issue. Fail with an actionable error if an issue does not exist
     or cannot be read; do not guess or silently omit it. Resolve every issue to:
     {"provider":"github","ref":"<owner/repo>#<number>","githubIssue":
-    {"repository","number","title","body","url","state","labels"},
+    {"repository":"<owner/repo>","number":<number>,"title":"<title>",
+    "body":"<body>","url":"<url>","state":"<state>",
+    "labels":["<label>"]},
     "repository":"<owner/repo>"}. Write the complete list to
     artifacts/batch-workflows-targets.json before queueing.
 
@@ -186,7 +188,7 @@ steps:
     summaryArtifact: artifacts/batch-workflows-result.json
     targetListArtifact: artifacts/batch-workflows-targets.json
   skill:
-    id: batch-workflows
+    id: queue-moonmind-workflows
     requiredCapabilities:
     - git
     - gh
