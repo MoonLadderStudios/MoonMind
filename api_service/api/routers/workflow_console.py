@@ -1121,6 +1121,24 @@ async def oauth_terminal_route(
         user=_user,
     )
 
+
+@router.get("/omnigent/agents", response_class=HTMLResponse)
+@router.get("/omnigent/policies", response_class=HTMLResponse)
+async def omnigent_inventory_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve reloadable capability-gated Omnigent inventory routes."""
+    return await _render_react_page(
+        request,
+        "omnigent-inventory",
+        request.url.path,
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
 @router.get("/workflows/new", response_class=HTMLResponse)
 async def task_create_route(
     request: Request,
@@ -1201,6 +1219,13 @@ async def get_dashboard_ui_info(
     )
     dashboard_config.pop("initialPath", None)
     system_config = dict(dashboard_config.get("system") or {})
+    from api_service.api.routers.omnigent_bridge import _BRIDGE_CONFIG
+    from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_PROXY
+
+    omnigent_agents_available = (
+        _BRIDGE_CONFIG.enabled
+        and _BRIDGE_CONFIG.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
+    )
     return DashboardUiInfoResponse(
         buildId=system_config.get("buildId"),
         features={
@@ -1213,6 +1238,10 @@ async def get_dashboard_ui_info(
             "skills": True,
             "settings": True,
             "oauthTerminal": True,
+            "omnigentAgents": omnigent_agents_available,
+            # No authorized policy inventory read contract exists yet. Advertising
+            # this explicitly keeps the rail and route free of dead links.
+            "omnigentPolicies": False,
         },
         limits={
             "workflowListDefaultPageSize": 50,
@@ -1231,6 +1260,11 @@ async def get_dashboard_ui_info(
             "skills": "/api/workflows/skills",
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",
+            **(
+                {"omnigentAgents": "/api/omnigent/api/agents"}
+                if omnigent_agents_available
+                else {}
+            ),
         },
         dashboardConfig=dashboard_config,
         settingsPermissions=sorted(settings_permissions_for_user(_user)),

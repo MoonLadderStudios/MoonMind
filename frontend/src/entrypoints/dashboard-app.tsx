@@ -21,7 +21,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
+import { Archive, Bot, PanelLeft, Rows3, ScrollText, ShieldCheck, Square } from 'lucide-react';
 import {
   MoonIcon,
   type MoonIconHandle,
@@ -71,6 +71,7 @@ const PAGE_IMPORTS = {
   artifacts: () => import('./artifacts'),
   'index-health': () => import('./index-health'),
   manifests: () => import('./manifests'),
+  'omnigent-inventory': () => import('./omnigent-inventory'),
   'oauth-terminal': () => import('./oauth-terminal'),
   schedules: () => import('./schedules'),
   settings: () => import('./settings'),
@@ -736,6 +737,18 @@ function DashboardNavigation({
           >
             Create
           </AnimatedRouteNavLink>
+          {uiInfo?.features?.omnigentAgents === true ? (
+            <NavLink to="/omnigent/agents" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+              <Bot size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
+              Omnigent Agents
+            </NavLink>
+          ) : null}
+          {uiInfo?.features?.omnigentPolicies === true ? (
+            <NavLink to="/omnigent/policies" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+              <ShieldCheck size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
+              Omnigent Policies
+            </NavLink>
+          ) : null}
           <AnimatedRouteNavLink
             to="/schedules"
             icon={SchedulesNavIcon}

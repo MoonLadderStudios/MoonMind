@@ -5,6 +5,7 @@ export type DashboardPage =
   | 'artifacts'
   | 'index-health'
   | 'manifests'
+  | 'omnigent-inventory'
   | 'oauth-terminal'
   | 'schedules'
   | 'settings'
@@ -128,6 +129,9 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
   if (path === '/manifests' || isDetailPath(path, 'manifests')) {
     return { page: 'manifests', dataWidePanel: false, currentPath: path };
   }
+  if (path === '/omnigent/agents' || path === '/omnigent/policies') {
+    return { page: 'omnigent-inventory', dataWidePanel: true, currentPath: path };
+  }
   if (path === '/index-health') {
     return { page: 'index-health', dataWidePanel: true, currentPath: path };
   }
@@ -180,6 +184,7 @@ export function payloadForDashboardRoute(
   layout.dataWidePanel = route.dataWidePanel;
   initialData.dashboardConfig = nextDashboardConfig;
   initialData.layout = layout;
+  initialData.uiEndpoints = objectValue(uiInfo?.endpoints) ?? {};
 
   if (route.page === 'settings') {
     initialData.workerPause = objectValue(uiInfo?.workerPause) ?? initialData.workerPause ?? {

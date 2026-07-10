@@ -3,6 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { resolveDashboardRoute } from './dashboardRoutes';
 
 describe('dashboard route resolution', () => {
+  it.each(['/omnigent/agents', '/omnigent/policies'])(
+    'resolves the %s inventory route independently',
+    (path) => {
+      expect(resolveDashboardRoute(path)).toEqual({
+        page: 'omnigent-inventory',
+        dataWidePanel: true,
+        currentPath: path,
+      });
+    },
+  );
   it.each(['/artifacts', '/observability'])('resolves the %s evidence collection route', (path) => {
     expect(resolveDashboardRoute(path)).toEqual({
       page: 'artifacts',
