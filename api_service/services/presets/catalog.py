@@ -527,9 +527,7 @@ def _normalize_skill_payload(raw_skill: Any, *, index: int) -> dict[str, Any]:
                 except RuntimeIntentValidationError as exc:
                     raise PresetValidationError(str(exc)) from exc
             else:
-                skill_payload[key] = (
-                    dict(value) if isinstance(value, Mapping) else value
-                )
+                skill_payload[key] = dict(value)
     return skill_payload
 
 

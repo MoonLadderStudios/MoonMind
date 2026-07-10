@@ -7479,18 +7479,13 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                         normalized_runtime[target_key] = value
                     else:
                         normalized_runtime[target_key] = normalized_value
-            if "modelTier" in validated_runtime:
-                normalized_runtime["modelTier"] = validated_runtime["modelTier"]
-            if "tierFallback" in validated_runtime:
-                normalized_runtime["tierFallback"] = validated_runtime["tierFallback"]
-            if isinstance(validated_runtime.get("profileSelector"), Mapping):
-                normalized_runtime["profileSelector"] = dict(
-                    validated_runtime["profileSelector"]
-                )
-            if isinstance(validated_runtime.get("hardOverrideAudit"), Mapping):
-                normalized_runtime["hardOverrideAudit"] = dict(
-                    validated_runtime["hardOverrideAudit"]
-                )
+            for key in ("modelTier", "tierFallback"):
+                if key in validated_runtime:
+                    normalized_runtime[key] = validated_runtime[key]
+            for key in ("profileSelector", "hardOverrideAudit"):
+                value = validated_runtime.get(key)
+                if isinstance(value, Mapping):
+                    normalized_runtime[key] = dict(value)
             if normalized_runtime:
                 normalized_step["runtime"] = normalized_runtime
 
@@ -9724,12 +9719,13 @@ async def _create_execution_from_workflow_request(
     manifest_artifact_ref = _coerce_artifact_ref(
         task_payload.get("manifestArtifactRef") or payload.get("manifestArtifactRef")
     )
+    runtime_from_task = task_payload.get("runtime")
     runtime_payload = (
         _validate_runtime_tier_intent_for_submit(
-            task_payload.get("runtime"),
+            runtime_from_task,
             field_name="payload.workflow.runtime",
         )
-        if isinstance(task_payload.get("runtime"), dict)
+        if isinstance(runtime_from_task, dict)
         else {}
     )
     merge_automation_payload = _normalize_merge_automation_payload(
