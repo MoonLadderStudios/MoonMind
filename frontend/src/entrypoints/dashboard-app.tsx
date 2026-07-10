@@ -21,7 +21,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
+import { PanelLeft, Rows3, ScrollText, Square, Wrench } from 'lucide-react';
 import {
   MoonIcon,
   type MoonIconHandle,
@@ -71,6 +71,7 @@ const PAGE_IMPORTS = {
   'index-health': () => import('./index-health'),
   manifests: () => import('./manifests'),
   'oauth-terminal': () => import('./oauth-terminal'),
+  remediations: () => import('./remediations'),
   schedules: () => import('./schedules'),
   settings: () => import('./settings'),
   skills: () => import('./skills'),
@@ -127,6 +128,10 @@ type AnimatedNavIconProps = NavIconProps & {
 
 function WorkflowsNavIcon({ className }: NavIconProps) {
   return <ScrollText size={NAV_ICON_SIZE} className={className} aria-hidden="true" />;
+}
+
+function RemediationsNavIcon({ className }: NavIconProps) {
+  return <Wrench size={NAV_ICON_SIZE} className={className} aria-hidden="true" />;
 }
 
 function StartWorkflowNavIcon({ className, iconRef }: AnimatedNavIconProps) {
@@ -756,6 +761,15 @@ function DashboardNavigation({
           >
             Settings
           </AnimatedRouteNavLink>
+          {uiInfo?.features?.remediationCollection === true ? (
+            <NavLink
+              to="/remediations"
+              className={({ isActive }) => (isActive ? 'active' : undefined)}
+            >
+              <RemediationsNavIcon className="route-nav-icon" />
+              Remediation
+            </NavLink>
+          ) : null}
         </nav>
       </div>
 
@@ -1223,6 +1237,7 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       <Route path="/manifests/:manifestName" element={routedDashboardPage} />
       <Route path="/oauth-terminal" element={routedDashboardPage} />
       <Route path="/index-health" element={routedDashboardPage} />
+      <Route path="/remediations" element={routedDashboardPage} />
       <Route
         path="*"
         element={

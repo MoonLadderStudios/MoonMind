@@ -1047,6 +1047,23 @@ async def index_health_route(
         user=_user,
     )
 
+
+@router.get("/remediations", response_class=HTMLResponse)
+async def remediations_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the capability-gated remediation inventory shell."""
+    return await _render_react_page(
+        request,
+        "remediations",
+        "/remediations",
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
 @router.get("/workers")
 async def task_workers_route(
     request: Request,
@@ -1194,6 +1211,7 @@ async def get_dashboard_ui_info(
             "skills": True,
             "settings": True,
             "oauthTerminal": True,
+            "remediationCollection": True,
         },
         limits={
             "workflowListDefaultPageSize": 50,
@@ -1211,6 +1229,7 @@ async def get_dashboard_ui_info(
             "skills": "/api/workflows/skills",
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",
+            "remediations": "/api/executions/remediations",
         },
         dashboardConfig=dashboard_config,
         settingsPermissions=sorted(settings_permissions_for_user(_user)),

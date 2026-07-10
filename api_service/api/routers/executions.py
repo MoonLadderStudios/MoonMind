@@ -532,6 +532,25 @@ class RemediationLinksResponseModel(BaseModel):
     direction: str
     items: list[RemediationLinkSummaryModel]
 
+
+class RemediationCollectionItemModel(BaseModel):
+    remediationWorkflowId: str
+    title: str
+    status: str
+    attentionRequired: bool = False
+    targetWorkflowId: str
+    targetTitle: str
+    authorityMode: str
+    mode: str
+    latestActionSummary: str | None = None
+    resolution: str | None = None
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class RemediationCollectionResponseModel(BaseModel):
+    items: list[RemediationCollectionItemModel]
+
 class RemediationApprovalDecisionRequest(BaseModel):
     decision: str
     comment: str | None = None
@@ -11030,6 +11049,57 @@ async def _read_remediation_context_payload(
             },
         )
     return decoded
+
+@router.get("/remediations", response_model=RemediationCollectionResponseModel)
+async def list_remediation_collection(
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> RemediationCollectionResponseModel:
+    """List only remediation relationships whose two executions are visible."""
+    items: list[RemediationCollectionItemModel] = []
+    for link in await service.list_remediation_links():
+        try:
+            remediation = await _get_owned_execution(
+                service=service,
+                workflow_id=link.remediation_workflow_id,
+                user=user,
+            )
+            target = await _get_owned_execution(
+                service=service,
+                workflow_id=link.target_workflow_id,
+                user=user,
+            )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_404_NOT_FOUND:
+                continue
+            raise
+        items.append(
+            RemediationCollectionItemModel(
+                remediationWorkflowId=link.remediation_workflow_id,
+                title=str(
+                    (getattr(remediation, "memo", None) or {}).get("title")
+                    or link.remediation_workflow_id
+                ),
+                status=str(
+                    _enum_value(getattr(remediation, "state", None)) or link.status
+                ),
+                attentionRequired=bool(
+                    getattr(remediation, "attention_required", False)
+                ),
+                targetWorkflowId=link.target_workflow_id,
+                targetTitle=str(
+                    (getattr(target, "memo", None) or {}).get("title")
+                    or link.target_workflow_id
+                ),
+                authorityMode=link.authority_mode,
+                mode=link.mode,
+                latestActionSummary=link.latest_action_summary,
+                resolution=link.outcome,
+                createdAt=link.created_at,
+                updatedAt=link.updated_at,
+            )
+        )
+    return RemediationCollectionResponseModel(items=items)
 
 @router.get(
     "/{workflow_id}/remediations",

@@ -57,4 +57,12 @@ describe('dashboard route resolution', () => {
       'schedules',
     );
   });
+
+  it('resolves the remediation collection as a data-wide route', () => {
+    expect(resolveDashboardRoute('/remediations')).toEqual({
+      page: 'remediations',
+      dataWidePanel: true,
+      currentPath: '/remediations',
+    });
+  });
 });
