@@ -160,6 +160,25 @@ def test_bind_child_inputs_github_auto_binds_issue_object_and_ref():
     assert inputs["run_verify"] is False
 
 
+def test_bind_child_inputs_github_orchestrate_auto_binds_issue_object_and_ref():
+    module = _load_module()
+    inputs = module["bind_child_inputs"](
+        _GITHUB_TARGET,
+        "preset",
+        "github-issue-orchestrate",
+        "Keep the change focused",
+    )
+    assert inputs["github_issue_ref"] == "MoonLadderStudios/MoonMind#42"
+    assert inputs["constraints"] == "Keep the change focused"
+
+    goal = module["child_goal_for_target"](
+        _GITHUB_TARGET,
+        "preset",
+        "github-issue-orchestrate",
+    )
+    assert goal == "Orchestrate GitHub issue MoonLadderStudios/MoonMind#42."
+
+
 def test_bind_child_inputs_returns_none_for_provider_mismatch():
     module = _load_module()
     assert (

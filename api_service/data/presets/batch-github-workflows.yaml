@@ -1,0 +1,193 @@
+slug: batch-github-workflows
+title: Batch GitHub Workflows
+description: Resolve an inclusive GitHub issue-number range and queue one GitHub
+  Issue Implement or GitHub Issue Orchestrate workflow per issue with inherited
+  runtime settings and a shared publish override.
+scope: global
+tags:
+- batch
+- orchestration
+- github
+requiredCapabilities:
+- git
+- gh
+annotations:
+  sourceSkill: batch-workflows
+  output: child-workflows
+  runtimeInheritance: caller
+  workflowPublish:
+    mode: none
+  orchestration:
+    kind: batch-github-workflows
+    runtimeInheritance: caller
+    summaryArtifact: artifacts/batch-workflows-result.json
+    targetListArtifact: artifacts/batch-workflows-targets.json
+  bindings:
+    preset:github-issue-implement:
+      github_issue: '{{ target.githubIssue }}'
+      github_issue_ref: '{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}'
+      constraints: '{{ shared.constraints }}'
+      run_verify: '{{ shared.run_verify }}'
+    preset:github-issue-orchestrate:
+      github_issue: '{{ target.githubIssue }}'
+      github_issue_ref: '{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}'
+      constraints: '{{ shared.constraints }}'
+      run_verify: '{{ shared.run_verify }}'
+  inputSchema:
+    type: object
+    required:
+    - issue_range
+    - run_ref
+    properties:
+      issue_range:
+        type: string
+        title: GitHub issue number range
+        description: Inclusive issue range, for example 3142-3150.
+        pattern: '^\d+-\d+$'
+      run_ref:
+        type: string
+        title: Run
+        description: Child workflow preset to run for each issue.
+        enum:
+        - preset:github-issue-implement
+        - preset:github-issue-orchestrate
+      repository:
+        type: string
+        title: Repository override
+        description: GitHub owner/repository; defaults to the workflow repository.
+      max_workflows:
+        type: string
+        title: Max workflows
+      constraints:
+        type: string
+        title: Extra instructions / constraints
+      run_verify:
+        type: boolean
+        title: Run verification
+        default: true
+      publish_mode:
+        type: string
+        title: Publish override
+        enum:
+        - none
+        - branch
+        - pr
+        - pr_with_merge_automation
+  uiSchema:
+    run_ref:
+      widget: select
+    repository:
+      advanced: true
+    constraints:
+      widget: textarea
+      advanced: true
+    run_verify:
+      widget: checkbox
+    publish_mode:
+      widget: select
+      advanced: true
+  defaults:
+    run_ref: preset:github-issue-implement
+    max_workflows: '25'
+    run_verify: true
+    publish_mode: none
+inputs:
+- name: issue_range
+  label: GitHub Issue Number Range
+  type: text
+  required: true
+  default: ''
+- name: run_ref
+  label: Run
+  type: enum
+  required: true
+  default: preset:github-issue-implement
+  options:
+  - preset:github-issue-implement
+  - preset:github-issue-orchestrate
+- name: repository
+  label: Repository Override
+  type: text
+  required: false
+  default: ''
+- name: max_workflows
+  label: Max Workflows
+  type: text
+  required: false
+  default: '25'
+- name: constraints
+  label: Extra Instructions / Constraints
+  type: textarea
+  required: false
+  default: ''
+- name: run_verify
+  label: Run Verification
+  type: boolean
+  required: false
+  default: true
+- name: publish_mode
+  label: Publish Override
+  type: enum
+  required: false
+  default: none
+  options:
+  - none
+  - branch
+  - pr
+  - pr_with_merge_automation
+steps:
+- title: Resolve GitHub issue range and queue child workflows
+  annotations:
+    batchWorkflowsRole: resolve-and-queue
+  instructions: |-
+    Resolve the inclusive GitHub issue-number range "{{ inputs.issue_range }}"
+    for repository "{{ inputs.repository }}" and queue one child MoonMind workflow
+    per issue. When the repository input is empty, use the repository from workflow
+    context. Do not re-select provider, model, or effort: every child inherits the
+    parent runtime via runtimeInheritance="caller".
+
+    Parse the range strictly as START-END. Require positive integers, START <= END,
+    and no more than {{ inputs.max_workflows }} issue numbers. Use the trusted `gh`
+    CLI to read each issue. Fail with an actionable error if an issue does not exist
+    or cannot be read; do not guess or silently omit it. Resolve every issue to:
+    {"provider":"github","ref":"<owner/repo>#<number>","githubIssue":
+    {"repository","number","title","body","url","state","labels"},
+    "repository":"<owner/repo>"}. Write the complete list to
+    artifacts/batch-workflows-targets.json before queueing.
+
+    Queue each target with "{{ inputs.run_ref }}" and publish override
+    "{{ inputs.publish_mode }}" using one helper invocation:
+    python3 .agents/skills/batch-workflows/bin/batch_workflows.py \
+    --targets artifacts/batch-workflows-targets.json \
+    --run-ref "{{ inputs.run_ref }}" \
+    --publish-mode "{{ inputs.publish_mode }}" \
+    --max-workflows "{{ inputs.max_workflows }}" \
+    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
+    --constraints "{{ inputs.constraints }}"
+
+    The helper writes artifacts/batch-workflows-result.json. Report its queued,
+    skipped, and error counts honestly and link every queued child workflow.
+  batchOrchestration:
+    source:
+      kind: github_issue_range
+      githubIssueRange:
+        range: '{{ inputs.issue_range }}'
+        repository: '{{ inputs.repository }}'
+    target:
+      runRef: '{{ inputs.run_ref }}'
+    sharedInputs:
+      constraints: '{{ inputs.constraints }}'
+      run_verify: '{{ inputs.run_verify }}'
+    publish:
+      mode: '{{ inputs.publish_mode }}'
+    runtime:
+      inherit: caller
+    maxWorkflows: '{{ inputs.max_workflows }}'
+    summaryArtifact: artifacts/batch-workflows-result.json
+    targetListArtifact: artifacts/batch-workflows-targets.json
+  skill:
+    id: batch-workflows
+    requiredCapabilities:
+    - git
+    - gh
+    args: {}
