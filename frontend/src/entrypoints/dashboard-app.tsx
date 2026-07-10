@@ -21,7 +21,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
+import { Archive, Bot, PanelLeft, Rows3, ScrollText, ShieldCheck, Square, Wrench } from 'lucide-react';
 import {
   MoonIcon,
   type MoonIconHandle,
@@ -68,9 +68,12 @@ type PageComponent = ComponentType<{ payload: BootPayload }>;
 type PageImport = () => Promise<{ default: PageComponent }>;
 
 const PAGE_IMPORTS = {
+  artifacts: () => import('./artifacts'),
   'index-health': () => import('./index-health'),
   manifests: () => import('./manifests'),
+  'omnigent-inventory': () => import('./omnigent-inventory'),
   'oauth-terminal': () => import('./oauth-terminal'),
+  remediations: () => import('./remediations'),
   schedules: () => import('./schedules'),
   settings: () => import('./settings'),
   skills: () => import('./skills'),
@@ -127,6 +130,10 @@ type AnimatedNavIconProps = NavIconProps & {
 
 function WorkflowsNavIcon({ className }: NavIconProps) {
   return <ScrollText size={NAV_ICON_SIZE} className={className} aria-hidden="true" />;
+}
+
+function RemediationsNavIcon({ className }: NavIconProps) {
+  return <Wrench size={NAV_ICON_SIZE} className={className} aria-hidden="true" />;
 }
 
 function StartWorkflowNavIcon({ className, iconRef }: AnimatedNavIconProps) {
@@ -735,6 +742,18 @@ function DashboardNavigation({
           >
             Create
           </AnimatedRouteNavLink>
+          {uiInfo?.features?.omnigentAgents === true ? (
+            <NavLink to="/omnigent/agents" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+              <Bot size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
+              Omnigent Agents
+            </NavLink>
+          ) : null}
+          {uiInfo?.features?.omnigentPolicies === true ? (
+            <NavLink to="/omnigent/policies" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+              <ShieldCheck size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
+              Omnigent Policies
+            </NavLink>
+          ) : null}
           <AnimatedRouteNavLink
             to="/schedules"
             icon={SchedulesNavIcon}
@@ -749,6 +768,17 @@ function DashboardNavigation({
           >
             Skills
           </AnimatedRouteNavLink>
+          {uiInfo?.features?.artifacts !== false ? (
+            <NavLink
+              to="/artifacts"
+              className={({ isActive }) => (
+                isActive || location.pathname === '/observability' ? 'active' : undefined
+              )}
+            >
+              <Archive size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
+              Artifacts
+            </NavLink>
+          ) : null}
           <AnimatedRouteNavLink
             to="/settings"
             icon={SettingsNavIcon}
@@ -756,6 +786,15 @@ function DashboardNavigation({
           >
             Settings
           </AnimatedRouteNavLink>
+          {uiInfo?.features?.remediationCollection === true ? (
+            <NavLink
+              to="/remediations"
+              className={({ isActive }) => (isActive ? 'active' : undefined)}
+            >
+              <RemediationsNavIcon className="route-nav-icon" />
+              Remediation
+            </NavLink>
+          ) : null}
         </nav>
       </div>
 
@@ -942,7 +981,10 @@ function RoutedDashboardPage({
     const normalizedPath = location.pathname.replace(/\/$/, '');
     if (normalizedPath === '/workflows') {
       setRequestedMode('table');
-    } else if (normalizedPath.startsWith('/workflows/') && normalizedPath !== '/workflows/new') {
+    } else if (normalizedPath.startsWith('/workflows/')) {
+      if (requestedMode === 'table') {
+        updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
+      }
       setRequestedMode((mode) => (mode === 'table' ? 'sidebar' : mode));
     } else if (normalizedPath === '/schedules') {
       setRequestedRecurringMode('table');
@@ -1215,6 +1257,8 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       <Route path="/workflows/:workflowId/artifacts" element={routedDashboardPage} />
       <Route path="/workflows/:workflowId/runs" element={routedDashboardPage} />
       <Route path="/workflows/:workflowId/debug" element={routedDashboardPage} />
+      <Route path="/omnigent/agents" element={routedDashboardPage} />
+      <Route path="/omnigent/policies" element={routedDashboardPage} />
       <Route path="/schedules" element={routedDashboardPage} />
       <Route path="/schedules/:definitionId" element={routedDashboardPage} />
       <Route path="/skills/*" element={routedDashboardPage} />
@@ -1223,6 +1267,9 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       <Route path="/manifests/:manifestName" element={routedDashboardPage} />
       <Route path="/oauth-terminal" element={routedDashboardPage} />
       <Route path="/index-health" element={routedDashboardPage} />
+      <Route path="/remediations" element={routedDashboardPage} />
+      <Route path="/artifacts" element={routedDashboardPage} />
+      <Route path="/observability" element={routedDashboardPage} />
       <Route
         path="*"
         element={
