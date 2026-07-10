@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserRouter } from 'react-router-dom';
 
 import { renderWithClient } from '../utils/test-utils';
@@ -14,6 +14,9 @@ describe('OmnigentInventoryPage', () => {
       ok: true,
       json: async () => [{ id: 'agent-1', name: 'Codex', status: 'ready', description: 'Coding agent' }],
     }));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('uses the advertised same-origin compact list once and keeps agent filters distinct', async () => {

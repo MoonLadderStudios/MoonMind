@@ -11,6 +11,7 @@ type InventoryRow = {
   status: string;
   summary: string;
   freshness: string | null;
+  formattedFreshness: string | null;
 };
 
 function text(record: Record<string, unknown>, ...keys: string[]): string {
@@ -31,12 +32,14 @@ function compactRows(payload: unknown): InventoryRow[] {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
     const row = item as Record<string, unknown>;
     const id = text(row, 'id', 'agentId', 'agent_id', 'slug', 'name') || `agent-${index + 1}`;
+    const freshness = text(row, 'updatedAt', 'updated_at', 'lastSeenAt', 'last_seen_at') || null;
     return [{
       id,
       name: text(row, 'displayName', 'display_name', 'name', 'label') || id,
       status: text(row, 'status', 'state', 'health') || 'Available',
       summary: text(row, 'description', 'summary', 'scope') || 'No summary provided.',
-      freshness: text(row, 'updatedAt', 'updated_at', 'lastSeenAt', 'last_seen_at') || null,
+      freshness,
+      formattedFreshness: freshness ? new Date(freshness).toLocaleString() : null,
     }];
   });
 }
@@ -57,6 +60,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
   const result = useQuery({
     queryKey: ['omnigent-inventory', kind],
     enabled: enabled && Boolean(endpoint),
+    staleTime: Number.POSITIVE_INFINITY,
     queryFn: async () => {
       const response = await fetch(endpoint!, { credentials: 'same-origin' });
       if (!response.ok) throw new Error(`${label} request failed (${response.status})`);
@@ -83,7 +87,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       {result.isPending ? <p role="status">Loading {label.toLowerCase()}…</p> : null}
       {result.isError ? <div role="alert"><p>{result.error.message}</p><button type="button" onClick={() => void result.refetch()}>Try again</button></div> : null}
       {result.data && rows.length === 0 ? <p>{filter ? `No ${label.toLowerCase()} match this filter.` : `No authorized ${label.toLowerCase()} are available.`}</p> : null}
-      {rows.length ? <div className="omnigent-inventory__table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Summary</th><th>Freshness</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{row.name}</strong><small>{row.id}</small></td><td>{row.status}</td><td>{row.summary}</td><td>{row.freshness ? <time dateTime={row.freshness}>{new Date(row.freshness).toLocaleString()}</time> : 'Not reported'}</td></tr>)}</tbody></table></div> : null}
+      {rows.length ? <div className="omnigent-inventory__table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Summary</th><th>Freshness</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{row.name}</strong><small>{row.id}</small></td><td>{row.status}</td><td>{row.summary}</td><td>{row.freshness ? <time dateTime={row.freshness}>{row.formattedFreshness}</time> : 'Not reported'}</td></tr>)}</tbody></table></div> : null}
     </section>
   </div>;
 }

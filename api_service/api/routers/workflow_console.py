@@ -1219,12 +1219,18 @@ async def get_dashboard_ui_info(
     )
     dashboard_config.pop("initialPath", None)
     system_config = dict(dashboard_config.get("system") or {})
-    from api_service.api.routers.omnigent_bridge import _BRIDGE_CONFIG
+    from api_service.api.routers.omnigent_bridge import (
+        OMNIGENT_BRIDGE_MOUNT_PATH,
+        get_bridge_config,
+    )
     from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_PROXY
+    from moonmind.omnigent.settings import build_omnigent_gate
 
+    bridge_config = get_bridge_config()
     omnigent_agents_available = (
-        _BRIDGE_CONFIG.enabled
-        and _BRIDGE_CONFIG.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
+        bridge_config.enabled
+        and bridge_config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
+        and build_omnigent_gate().enabled
     )
     return DashboardUiInfoResponse(
         buildId=system_config.get("buildId"),
@@ -1261,7 +1267,7 @@ async def get_dashboard_ui_info(
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",
             **(
-                {"omnigentAgents": "/api/omnigent/api/agents"}
+                {"omnigentAgents": f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/agents"}
                 if omnigent_agents_available
                 else {}
             ),

@@ -1240,6 +1240,8 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       <Route path="/workflows/:workflowId/artifacts" element={routedDashboardPage} />
       <Route path="/workflows/:workflowId/runs" element={routedDashboardPage} />
       <Route path="/workflows/:workflowId/debug" element={routedDashboardPage} />
+      <Route path="/omnigent/agents" element={routedDashboardPage} />
+      <Route path="/omnigent/policies" element={routedDashboardPage} />
       <Route path="/schedules" element={routedDashboardPage} />
       <Route path="/schedules/:definitionId" element={routedDashboardPage} />
       <Route path="/skills/*" element={routedDashboardPage} />
