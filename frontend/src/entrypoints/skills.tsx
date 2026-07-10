@@ -4,6 +4,7 @@ import { marked } from 'marked';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
+import { CollectionWorkspace } from '../components/CollectionWorkspace';
 
 interface SkillItem {
   id: string;
@@ -402,8 +403,13 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
   );
 
   return (
-    <div className="skills-page collection-workspace">
-      <nav className="workflow-workspace-sidebar collection-sidebar" aria-label="Skill navigation">
+    <CollectionWorkspace
+      collection="skill"
+      mode={isDrawerOpen ? 'create' : 'preview'}
+      className="skills-page"
+      primaryAs="div"
+      primaryClassName="skills-primary workflow-workspace-detail px-4 py-4 sm:px-6 sm:py-6"
+      sidebar={<nav className="workflow-workspace-sidebar collection-sidebar" aria-label="Skill navigation">
         <div role="table" aria-label="Skill list table slice" className="workflow-workspace-sidebar-table">
           <div role="rowgroup" className="workflow-workspace-sidebar-header">
             <div role="row" className="workflow-workspace-sidebar-header-row">
@@ -454,8 +460,8 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
             ))}
           </div>
         </div>
-      </nav>
-      <main className="skills-primary workflow-workspace-detail px-4 py-4 sm:px-6 sm:py-6">
+      </nav>}
+    >
         <div className="space-y-5 sm:space-y-6">
         <header className="flex items-start justify-between gap-4 px-1 sm:px-0">
           <div>
@@ -560,7 +566,6 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
             )}
           </section>
       </div>
-      </main>
 
       {isDrawerOpen ? (
         <div
@@ -681,7 +686,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
           </div>
         </div>
       ) : null}
-    </div>
+    </CollectionWorkspace>
   );
 }
 export default SkillsPage;
