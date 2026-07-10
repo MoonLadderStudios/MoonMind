@@ -85,6 +85,9 @@ _PR_RESOLVER_MERGED_STATUSES: frozenset[str] = frozenset({"merged"})
 _PR_RESOLVER_TERMINAL_STATUSES: frozenset[str] = (
     _PR_RESOLVER_FAILURE_STATUSES | _PR_RESOLVER_MERGED_STATUSES
 )
+_PR_RESOLVER_TERMINAL_DISPOSITIONS: frozenset[str] = frozenset(
+    {"merged", "already_merged", "reenter_gate", "manual_review", "hard_failure"}
+)
 _PR_RESOLVER_REENTER_NEXT_STEPS: frozenset[str] = frozenset(
     {
         "run_fix_comments_skill",
@@ -684,7 +687,11 @@ def _load_pr_resolver_terminal_result(
         if payload is None:
             failures.append(f"{provenance}: malformed JSON object")
             continue
-        if _pr_resolver_disposition(payload) is None:
+        disposition = _pr_resolver_disposition(payload, merge_gate_owned=True)
+        if (
+            _pr_resolver_status(payload) not in _PR_RESOLVER_TERMINAL_STATUSES
+            and disposition not in _PR_RESOLVER_TERMINAL_DISPOSITIONS
+        ):
             failures.append(f"{provenance}: unrecognized terminal status/disposition")
             continue
         artifact_run_id = _payload_identity(

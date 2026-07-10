@@ -119,6 +119,21 @@ def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
     )
 
 
+def test_pr_resolver_rejects_unrecognized_terminal_evidence(tmp_path: Path) -> None:
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    (resolver / "result.json").write_text(
+        '{"message":"resolver still running"}', encoding="utf-8"
+    )
+
+    terminal = _load_pr_resolver_terminal_result(str(tmp_path))
+
+    assert terminal.payload is None
+    assert terminal.validation_failures == (
+        "var/pr_resolver/result.json: unrecognized terminal status/disposition",
+    )
+
+
 def test_pr_resolver_accepts_compatibility_path_with_matching_identity(
     tmp_path: Path,
 ) -> None:
