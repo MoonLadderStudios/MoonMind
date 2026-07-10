@@ -322,6 +322,8 @@ function WorkflowSidebar({
       currentRowCopy="Current workflow"
       filterValue={filterText}
       onFilterChange={setFilterText}
+      externalFiltering
+      className="workflow-collection-sidebar"
       headerContent={<WorkflowSidebarHeader filterText={filterText} setFilterText={setFilterText} />}
       renderLink={(row, props) => {
         const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {

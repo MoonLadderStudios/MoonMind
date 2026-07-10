@@ -1616,6 +1616,10 @@ h1 {
   top: var(--collection-sidebar-header-height);
 }
 
+.workflow-collection-sidebar {
+  --collection-sidebar-header-height: var(--workflow-list-header-row-height);
+}
+
 .collection-sidebar-filter input {
   width: 100%;
   min-height: 1.9rem;

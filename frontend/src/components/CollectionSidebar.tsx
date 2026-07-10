@@ -40,6 +40,8 @@ export function CollectionSidebar({
   headerContent,
   filterValue,
   onFilterChange,
+  externalFiltering = false,
+  className,
 }: {
   landmarkLabel: string;
   tableLabel: string;
@@ -62,16 +64,24 @@ export function CollectionSidebar({
   headerContent?: ReactNode;
   filterValue?: string;
   onFilterChange?: (value: string) => void;
+  externalFiltering?: boolean;
+  className?: string;
 }) {
   const [internalFilter, setInternalFilter] = useState('');
-  const filter = filterValue ?? internalFilter;
-  const setFilter = onFilterChange ?? setInternalFilter;
+  const isControlled = filterValue !== undefined;
+  const filter = isControlled ? filterValue : internalFilter;
+  const setFilter = (value: string) => {
+    if (!isControlled) {
+      setInternalFilter(value);
+    }
+    onFilterChange?.(value);
+  };
   const normalizedFilter = filter.trim().toLocaleLowerCase();
-  const filteredRows = useMemo(() => rows.filter((row) => (
+  const filteredRows = useMemo(() => externalFiltering ? rows : rows.filter((row) => (
     !normalizedFilter
     || row.primaryText.toLocaleLowerCase().includes(normalizedFilter)
     || row.id.toLocaleLowerCase().includes(normalizedFilter)
-  )), [normalizedFilter, rows]);
+  )), [externalFiltering, normalizedFilter, rows]);
   const activeInFilteredRows = filteredRows.some((row) => row.id === activeId);
   const visiblePinnedRow = pinnedRow && !activeInFilteredRows ? pinnedRow : null;
 
@@ -103,7 +113,7 @@ export function CollectionSidebar({
   };
 
   return (
-    <aside className="collection-sidebar workflow-workspace-sidebar" aria-label={landmarkLabel}>
+    <aside className={`collection-sidebar workflow-workspace-sidebar${className ? ` ${className}` : ''}`} aria-label={landmarkLabel}>
       <div role="table" aria-label={tableLabel} className="workflow-workspace-sidebar-table">
         {headerContent ?? <div role="rowgroup" className="workflow-workspace-sidebar-header">
           <div role="row" className="workflow-workspace-sidebar-header-row">
@@ -123,13 +133,13 @@ export function CollectionSidebar({
             {onRetry ? <button type="button" className="secondary" onClick={onRetry}>Retry</button> : null}
           </SidebarState>
         ) : null}
-        {!isLoading && !error && visiblePinnedRow ? (
+        {!isLoading && visiblePinnedRow ? (
           <div role="rowgroup" className="workflow-workspace-sidebar-list workflow-workspace-sidebar-pinned-list" aria-label={currentRowCopy}>
             {renderRow(visiblePinnedRow, true)}
           </div>
         ) : null}
         {!isLoading && !error && filteredRows.length === 0 ? <SidebarState>{normalizedFilter ? filteredEmptyCopy : emptyCopy}</SidebarState> : null}
-        {!isLoading && !error && filteredRows.length > 0 ? (
+        {!isLoading && filteredRows.length > 0 ? (
           <div role="rowgroup" className="workflow-workspace-sidebar-list" aria-label={`${header} navigation list`}>
             {filteredRows.map((row) => renderRow(row))}
           </div>
