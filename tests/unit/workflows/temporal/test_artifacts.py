@@ -1509,7 +1509,7 @@ async def test_write_integration_event_artifact_creates_restricted_preview(
             assert artifact.retention_class.value == "ephemeral"
             assert policy.preview_artifact_ref is not None
 
-async def test_execution_owner_can_read_linked_input_attachment_from_other_principal(
+async def test_execution_owner_can_read_linked_artifact_from_other_principal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1576,7 +1576,7 @@ async def test_execution_owner_can_read_linked_input_attachment_from_other_princ
                     namespace="moonmind",
                     workflow_id="wf-mm-628",
                     run_id="run-mm-628",
-                    link_type="input.attachment",
+                    link_type="output.primary",
                 ),
             )
             await service.link_artifact(
@@ -1602,6 +1602,14 @@ async def test_execution_owner_can_read_linked_input_attachment_from_other_princ
             assert linked_artifact.artifact_id == artifact.artifact_id
             assert policy.raw_access_allowed is True
             assert payload == b"data"
+            batched_links = await repo.list_links_for_artifacts(
+                [artifact.artifact_id]
+            )
+            assert {link.link_type for link in batched_links} == {
+                "output.primary",
+                "input.attachment",
+            }
+            assert await repo.list_links_for_artifacts([]) == []
 
             with pytest.raises(TemporalArtifactAuthorizationError, match="cannot read"):
                 await service.get_metadata(

@@ -1047,6 +1047,25 @@ async def index_health_route(
         user=_user,
     )
 
+
+@router.get("/artifacts", response_class=HTMLResponse)
+@router.get("/observability", response_class=HTMLResponse)
+async def artifact_collection_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the capability-gated artifact and observability collection shell."""
+    current_path = request.url.path
+    return await _render_react_page(
+        request,
+        "artifacts",
+        current_path,
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
 @router.get("/workers")
 async def task_workers_route(
     request: Request,
@@ -1208,6 +1227,7 @@ async def get_dashboard_ui_info(
             "workflowUpdatesStream": "/api/workflows/updates/stream",
             "workflowEventsStream": "/api/workflows/{workflowId}/events/stream",
             "artifacts": "/api/artifacts",
+            "artifactCollection": "/api/artifacts/collection",
             "skills": "/api/workflows/skills",
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",

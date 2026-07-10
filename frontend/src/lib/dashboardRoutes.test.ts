@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { resolveDashboardRoute } from './dashboardRoutes';
 
 describe('dashboard route resolution', () => {
+  it.each(['/artifacts', '/observability'])('resolves the %s evidence collection route', (path) => {
+    expect(resolveDashboardRoute(path)).toEqual({
+      page: 'artifacts',
+      dataWidePanel: true,
+      currentPath: path,
+    });
+  });
   it('resolves percent-encoded workflow detail IDs', () => {
     const path = '/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95';
 

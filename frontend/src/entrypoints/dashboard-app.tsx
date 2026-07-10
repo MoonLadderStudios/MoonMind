@@ -21,7 +21,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
+import { Archive, PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
 import {
   MoonIcon,
   type MoonIconHandle,
@@ -68,6 +68,7 @@ type PageComponent = ComponentType<{ payload: BootPayload }>;
 type PageImport = () => Promise<{ default: PageComponent }>;
 
 const PAGE_IMPORTS = {
+  artifacts: () => import('./artifacts'),
   'index-health': () => import('./index-health'),
   manifests: () => import('./manifests'),
   'oauth-terminal': () => import('./oauth-terminal'),
@@ -749,6 +750,17 @@ function DashboardNavigation({
           >
             Skills
           </AnimatedRouteNavLink>
+          {uiInfo?.features?.artifacts !== false ? (
+            <NavLink
+              to="/artifacts"
+              className={({ isActive }) => (
+                isActive || location.pathname === '/observability' ? 'active' : undefined
+              )}
+            >
+              <Archive size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
+              Artifacts
+            </NavLink>
+          ) : null}
           <AnimatedRouteNavLink
             to="/settings"
             icon={SettingsNavIcon}
@@ -1223,6 +1235,8 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       <Route path="/manifests/:manifestName" element={routedDashboardPage} />
       <Route path="/oauth-terminal" element={routedDashboardPage} />
       <Route path="/index-health" element={routedDashboardPage} />
+      <Route path="/artifacts" element={routedDashboardPage} />
+      <Route path="/observability" element={routedDashboardPage} />
       <Route
         path="*"
         element={
