@@ -366,9 +366,11 @@ def _ensure_launch_ready_profile(profile: Any | None) -> None:
         launch_ready = profile.get("launch_ready", profile.get("launchReady", True))
     else:
         enabled = getattr(profile, "enabled", True)
-        auth_state = getattr(profile, "auth_state", None)
-        disabled_reason = getattr(profile, "disabled_reason", None)
-        launch_ready = getattr(profile, "launch_ready", True)
+        auth_state = getattr(profile, "auth_state", getattr(profile, "authState", None))
+        disabled_reason = getattr(
+            profile, "disabled_reason", getattr(profile, "disabledReason", None)
+        )
+        launch_ready = getattr(profile, "launch_ready", getattr(profile, "launchReady", True))
 
     if enabled is False:
         raise ValueError("selected provider profile is not launch-ready")

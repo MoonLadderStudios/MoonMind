@@ -11,6 +11,7 @@ Also tests that `normalize_runtime_id` applies aliases correctly.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -391,6 +392,21 @@ class TestResolveModelEffortTiers:
         ],
     )
     def test_launch_unready_selected_profile_fails_explicitly(self, profile):
+        with pytest.raises(ValueError, match="not launch-ready"):
+            resolve_model_effort(
+                runtime_id="codex_cli",
+                profile=profile,
+                requested_model_tier=1,
+                env={},
+            )
+
+    def test_launch_unready_object_profile_checks_camel_case_attributes(self):
+        profile = SimpleNamespace(
+            enabled=True,
+            authState="disconnected",
+            model_tiers=[],
+        )
+
         with pytest.raises(ValueError, match="not launch-ready"):
             resolve_model_effort(
                 runtime_id="codex_cli",
