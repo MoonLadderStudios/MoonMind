@@ -9189,3 +9189,23 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     background-position: 50% 50%, 50% 50%;
   }
 }
+.omnigent-inventory {
+  display: grid;
+  gap: 1.25rem;
+  padding: 1.5rem;
+}
+
+.omnigent-inventory__toolbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.omnigent-inventory label,
+.omnigent-inventory td strong,
+.omnigent-inventory td small { display: block; }
+.omnigent-inventory input[type='search'] { margin-top: .35rem; max-width: 28rem; width: 100%; }
+.omnigent-inventory__table-wrap { margin-top: 1rem; overflow-x: auto; }
+.omnigent-inventory table { border-collapse: collapse; width: 100%; }
+.omnigent-inventory th,
+.omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; }

@@ -69,6 +69,12 @@ _ROUTES = _BRIDGE_CONFIG.public_api.routes
 
 OMNIGENT_BRIDGE_MOUNT_PATH = _BRIDGE_CONFIG.public_api.mount_path
 
+
+def get_bridge_config() -> OmnigentBridgeConfig:
+    """Return the resolved, immutable bridge configuration."""
+
+    return _BRIDGE_CONFIG
+
 router = APIRouter(tags=["Omnigent Bridge"])
 
 _FAILURE_CLASS_STATUS = {
