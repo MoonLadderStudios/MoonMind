@@ -386,6 +386,22 @@ describe('Dashboard shared entry', () => {
     expect(animatedNavIconMocks.settingsStop).toHaveBeenCalledTimes(1);
   });
 
+  it('MM-1167 switches the full-screen workflow list to the sidebar when navigating to Create', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(screen.getByRole('link', { name: 'Create' }));
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+    });
+    expect(window.location.pathname).toBe('/workflows/new');
+  });
+
   it('renders dashboard alerts and lazy-loads the requested page component', async () => {
     window.history.replaceState({}, '', '/workflows');
     const payload: BootPayload = {
@@ -1211,6 +1227,24 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
     expect(window.location.pathname).toBe('/workflows/new');
     expect(window.location.search).toBe('?source=temporal');
+  });
+
+  it('MM-1167 preserves the Create sidebar when preferences change', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('link', { name: 'Create' }));
+
+    expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'preference-sync' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
+    });
   });
 
   it('MM-1029 navigateTo uses the SPA route event for dashboard-internal URLs', async () => {

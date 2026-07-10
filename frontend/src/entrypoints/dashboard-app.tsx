@@ -954,7 +954,10 @@ function RoutedDashboardPage({
     const normalizedPath = location.pathname.replace(/\/$/, '');
     if (normalizedPath === '/workflows') {
       setRequestedMode('table');
-    } else if (normalizedPath.startsWith('/workflows/') && normalizedPath !== '/workflows/new') {
+    } else if (normalizedPath.startsWith('/workflows/')) {
+      if (requestedMode === 'table') {
+        updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
+      }
       setRequestedMode((mode) => (mode === 'table' ? 'sidebar' : mode));
     } else if (normalizedPath === '/schedules') {
       setRequestedRecurringMode('table');
