@@ -1,83 +1,89 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issue_ref": "MM-1146",
-  "issue_url": "https://moonladder.atlassian.net/browse/MM-1146",
+  "issue_ref": "MM-1172",
+  "issue_url": "https://moonladder.atlassian.net/browse/MM-1172",
   "source_verification_artifact": "artifacts/jira-implement-verify.json",
   "source_verdict": "ADDITIONAL_WORK_NEEDED",
   "brief_truncated": false,
-  "summary": "Remediated the two verifier-reported implementation gaps and the associated verification gap for the Recurring schedules desktop table (frontend/src/entrypoints/schedules.tsx). Added the documented 'Updated' (updatedAt) column at order 9 (after Policy) and an 'Actions' column at order 10 exposing only safe, common row actions (Run now, Pause/Resume) gated by the existing scheduleActionAvailability logic. Destructive delete remains detail-only per docs/UI/RecurringSchedulesPage.md#s21 / STORY-011. Extended schedules.test.tsx to assert both new columns, the safe row actions with no delete control, a triggered run-now action, and absence of spawned execution content in the list (testing contract item 16). Scope was bounded strictly to the verifier's remaining_work backlog; the issue scope was not broadened, no PR was created, and Jira status was not changed.",
+  "summary": "Remediated the verifier-reported execution-router gaps for provider profile model tier launch metadata. Legacy provider profiles that only expose default_model/default_effort now preserve the compatibility modelSource provider_profile_default instead of being reclassified as profile_default_tier. Execution launch paths now record modelTierResolution only when tier policy is actually involved: an explicit modelTier, an advisory tierPreview, or a provider profile with configured model_tiers. Added focused launch-path coverage proving stale tierPreview data is advisory, backend resolution re-runs against the current profile policy, and modelTierResolution.previewMismatch is recorded.",
   "changed_files": [
-    "frontend/src/entrypoints/schedules.tsx",
-    "frontend/src/entrypoints/schedules.test.tsx",
-    "frontend/src/styles/dashboard.css"
+    "api_service/api/routers/executions.py",
+    "moonmind/workflows/executions/model_resolver.py",
+    "tests/unit/api/routers/test_executions.py",
+    "reports/remediation_attempt-1.json"
   ],
   "gap_statuses": [
     {
-      "requirement": "AC-updated-column: The desktop table includes the 'Updated' column (updatedAt) in the documented order after Policy.",
-      "gap_type": "implementation",
-      "status": "fixed",
-      "evidence": [
-        "frontend/src/entrypoints/schedules.tsx now defines a DataTable column {key:'updatedAt', header:'Updated', render:(item)=>formatWhen(item.updatedAt)} immediately after the Policy column (order 9).",
-        "frontend/src/entrypoints/schedules.test.tsx asserts getByRole('columnheader',{name:'Updated'}) and the formatted updatedAt value rendered from the schedule row."
-      ]
-    },
-    {
-      "requirement": "AC-actions-column: An 'Actions' column with safe common row actions is added where row actions are needed, with destructive delete remaining on detail.",
-      "gap_type": "implementation",
-      "status": "fixed",
-      "evidence": [
-        "frontend/src/entrypoints/schedules.tsx adds a ScheduleRowActions component wired via the shared DataTable rowActions prop (trailing 'Actions' column, order 10). It surfaces only safe, common actions: 'Run now' (POST to the runNow endpoint) and 'Pause'/'Resume' (PATCH enabled), each gated by scheduleActionAvailability (canRun / canEdit) with permission-disabled reasons via title. Destructive delete is NOT rendered in the list and stays on detail per docs/UI/RecurringSchedulesPage.md#s21 / STORY-011.",
-        "The schedule-name link in column 1 remains the primary accessible link to /schedules/{definitionId}; row actions render as normal secondary controls.",
-        "frontend/src/entrypoints/schedules.test.tsx asserts getByRole('columnheader',{name:'Actions'}), one 'Run now' action per row (3), Pause on enabled rows (2), Resume on the paused row (1), and queryByRole('button',{name:/delete/i}) is null."
-      ]
-    },
-    {
-      "requirement": "AC-testing-contract-item-16: Row rendering tests reflect the new columns for recurring definitions with no spawned execution content.",
+      "requirement": "Preview output is advisory and does not replace launch-time backend resolution.",
       "gap_type": "verification",
       "status": "fixed",
       "evidence": [
-        "frontend/src/entrypoints/schedules.test.tsx adds a test 'renders the documented Updated and Actions columns in the recurring table' asserting both column headers, the updatedAt value, the safe row-action set, absence of delete, and absence of Steps/Artifacts/Logs/Proposals/Diagnostics headings in the list.",
-        "Added 'triggers a safe run-now row action without exposing destructive delete' asserting the run-now POST fires to /api/recurring-workflows/schedule-1/run and that no delete control is present.",
-        "Updated the beforeEach list mock to include updatedAt on schedule-1 so the Updated column value is asserted deterministically."
+        "api_service/api/routers/executions.py now gates modelTierResolution emission through _should_record_model_tier_resolution so ordinary non-tier launch payloads retain their prior shape while tier-policy launches still record resolved metadata.",
+        "tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_records_tier_preview_mismatch submits stale tierPreview data and verifies launch-time backend resolution stores the current profile model/effort instead of trusting the preview snapshot.",
+        "./tools/test_unit.sh tests/unit/api/routers/test_executions.py passed."
       ]
     },
     {
-      "requirement": "DESIGN-REQ-016: Render the scan-optimized column set in documented order through Updated (9) and Actions (10).",
+      "requirement": "Backend can detect and record preview mismatch when submitted preview state differs from current profile policy.",
+      "gap_type": "verification",
+      "status": "fixed",
+      "evidence": [
+        "tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_records_tier_preview_mismatch asserts modelTierResolution.previewMismatch is true in initial_parameters when the submitted preview model differs from the resolver output.",
+        "The same test asserts requestedModelTier, effectiveModelTier, resolvedModel, resolvedEffort, modelSource, effortSource, and fallbackReason in the recorded modelTierResolution payload."
+      ]
+    },
+    {
+      "requirement": "Provider profile default compatibility during migration.",
       "gap_type": "implementation",
       "status": "fixed",
       "evidence": [
-        "The DataTable columns array now runs Schedule, State, Target, Cadence, Next Run, Last Scheduled, Dispatch, Policy, Updated (columns 1-9) with the rowActions-rendered Actions cell at column 10, matching docs/UI/RecurringSchedulesPage.md section 9 order."
+        "moonmind/workflows/executions/model_resolver.py now distinguishes explicitly configured model_tiers from tiers derived from legacy default_model/default_effort fields.",
+        "Legacy profiles without configured model_tiers continue to resolve modelSource=provider_profile_default unless an explicit requested model tier is supplied.",
+        "Previously failing tests test_step_runtime_inherits_task_profile_default_model and test_create_task_shaped_execution_accepts_provider_profile_alias now pass in ./tools/test_unit.sh tests/unit/api/routers/test_executions.py."
       ]
     }
   ],
   "unchanged_verified_requirements": [
-    "DESIGN-REQ-017 (status pill State, non-color-only attention, compact dispatch error, compact target summary) - already VERIFIED, unaffected by this change.",
-    "DESIGN-REQ-018 (shared DataTable visual language, empty state + create action, no per-run fetch, no spawned content) - already VERIFIED; the new Updated column and safe row actions add no per-run workflow fetch and no spawned execution content.",
-    "AC-first-column-link (schedule name is the primary link to /schedules/{definitionId}) - unchanged and preserved."
+    "Provider Profile create/update accepts model_tiers and default_model_tier.",
+    "Provider Profile responses include tier policy plus compatibility fields during migration.",
+    "The preview endpoint returns requested tier, effective tier, model, effort, and fallback reason for each requested step.",
+    "Use backend resolver logic for preview parity.",
+    "Do not require presets to name concrete models for preview."
   ],
   "targeted_checks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/schedules.test.tsx",
+      "command": "./tools/test_unit.sh tests/unit/api/routers/test_executions.py",
       "result": "PASS",
-      "notes": "1 test file passed, 33 tests passed (Vitest v4.1.1). Up from 31; the two added tests cover the Updated column, the Actions column safe actions with no delete, the run-now row action, and no spawned execution content in the list."
+      "notes": "357 Python tests passed, including the new launch-path preview mismatch coverage and the four previously failing execution-router tests. The runner UI phase also passed: 60 files passed, 942 tests passed, 238 skipped. Warnings were existing Starlette deprecation, AsyncMock resource, and jsdom canvas getContext warnings."
     },
     {
-      "command": "node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json",
+      "command": "./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/workflows/executions/test_model_resolver.py",
       "result": "PASS",
-      "notes": "Frontend TypeScript typecheck completed with no errors (the npm 'ui:typecheck' script maps to this; the bare 'tsc' binary is not on PATH, so it was invoked from node_modules/.bin)."
+      "notes": "82 Python tests passed for provider profile API and model resolver coverage. The runner UI phase also passed: 60 files passed, 942 tests passed, 238 skipped. Warnings were existing google.generativeai deprecation and jsdom canvas getContext warnings."
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "notes": "No whitespace errors reported for the working tree diff."
     }
   ],
+  "remaining_work": [],
   "environment_notes": [
     {
       "item": "MoonMind RAG retrieved context",
-      "status": "NOT RUN",
-      "detail": "Retrieved context was delivered in degraded local fallback mode. Non-gating: remediation relied on direct repository inspection, the authoritative verify artifact, and the focused frontend unit suite plus typecheck."
+      "status": "NOT_USED",
+      "detail": "Retrieved context was delivered in degraded local fallback mode and was not needed for this bounded remediation; direct repository files and the authoritative verifier artifact controlled the work."
     },
     {
       "item": "Stale prior artifact overwritten",
       "status": "NOTE",
-      "detail": "The previous reports/remediation_attempt-1.json described a different issue (MoonLadderStudios/MoonMind#3068, masthead workflow list display). It was stale scaffolding and has been overwritten with this MM-1146 attempt-1 record."
+      "detail": "reports/remediation_attempt-1.json previously described MM-1146. It was replaced with this MM-1172 remediation attempt record."
     }
-  ]
+  ],
+  "scope_controls": {
+    "pull_request_created": false,
+    "jira_status_changed": false,
+    "scope_broadened": false
+  }
 }

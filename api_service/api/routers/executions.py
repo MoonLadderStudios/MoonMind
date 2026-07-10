@@ -7738,7 +7738,14 @@ async def _resolve_step_runtime_selections(
         if raw_requested_model is not None:
             resolved_runtime["requestedModel"] = raw_requested_model
         resolved_runtime["modelSource"] = resolved_model_effort.model_source
-        resolved_runtime["modelTierResolution"] = resolved_model_effort.as_metadata()
+        if _should_record_model_tier_resolution(
+            provider_profile=provider_profile,
+            requested_model_tier=requested_model_tier,
+            advisory_preview=advisory_preview,
+        ):
+            resolved_runtime["modelTierResolution"] = (
+                resolved_model_effort.as_metadata()
+            )
         if raw_step_profile_id:
             resolved_runtime["profileId"] = raw_step_profile_id
             resolved_runtime["providerProfile"] = raw_step_profile_id
@@ -7747,6 +7754,22 @@ async def _resolve_step_runtime_selections(
         if "effort" not in resolved_runtime and isinstance(task_runtime.get("effort"), str):
             resolved_runtime["effort"] = task_runtime["effort"]
         step["runtime"] = resolved_runtime
+
+
+def _should_record_model_tier_resolution(
+    *,
+    provider_profile: Any | None,
+    requested_model_tier: int | None,
+    advisory_preview: Mapping[str, Any] | None,
+) -> bool:
+    if requested_model_tier is not None or advisory_preview is not None:
+        return True
+    raw_tiers = (
+        getattr(provider_profile, "model_tiers", None)
+        if provider_profile is not None
+        else None
+    )
+    return isinstance(raw_tiers, list) and bool(raw_tiers)
 
 
 def _preset_seed_dir() -> Path:
@@ -9885,10 +9908,15 @@ async def _create_execution_from_workflow_request(
         "modelSource": resolved_model_effort.model_source,
         "profileId": raw_profile_id if _provider_profile is not None else None,
         "effort": resolved_model_effort.effort,
-        "modelTierResolution": resolved_model_effort.as_metadata(),
         "publishMode": publish_payload["mode"],
         "stepCount": step_count,
     }
+    if _should_record_model_tier_resolution(
+        provider_profile=_provider_profile,
+        requested_model_tier=requested_model_tier,
+        advisory_preview=advisory_preview,
+    ):
+        initial_parameters["modelTierResolution"] = resolved_model_effort.as_metadata()
     if known_refs:
         initial_parameters["knownRefs"] = sorted(known_refs)
     if story_output_payload:
@@ -10273,8 +10301,13 @@ async def _resolve_recurring_runtime_metadata(
         "model": resolved_model_effort.model,
         "requestedModel": raw_requested_model,
         "modelSource": resolved_model_effort.model_source,
-        "modelTierResolution": resolved_model_effort.as_metadata(),
     }
+    if _should_record_model_tier_resolution(
+        provider_profile=provider_profile,
+        requested_model_tier=requested_model_tier,
+        advisory_preview=advisory_preview,
+    ):
+        metadata["modelTierResolution"] = resolved_model_effort.as_metadata()
     if raw_profile_id:
         metadata["profileId"] = raw_profile_id
     metadata["effort"] = resolved_model_effort.effort

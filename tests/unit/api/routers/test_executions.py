@@ -5458,6 +5458,84 @@ def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
     assert initial_parameters["modelSource"] == "provider_profile_default"
     app.dependency_overrides.clear()
 
+
+def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.create_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(
+                default_model="legacy-default",
+                default_model_tier=1,
+                model_tiers=[
+                    {
+                        "label": "Plan",
+                        "model": "codex-plan-current",
+                        "effort": "low",
+                    },
+                    {
+                        "label": "Implement",
+                        "model": "codex-implement-current",
+                        "effort": "high",
+                    },
+                ],
+            )
+        )
+    )
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex",
+                    "workflow": {
+                        "instructions": "Run with a stale advisory preview.",
+                        "runtime": {
+                            "mode": "codex",
+                            "providerProfile": "codex-provider-profile",
+                            "modelTier": 2,
+                            "tierPreview": {
+                                "requestedTier": 2,
+                                "effectiveTier": 2,
+                                "model": "codex-implement-stale",
+                                "effort": "high",
+                                "fallbackReason": None,
+                            },
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    initial_parameters = mock_service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["model"] == "codex-implement-current"
+    assert initial_parameters["effort"] == "high"
+    assert initial_parameters["modelSource"] == "requested_tier"
+    assert initial_parameters["modelTierResolution"] == {
+        "requestedModelTier": 2,
+        "effectiveModelTier": 2,
+        "tierLabel": "Implement",
+        "fallbackReason": None,
+        "resolvedModel": "codex-implement-current",
+        "resolvedEffort": "high",
+        "modelSource": "requested_tier",
+        "effortSource": "requested_tier",
+        "effortApplicationStatus": "unknown",
+        "previewMismatch": True,
+    }
+    app.dependency_overrides.clear()
+
 def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

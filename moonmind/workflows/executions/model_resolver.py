@@ -123,6 +123,7 @@ def resolve_model_effort(
     """Resolve model and effort from explicit overrides, tiers, profile defaults, and runtime defaults."""
     clean_requested_model = str(requested_model or "").strip() or None
     clean_requested_effort = str(requested_effort or "").strip() or None
+    profile_has_configured_tiers = _profile_has_configured_tiers(profile)
     tiers = normalize_model_tiers(profile)
     default_tier = _default_model_tier(profile, len(tiers))
     effective_tier, fallback_reason = _effective_tier(
@@ -134,12 +135,9 @@ def resolve_model_effort(
     tier = tiers[effective_tier - 1]
     tier_model = str(tier.get("model") or "").strip() or None
     tier_effort = str(tier.get("effort") or "").strip() or None
-    tier_source = (
-        _MODEL_SOURCE_PROFILE_DEFAULT_TIER
-        if requested_model_tier is None
-        else _MODEL_SOURCE_REQUESTED_TIER
-    )
-    if requested_model_tier is None:
+    tier_source = _MODEL_SOURCE_REQUESTED_TIER
+    if requested_model_tier is None and profile_has_configured_tiers:
+        tier_source = _MODEL_SOURCE_PROFILE_DEFAULT_TIER
         fallback_reason = fallback_reason or _MODEL_SOURCE_PROFILE_DEFAULT_TIER
 
     runtime_model, runtime_effort = resolve_runtime_defaults(
@@ -161,7 +159,9 @@ def resolve_model_effort(
 
     if clean_requested_model:
         model, model_source = clean_requested_model, _MODEL_SOURCE_TASK_OVERRIDE
-    elif tier_model:
+    elif tier_model and (
+        requested_model_tier is not None or profile_has_configured_tiers
+    ):
         model, model_source = tier_model, tier_source
     elif profile_model:
         model, model_source = profile_model, _MODEL_SOURCE_PROFILE_DEFAULT
@@ -172,7 +172,9 @@ def resolve_model_effort(
 
     if clean_requested_effort:
         effort, effort_source = clean_requested_effort, _MODEL_SOURCE_TASK_OVERRIDE
-    elif tier_effort:
+    elif tier_effort and (
+        requested_model_tier is not None or profile_has_configured_tiers
+    ):
         effort, effort_source = tier_effort, tier_source
     elif profile_effort:
         effort, effort_source = profile_effort, _MODEL_SOURCE_PROFILE_DEFAULT
@@ -265,6 +267,11 @@ def _normalize_tier_entry(tier: Any) -> dict[str, Any]:
         "parameters": dict(tier.get("parameters") or {}),
         "annotations": dict(tier.get("annotations") or {}),
     }
+
+
+def _profile_has_configured_tiers(profile: Any | None) -> bool:
+    raw_tiers = getattr(profile, "model_tiers", None) if profile is not None else None
+    return isinstance(raw_tiers, list) and bool(raw_tiers)
 
 
 def _default_model_tier(profile: Any | None, tier_count: int) -> int:
