@@ -529,7 +529,8 @@ def test_apply_resolved_tier_policy_initializes_missing_parameters():
         authState="connected",
         disabledReason=None,
     )
-    request = _make_request(parameters=None)
+    request = _make_request(parameters={})
+    request.parameters = None
 
     ManagedRuntimeLauncher._apply_resolved_tier_policy(
         request=request,
