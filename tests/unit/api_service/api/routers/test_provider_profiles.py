@@ -530,6 +530,16 @@ def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -
     assert payload["file_templates"][2]["content_template"]["api_key"] == "[REDACTED]"
     assert payload["command_behavior"]["authorization"] == "[REDACTED_AUTHORIZATION]"
     assert payload["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
+    assert payload["model_tiers"] == [
+        {
+            "label": "Runtime default",
+            "model": None,
+            "effort": None,
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
+    assert payload["default_model_tier"] == 1
 
 @pytest.mark.asyncio
 async def test_create_codex_oauth_profile_requires_volume_ref_and_mount_path(
@@ -661,6 +671,16 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
     assert data["rate_limit_policy"] == "queue"
     assert data["default_model"] == "test-model-v2"
     assert data["default_effort"] == "high"
+    assert data["model_tiers"] == [
+        {
+            "label": "Legacy default",
+            "model": "test-model-v2",
+            "effort": "high",
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
+    assert data["default_model_tier"] == 1
     assert data["model_overrides"] == {"smart": "test-model-v3"}
     assert data["is_default"] is True
     assert data["auth_state"] == "connected"
@@ -685,6 +705,144 @@ async def test_create_provider_profile_rejects_overlong_default_effort(
         response = await client.post("/api/v1/provider-profiles", json=payload)
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_mm1169_create_provider_profile_persists_explicit_model_tiers(
+    client_app: AsyncClient, _module_db
+) -> None:
+    payload = {
+        "profile_id": "explicit_model_tier_profile",
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "credential_source": "none",
+        "runtime_materialization_mode": "composite",
+        "model_tiers": [
+            {
+                "label": "Plan",
+                "model": "provider-model-one",
+                "effort": "medium",
+                "parameters": {"temperature": 0},
+                "annotations": {"costClass": "standard"},
+            },
+            {
+                "label": "Implement",
+                "model": "provider-model-two",
+                "effort": "xhigh",
+                "parameters": {},
+                "annotations": {"recommendedFor": ["implementation"]},
+            },
+        ],
+        "default_model_tier": 2,
+    }
+
+    async with client_app as client:
+        response = await client.post("/api/v1/provider-profiles", json=payload)
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["model_tiers"] == payload["model_tiers"]
+    assert data["default_model_tier"] == 2
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(
+            ManagedAgentProviderProfile,
+            "explicit_model_tier_profile",
+        )
+        assert row is not None
+        assert row.model_tiers == payload["model_tiers"]
+        assert row.default_model_tier == 2
+
+
+@pytest.mark.asyncio
+async def test_mm1169_create_profile_rejects_empty_and_secret_like_tiers(
+    client_app: AsyncClient, _module_db
+) -> None:
+    base_payload = {
+        "profile_id": "invalid_model_tier_profile",
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "credential_source": "none",
+        "runtime_materialization_mode": "composite",
+    }
+
+    async with client_app as client:
+        empty_response = await client.post(
+            "/api/v1/provider-profiles",
+            json={**base_payload, "model_tiers": []},
+        )
+        secret_response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                **base_payload,
+                "profile_id": "secret_model_tier_profile",
+                "model_tiers": [
+                    {
+                        "label": "Unsafe",
+                        "model": "opaque-model",
+                        "effort": "opaque-effort",
+                        "parameters": {"api_key": "raw"},
+                        "annotations": {},
+                    }
+                ],
+            },
+        )
+
+    assert empty_response.status_code == 422
+    assert "model_tiers" in empty_response.text
+    assert secret_response.status_code == 422
+    assert "credential-like" in secret_response.text
+
+
+@pytest.mark.asyncio
+async def test_mm1169_reordering_model_tiers_persists_policy_order(
+    client_app: AsyncClient, _module_db
+) -> None:
+    profile_id = "reordered_model_tier_profile"
+    payload = {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "credential_source": "none",
+        "runtime_materialization_mode": "composite",
+        "model_tiers": [
+            {"label": "Tier A", "model": "model-a", "effort": "low"},
+            {"label": "Tier B", "model": "model-b", "effort": "high"},
+        ],
+        "default_model_tier": 1,
+    }
+    reordered = [
+        {"label": "Tier B", "model": "model-b", "effort": "high"},
+        {"label": "Tier A", "model": "model-a", "effort": "low"},
+    ]
+
+    async with client_app as client:
+        create_response = await client.post("/api/v1/provider-profiles", json=payload)
+        update_response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"model_tiers": reordered, "default_model_tier": 2},
+        )
+
+    assert create_response.status_code == 201
+    assert update_response.status_code == 200
+    data = update_response.json()
+    assert data["model_tiers"] == [
+        {
+            "label": "Tier B",
+            "model": "model-b",
+            "effort": "high",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Tier A",
+            "model": "model-a",
+            "effort": "low",
+            "parameters": {},
+            "annotations": {},
+        },
+    ]
+    assert data["default_model_tier"] == 2
 
 
 @pytest.mark.asyncio

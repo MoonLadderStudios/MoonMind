@@ -2403,6 +2403,25 @@ class ManagedAgentProviderProfile(Base):
     provider_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_effort: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    model_tiers: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=lambda: [
+            {
+                "label": "Runtime default",
+                "model": None,
+                "effort": None,
+                "parameters": {},
+                "annotations": {},
+            }
+        ],
+        server_default=text(
+            """'[{"label":"Runtime default","model":null,"effort":null,"parameters":{},"annotations":{}}]'"""
+        ),
+    )
+    default_model_tier: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     model_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     
     credential_source: Mapped[ProviderCredentialSource] = mapped_column(
