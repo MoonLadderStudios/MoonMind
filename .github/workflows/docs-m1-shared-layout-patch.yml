@@ -1,0 +1,42 @@
+name: Apply Milestone 1 shared layout docs
+
+on:
+  push:
+    branches:
+      - docs/m1-shared-sidebar-detail-contract
+    paths:
+      - .github/workflows/docs-m1-shared-layout-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out documentation branch
+        uses: actions/checkout@v4
+        with:
+          ref: docs/m1-shared-sidebar-detail-contract
+          fetch-depth: 0
+
+      - name: Assemble and apply declarative documentation patch
+        shell: bash
+        run: |
+          cat .github/docs-patch-parts/part-*.py > /tmp/docs_patch.py
+          python -m py_compile /tmp/docs_patch.py
+          python /tmp/docs_patch.py
+
+      - name: Validate and commit documentation
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "Expected documentation changes were not produced." >&2
+            exit 1
+          fi
+          git commit -m "docs: unify collection sidebars and detail frames"
+          git push origin HEAD:docs/m1-shared-sidebar-detail-contract
