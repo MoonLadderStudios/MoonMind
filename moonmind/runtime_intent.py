@@ -7,6 +7,7 @@ from typing import Any
 
 MODEL_TIER_KEY = "modelTier"
 TIER_FALLBACK_KEY = "tierFallback"
+HARD_OVERRIDE_AUDIT_KEY = "hardOverrideAudit"
 SUPPORTED_TIER_FALLBACKS = frozenset({"clamp", "strict"})
 
 
@@ -44,12 +45,18 @@ def validate_runtime_tier_intent(
             raise RuntimeIntentValidationError(
                 f"{field_name}.tierFallback must be one of: {supported}."
             )
+    if HARD_OVERRIDE_AUDIT_KEY in payload:
+        hard_override_audit = payload[HARD_OVERRIDE_AUDIT_KEY]
+        if not isinstance(hard_override_audit, Mapping) or not hard_override_audit:
+            raise RuntimeIntentValidationError(
+                f"{field_name}.hardOverrideAudit must be a non-empty object."
+            )
     if MODEL_TIER_KEY in payload:
         override_fields = [
             key for key in ("model", "effort") if payload.get(key) is not None
         ]
-        if override_fields and "hardOverrideAudit" not in payload:
-            payload["hardOverrideAudit"] = {
+        if override_fields and HARD_OVERRIDE_AUDIT_KEY not in payload:
+            payload[HARD_OVERRIDE_AUDIT_KEY] = {
                 "source": "runtime_metadata",
                 "fields": override_fields,
                 "trace": ["MM-1168", "MM-1171"],

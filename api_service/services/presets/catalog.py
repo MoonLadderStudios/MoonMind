@@ -531,6 +531,24 @@ def _normalize_skill_payload(raw_skill: Any, *, index: int) -> dict[str, Any]:
     return skill_payload
 
 
+def _promote_skill_runtime(step_payload: dict[str, Any]) -> None:
+    skill_payload = step_payload.get("skill")
+    if not isinstance(skill_payload, Mapping):
+        return
+    skill_runtime = skill_payload.get("runtime")
+    if not isinstance(skill_runtime, Mapping):
+        return
+    step_runtime = (
+        dict(step_payload.get("runtime"))
+        if isinstance(step_payload.get("runtime"), Mapping)
+        else {}
+    )
+    for key, value in skill_runtime.items():
+        step_runtime.setdefault(key, value)
+    if step_runtime:
+        step_payload["runtime"] = step_runtime
+
+
 def _normalize_preset_payload(raw_preset: Any, *, index: int) -> dict[str, Any]:
     if not isinstance(raw_preset, Mapping):
         raise _step_validation_error(
@@ -1990,6 +2008,7 @@ class PresetCatalogService:
                 step_payload["skill"] = _normalize_skill_payload(
                     raw_step.get("skill"), index=index
                 )
+                _promote_skill_runtime(step_payload)
             else:
                 if (
                     raw_step.get("tool") is not None
@@ -2295,6 +2314,7 @@ class PresetCatalogService:
                 step_payload["skill"] = _normalize_skill_payload(
                     rendered.get("skill"), index=source_index
                 )
+                _promote_skill_runtime(step_payload)
             step_payload.update(
                 {
                     str(key).strip(): value

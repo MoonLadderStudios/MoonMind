@@ -9919,15 +9919,15 @@ async def _create_execution_from_workflow_request(
         or ""
     )
     raw_profile_id = str(
-        runtime_payload.get("profileId")
+        runtime_payload.get("providerProfileRef")
+        or runtime_payload.get("profileId")
         or runtime_payload.get("providerProfile")
-        or runtime_payload.get("providerProfileRef")
+        or task_payload.get("providerProfileRef")
         or task_payload.get("profileId")
         or task_payload.get("providerProfile")
-        or task_payload.get("providerProfileRef")
+        or payload.get("providerProfileRef")
         or payload.get("profileId")
         or payload.get("providerProfile")
-        or payload.get("providerProfileRef")
         or ""
     ).strip() or None
     # Preserve the original requested model byte-for-byte (Compatibility Policy:
@@ -9952,6 +9952,10 @@ async def _create_execution_from_workflow_request(
             normalized_task_for_planner.get("runtime") or {}
         )
         normalized_runtime_for_planner["mode"] = canonical_target_runtime
+        if isinstance(runtime_payload.get("profileSelector"), Mapping):
+            normalized_runtime_for_planner["profileSelector"] = dict(
+                runtime_payload["profileSelector"]
+            )
         normalized_task_for_planner["runtime"] = normalized_runtime_for_planner
 
     # Load provider profile when a profileId is supplied. For tier-aware
@@ -10026,6 +10030,9 @@ async def _create_execution_from_workflow_request(
         initial_parameters["tierFallback"] = runtime_payload.get("tierFallback")
     if isinstance(runtime_payload.get("profileSelector"), Mapping):
         initial_parameters["profileSelector"] = dict(
+            runtime_payload["profileSelector"]
+        )
+        initial_parameters.setdefault("runtime", {})["profileSelector"] = dict(
             runtime_payload["profileSelector"]
         )
     if model_tier_resolution is not None:
@@ -10316,6 +10323,17 @@ async def _resolve_recurring_runtime_metadata(
         raw_runtime_payload,
         field_name="payload.workflow.runtime",
     )
+    steps_payload = task_payload.get("steps")
+    if isinstance(steps_payload, Sequence) and not isinstance(steps_payload, (str, bytes)):
+        for index, step_payload in enumerate(steps_payload):
+            if not isinstance(step_payload, Mapping):
+                continue
+            step_runtime = step_payload.get("runtime")
+            if isinstance(step_runtime, Mapping):
+                _validate_runtime_tier_intent_for_submit(
+                    step_runtime,
+                    field_name=f"payload.workflow.steps[{index}].runtime",
+                )
     raw_target_runtime = (
         request_payload.get("targetRuntime")
         or parameter_payload.get("targetRuntime")
@@ -10335,19 +10353,19 @@ async def _resolve_recurring_runtime_metadata(
 
     raw_profile_id = None
     for candidate_profile_id in (
+        runtime_payload.get("providerProfileRef"),
         runtime_payload.get("profileId"),
         runtime_payload.get("providerProfile"),
-        runtime_payload.get("providerProfileRef"),
         runtime_payload.get("executionProfileRef"),
+        task_payload.get("providerProfileRef"),
         task_payload.get("profileId"),
         task_payload.get("providerProfile"),
-        task_payload.get("providerProfileRef"),
+        parameter_payload.get("providerProfileRef"),
         parameter_payload.get("profileId"),
         parameter_payload.get("providerProfile"),
-        parameter_payload.get("providerProfileRef"),
+        request_payload.get("providerProfileRef"),
         request_payload.get("profileId"),
         request_payload.get("providerProfile"),
-        request_payload.get("providerProfileRef"),
     ):
         if candidate_profile_id is None:
             continue

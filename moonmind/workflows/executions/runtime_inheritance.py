@@ -182,11 +182,19 @@ def has_explicit_child_runtime(
 
     runtime_node = task_payload.get("runtime") if isinstance(task_payload, Mapping) else None
     if isinstance(runtime_node, Mapping):
-        for key in ("mode", "model", "effort", "providerProfile", "profileId", "executionProfileRef"):
+        for key in (
+            "mode",
+            "model",
+            "effort",
+            "providerProfileRef",
+            "providerProfile",
+            "profileId",
+            "executionProfileRef",
+        ):
             if _coerce_str(runtime_node.get(key)):
                 return True
 
-    for key in ("profileId", "providerProfile"):
+    for key in ("providerProfileRef", "profileId", "providerProfile"):
         if _coerce_str(payload.get(key)) or _coerce_str(task_payload.get(key)):
             return True
 
@@ -406,7 +414,7 @@ def apply_inherited_runtime_to_payload(
     runtime resolution path then sees the merged request.
 
     Note: when the caller has supplied an explicit profile selector
-    (``profileId`` / ``providerProfile`` anywhere in the payload),
+    (``providerProfileRef`` / ``profileId`` / ``providerProfile`` anywhere in the payload),
     ``executionProfileRef`` is *also* left blank.  Downstream selection
     prefers ``executionProfileRef`` over ``profileId``/``providerProfile``
     (see ``run.py``), so backfilling the parent's ref would silently
@@ -423,11 +431,14 @@ def apply_inherited_runtime_to_payload(
         payload.get("targetRuntime")
     ) or _coerce_str(runtime_block.get("mode"))
     explicit_profile_id = (
-        _coerce_str(runtime_block.get("profileId"))
+        _coerce_str(runtime_block.get("providerProfileRef"))
+        or _coerce_str(runtime_block.get("profileId"))
         or _coerce_str(runtime_block.get("providerProfile"))
         or _coerce_str(runtime_block.get("executionProfileRef"))
+        or _coerce_str(payload.get("providerProfileRef"))
         or _coerce_str(payload.get("profileId"))
         or _coerce_str(payload.get("providerProfile"))
+        or _coerce_str(task_payload.get("providerProfileRef"))
         or _coerce_str(task_payload.get("profileId"))
         or _coerce_str(task_payload.get("providerProfile"))
     )

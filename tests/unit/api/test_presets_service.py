@@ -159,6 +159,7 @@ async def test_mm1171_preset_runtime_tier_intent_is_validated_and_preserved(tmp_
         "modelTier": 2,
         "tierFallback": "strict",
     }
+    assert expanded["steps"][0]["runtime"] == runtime
 
 
 async def test_mm1171_preset_runtime_rejects_invalid_tier_values(tmp_path):

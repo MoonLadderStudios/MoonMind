@@ -6102,6 +6102,8 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
+    assert initial_parameters["profileSelector"] == {"providerId": "openai"}
+    assert initial_parameters["runtime"]["profileSelector"] == {"providerId": "openai"}
     workflow_runtime = initial_parameters["workflow"]["runtime"]
     assert workflow_runtime["providerProfileRef"] == "codex-openai"
     assert workflow_runtime["profileSelector"] == {"providerId": "openai"}
@@ -6168,6 +6170,29 @@ def test_mm1171_create_execution_rejects_invalid_runtime_tier_intent(
 
     assert response.status_code == 422
     assert "tierFallback" in response.json()["detail"]["message"]
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Reject bad hard override audit",
+                    "instructions": "Run a workflow.",
+                    "runtime": {
+                        "modelTier": 1,
+                        "model": "gpt-x",
+                        "hardOverrideAudit": "yes",
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "hardOverrideAudit" in response.json()["detail"]["message"]
 
 
 def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
@@ -8150,6 +8175,48 @@ def test_create_task_shaped_recurring_schedule_preserves_runtime_selection(
     assert stored_runtime["effort"] == "xhigh"
     assert stored_runtime["profileId"] == "codex-profile"
     assert stored_runtime["providerProfile"] == "codex-profile"
+
+
+def test_create_task_shaped_recurring_schedule_rejects_invalid_step_runtime_tier(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+
+    with patch(
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.create_definition = AsyncMock()
+
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "codex",
+                    "schedule": {
+                        "mode": "recurring",
+                        "cron": "0 * * * *",
+                    },
+                    "workflow": {
+                        "instructions": "Resolve Dependabot PRs.",
+                        "runtime": {"mode": "codex"},
+                        "steps": [
+                            {
+                                "id": "bad-tier",
+                                "instructions": "Run invalid tier.",
+                                "runtime": {"modelTier": "2"},
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert "payload.workflow.steps[0].runtime.modelTier" in response.json()["detail"]["message"]
+    service.create_definition.assert_not_awaited()
 
 
 def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
