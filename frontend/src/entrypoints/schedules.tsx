@@ -856,15 +856,24 @@ function RecurringScheduleSidebar({
   schedules: Schedule[];
   isLoading: boolean;
   error: unknown;
-  pinnedSchedule?: Schedule | null;
-  onRetry?: () => void;
+  pinnedSchedule?: Schedule | null | undefined;
+  onRetry?: (() => void) | undefined;
 }) {
-  const toRow = (schedule: Schedule): CollectionSidebarRow => ({
+  const rows = useMemo(() => schedules.map((schedule): CollectionSidebarRow => ({
     id: schedule.id,
     href: `/schedules/${encodeURIComponent(schedule.id)}`,
     primaryText: schedule.name,
     metadata: <>{stateLabel(schedule)} · next {formatWhen(schedule.nextRunAt)}</>,
-  });
+  })), [schedules]);
+  const pinnedRow = useMemo(
+    (): CollectionSidebarRow | null => (pinnedSchedule ? {
+      id: pinnedSchedule.id,
+      href: `/schedules/${encodeURIComponent(pinnedSchedule.id)}`,
+      primaryText: pinnedSchedule.name,
+      metadata: <>{stateLabel(pinnedSchedule)} · next {formatWhen(pinnedSchedule.nextRunAt)}</>,
+    } : null),
+    [pinnedSchedule],
+  );
   return (
     <CollectionSidebar
       landmarkLabel="Recurring schedule navigation"
@@ -872,12 +881,12 @@ function RecurringScheduleSidebar({
       header="Recurring"
       filterLabel="Recurring schedule sidebar filter"
       filterPlaceholder="Filter recurring schedules"
-      rows={schedules.map(toRow)}
+      rows={rows}
       activeId={definitionId}
-      pinnedRow={pinnedSchedule ? toRow(pinnedSchedule) : null}
+      pinnedRow={pinnedRow}
       isLoading={isLoading}
       error={error}
-      onRetry={onRetry}
+      {...(onRetry ? { onRetry } : {})}
       loadingCopy="Loading recurring schedules..."
       emptyCopy="No recurring schedules yet."
       filteredEmptyCopy="No recurring schedules match the current filter."
@@ -903,8 +912,8 @@ function RecurringScheduleWorkspace({
   schedules: Schedule[];
   isLoading: boolean;
   error: unknown;
-  pinnedSchedule?: Schedule | null;
-  onRetry?: () => void;
+  pinnedSchedule?: Schedule | null | undefined;
+  onRetry?: (() => void) | undefined;
   children: ReactNode;
 }) {
   if (listDisplayMode !== 'sidebar') {
@@ -917,8 +926,8 @@ function RecurringScheduleWorkspace({
         schedules={schedules}
         isLoading={isLoading}
         error={error}
-        pinnedSchedule={pinnedSchedule}
-        onRetry={onRetry}
+        pinnedSchedule={pinnedSchedule ?? null}
+        {...(onRetry ? { onRetry } : {})}
       />
       <div className="workflow-workspace-detail">
         {children}

@@ -33,10 +33,10 @@ export function CollectionSidebar({
   filterPlaceholder: string;
   rows: CollectionSidebarRow[];
   activeId: string | null;
-  pinnedRow?: CollectionSidebarRow | null;
+  pinnedRow?: CollectionSidebarRow | null | undefined;
   isLoading?: boolean;
   error?: unknown;
-  onRetry?: () => void;
+  onRetry?: (() => void) | undefined;
   loadingCopy: string;
   emptyCopy: string;
   filteredEmptyCopy: string;
@@ -51,8 +51,8 @@ export function CollectionSidebar({
     || row.primaryText.toLocaleLowerCase().includes(normalizedFilter)
     || row.id.toLocaleLowerCase().includes(normalizedFilter)
   )), [normalizedFilter, rows]);
-  const activeInRows = rows.some((row) => row.id === activeId);
-  const visiblePinnedRow = pinnedRow && !activeInRows ? pinnedRow : null;
+  const activeInFilteredRows = filteredRows.some((row) => row.id === activeId);
+  const visiblePinnedRow = pinnedRow && !activeInFilteredRows ? pinnedRow : null;
 
   const renderRow = (row: CollectionSidebarRow, pinned = false) => {
     const focusProps = rowFocusAttribute ? { [rowFocusAttribute]: row.id } : {};
