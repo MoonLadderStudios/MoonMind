@@ -8,6 +8,8 @@ import json
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateColumn
 
+from api_service.db.models import ManagedAgentProviderProfile
+
 
 class _RecordingOp:
     def __init__(self) -> None:
@@ -24,6 +26,28 @@ class _RecordingOp:
 
     def create_check_constraint(self, *_args, **_kwargs) -> None:
         return None
+
+
+def _assert_valid_model_tiers_default(column) -> None:
+    default_sql = str(
+        column.server_default.arg.compile(
+            dialect=postgresql.dialect(),
+        )
+    )
+    assert default_sql.startswith("'") and default_sql.endswith("'")
+    assert json.loads(default_sql[1:-1]) == [
+        {
+            "label": "Runtime default",
+            "model": None,
+            "effort": None,
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
+
+    ddl = str(CreateColumn(column).compile(dialect=postgresql.dialect()))
+    assert '"model":null' in ddl
+    assert '"effort":null' in ddl
 
 
 def test_model_tiers_server_default_compiles_as_valid_postgresql_json(
@@ -43,24 +67,10 @@ def test_model_tiers_server_default_compiles_as_valid_postgresql_json(
         if table_name == "managed_agent_provider_profiles"
         and column.name == "model_tiers"
     )
-    default_sql = str(
-        model_tiers_column.server_default.arg.compile(
-            dialect=postgresql.dialect(),
-        )
-    )
-    assert default_sql.startswith("'") and default_sql.endswith("'")
-    assert json.loads(default_sql[1:-1]) == [
-        {
-            "label": "Runtime default",
-            "model": None,
-            "effort": None,
-            "parameters": {},
-            "annotations": {},
-        }
-    ]
+    _assert_valid_model_tiers_default(model_tiers_column)
 
-    ddl = str(
-        CreateColumn(model_tiers_column).compile(dialect=postgresql.dialect())
+
+def test_model_tiers_model_default_compiles_as_valid_postgresql_json() -> None:
+    _assert_valid_model_tiers_default(
+        ManagedAgentProviderProfile.__table__.c.model_tiers
     )
-    assert '"model":null' in ddl
-    assert '"effort":null' in ddl
