@@ -53,6 +53,8 @@
   --mm-mobile-nav-active-end: rgb(var(--mm-accent) / 0.10);
   --mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.88);
   --mm-app-rail-width: 14rem;
+  --mm-dashboard-content-padding-inline: 1rem;
+  --mm-workspace-divider: rgb(var(--mm-border) / 0.72);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --mm-executing-sweep-cycle-duration: 2600ms;
   /* MM-1048: slightly more horizontal shimmer path while preserving the shared
@@ -202,13 +204,18 @@ samp {
   padding: 0;
   box-sizing: border-box;
   container-type: inline-size;
+  overflow-x: clip;
 }
 
-.dashboard-content { min-width: 0; padding: var(--dashboard-pt) 1rem 2.75rem; }
+.dashboard-content {
+  min-width: 0;
+  width: 100%;
+  padding: var(--dashboard-pt) var(--mm-dashboard-content-padding-inline) 2.75rem;
+}
 .application-rail {
   position: sticky; top: 0; z-index: 50; display: flex; flex-direction: column;
   align-items: stretch; gap: 1rem; width: var(--mm-app-rail-width); height: 100dvh;
-  padding: 0.9rem 0.7rem; border-right: 1px solid rgb(var(--mm-border) / 0.72);
+  padding: 0.9rem 0.7rem; border-right: 1px solid var(--mm-workspace-divider);
   background: var(--mm-glass-fill); box-shadow: var(--mm-elevation-panel);
 }
 .application-rail .masthead-brand { padding: 0 0.45rem 0.65rem; border-bottom: 1px solid rgb(var(--mm-border) / 0.58); }
@@ -230,18 +237,7 @@ samp {
 }
 .application-rail-utilities .version-badge { align-self: flex-start; margin: 0 0.7rem; }
 .dashboard-collection-utilities { display: flex; justify-content: flex-start; padding: 0.65rem 0; }
-
-/* Most pages read best in a centered working container; data-table routes opt into wide. */
-.dashboard-shell-constrained {
-  max-width: min(72rem, calc(100vw - 2rem));
-  margin-left: auto;
-  margin-right: auto;
-  width: 100%;
-}
-
-.dashboard-shell-constrained--data-wide {
-  max-width: min(112rem, calc(100vw - 2rem));
-}
+.dashboard-alerts-region { min-width: 0; width: 100%; }
 
 .dashboard-shell-full {
   width: 100%;
@@ -649,9 +645,10 @@ h1 {
 
 .panel {
   margin-top: 0;
-  margin-left: auto;
-  margin-right: auto;
-  max-width: min(72rem, calc(100vw - 2rem));
+  margin-left: 0;
+  margin-right: 0;
+  max-width: none;
+  min-width: 0;
   width: 100%;
   border-radius: 1rem;
   background: var(--mm-glass-fill);
@@ -682,11 +679,8 @@ h1 {
   min-height: 0;
 }
 
-/* Workflows table and unified workspace run edge-to-edge, reaching up to the
- * full-width border line under the masthead instead of sitting inside a
- * narrower centered card. The `.panel` prefix raises specificity above the
- * later `.panel.panel--data-wide` 112rem cap so the edge-to-edge intent wins
- * regardless of source order. */
+/* Workflows table and unified workspace remove the generic panel surface while
+ * retaining the fluid route-root geometry. */
 .panel.panel--data-wide:has(.workflow-list-data-slab),
 .panel.panel--data-wide:has(.workflow-workspace-shell) {
   max-width: none;
@@ -717,7 +711,7 @@ h1 {
 }
 
 .panel.panel--data-wide {
-  max-width: min(112rem, calc(100vw - 2rem));
+  max-width: none;
 }
 
 @keyframes panel-enter {
