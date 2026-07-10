@@ -79,3 +79,27 @@ def test_mm1169_tier_metadata_rejects_raw_credential_like_keys() -> None:
                 "annotations": {"billing": {"token": "secret"}},
             }
         )
+
+
+def test_mm1169_tier_metadata_rejects_raw_credential_like_values() -> None:
+    with pytest.raises(ValidationError, match="credential-like"):
+        ProviderModelEffortTier.model_validate(
+            {
+                "label": "Unsafe value",
+                "model": "opaque",
+                "effort": "opaque",
+                "parameters": {"header": "token=blocked-secret-value"},
+                "annotations": {},
+            }
+        )
+
+    with pytest.raises(ValidationError, match="credential-like"):
+        ProviderModelEffortTier.model_validate(
+            {
+                "label": "Unsafe annotation value",
+                "model": "opaque",
+                "effort": "opaque",
+                "parameters": {},
+                "annotations": {"note": "sk-1234567890abcdef"},
+            }
+        )

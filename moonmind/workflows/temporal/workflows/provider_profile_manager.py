@@ -167,6 +167,8 @@ class ProfileSlotState:
     input_per_million_usd: Optional[float] = None
     output_per_million_usd: Optional[float] = None
     pricing_source: Optional[str] = None
+    model_tiers: list[dict[str, Any]] = field(default_factory=list)
+    default_model_tier: int = 1
 
     @property
     def available_slots(self) -> int:
@@ -239,6 +241,8 @@ class ProfileSlotState:
             "input_per_million_usd": self.input_per_million_usd,
             "output_per_million_usd": self.output_per_million_usd,
             "pricing_source": self.pricing_source,
+            "model_tiers": list(self.model_tiers),
+            "default_model_tier": self.default_model_tier,
         }
 
     @property
@@ -727,6 +731,8 @@ class MoonMindProviderProfileManagerWorkflow:
                 input_per_million_usd=p.get("input_per_million_usd"),
                 output_per_million_usd=p.get("output_per_million_usd"),
                 pricing_source=p.get("pricing_source"),
+                model_tiers=p.get("model_tiers") or [],
+                default_model_tier=p.get("default_model_tier", 1),
             )
             self._profiles[pid] = state
 
@@ -763,6 +769,10 @@ class MoonMindProviderProfileManagerWorkflow:
                 existing.runtime_materialization_mode = p.get(
                     "runtime_materialization_mode", existing.runtime_materialization_mode
                 )
+                existing.model_tiers = p.get("model_tiers") or existing.model_tiers
+                existing.default_model_tier = p.get(
+                    "default_model_tier", existing.default_model_tier
+                )
                 self._apply_profile_pricing(existing, p)
             else:
                 pricing = pricing_from_profile_metadata(p)
@@ -790,6 +800,8 @@ class MoonMindProviderProfileManagerWorkflow:
                         pricing.output_per_million_usd if pricing else None
                     ),
                     pricing_source=pricing.source if pricing else None,
+                    model_tiers=p.get("model_tiers") or [],
+                    default_model_tier=p.get("default_model_tier", 1),
                 )
 
         # Disable profiles that were removed from DB (but don't drop leases).

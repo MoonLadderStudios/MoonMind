@@ -1,83 +1,136 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issue_ref": "MM-1146",
-  "issue_url": "https://moonladder.atlassian.net/browse/MM-1146",
-  "source_verification_artifact": "artifacts/jira-implement-verify.json",
+  "issue_ref": "MM-1170",
+  "issue_url": "https://moonladder.atlassian.net/browse/MM-1170",
+  "source_verification_artifact": "/work/agent_jobs/mm:3a4d0574-3f55-438b-8861-be2e0a37020f/artifacts/jira-implement-verify.json",
   "source_verdict": "ADDITIONAL_WORK_NEEDED",
   "brief_truncated": false,
-  "summary": "Remediated the two verifier-reported implementation gaps and the associated verification gap for the Recurring schedules desktop table (frontend/src/entrypoints/schedules.tsx). Added the documented 'Updated' (updatedAt) column at order 9 (after Policy) and an 'Actions' column at order 10 exposing only safe, common row actions (Run now, Pause/Resume) gated by the existing scheduleActionAvailability logic. Destructive delete remains detail-only per docs/UI/RecurringSchedulesPage.md#s21 / STORY-011. Extended schedules.test.tsx to assert both new columns, the safe row actions with no delete control, a triggered run-now action, and absence of spawned execution content in the list (testing contract item 16). Scope was bounded strictly to the verifier's remaining_work backlog; the issue scope was not broadened, no PR was created, and Jira status was not changed.",
+  "summary": "Remediated the verifier-reported MM-1170 gaps by adding persisted Provider Profile tier policy fields, exposing them through provider-profile CRUD and manager sync payloads, and adding the missing focused coverage for provider-profile tier round trips, strict API fallback rejection, and independent model-only / effort-only task override semantics. Scope was bounded to the verifier remainingWork backlog; no pull request was created and Jira status was not changed.",
   "changed_files": [
-    "frontend/src/entrypoints/schedules.tsx",
-    "frontend/src/entrypoints/schedules.test.tsx",
-    "frontend/src/styles/dashboard.css"
+    "api_service/api/routers/provider_profiles.py",
+    "api_service/db/models.py",
+    "api_service/migrations/versions/335_provider_profile_model_tiers.py",
+    "api_service/services/provider_profile_service.py",
+    "moonmind/workflows/temporal/workflows/provider_profile_manager.py",
+    "tests/unit/api/routers/test_executions.py",
+    "tests/unit/api_service/api/routers/test_provider_profiles.py",
+    "tests/unit/workflows/executions/test_model_resolver.py"
   ],
   "gap_statuses": [
     {
-      "requirement": "AC-updated-column: The desktop table includes the 'Updated' column (updatedAt) in the documented order after Policy.",
+      "requirement": "Add model_tiers JSON and default_model_tier integer to ManagedAgentProviderProfile with validation/defaults aligned to docs/Security/ProviderProfileModelEffortTiers.md.",
       "gap_type": "implementation",
       "status": "fixed",
       "evidence": [
-        "frontend/src/entrypoints/schedules.tsx now defines a DataTable column {key:'updatedAt', header:'Updated', render:(item)=>formatWhen(item.updatedAt)} immediately after the Policy column (order 9).",
-        "frontend/src/entrypoints/schedules.test.tsx asserts getByRole('columnheader',{name:'Updated'}) and the formatted updatedAt value rendered from the schedule row."
+        "api_service/db/models.py adds non-null model_tiers JSON with the documented Runtime default tier and default_model_tier integer defaulting to 1.",
+        "api_service/db/models.py adds ck_provider_profiles_default_model_tier_positive.",
+        "api_service/api/routers/provider_profiles.py validates model_tiers as a non-empty list of mappings and default_model_tier as an integer within range."
       ]
     },
     {
-      "requirement": "AC-actions-column: An 'Actions' column with safe common row actions is added where row actions are needed, with destructive delete remaining on detail.",
+      "requirement": "Add an Alembic migration for model_tiers/default_model_tier with safe defaults for existing profiles.",
       "gap_type": "implementation",
       "status": "fixed",
       "evidence": [
-        "frontend/src/entrypoints/schedules.tsx adds a ScheduleRowActions component wired via the shared DataTable rowActions prop (trailing 'Actions' column, order 10). It surfaces only safe, common actions: 'Run now' (POST to the runNow endpoint) and 'Pause'/'Resume' (PATCH enabled), each gated by scheduleActionAvailability (canRun / canEdit) with permission-disabled reasons via title. Destructive delete is NOT rendered in the list and stays on detail per docs/UI/RecurringSchedulesPage.md#s21 / STORY-011.",
-        "The schedule-name link in column 1 remains the primary accessible link to /schedules/{definitionId}; row actions render as normal secondary controls.",
-        "frontend/src/entrypoints/schedules.test.tsx asserts getByRole('columnheader',{name:'Actions'}), one 'Run now' action per row (3), Pause on enabled rows (2), Resume on the paused row (1), and queryByRole('button',{name:/delete/i}) is null."
+        "api_service/migrations/versions/335_provider_profile_model_tiers.py adds model_tiers and default_model_tier to managed_agent_provider_profiles with safe non-null server defaults and the positive default tier check."
       ]
     },
     {
-      "requirement": "AC-testing-contract-item-16: Row rendering tests reflect the new columns for recurring definitions with no spawned execution content.",
+      "requirement": "Extend provider profile create/update/read schemas and _row_to_dict to accept and return tier policy fields, including validation that model_tiers is a non-empty list of mappings and default_model_tier is within range.",
+      "gap_type": "implementation",
+      "status": "fixed",
+      "evidence": [
+        "ProviderProfileCreate, ProviderProfileUpdate, and ProviderProfileResponse now include model_tiers/default_model_tier.",
+        "create_profile persists the fields; update_profile validates row-level tier policy after partial updates; _row_to_dict returns the fields.",
+        "tests/unit/api_service/api/routers/test_provider_profiles.py covers create response, get/update round trip, DB readback, and out-of-range default_model_tier rejection."
+      ]
+    },
+    {
+      "requirement": "Ensure provider profile manager/list/service surfaces preserve model_tiers/default_model_tier so runtime resolution sees real selected profile policy, not only test-double attributes.",
+      "gap_type": "implementation",
+      "status": "fixed",
+      "evidence": [
+        "api_service/services/provider_profile_service.py includes model_tiers/default_model_tier in _manager_profile_payload.",
+        "moonmind/workflows/temporal/workflows/provider_profile_manager.py stores and returns model_tiers/default_model_tier in ProfileSlotState, restore, and sync paths.",
+        "tests/unit/api_service/api/routers/test_provider_profiles.py asserts _manager_profile_payload preserves both fields."
+      ]
+    },
+    {
+      "requirement": "Add API strict fallback rejection coverage.",
       "gap_type": "verification",
       "status": "fixed",
       "evidence": [
-        "frontend/src/entrypoints/schedules.test.tsx adds a test 'renders the documented Updated and Actions columns in the recurring table' asserting both column headers, the updatedAt value, the safe row-action set, absence of delete, and absence of Steps/Artifacts/Logs/Proposals/Diagnostics headings in the list.",
-        "Added 'triggers a safe run-now row action without exposing destructive delete' asserting the run-now POST fires to /api/recurring-workflows/schedule-1/run and that no delete control is present.",
-        "Updated the beforeEach list mock to include updatedAt on schedule-1 so the Updated column value is asserted deterministically."
+        "tests/unit/api/routers/test_executions.py adds test_create_task_shaped_execution_rejects_strict_unavailable_model_tier, asserting tierFallback strict with out-of-range modelTier rejects before create_execution is called."
       ]
     },
     {
-      "requirement": "DESIGN-REQ-016: Render the scan-optimized column set in documented order through Updated (9) and Actions (10).",
-      "gap_type": "implementation",
+      "requirement": "Add model-only and effort-only override tests if the intended override semantics require independent bypass behavior.",
+      "gap_type": "verification",
       "status": "fixed",
       "evidence": [
-        "The DataTable columns array now runs Schedule, State, Target, Cadence, Next Run, Last Scheduled, Dispatch, Policy, Updated (columns 1-9) with the rowActions-rendered Actions cell at column 10, matching docs/UI/RecurringSchedulesPage.md section 9 order."
+        "tests/unit/workflows/executions/test_model_resolver.py adds independent model-only and effort-only override tests showing the supplied override bypasses tier policy and records task_override for the overridden field."
+      ]
+    },
+    {
+      "requirement": "Run targeted provider profile API/unit tests after adding schema support.",
+      "gap_type": "verification",
+      "status": "fixed",
+      "evidence": [
+        "Focused pytest and ./tools/test_unit.sh targeted runs passed for tests/unit/api_service/api/routers/test_provider_profiles.py."
+      ]
+    },
+    {
+      "requirement": "Run the model resolver and execution router unit tests again after persistence/API wiring changes.",
+      "gap_type": "verification",
+      "status": "fixed",
+      "evidence": [
+        "./tools/test_unit.sh tests/unit/workflows/executions/test_model_resolver.py tests/unit/api/routers/test_executions.py tests/unit/api_service/api/routers/test_provider_profiles.py passed."
+      ]
+    },
+    {
+      "requirement": "Run hermetic integration only if the migration/schema change triggers the repo's integration selector for DB migrations.",
+      "gap_type": "verification",
+      "status": "blocked_by_environment",
+      "evidence": [
+        "./tools/test_integration.sh was attempted because this remediation adds an Alembic migration.",
+        "The command failed before running tests while building the Docker pytest image: Docker reported 'the --mount option requires BuildKit' and compose warned that the buildx plugin is not installed.",
+        "Retrying with DOCKER_BUILDKIT=1 failed with the same BuildKit/buildx environment error before test execution."
       ]
     }
   ],
-  "unchanged_verified_requirements": [
-    "DESIGN-REQ-017 (status pill State, non-color-only attention, compact dispatch error, compact target summary) - already VERIFIED, unaffected by this change.",
-    "DESIGN-REQ-018 (shared DataTable visual language, empty state + create action, no per-run fetch, no spawned content) - already VERIFIED; the new Updated column and safe row actions add no per-run workflow fetch and no spawned execution content.",
-    "AC-first-column-link (schedule name is the primary link to /schedules/{definitionId}) - unchanged and preserved."
-  ],
   "targeted_checks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/schedules.test.tsx",
+      "command": "pytest tests/unit/workflows/executions/test_model_resolver.py tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_resolves_model_tier_against_profile tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_rejects_strict_unavailable_model_tier tests/unit/api_service/api/routers/test_provider_profiles.py::test_create_provider_profile tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_tier_policy_round_trips_through_get_and_update tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_rejects_invalid_default_model_tier tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_manager_payload_redacts_secret_like_runtime_fields -q",
       "result": "PASS",
-      "notes": "1 test file passed, 33 tests passed (Vitest v4.1.1). Up from 31; the two added tests cover the Updated column, the Actions column safe actions with no delete, the run-now row action, and no spawned execution content in the list."
+      "notes": "46 passed; warnings were existing FastAPI TestClient/httpx deprecation and google.generativeai package deprecation warnings."
     },
     {
-      "command": "node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/executions/test_model_resolver.py tests/unit/api/routers/test_executions.py tests/unit/api_service/api/routers/test_provider_profiles.py",
       "result": "PASS",
-      "notes": "Frontend TypeScript typecheck completed with no errors (the npm 'ui:typecheck' script maps to this; the bare 'tsc' binary is not on PATH, so it was invoked from node_modules/.bin)."
+      "notes": "Python segment passed 453 tests; Vitest segment passed 60 files with 942 tests passed and 238 skipped. The wrapper emitted existing jsdom canvas warnings during UI tests."
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_integration.sh",
+      "result": "FAIL_ENVIRONMENT",
+      "notes": "Failed before tests while building the Docker pytest image because BuildKit support was unavailable: Docker reported 'the --mount option requires BuildKit'; compose also warned the buildx plugin is not installed."
+    },
+    {
+      "command": "DOCKER_BUILDKIT=1 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_integration.sh",
+      "result": "FAIL_ENVIRONMENT",
+      "notes": "Retry failed before tests for the same BuildKit/buildx environment issue."
     }
   ],
   "environment_notes": [
     {
-      "item": "MoonMind RAG retrieved context",
-      "status": "NOT RUN",
-      "detail": "Retrieved context was delivered in degraded local fallback mode. Non-gating: remediation relied on direct repository inspection, the authoritative verify artifact, and the focused frontend unit suite plus typecheck."
+      "item": "Authoritative verifier artifact location",
+      "status": "NOTE",
+      "detail": "The latest MM-1170 moonspec-verify result was found at /work/agent_jobs/mm:3a4d0574-3f55-438b-8861-be2e0a37020f/artifacts/jira-implement-verify.json. Repo-local reports/remediation_verification-1.json referred to MM-1146 and was not used as authority."
     },
     {
-      "item": "Stale prior artifact overwritten",
-      "status": "NOTE",
-      "detail": "The previous reports/remediation_attempt-1.json described a different issue (MoonLadderStudios/MoonMind#3068, masthead workflow list display). It was stale scaffolding and has been overwritten with this MM-1146 attempt-1 record."
+      "item": "Integration verification",
+      "status": "BLOCKED_BY_ENVIRONMENT",
+      "detail": "Hermetic integration was attempted due to the migration/schema change, but the runtime Docker environment lacks working BuildKit/buildx support for the integration image build."
     }
   ]
 }

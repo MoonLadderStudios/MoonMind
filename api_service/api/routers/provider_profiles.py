@@ -70,6 +70,64 @@ def validate_secret_refs_helper(value: dict[str, str] | None) -> dict[str, str] 
             raise ValueError(f"Invalid secret reference {v!r} for key {k!r}: {e}")
     return value
 
+
+def _default_model_tiers() -> list[dict[str, Any]]:
+    return [
+        {
+            "label": "Runtime default",
+            "model": None,
+            "effort": None,
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
+
+
+def _validate_model_tiers_value(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("model_tiers must be a non-empty list")
+    normalized: list[dict[str, Any]] = []
+    for tier in value:
+        if not isinstance(tier, dict):
+            raise ValueError("model_tiers entries must be mappings")
+        normalized.append(
+            ProviderModelEffortTier.model_validate(tier).model_dump(mode="json")
+        )
+    return normalized
+
+
+def _validate_default_model_tier_value(
+    default_model_tier: int,
+    model_tiers: list[dict[str, Any]],
+) -> int:
+    if isinstance(default_model_tier, bool) or not isinstance(default_model_tier, int):
+        raise ValueError("default_model_tier must be an integer greater than or equal to 1")
+    if default_model_tier < 1:
+        raise ValueError("default_model_tier must be an integer greater than or equal to 1")
+    if default_model_tier > len(model_tiers):
+        raise ValueError("default_model_tier must be within configured model_tiers range")
+    return default_model_tier
+
+
+def _validate_default_model_tier_input(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("default_model_tier must be an integer greater than or equal to 1")
+    if value < 1:
+        raise ValueError("default_model_tier must be an integer greater than or equal to 1")
+    return value
+
+
+def _validate_profile_tier_policy(row: ManagedAgentProviderProfile) -> None:
+    model_tiers = _validate_model_tiers_value(row.model_tiers)
+    default_model_tier = _validate_default_model_tier_value(
+        row.default_model_tier,
+        model_tiers,
+    )
+    row.model_tiers = model_tiers
+    row.default_model_tier = default_model_tier
+
 # ---------------------------------------------------------------------------
 # Request / Response schemas
 # ---------------------------------------------------------------------------
@@ -139,8 +197,25 @@ class ProviderProfileCreate(BaseModel):
     def _validate_secret_refs(cls, value: dict[str, str] | None) -> dict[str, str] | None:
         return validate_secret_refs_helper(value)
 
+    @field_validator("model_tiers", mode="before")
+    @classmethod
+    def _validate_model_tiers(cls, value: object) -> list[dict[str, Any]] | None:
+        if value is None:
+            return None
+        return _validate_model_tiers_value(value)
+
+    @field_validator("default_model_tier", mode="before")
+    @classmethod
+    def _validate_default_model_tier(cls, value: object) -> int | None:
+        return _validate_default_model_tier_input(value)
+
     @model_validator(mode="after")
     def _validate_runtime_env(self) -> "ProviderProfileCreate":
+        if self.model_tiers is not None and self.default_model_tier is not None:
+            self.default_model_tier = _validate_default_model_tier_value(
+                self.default_model_tier,
+                self.model_tiers,
+            )
         if self.enabled and self.auth_state != ProviderProfileAuthState.CONNECTED.value:
             raise ValueError("enabled profiles require auth_state=connected")
         if self.enabled:
@@ -218,8 +293,27 @@ class ProviderProfileUpdate(BaseModel):
     def _validate_secret_refs_update(cls, value: dict[str, str] | None) -> dict[str, str] | None:
         return validate_secret_refs_helper(value)
 
+    @field_validator("model_tiers", mode="before")
+    @classmethod
+    def _validate_model_tiers_update(
+        cls, value: object
+    ) -> list[dict[str, Any]] | None:
+        if value is None:
+            return None
+        return _validate_model_tiers_value(value)
+
+    @field_validator("default_model_tier", mode="before")
+    @classmethod
+    def _validate_default_model_tier_update(cls, value: object) -> int | None:
+        return _validate_default_model_tier_input(value)
+
     @model_validator(mode="after")
     def _validate_runtime_env_update(self) -> "ProviderProfileUpdate":
+        if self.model_tiers is not None and self.default_model_tier is not None:
+            self.default_model_tier = _validate_default_model_tier_value(
+                self.default_model_tier,
+                self.model_tiers,
+            )
         return self
 
 class ProviderProfileResponse(BaseModel):
@@ -452,6 +546,7 @@ async def create_profile(
             else None
         ),
     )
+    _validate_profile_tier_policy(profile)
     _validate_codex_oauth_profile_row(profile)
     session.add(profile)
     await session.flush()
@@ -597,6 +692,11 @@ async def update_profile(
             managed_secret_statuses=secret_statuses,
             secret_ref_results=secret_ref_results.get(profile.profile_id, {}),
         )
+
+    try:
+        _validate_profile_tier_policy(profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if requested_is_default is False:
         profile.is_default = False

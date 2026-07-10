@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -20,6 +21,19 @@ _SENSITIVE_KEY_TERMS = (
     "oauth",
     "cookie",
     "session",
+)
+
+_SENSITIVE_VALUE_PATTERNS = (
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"(?i)(?:token|password|secret|api[_-]?key)\s*="),
+    re.compile(
+        r"^(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|"
+        r"github_pat_[A-Za-z0-9_]{8,})"
+    ),
+    re.compile(
+        r"^(?:AKIA[0-9A-Z]{12,}|AIza[0-9A-Za-z_-]{20,}|"
+        r"xox[baprs]-[A-Za-z0-9-]{10,})"
+    ),
 )
 
 _SAFE_KEY_EXCLUSIONS = frozenset(
@@ -150,6 +164,12 @@ def coerce_model_effort_tier_policy(
 
 
 def _contains_sensitive_key(value: Any) -> bool:
+    if isinstance(value, str):
+        normalized_value = value.strip()
+        return any(
+            pattern.search(normalized_value)
+            for pattern in _SENSITIVE_VALUE_PATTERNS
+        )
     if isinstance(value, Mapping):
         for key, nested in value.items():
             normalized_key = str(key).strip().lower().replace("-", "_")

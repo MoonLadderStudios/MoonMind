@@ -2420,6 +2420,10 @@ class ManagedAgentProviderProfile(Base):
             ")",
             name="ck_provider_profiles_last_auth_method",
         ),
+        CheckConstraint(
+            "default_model_tier >= 1",
+            name="ck_provider_profiles_default_model_tier_positive",
+        ),
         Index(
             "ux_provider_profiles_runtime_default",
             "runtime_id",

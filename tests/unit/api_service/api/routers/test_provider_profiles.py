@@ -510,6 +510,11 @@ def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -
         ],
         command_behavior={"authorization": f"Bearer {raw_secret}"},
         secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
+        model_tiers=[
+            {"label": "Plan", "model": "gpt-5-mini", "effort": "low"},
+            {"label": "Build", "model": "gpt-5.5", "effort": "high"},
+        ],
+        default_model_tier=2,
         max_parallel_runs=2,
         cooldown_after_429_seconds=120,
         max_lease_duration_seconds=900,
@@ -524,22 +529,29 @@ def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -
     assert payload["max_parallel_runs"] == 2
     assert payload["cooldown_after_429_seconds"] == 120
     assert payload["max_lease_duration_seconds"] == 900
+    assert payload["model_tiers"] == [
+        {
+            "label": "Plan",
+            "model": "gpt-5-mini",
+            "effort": "low",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Build",
+            "model": "gpt-5.5",
+            "effort": "high",
+            "parameters": {},
+            "annotations": {},
+        },
+    ]
+    assert payload["default_model_tier"] == 2
     assert payload["env_template"]["OPENAI_API_KEY"] == "[REDACTED]"
     assert payload["file_templates"][0]["content"] == "[REDACTED]"
     assert payload["file_templates"][1]["contentTemplate"] == "[REDACTED]"
     assert payload["file_templates"][2]["content_template"]["api_key"] == "[REDACTED]"
     assert payload["command_behavior"]["authorization"] == "[REDACTED_AUTHORIZATION]"
     assert payload["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
-    assert payload["model_tiers"] == [
-        {
-            "label": "Runtime default",
-            "model": None,
-            "effort": None,
-            "parameters": {},
-            "annotations": {},
-        }
-    ]
-    assert payload["default_model_tier"] == 1
 
 
 def test_manager_profile_payload_redacts_model_tier_metadata() -> None:
@@ -688,6 +700,11 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
         "default_model": "test-model-v2",
         "default_effort": "high",
         "model_overrides": {"smart": "test-model-v3"},
+        "model_tiers": [
+            {"label": "Plan", "model": "test-model-v1", "effort": "low"},
+            {"label": "Build", "model": "test-model-v2", "effort": "high"},
+        ],
+        "default_model_tier": 2,
         "enabled": True,
         "auth_state": "connected",
         "last_auth_method": "secret_ref",
@@ -703,21 +720,123 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
     assert data["rate_limit_policy"] == "queue"
     assert data["default_model"] == "test-model-v2"
     assert data["default_effort"] == "high"
+    assert data["model_overrides"] == {"smart": "test-model-v3"}
     assert data["model_tiers"] == [
         {
-            "label": "Legacy default",
+            "label": "Plan",
+            "model": "test-model-v1",
+            "effort": "low",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Build",
             "model": "test-model-v2",
             "effort": "high",
             "parameters": {},
             "annotations": {},
-        }
+        },
     ]
-    assert data["default_model_tier"] == 1
-    assert data["model_overrides"] == {"smart": "test-model-v3"}
+    assert data["default_model_tier"] == 2
     assert data["is_default"] is True
     assert data["auth_state"] == "connected"
     assert data["disabled_reason"] is None
     assert data["last_auth_method"] == "secret_ref"
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_tier_policy_round_trips_through_get_and_update(
+    client_app: AsyncClient, _module_db
+) -> None:
+    profile_id = "tier_policy_roundtrip_profile"
+    create_payload = {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "credential_source": "none",
+        "runtime_materialization_mode": "composite",
+        "model_tiers": [
+            {"label": "Review", "model": "gpt-5-mini", "effort": "low"},
+            {"label": "Implement", "model": "gpt-5.5", "effort": "high"},
+        ],
+        "default_model_tier": 1,
+    }
+    update_payload = {
+        "model_tiers": [
+            {"label": "Cheap", "model": "gpt-5-nano", "effort": "low"},
+            {"label": "Deep", "model": "gpt-5.5", "effort": "xhigh"},
+            {"label": "Fallback", "model": None, "effort": None},
+        ],
+        "default_model_tier": 2,
+    }
+
+    async with client_app as client:
+        create_response = await client.post(
+            "/api/v1/provider-profiles", json=create_payload
+        )
+        update_response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}", json=update_payload
+        )
+        get_response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert create_response.status_code == 201
+    assert update_response.status_code == 200
+    assert get_response.status_code == 200
+    data = get_response.json()
+    expected_tiers = [
+        {
+            "label": "Cheap",
+            "model": "gpt-5-nano",
+            "effort": "low",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Deep",
+            "model": "gpt-5.5",
+            "effort": "xhigh",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Fallback",
+            "model": None,
+            "effort": None,
+            "parameters": {},
+            "annotations": {},
+        },
+    ]
+    assert data["model_tiers"] == expected_tiers
+    assert data["default_model_tier"] == 2
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert row is not None
+        assert row.model_tiers == expected_tiers
+        assert row.default_model_tier == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("default_model_tier", [2, True])
+async def test_provider_profile_rejects_invalid_default_model_tier(
+    client_app: AsyncClient, _module_db, default_model_tier: object
+) -> None:
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": f"tier_policy_invalid_default_{default_model_tier}",
+                "runtime_id": "codex_cli",
+                "credential_source": "none",
+                "runtime_materialization_mode": "composite",
+                "model_tiers": [
+                    {"label": "Only", "model": "gpt-5-mini", "effort": "low"}
+                ],
+                "default_model_tier": default_model_tier,
+            },
+        )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

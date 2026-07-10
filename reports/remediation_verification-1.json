@@ -6,15 +6,15 @@
   "attempt": 1,
   "verifiesRemediationAttempt": 1,
   "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
-  "verificationArtifact": "artifacts/jira-implement-verify.json",
-  "sourceBriefArtifact": "artifacts/jira-implement-brief.json",
-  "sourceAssessmentArtifact": "artifacts/jira-implement-assessment.json",
+  "verificationArtifact": "/work/agent_jobs/mm:3a4d0574-3f55-438b-8861-be2e0a37020f/artifacts/jira-implement-verify.json",
+  "sourceBriefArtifact": "/work/agent_jobs/mm:3a4d0574-3f55-438b-8861-be2e0a37020f/artifacts/jira-implement-brief.json",
+  "sourceAssessmentArtifact": "/work/agent_jobs/mm:3a4d0574-3f55-438b-8861-be2e0a37020f/artifacts/jira-implement-assessment.json",
   "issue_provider": "jira",
-  "issue_ref": "MM-1146",
-  "issue_url": "https://moonladder.atlassian.net/browse/MM-1146",
-  "branch": "run-jira-implement-for-mm-1146-add-the-r-015921e9",
+  "issue_ref": "MM-1170",
+  "issue_url": "https://moonladder.atlassian.net/browse/MM-1170",
+  "branch": "run-jira-implement-for-mm-1170-implement-e6bd808f",
   "base_ref": "origin/main",
-  "head_commit": "3ae7ae9ed",
+  "head_commit": "ce415c563",
   "authoritativeVerdict": "FULLY_IMPLEMENTED",
   "verdict": "FULLY_IMPLEMENTED",
   "confidence": "HIGH",
@@ -22,71 +22,122 @@
   "recoverableInCurrentRuntime": true,
   "brief_truncated": false,
   "implementation_step_made_code_changes": true,
-  "summary": "Remediation verification attempt 1 of 6 verifies remediation attempt 1 (reports/remediation_attempt-1.json) for Jira issue MM-1146. Remediation commit 3ae7ae9ed added the documented 'Updated' (updatedAt, order 9 after Policy) and 'Actions' (order 10, safe row actions only) columns to the Recurring schedules desktop table in frontend/src/entrypoints/schedules.tsx and extended frontend/src/entrypoints/schedules.test.tsx to cover both. Direct code inspection confirms the full documented column order, that the Actions column surfaces only safe common actions (Run now, Pause/Resume) gated by scheduleActionAvailability with destructive delete remaining detail-only per docs/UI/RecurringSchedulesPage.md#s21 / STORY-011, that the first-column schedule name remains the primary link to /schedules/{definitionId}, and that no per-run fetch or spawned execution content is introduced. The focused frontend unit suite passes 33/33 and the frontend TypeScript typecheck passes cleanly. Every repo-verifiable in-scope requirement and acceptance criterion is VERIFIED. Two out-of-scope items (sort/filter posture, MM-1144 traceability constraint) are disclosed exclusions and the degraded-fallback RAG context is a non-gating NOT RUN environment note. This is the authoritative verdict for the whole MM-1146 target state.",
+  "summary": "Remediation verification attempt 1 of 6 verifies remediation attempt 1 for Jira issue MM-1170. Direct code inspection confirms persisted Provider Profile tier policy fields, provider-profile CRUD/manager propagation, tier-aware backend resolution, runtime/API validation, strict fallback rejection before launch, explicit model/effort override bypass semantics, legacy profile/runtime fallback behavior, and the required ResolvedModelEffort/modelTierResolution output contract. Focused in-scope unit tests pass. The broader unit wrapper's frontend failure and integration BuildKit/buildx limitation are disclosed non-blocking environment/advisory notes. Every repo-verifiable in-scope requirement and acceptance criterion is VERIFIED.",
   "gapsClosedThisAttempt": [
     {
-      "requirement": "AC-updated-column: desktop table includes the 'Updated' column (updatedAt) after Policy.",
-      "priorStatus": "MISSING",
+      "requirement": "Backend resolves requested model tiers against selected Provider Profile model_tiers.",
+      "priorStatus": "NOT_MET",
       "postStatus": "VERIFIED",
-      "evidence": "frontend/src/entrypoints/schedules.tsx:1573-1576 column {key:'updatedAt', header:'Updated', render:(item)=>formatWhen(item.updatedAt)}; schedules.test.tsx asserts the 'Updated' columnheader and formatted value."
+      "evidence": "moonmind/workflows/executions/model_resolver.py:130 and api_service/api/routers/executions.py:6922 route modelTier through resolve_model_effort."
     },
     {
-      "requirement": "AC-actions-column: 'Actions' column with safe common row actions; destructive delete stays on detail.",
-      "priorStatus": "MISSING",
+      "requirement": "No requested tier uses default_model_tier; Tier 2 maps to model_tiers[1]; out-of-range Tier 3 clamps by default with fallback reason.",
+      "priorStatus": "NOT_MET",
       "postStatus": "VERIFIED",
-      "evidence": "frontend/src/entrypoints/schedules.tsx:1578-1585 rowActions -> ScheduleRowActions (Run now + Pause/Resume, gated by scheduleActionAvailability, no delete); DataTable.tsx:265-269 renders the trailing 'Actions' header; schedules.test.tsx asserts the header, 3 Run now / 2 Pause / 1 Resume, and no delete control."
+      "evidence": "moonmind/workflows/executions/model_resolver.py:341-356 and tests/unit/workflows/executions/test_model_resolver.py:257-297."
     },
     {
-      "requirement": "AC-testing-contract-item-16 / DESIGN-REQ-016 verification: row rendering tests cover the new columns with no spawned execution content.",
-      "priorStatus": "PARTIAL",
+      "requirement": "tierFallback strict rejects unavailable tiers before launch.",
+      "priorStatus": "NOT_MET",
       "postStatus": "VERIFIED",
-      "evidence": "frontend/src/entrypoints/schedules.test.tsx adds two tests covering both columns, safe actions, run-now trigger, no delete, and continued absence of Steps/Artifacts/Logs/Proposals/Diagnostics headings; suite passes 33/33."
+      "evidence": "moonmind/workflows/executions/model_resolver.py:353 and tests/unit/api/routers/test_executions.py:5527-5573."
+    },
+    {
+      "requirement": "Explicit model or effort overrides bypass tier policy and record task_override source.",
+      "priorStatus": "PARTIALLY_MET",
+      "postStatus": "VERIFIED",
+      "evidence": "moonmind/workflows/executions/model_resolver.py:153-179 and tests/unit/workflows/executions/test_model_resolver.py:309-359."
+    },
+    {
+      "requirement": "Resolver returns model, effort, requested tier, effective tier, tier label, model source, effort source, fallback reason, and effort application status placeholder.",
+      "priorStatus": "NOT_MET",
+      "postStatus": "VERIFIED",
+      "evidence": "moonmind/workflows/executions/model_resolver.py:52-63 and api_service/api/routers/executions.py:6983-6998."
+    },
+    {
+      "requirement": "Validate modelTier as an integer greater than or equal to 1.",
+      "priorStatus": "NOT_MET",
+      "postStatus": "VERIFIED",
+      "evidence": "moonmind/workflows/executions/model_resolver.py:317-324, api_service/api/routers/executions.py:6957-6971, and tests/unit/workflows/executions/test_model_resolver.py:361-369."
+    },
+    {
+      "requirement": "Preserve documented resolution order from explicit overrides through runtime defaults, including legacy default_model/default_effort fallback.",
+      "priorStatus": "PARTIALLY_MET",
+      "postStatus": "VERIFIED",
+      "evidence": "moonmind/workflows/executions/model_resolver.py:153-207 and tests/unit/workflows/executions/test_model_resolver.py:402-410."
+    },
+    {
+      "requirement": "Fail explicitly for missing or launch-unready selected profiles.",
+      "priorStatus": "MET",
+      "postStatus": "VERIFIED",
+      "evidence": "moonmind/workflows/executions/model_resolver.py:359-364 and tests/unit/workflows/executions/test_model_resolver.py:371-400."
     }
   ],
   "testResults": [
     {
-      "command": "npm run ui:test -- frontend/src/entrypoints/schedules.test.tsx (MOONMIND_FORCE_LOCAL_TESTS=1)",
+      "command": "pytest tests/unit/workflows/executions/test_model_resolver.py tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_resolves_model_tier_against_profile tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_rejects_strict_unavailable_model_tier tests/unit/api_service/api/routers/test_provider_profiles.py::test_create_provider_profile tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_tier_policy_round_trips_through_get_and_update tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_rejects_invalid_default_model_tier tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_manager_payload_redacts_secret_like_runtime_fields -q",
       "result": "PASS",
-      "notes": "1 test file passed, 33 tests passed (Vitest v4.1.1)."
+      "notes": "46 passed, 2 warnings in 2.32s."
     },
     {
-      "command": "node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json",
-      "result": "PASS",
-      "notes": "Frontend TypeScript typecheck exit 0, no diagnostics."
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/executions/test_model_resolver.py tests/unit/api/routers/test_executions.py tests/unit/api_service/api/routers/test_provider_profiles.py",
+      "result": "FAIL_NON_BLOCKING_UNRELATED_UI",
+      "notes": "Python segment passed 453 tests. Wrapper then ran broad Vitest suite and failed one unrelated dashboard recurring schedule UI test."
+    },
+    {
+      "command": "docker buildx version",
+      "result": "FAIL_ENVIRONMENT",
+      "notes": "docker reports unknown command buildx; confirms integration BuildKit/buildx prerequisite unavailable."
+    },
+    {
+      "command": "./tools/test_integration.sh",
+      "result": "NOT_RUN",
+      "notes": "Advisory integration not rerun after confirming buildx is unavailable; previous remediation attempt failed before test execution for this same environment reason."
     }
   ],
   "requirementCoverageSummary": {
-    "DESIGN-REQ-016": "VERIFIED",
-    "DESIGN-REQ-017": "VERIFIED",
-    "DESIGN-REQ-018": "VERIFIED",
-    "AC-first-column-link": "VERIFIED",
-    "AC-updated-column": "VERIFIED",
-    "AC-actions-column": "VERIFIED",
-    "AC-testing-contract-item-16": "VERIFIED"
+    "DESIGN-REQ-003": "VERIFIED",
+    "DESIGN-REQ-006": "VERIFIED",
+    "DESIGN-REQ-007": "VERIFIED",
+    "DESIGN-REQ-015": "VERIFIED",
+    "AC-no-requested-tier-uses-default-model-tier": "VERIFIED",
+    "AC-tier-2-index-1": "VERIFIED",
+    "AC-tier-3-clamps": "VERIFIED",
+    "AC-strict-rejects": "VERIFIED",
+    "AC-task-overrides": "VERIFIED",
+    "AC-output-contract": "VERIFIED"
   },
   "workspaceProjectionPreflight": {
     "result": "CLEAN",
-    "detail": ".agents/skills and .gemini/skills are not projection symlinks; skills_active absent; git status --porcelain empty for those paths."
+    "detail": ".agents/skills and .gemini/skills are not projection symlinks; skills_active is absent or symlink-compatible; git status for projection paths was empty."
   },
   "disclosedScopeExclusions": [
     {
-      "item": "Sorting/filtering posture (docs section 9 sort/filter expectations)",
-      "reason": "Not part of MM-1146 acceptance criteria or the assessment backlog; out of scope.",
-      "type": "out_of_scope"
-    },
-    {
-      "item": "Preserve source issue MM-1144 traceability",
-      "reason": "Documentation/traceability constraint on the change; no repository behavior to verify. Honored by the implementing commit/PR body.",
-      "type": "out_of_scope"
+      "item": "Preserve source issue MM-1168 traceability",
+      "reason": "Traceability is workflow/PR metadata rather than repo-verifiable backend behavior in this verification step.",
+      "type": "workflow_metadata"
     }
   ],
   "environmentNotes": [
     {
       "tooling": "MoonMind RAG retrieved context",
-      "status": "NOT RUN",
+      "status": "NOT_RUN",
       "gatesVerdict": false,
-      "reason": "Retrieved context delivered in degraded local fallback mode; non-gating. Verification relied on direct repository inspection, the focused frontend unit suite, and the frontend typecheck."
+      "reason": "Retrieved context was delivered in degraded local fallback mode; direct repository inspection and focused tests provided controlling evidence."
+    },
+    {
+      "tooling": "Docker integration runner",
+      "status": "NOT_RUN",
+      "gatesVerdict": false,
+      "reason": "Docker buildx/BuildKit is unavailable, so integration would fail before executing tests."
+    },
+    {
+      "tooling": "test_unit.sh broad frontend segment",
+      "status": "FAIL_NON_BLOCKING",
+      "gatesVerdict": false,
+      "reason": "Failure is in unrelated frontend dashboard Recurring Schedules test, outside MM-1170 backend model tier scope."
     }
   ],
-  "remainingWork": []
+  "remainingWork": [],
+  "reportMarkdown": "# MoonSpec Verification Report\n\n**Feature**: MM-1170\n**Spec**: N/A (issue-brief verification mode)\n**Original Request Source**: /work/agent_jobs/mm:3a4d0574-3f55-438b-8861-be2e0a37020f/artifacts/jira-implement-brief.json\n**Verdict**: FULLY_IMPLEMENTED\n**Confidence**: HIGH\n\n## Test Results\n\n| Suite | Command | Result | Notes |\n|-------|---------|--------|-------|\n| Focused unit | `pytest tests/unit/workflows/executions/test_model_resolver.py tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_resolves_model_tier_against_profile tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_rejects_strict_unavailable_model_tier tests/unit/api_service/api/routers/test_provider_profiles.py::test_create_provider_profile tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_tier_policy_round_trips_through_get_and_update tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_rejects_invalid_default_model_tier tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_manager_payload_redacts_secret_like_runtime_fields -q` | PASS | 46 passed, 2 warnings in 2.32s. |\n| Targeted unit wrapper | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/executions/test_model_resolver.py tests/unit/api/routers/test_executions.py tests/unit/api_service/api/routers/test_provider_profiles.py` | FAIL (non-blocking unrelated UI segment) | Python segment passed 453 tests; wrapper then ran broader Vitest UI suite and failed `frontend/src/entrypoints/dashboard.test.tsx` on an unrelated Recurring Schedules heading assertion. |\n| Integration | `./tools/test_integration.sh` | NOT RUN | Prior remediation attempt showed Docker BuildKit/buildx failure before test execution; `docker buildx version` still reports `docker: unknown command: docker buildx`. Advisory environment limitation for this verification. |\n\n## Requirement Coverage\n\n| Requirement | Evidence | Status | Notes |\n|-------------|----------|--------|-------|\n| Backend resolves requested model tiers against selected Provider Profile `model_tiers` | `moonmind/workflows/executions/model_resolver.py:130`, `api_service/api/routers/executions.py:6922`, `api_service/api/routers/executions.py:6928`, `tests/unit/api/routers/test_executions.py:5485` | VERIFIED | Runtime payload `modelTier` is parsed and routed through `resolve_model_effort` when a selected profile has tier policy. |\n| No requested tier uses `default_model_tier` | `moonmind/workflows/executions/model_resolver.py:341`, `tests/unit/workflows/executions/test_model_resolver.py:275` | VERIFIED | `_resolve_effective_tier` uses requested tier when present; default tier only applies when no requested tier exists. |\n| Requested Tier 2 resolves to `model_tiers[1]` | `moonmind/workflows/executions/model_resolver.py:189`, `tests/unit/workflows/executions/test_model_resolver.py:257`, `tests/unit/api/routers/test_executions.py:5509` | VERIFIED | Unit and API router tests assert Tier 2 selects the second configured tier's model and effort. |\n| Requested Tier 3 with two tiers clamps to Tier 2 and records `requested_tier_above_configured_range` | `moonmind/workflows/executions/model_resolver.py:350`, `moonmind/workflows/executions/model_resolver.py:356`, `tests/unit/workflows/executions/test_model_resolver.py:286` | VERIFIED | Default fallback clamps to available range and preserves fallback reason. |\n| `tierFallback: strict` rejects unavailable tiers before launch | `moonmind/workflows/executions/model_resolver.py:353`, `api_service/api/routers/executions.py:6939`, `tests/unit/api/routers/test_executions.py:5527` | VERIFIED | API test asserts 422 and `create_execution` is not awaited. |\n| Explicit model or effort overrides bypass tier policy and record `task_override` source | `moonmind/workflows/executions/model_resolver.py:153`, `moonmind/workflows/executions/model_resolver.py:159`, `moonmind/workflows/executions/model_resolver.py:164`, `tests/unit/workflows/executions/test_model_resolver.py:309`, `tests/unit/workflows/executions/test_model_resolver.py:327`, `tests/unit/workflows/executions/test_model_resolver.py:344` | VERIFIED | Both combined and independent override semantics are covered. |\n| Resolver returns required model/effort/tier/source/fallback/status shape | `moonmind/workflows/executions/model_resolver.py:52`, `moonmind/workflows/executions/model_resolver.py:208`, `api_service/api/routers/executions.py:6983`, `tests/unit/api/routers/test_executions.py:5512` | VERIFIED | `ResolvedModelEffort` and API `modelTierResolution` payload include all required fields. |\n| Validate `modelTier` as integer >= 1 | `moonmind/workflows/executions/model_resolver.py:317`, `api_service/api/routers/executions.py:6957`, `tests/unit/workflows/executions/test_model_resolver.py:361` | VERIFIED | Booleans, non-integers, zero, and negative values are rejected. |\n| Preserve documented resolution order including legacy default model/default effort and runtime fallback | `moonmind/workflows/executions/model_resolver.py:153`, `moonmind/workflows/executions/model_resolver.py:198`, `moonmind/workflows/executions/model_resolver.py:220`, `tests/unit/workflows/executions/test_model_resolver.py:402` | VERIFIED | Tier values fall through to legacy profile defaults and runtime defaults when tier entries omit model/effort. |\n| Fail explicitly for missing or launch-unready selected profiles | `moonmind/workflows/executions/model_resolver.py:359`, `tests/unit/workflows/executions/test_model_resolver.py:371`, `tests/unit/workflows/executions/test_model_resolver.py:380` | VERIFIED | Missing profile and disabled/disconnected/disabled-reason profiles raise explicit errors. |\n| Provider Profile persistence and surfaces preserve tier policy | `api_service/db/models.py:2423`, `api_service/migrations/versions/335_provider_profile_model_tiers.py:31`, `api_service/api/routers/provider_profiles.py:192`, `api_service/api/routers/provider_profiles.py:1706`, `api_service/services/provider_profile_service.py:112`, `moonmind/workflows/temporal/workflows/provider_profile_manager.py:170`, `tests/unit/api_service/api/routers/test_provider_profiles.py:691` | VERIFIED | DB model, migration, CRUD schemas, manager payload, and manager state all include `model_tiers`/`default_model_tier`. |\n\n## Acceptance Scenario Coverage\n\n| Scenario | Evidence | Status | Notes |\n|----------|----------|--------|-------|\n| Submit workflow runtime with selected Provider Profile and `modelTier: 2` | `api_service/api/routers/executions.py:6928`, `tests/unit/api/routers/test_executions.py:5485` | VERIFIED | Initial parameters include model, effort, model source, and resolution payload. |\n| Submit workflow runtime with `modelTier: 3`, two tiers, and `tierFallback: strict` | `api_service/api/routers/executions.py:6939`, `tests/unit/api/routers/test_executions.py:5550` | VERIFIED | Request is rejected before execution creation. |\n| Create/update/read Provider Profile tier policy | `api_service/api/routers/provider_profiles.py:488`, `api_service/api/routers/provider_profiles.py:1706`, `tests/unit/api_service/api/routers/test_provider_profiles.py:691` | VERIFIED | API round trip and DB readback preserve tier policy. |\n\n## Story Scope, Principles, And Source Claim Coverage\n\n| Item | Evidence | Status | Notes |\n|------|----------|--------|-------|\n| DESIGN-REQ-003 backend accepts `modelTier`/`tierFallback` against provider profile tiers | `api_service/api/routers/executions.py:6922`, `moonmind/workflows/executions/model_resolver.py:130` | VERIFIED | Backend owns deterministic tier resolution. |\n| DESIGN-REQ-006 preserve explicit/profile/runtime precedence | `moonmind/workflows/executions/model_resolver.py:66`, `moonmind/workflows/executions/model_resolver.py:153` | VERIFIED | Legacy model helper remains and tier-aware resolver preserves fallback chain. |\n| DESIGN-REQ-007 output `ResolvedModelEffort` metadata | `moonmind/workflows/executions/model_resolver.py:52`, `api_service/api/routers/executions.py:6983` | VERIFIED | Required contract exists and is propagated. |\n| DESIGN-REQ-015 runtime validation | `api_service/api/routers/executions.py:6957`, `api_service/api/routers/provider_profiles.py:80` | VERIFIED | Runtime `modelTier` and profile tier policy are validated. |\n| AGENTS.md testing discipline | Focused unit command PASS; integration environment disclosed | VERIFIED | Repo-local unit evidence covers changed behavior; unavailable BuildKit is advisory environment limitation. |\n\n## Canonical Claim Coverage\n\n| Claim | Code Evidence | Test Evidence | Artifact Evidence | Implementation Status | Verification Status | Drift Status | Gap Reason |\n|-------|---------------|---------------|-------------------|-----------------------|---------------------|--------------|------------|\n| CLAIM-docs-security-providerprofilemodelefforttiers-001 | `api_service/db/models.py:2423`, `api_service/api/routers/provider_profiles.py:1706`, `moonmind/workflows/temporal/workflows/provider_profile_manager.py:170` | `tests/unit/api_service/api/routers/test_provider_profiles.py:691` | `reports/remediation_attempt-1.json` | VERIFIED | VERIFIED | NONE |  |\n| CLAIM-docs-security-providerprofilemodelefforttiers-007 | `moonmind/workflows/executions/model_resolver.py:130`, `api_service/api/routers/executions.py:6922`, `api_service/api/routers/executions.py:6983` | `tests/unit/workflows/executions/test_model_resolver.py:257`, `tests/unit/api/routers/test_executions.py:5527` | `reports/remediation_attempt-1.json` | VERIFIED | VERIFIED | NONE |  |\n\n## Original Request Alignment\n\n- PASS: backend model tier resolution is implemented against selected Provider Profile policy, with deterministic and auditable resolution independent of frontend previews.\n- PASS: explicit model/profile default/runtime default behavior remains as supporting precedence, including legacy default model/default effort fallback.\n\n## Source Document Drift\n\n| Doc Claim | Observed Behavior | Evidence | Severity |\n|-----------|-------------------|----------|----------|\n| None | No verified implementation evidence contradicts the cited source document for this story scope. | Direct code and unit inspection | none |\n\n## Gaps\n\n- None for repo-verifiable in-scope MM-1170 behavior.\n- Disclosed scope exclusion: source issue `MM-1168` traceability is workflow/PR metadata, not runtime repository behavior, and should be handled by the workflow publication layer.\n- Environment note: integration suite could not be used because Docker buildx/BuildKit is unavailable in this runtime.\n- Environment note: MoonMind RAG context was provided in degraded local fallback mode; direct repository inspection was sufficient and this did not gate the verdict.\n\n## Remaining Work\n\nNone.\n\n## Decision\n\nThe repo-verifiable MM-1170 target state is fully implemented. Advance to the next workflow step.\n"
 }
