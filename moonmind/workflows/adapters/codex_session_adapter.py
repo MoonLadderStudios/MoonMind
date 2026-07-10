@@ -154,6 +154,8 @@ _SESSION_ARTIFACT_METADATA_FIELDS = (
     "observabilityEventsRef",
 )
 _TURN_METADATA_SCALAR_FIELDS = (
+    "reason",
+    "continuationFailureType",
     "failureCause",
     "failureClass",
     "retryRecommendedAction",
@@ -985,6 +987,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             "outcome": "requested",
                         }
                     )
+                    if execution_deadline is not None:
+                        remaining_seconds = execution_deadline - time.monotonic()
+                        if remaining_seconds <= 0:
+                            continuation_history[-1]["outcome"] = "deadline_exhausted"
+                            break
                     continuation_call = self._coerce_turn_response(
                         self._send_turn(
                             SendCodexManagedSessionTurnRequest(
@@ -1003,20 +1010,38 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             )
                         )
                     )
-                    if execution_deadline is None:
-                        turn_response = await continuation_call
-                    else:
-                        remaining_seconds = execution_deadline - time.monotonic()
-                        if remaining_seconds <= 0:
-                            continuation_history[-1]["outcome"] = "deadline_exhausted"
-                            break
-                        try:
-                            turn_response = await asyncio.wait_for(
-                                continuation_call, timeout=remaining_seconds
+                    try:
+                        if execution_deadline is None:
+                            turn_response = await continuation_call
+                        else:
+                            try:
+                                turn_response = await asyncio.wait_for(
+                                    continuation_call, timeout=remaining_seconds
+                                )
+                            except TimeoutError:
+                                continuation_history[-1]["outcome"] = "deadline_exhausted"
+                                break
+                    except Exception as exc:
+                        # Cancellation derives from BaseException and intentionally
+                        # bypasses this recovery path. Provider/activity failures,
+                        # however, must retain the contract context that caused the
+                        # continuation while preserving their underlying details.
+                        continuation_history[-1]["outcome"] = "provider_failure"
+                        failure_details: dict[str, Any] = {
+                            "reason": str(exc).strip()
+                            or "Managed-session continuation failed",
+                            "continuationFailureType": type(exc).__name__,
+                        }
+                        if isinstance(exc, ActivityError) and isinstance(
+                            exc.cause, ApplicationError
+                        ):
+                            failure_details.update(
+                                _turn_failure_metadata_from_activity_error(exc.cause)
                             )
-                        except TimeoutError:
-                            continuation_history[-1]["outcome"] = "deadline_exhausted"
-                            break
+                        turn_response = turn_response.model_copy(
+                            update={"status": "failed", "metadata": failure_details}
+                        )
+                        break
                     turn_id = turn_response.turn_id
                     current_locator = self._locator_from_state(
                         session_state=turn_response.session_state,
@@ -1032,16 +1057,25 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     continuation_history[-1]["outcome"] = (
                         "recovered" if contract_satisfied else "incomplete"
                     )
-                if not contract_satisfied and turn_response.status == "completed":
+                if not contract_satisfied:
                     incomplete_metadata = {
                         **dict(turn_response.metadata or {}),
                         **terminal_contract_metadata,
-                        "failureCode": _INCOMPLETE_TERMINAL_CONTRACT_FAILURE_CODE,
+                        "failureCode": (
+                            dict(turn_response.metadata or {}).get("failureCode")
+                            or _INCOMPLETE_TERMINAL_CONTRACT_FAILURE_CODE
+                        ),
                         "terminalContractContinuationCount": len(continuation_history),
                         "terminalContractReason": "missing_terminal_evidence",
                         "terminalContractMissingEvidence": list(missing_evidence),
                         "terminalContractContinuationHistory": continuation_history,
-                        "terminalContractRecoveryOutcome": "exhausted",
+                        "terminalContractRecoveryOutcome": (
+                            continuation_history[-1]["outcome"]
+                            if continuation_history
+                            and continuation_history[-1]["outcome"]
+                            in {"provider_failure", "deadline_exhausted"}
+                            else "exhausted"
+                        ),
                     }
                     turn_response = turn_response.model_copy(
                         update={"status": "failed", "metadata": incomplete_metadata}

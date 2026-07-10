@@ -1,57 +1,51 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issue_ref": "MoonLadderStudios/MoonMind#3140",
-  "source_verification_artifact": "artifacts/github-issue-implement-verify.json",
-  "source_verdict": "ADDITIONAL_WORK_NEEDED",
-  "summary": "Corrected stale terminal evidence coverage and resolved focused adapter-suite failures exposed once the documented test dependencies were installed. Terminal failures now retain manual-review disposition, and terminal artifact freshness allows a one-second precision boundary between filesystem timestamps and run-store start timestamps while still rejecting genuinely stale evidence.",
-  "changed_files": [
-    "moonmind/workflows/adapters/managed_agent_adapter.py",
-    "tests/unit/workflows/adapters/test_managed_agent_adapter.py",
+  "issueRef": "MoonLadderStudios/MoonMind#3142",
+  "sourceVerificationArtifact": "artifacts/github-issue-implement-verify.json",
+  "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
+  "summary": "Remediated the bounded continuation failure-context and verification gaps reported by moonspec-verify.",
+  "changedFiles": [
+    "moonmind/workflows/adapters/codex_session_adapter.py",
+    "tests/unit/workflows/adapters/test_codex_session_adapter.py",
     "reports/remediation_attempt-1.json"
   ],
-  "gap_statuses": [
+  "gapStatuses": [
     {
-      "requirement": "Add coverage for stale terminal evidence",
-      "gap_type": "verification",
+      "gap": "Provider/infrastructure failure during continuation retains incomplete-contract context",
       "status": "fixed",
-      "evidence": "The malformed-and-stale test now uses the current run identity and asserts 'stale terminal artifact', reaching the freshness rejection branch."
+      "evidence": "Continuation exceptions and non-completed responses now flow through terminal-contract metadata composition; provider reason/type and any underlying failure code are preserved, while missing evidence, continuation history, and recovery outcome remain available."
     },
     {
-      "requirement": "Run the focused adapter unit and boundary coverage",
-      "gap_type": "verification",
+      "gap": "Hermetic scripted recovery and exhaustion scenarios",
       "status": "fixed",
-      "evidence": "Installed the declared tests extra and the exact focused runner completed successfully: 78 Python tests passed; the automatic frontend phase also passed."
+      "evidence": "Added managed-session adapter journeys for same-session recovery after terminal evidence appears and for two-turn exhaustion with execution_error/INCOMPLETE_TERMINAL_CONTRACT metadata."
     },
     {
-      "requirement": "Preserve established manual-review terminal result behavior",
-      "gap_type": "implementation",
+      "gap": "Retry/replay idempotency and prompt cancellation/deadline termination",
       "status": "fixed",
-      "evidence": "Focused execution revealed that failed, blocked, and attempts_exhausted terminal results lost mergeAutomationDisposition. They now derive manual_review unless an owned merge gate derives reenter_gate."
+      "evidence": "Boundary tests assert stable idempotency-derived request IDs, unchanged session/epoch/thread, original-deadline exhaustion, and CancelledError propagation during continuation. The deadline check now occurs before creating the continuation coroutine."
     },
     {
-      "requirement": "Reject stale artifacts without rejecting run-boundary writes",
-      "gap_type": "implementation",
+      "gap": "Focused repo-local test evidence",
       "status": "fixed",
-      "evidence": "Freshness validation now permits a one-second filesystem/run-store timestamp precision tolerance; the explicit 2020 stale artifact remains rejected."
+      "evidence": "Installed the declared pytest test dependencies in the managed environment and ran the verifier-named focused repository test command successfully."
     }
   ],
-  "targeted_checks": [
+  "targetedLocalChecks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py",
-      "result": "PASS",
-      "notes": "78 Python tests passed with four non-blocking pytest marker warnings. Automatic frontend phase: 63 files passed; 972 tests passed and 238 skipped."
+      "command": "python -m py_compile moonmind/workflows/adapters/codex_session_adapter.py tests/unit/workflows/adapters/test_codex_session_adapter.py",
+      "status": "passed"
+    },
+    {
+      "command": "./tools/test_unit.sh tests/unit/workflows/adapters/test_codex_session_adapter.py",
+      "status": "passed",
+      "result": "66 Python adapter tests passed; the runner also completed 980 frontend tests with 238 skipped. Two pre-existing pytest warnings remain for synchronous tests under the module-level asyncio marker."
     },
     {
       "command": "git diff --check",
-      "result": "PASS",
-      "notes": "No whitespace errors."
+      "status": "passed"
     }
   ],
-  "remaining_work": [],
-  "scope_controls": {
-    "pull_request_created": false,
-    "github_issue_status_changed": false,
-    "scope_broadened": false
-  }
+  "knownRemainingGaps": []
 }

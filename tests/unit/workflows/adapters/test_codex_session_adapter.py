@@ -80,6 +80,246 @@ def test_pr_resolver_terminal_contract_requires_publish_evidence_for_merge(
     assert "artifacts/publish_result.json" in instruction
     assert "Do not declare completion" in instruction
 
+
+def _terminal_contract_test_adapter(
+    tmp_path: Path,
+    *,
+    send_turn: Any,
+    terminate_remote_session: Any = None,
+) -> CodexSessionAdapter:
+    binding = _binding()
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-terminal-contract",
+            thread_id="thread-terminal-contract",
+        )
+
+    async def _fetch_summary(
+        request: FetchCodexManagedSessionSummaryRequest,
+    ) -> CodexManagedSessionSummary:
+        return _summary(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    async def _publish_artifacts(
+        request: PublishCodexManagedSessionArtifactsRequest,
+    ) -> CodexManagedSessionArtifactsPublication:
+        return _publication(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    return CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-terminal-contract",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=terminate_remote_session or _async_noop,
+        fetch_remote_summary=_fetch_summary,
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+
+def _pr_resolver_request(
+    binding: CodexManagedSessionBinding,
+    workspace_path: Path,
+    *,
+    timeout_seconds: float | None = None,
+) -> AgentExecutionRequest:
+    request = _request(
+        binding,
+        workspace_path=str(workspace_path),
+        timeout_seconds=timeout_seconds,
+    )
+    return request.model_copy(
+        update={"parameters": {"publishMode": "none", "selectedSkill": "pr-resolver"}}
+    )
+
+
+async def test_pr_resolver_continuation_recovers_on_same_session(tmp_path: Path) -> None:
+    binding = _binding()
+    workspace = tmp_path / "workspace"
+    requests: list[SendCodexManagedSessionTurnRequest] = []
+    termination_calls: list[Any] = []
+
+    async def _send_turn(
+        request: SendCodexManagedSessionTurnRequest,
+    ) -> CodexManagedSessionTurnResponse:
+        requests.append(request)
+        if len(requests) == 2:
+            result = workspace / "var" / "pr_resolver" / "result.json"
+            result.parent.mkdir(parents=True)
+            result.write_text('{"status":"blocked"}', encoding="utf-8")
+        return _turn_response(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+            turn_id=f"turn-{len(requests)}",
+        )
+
+    async def _terminate(request: Any) -> None:
+        termination_calls.append(request)
+
+    adapter = _terminal_contract_test_adapter(
+        tmp_path, send_turn=_send_turn, terminate_remote_session=_terminate
+    )
+    handle = await adapter.start(_pr_resolver_request(binding, workspace))
+    result = await adapter.fetch_result(handle.run_id)
+
+    assert handle.status == "completed"
+    assert len(requests) == 2
+    assert {(r.session_id, r.session_epoch, r.thread_id) for r in requests} == {
+        (binding.session_id, binding.session_epoch, "thread-terminal-contract")
+    }
+    assert requests[1].request_id == "idem-1:terminal-contract:1"
+    assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
+    assert result.metadata["terminalContractContinuationCount"] == 1
+    assert termination_calls == []
+
+
+async def test_pr_resolver_continuation_exhaustion_is_compact_execution_error(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    workspace = tmp_path / "workspace"
+    requests: list[SendCodexManagedSessionTurnRequest] = []
+
+    async def _send_turn(
+        request: SendCodexManagedSessionTurnRequest,
+    ) -> CodexManagedSessionTurnResponse:
+        requests.append(request)
+        return _turn_response(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+            turn_id=f"turn-{len(requests)}",
+        )
+
+    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=_send_turn)
+    with pytest.raises(CodexSessionRunFailedError) as exc_info:
+        await adapter.start(_pr_resolver_request(binding, workspace))
+
+    result = exc_info.value.agent_run_result
+    assert result.failure_class == "execution_error"
+    assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert result.metadata["terminalContractContinuationCount"] == 2
+    assert result.metadata["terminalContractMissingEvidence"] == [
+        "var/pr_resolver/result.json"
+    ]
+    assert [request.request_id for request in requests] == [
+        "idem-1:initial",
+        "idem-1:terminal-contract:1",
+        "idem-1:terminal-contract:2",
+    ]
+
+
+async def test_pr_resolver_continuation_provider_failure_retains_contract_context(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    workspace = tmp_path / "workspace"
+    calls = 0
+
+    async def _send_turn(
+        request: SendCodexManagedSessionTurnRequest,
+    ) -> CodexManagedSessionTurnResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("provider transport unavailable")
+        return _turn_response(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=_send_turn)
+    with pytest.raises(CodexSessionRunFailedError) as exc_info:
+        await adapter.start(_pr_resolver_request(binding, workspace))
+
+    metadata = exc_info.value.agent_run_result.metadata
+    assert metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert metadata["terminalContractRecoveryOutcome"] == "provider_failure"
+    assert metadata["terminalContractContinuationHistory"][0]["outcome"] == (
+        "provider_failure"
+    )
+    assert metadata["turnMetadata"]["continuationFailureType"] == "RuntimeError"
+    assert "provider transport unavailable" in exc_info.value.agent_run_result.summary
+
+
+async def test_pr_resolver_continuation_obeys_deadline_and_cancellation(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    workspace = tmp_path / "workspace"
+    continuation_started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def _send_turn(
+        request: SendCodexManagedSessionTurnRequest,
+    ) -> CodexManagedSessionTurnResponse:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            continuation_started.set()
+            await release.wait()
+        return _turn_response(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=_send_turn)
+    with pytest.raises(CodexSessionRunFailedError) as deadline_exc:
+        await adapter.start(
+            _pr_resolver_request(binding, workspace, timeout_seconds=0.01)
+        )
+    assert deadline_exc.value.agent_run_result.metadata[
+        "terminalContractRecoveryOutcome"
+    ] == (
+        "deadline_exhausted"
+    )
+
+    calls = 0
+    continuation_started.clear()
+    task = asyncio.create_task(adapter.start(_pr_resolver_request(binding, workspace)))
+    await continuation_started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
 def _fake_profiles(profiles: list[dict[str, Any]]):
     async def _fetcher(*, runtime_id: str):
         return {"profiles": profiles}
