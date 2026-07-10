@@ -14,7 +14,7 @@ def _load_workflow() -> dict:
 
 
 def _triggers(workflow: dict) -> dict:
-    return workflow.get("on", workflow.get(True))
+    return workflow.get("on", workflow.get(True)) or {}
 
 
 def test_gate_runs_for_merge_candidates_and_merge_queue() -> None:
@@ -27,7 +27,7 @@ def test_gate_runs_for_merge_candidates_and_merge_queue() -> None:
 
     checkout = workflow["jobs"]["migration-gate"]["steps"][0]
     assert checkout["name"] == "Check out merge candidate"
-    assert "ref" not in checkout["with"]
+    assert "ref" not in checkout.get("with", {})
 
 
 def test_gate_checks_graph_and_upgrades_clean_postgres() -> None:

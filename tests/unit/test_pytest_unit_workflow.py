@@ -61,9 +61,9 @@ def test_required_unit_workflow_runs_status_token_audit() -> None:
 
 def test_required_unit_workflow_runs_for_merge_queue_candidates() -> None:
     workflow = _load_workflow()
-    triggers = workflow.get("on", workflow.get(True))
+    triggers = workflow.get("on", workflow.get(True)) or {}
 
-    assert triggers["merge_group"]["types"] == ["checks_requested"]
+    assert triggers.get("merge_group", {}).get("types") == ["checks_requested"]
 
 
 def test_required_unit_workflow_checks_out_moonspec_submodule() -> None:

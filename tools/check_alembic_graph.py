@@ -35,8 +35,7 @@ def main() -> int:
 
     print(
         "::error title=Alembic migration graph is not linear::"
-        f"Expected exactly one head, found {len(heads)}: "
-        + ", ".join(rendered_heads)
+        f"Expected exactly one head, found {len(heads)}: {', '.join(rendered_heads)}"
     )
     print(
         "Rebase onto current main and regenerate/reparent an unshipped "

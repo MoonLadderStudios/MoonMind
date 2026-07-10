@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import importlib.util
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[3] / "tools" / "check_alembic_graph.py"
-SPEC = importlib.util.spec_from_file_location("check_alembic_graph", SCRIPT_PATH)
-assert SPEC and SPEC.loader
-check_alembic_graph = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(check_alembic_graph)
+TOOLS_DIR = Path(__file__).resolve().parents[3] / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+import check_alembic_graph
 
 
 def test_main_accepts_exactly_one_head(capsys) -> None:
