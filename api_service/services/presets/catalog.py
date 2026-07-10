@@ -2008,7 +2008,6 @@ class PresetCatalogService:
                 step_payload["skill"] = _normalize_skill_payload(
                     raw_step.get("skill"), index=index
                 )
-                _promote_skill_runtime(step_payload)
             else:
                 if (
                     raw_step.get("tool") is not None
