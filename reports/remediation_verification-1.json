@@ -1,40 +1,38 @@
 {
   "artifact_type": "remediation.verification",
   "attempt": 1,
-  "remediation_attempt": 1,
+  "remediation_attempt_verified": 1,
   "remediation_attempt_artifact": "reports/remediation_attempt-1.json",
   "authoritative_verification_artifact": "artifacts/github-issue-implement-verify.json",
   "verification_target": "issue_brief",
-  "issue_ref": "MoonLadderStudios/MoonMind#3140",
+  "issue_ref": "MoonLadderStudios/MoonMind#3142",
   "verdict": "ADDITIONAL_WORK_NEEDED",
   "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "summary": "Remediation attempt 1 passes the focused adapter suite and closes the previously reported freshness and established-shape failures, but terminal validation still accepts a parseable payload with no recognized terminal status/disposition because an empty string is compared to None.",
+  "summary": "Remediation attempt 1 fixes the incomplete-contract failure context and passes focused recovery, exhaustion, deadline, and cancellation tests. The whole target state still lacks the issue-required scripted fake app-server/active-shell journey and an activity-retry or Temporal-replay deduplication boundary test.",
+  "remainingWork": [
+    {
+      "requirement": "Hermetic scripted Codex/app-server recovery and exhaustion scenarios",
+      "gapType": "verification",
+      "remainingWork": "Add the issue-described fake app-server journey through the managed-session boundary, including the outer-wrapper/inner-active-shell condition and same-session recovery.",
+      "recoverableInCurrentRuntime": true
+    },
+    {
+      "requirement": "Activity retry or Temporal replay cannot create duplicate continuation turns",
+      "gapType": "verification",
+      "remainingWork": "Exercise retry/replay against request tracking and prove the deterministic continuation request ID is deduplicated.",
+      "recoverableInCurrentRuntime": true
+    }
+  ],
   "testResults": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_codex_session_adapter.py",
       "result": "PASS",
-      "notes": "78 Python tests passed; frontend phase passed 972 tests with 238 skipped."
+      "notes": "66 Python adapter tests and 980 frontend tests passed; 238 frontend tests skipped."
     },
     {
       "command": "git diff --check",
       "result": "PASS"
-    }
-  ],
-  "remainingWork": [
-    {
-      "requirement": "A terminal result must have a recognized terminal status/disposition",
-      "gapType": "implementation",
-      "remainingWork": "Reject empty/unrecognized dispositions in _load_pr_resolver_terminal_result.",
-      "suggestedEvidence": ["moonmind/workflows/adapters/managed_agent_adapter.py:687"],
-      "recoverableInCurrentRuntime": true
-    },
-    {
-      "requirement": "Unrecognized parseable terminal evidence must be covered",
-      "gapType": "verification",
-      "remainingWork": "Add a regression test for a parseable terminal-path JSON object with no recognized terminal status/disposition and rerun the focused adapter suite.",
-      "suggestedEvidence": ["tests/unit/workflows/adapters/test_managed_agent_adapter.py:94"],
-      "recoverableInCurrentRuntime": true
     }
   ]
 }
