@@ -954,7 +954,7 @@ function RoutedDashboardPage({
     const normalizedPath = location.pathname.replace(/\/$/, '');
     if (normalizedPath === '/workflows') {
       setRequestedMode('table');
-    } else if (normalizedPath.startsWith('/workflows/') && normalizedPath !== '/workflows/new') {
+    } else if (normalizedPath.startsWith('/workflows/')) {
       setRequestedMode((mode) => (mode === 'table' ? 'sidebar' : mode));
     } else if (normalizedPath === '/schedules') {
       setRequestedRecurringMode('table');
