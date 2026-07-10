@@ -14301,18 +14301,11 @@ describe("Task Create MM-641 authoring validation", () => {
     unmount();
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(
-      (
-        await screen.findByRole("checkbox", {
-          name: "Propose follow-up work",
-        })
-      ).getAttribute("name"),
-    ).toBe("proposeTasks");
-    expect(
-      (screen.getByRole("checkbox", {
-        name: "Propose follow-up work",
-      }) as HTMLInputElement).checked,
-    ).toBe(true);
+    const proposeCheckbox = await screen.findByRole("checkbox", {
+      name: "Propose follow-up work",
+    });
+    expect(proposeCheckbox.getAttribute("name")).toBe("proposeTasks");
+    expect((proposeCheckbox as HTMLInputElement).checked).toBe(true);
   });
 
   it("does not overwrite the Propose Tasks server default on initial mount", async () => {
@@ -14333,13 +14326,10 @@ describe("Task Create MM-641 authoring validation", () => {
 
     renderWithClient(<WorkflowStartPage payload={payload} />);
 
-    expect(
-      (
-        await screen.findByRole("checkbox", {
-          name: "Propose follow-up work",
-        })
-      ) as HTMLInputElement,
-    ).toHaveProperty("checked", true);
+    const checkbox = await screen.findByRole("checkbox", {
+      name: "Propose follow-up work",
+    });
+    expect((checkbox as HTMLInputElement).checked).toBe(true);
     expect(window.localStorage.getItem(preferenceKey)).toBeNull();
   });
 });
