@@ -132,10 +132,6 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
     def supports_slash_passthrough(self) -> bool:
         return True
 
-    def effort_application_status(self, resolved_effort: object) -> str:
-        """Codex CLI does not apply the tier policy's effort value."""
-        return "not_supported" if resolved_effort is not None else "unknown"
-
     def build_command(
         self,
         profile: Any,
@@ -182,6 +178,12 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
             cmd.append(request.instruction_ref)
 
         return cmd
+
+    def effort_application_status(self, effort: str | None) -> str:
+        # The managed Codex CLI command path currently has no effort flag or
+        # generated config mapping. Keep the resolved value in diagnostics,
+        # but never claim that it reached the CLI.
+        return "not_supported" if effort else "metadata_only"
 
     @classmethod
     def _sanitize_command_template(cls, command_template: list[str]) -> list[str]:

@@ -13679,6 +13679,10 @@ class MoonMindRunWorkflow:
         parameters: dict[str, Any] = {}
         for param_key in (
             "model",
+            "requestedModel",
+            "modelTier",
+            "tierFallback",
+            "tierPreview",
             "effort",
             "publishMode",
             "commitMessage",

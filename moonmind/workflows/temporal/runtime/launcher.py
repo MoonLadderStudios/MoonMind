@@ -1107,6 +1107,60 @@ class ManagedRuntimeLauncher:
             request.instruction_ref = result.rendered_instruction
 
     @staticmethod
+    def _apply_resolved_tier_policy(
+        *,
+        request: AgentExecutionRequest,
+        profile: ManagedRuntimeProfile,
+        strategy: Any,
+    ) -> None:
+        """Resolve tier policy once at the launch boundary and shape parameters."""
+        from dataclasses import replace
+
+        from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+        parameters = request.parameters
+        if not isinstance(parameters, dict):
+            parameters = {}
+            request.parameters = parameters
+        requested_tier = parameters.get("modelTier")
+        requested_model = parameters.get("requestedModel")
+        if requested_model is None and requested_tier is None:
+            requested_model = parameters.get("model")
+        resolved = resolve_model_effort(
+            runtime_id=profile.runtime_id,
+            profile=profile,
+            requested_model_tier=requested_tier,
+            requested_model=requested_model,
+            requested_effort=parameters.get("effort"),
+            tier_fallback=parameters.get("tierFallback", "clamp"),
+            advisory_preview=parameters.get("tierPreview"),
+        )
+
+        # Tier values are defaults. Explicit step parameters retain authority.
+        for key, value in resolved.tier_parameters.items():
+            parameters.setdefault(key, value)
+        if resolved.model is not None:
+            parameters["model"] = resolved.model
+        if resolved.effort is not None:
+            parameters["effort"] = resolved.effort
+
+        application_status = (
+            strategy.effort_application_status(resolved.effort)
+            if strategy is not None
+            else ("unknown" if resolved.effort else "metadata_only")
+        )
+        resolved = replace(resolved, effort_application_status=application_status)
+        metadata = parameters.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+            parameters["metadata"] = metadata
+        moonmind_metadata = metadata.setdefault("moonmind", {})
+        if not isinstance(moonmind_metadata, dict):
+            moonmind_metadata = {}
+            metadata["moonmind"] = moonmind_metadata
+        moonmind_metadata["modelEffortResolution"] = resolved.as_metadata()
+
+    @staticmethod
     def _assert_profile_launch_ready(profile: ManagedRuntimeProfile) -> None:
         """Re-check compact Provider Profile readiness at the launch boundary."""
 
@@ -1250,7 +1304,13 @@ class ManagedRuntimeLauncher:
 
         from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
+        self._assert_profile_launch_ready(profile)
         strategy = get_strategy(normalize_runtime_id(profile.runtime_id))
+        self._apply_resolved_tier_policy(
+            request=request,
+            profile=profile,
+            strategy=strategy,
+        )
         launch_github_token = (
             await resolve_github_token_for_launch()
             if self._request_workspace_needs_github_https_auth(
@@ -1290,7 +1350,6 @@ class ManagedRuntimeLauncher:
             assert_managed_secret_refs_active_for_launch,
             resolve_managed_api_key_reference,
         )
-        self._assert_profile_launch_ready(profile)
         profile_secret_refs = getattr(profile, "secret_refs", None) or {}
         # Refuse to materialize the runtime when any managed SecretRef is
         # disabled, revoked, or missing. Plaintext is never read or surfaced.

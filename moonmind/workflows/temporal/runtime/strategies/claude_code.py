@@ -115,6 +115,9 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
 
         return cmd
 
+    def effort_application_status(self, effort: str | None) -> str:
+        return "applied" if effort else "metadata_only"
+
     def classify_exit(
         self,
         exit_code: int | None,

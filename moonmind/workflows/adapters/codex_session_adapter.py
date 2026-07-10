@@ -1801,6 +1801,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             defaultModel=profile.get("default_model") or runtime_default_model,
             modelOverrides=profile.get("model_overrides") or {},
             defaultEffort=profile.get("default_effort") or runtime_default_effort,
+            modelTiers=profile.get("model_tiers") or [],
+            defaultModelTier=profile.get("default_model_tier") or 1,
             defaultTimeoutSeconds=profile.get("default_timeout_seconds") or profile.get(
                 "defaultTimeoutSeconds", 3600
             ),
