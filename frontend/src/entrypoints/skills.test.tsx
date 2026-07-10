@@ -120,10 +120,10 @@ describe('Skills Entrypoint', () => {
   it('names the skill navigation, exposes selection, and focuses the selected detail', async () => {
     renderWithClient(<SkillsPage payload={mockPayload} />);
 
-    const navigation = await screen.findByRole('region', { name: 'Skill navigation' });
+    const navigation = await screen.findByRole('navigation', { name: 'Skill navigation' });
     expect(navigation).toBeTruthy();
     const skill = await screen.findByRole('button', { name: 'pr-resolver' });
-    expect(skill.getAttribute('aria-current')).toBe('false');
+    expect(skill.getAttribute('aria-current')).toBeNull();
 
     fireEvent.click(skill);
 
@@ -249,7 +249,7 @@ describe('Skills Entrypoint', () => {
     expect(await screen.findByRole('button', { name: 'speckit-orchestrate' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'pr-resolver' })).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText('Filter skills by ID'), {
+    fireEvent.change(screen.getByLabelText('Skill filter'), {
       target: { value: 'pr-' },
     });
 
@@ -258,13 +258,27 @@ describe('Skills Entrypoint', () => {
       expect(screen.getByRole('button', { name: 'pr-resolver' })).toBeTruthy();
     });
 
-    fireEvent.change(screen.getByLabelText('Filter skills by ID'), {
+    fireEvent.change(screen.getByLabelText('Skill filter'), {
       target: { value: 'does-not-exist' },
     });
 
     await waitFor(() => {
       expect(screen.getByText('No skills match your filter.')).toBeTruthy();
+      expect(screen.getByRole('rowgroup', { name: 'Current skill' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Current skill: speckit-orchestrate' })).toBeTruthy();
     });
+  });
+
+  it('keeps the shared skill sidebar mounted while create and upload are open', async () => {
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+
+    expect(screen.getByRole('dialog', { name: 'Create or upload skill' })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Skill navigation' })).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'Skill list table slice' })).toBeTruthy();
+    expect(screen.queryByText('Available Skills')).toBeNull();
+    expect(screen.queryByText('Workflow')).toBeNull();
   });
 
   it('shows the raw markdown and metadata preview tabs', async () => {
