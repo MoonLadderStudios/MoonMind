@@ -108,6 +108,112 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
     assert "version" not in expanded["appliedTemplate"]
     assert "checkpointBranching" not in expanded
 
+
+async def test_mm1171_preset_runtime_tier_intent_is_validated_and_preserved(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="tiered-workflow",
+                title="Tiered Workflow",
+                description="Template carrying MM-1168 model tier intent.",
+                scope="personal",
+                scope_ref=str(user_id),
+                tags=["runtime"],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "title": "Implement",
+                        "instructions": "Implement the issue.",
+                        "skill": {
+                            "id": "auto",
+                            "runtime": {
+                                "providerProfileRef": "codex-openai",
+                                "profileSelector": {"providerId": "openai"},
+                                "modelTier": 2,
+                                "tierFallback": "strict",
+                            },
+                        },
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            expanded = await service.expand_template(
+                slug="tiered-workflow",
+                scope="personal",
+                scope_ref=str(user_id),
+                inputs={},
+                context={},
+                options=ExpandOptions(should_enforce_step_limit=True),
+                user_id=user_id,
+            )
+
+    runtime = expanded["steps"][0]["skill"]["runtime"]
+    assert runtime == {
+        "providerProfileRef": "codex-openai",
+        "profileSelector": {"providerId": "openai"},
+        "modelTier": 2,
+        "tierFallback": "strict",
+    }
+
+
+async def test_mm1171_preset_runtime_rejects_invalid_tier_values(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+
+            with pytest.raises(PresetValidationError, match="modelTier"):
+                await service.create_template(
+                    slug="bad-tier",
+                    title="Bad Tier",
+                    description="Template with invalid tier intent.",
+                    scope="personal",
+                    scope_ref=str(user_id),
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "title": "Run",
+                            "instructions": "Run.",
+                            "skill": {"runtime": {"modelTier": "2"}},
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=user_id,
+                )
+
+            with pytest.raises(PresetValidationError, match="tierFallback"):
+                await service.create_template(
+                    slug="bad-fallback",
+                    title="Bad Fallback",
+                    description="Template with invalid fallback intent.",
+                    scope="personal",
+                    scope_ref=str(user_id),
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "title": "Run",
+                            "instructions": "Run.",
+                            "skill": {
+                                "runtime": {
+                                    "modelTier": 1,
+                                    "tierFallback": "soft",
+                                }
+                            },
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=user_id,
+                )
+
 async def test_checkpoint_branching_policy_expands_only_when_enabled(tmp_path):
     user_id = uuid4()
     async with template_db(tmp_path) as session_maker:

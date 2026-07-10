@@ -5942,6 +5942,118 @@ def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
     assert runtime["providerProfile"] == "123"
 
 
+def test_mm1171_create_execution_preserves_runtime_tier_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: None
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Preserve MM-1168 tier intent",
+                    "instructions": "Run a portable tiered workflow.",
+                    "runtime": {
+                        "providerProfileRef": "codex-openai",
+                        "profileSelector": {"providerId": "openai"},
+                        "modelTier": 2,
+                        "tierFallback": "clamp",
+                    },
+                    "steps": [
+                        {
+                            "id": "implement",
+                            "instructions": "Implement.",
+                            "runtime": {
+                                "providerProfileRef": "codex-openai",
+                                "profileSelector": {"providerId": "openai"},
+                                "modelTier": 3,
+                                "tierFallback": "strict",
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    workflow_runtime = initial_parameters["workflow"]["runtime"]
+    assert workflow_runtime["providerProfileRef"] == "codex-openai"
+    assert workflow_runtime["profileSelector"] == {"providerId": "openai"}
+    assert workflow_runtime["modelTier"] == 2
+    assert workflow_runtime["tierFallback"] == "clamp"
+    assert "requestedModel" not in workflow_runtime
+    assert "model" not in workflow_runtime
+
+    step_runtime = initial_parameters["workflow"]["steps"][0]["runtime"]
+    assert step_runtime["providerProfileRef"] == "codex-openai"
+    assert step_runtime["profileSelector"] == {"providerId": "openai"}
+    assert step_runtime["modelTier"] == 3
+    assert step_runtime["tierFallback"] == "strict"
+    assert "requestedModel" not in step_runtime
+
+
+def test_mm1171_create_execution_rejects_invalid_runtime_tier_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: None
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Reject bad tier",
+                    "instructions": "Run a workflow.",
+                    "runtime": {"modelTier": "2"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "modelTier" in response.json()["detail"]["message"]
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Reject bad fallback",
+                    "instructions": "Run a workflow.",
+                    "steps": [
+                        {
+                            "id": "verify",
+                            "instructions": "Verify.",
+                            "runtime": {"modelTier": 1, "tierFallback": "soft"},
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "tierFallback" in response.json()["detail"]["message"]
+
+
 def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

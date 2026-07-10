@@ -44,6 +44,10 @@ from moonmind.workflows.checkpoint_branches import (
     CheckpointBranchGitBindingError,
     _validate_work_branch,
 )
+from moonmind.runtime_intent import (
+    RuntimeIntentValidationError,
+    validate_runtime_tier_intent,
+)
 
 _FORBIDDEN_STEP_KEYS = frozenset(
     {
@@ -514,7 +518,18 @@ def _normalize_skill_payload(raw_skill: Any, *, index: int) -> dict[str, Any]:
                 raise PresetValidationError(
                     f"Step {index} skill.{key} must be an object when provided."
                 )
-            skill_payload[key] = dict(value) if isinstance(value, Mapping) else value
+            if key == "runtime":
+                try:
+                    skill_payload[key] = validate_runtime_tier_intent(
+                        value,
+                        field_name=f"steps[{index - 1}].skill.runtime",
+                    )
+                except RuntimeIntentValidationError as exc:
+                    raise PresetValidationError(str(exc)) from exc
+            else:
+                skill_payload[key] = (
+                    dict(value) if isinstance(value, Mapping) else value
+                )
     return skill_payload
 
 

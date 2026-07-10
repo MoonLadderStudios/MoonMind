@@ -67,6 +67,10 @@ from moonmind.workflows.executions.title_derivation import (
     synthesize_workflow_title,
 )
 from moonmind.workflows.executions.routing import _coerce_bool
+from moonmind.runtime_intent import (
+    RuntimeIntentValidationError,
+    validate_runtime_tier_intent,
+)
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
@@ -6907,6 +6911,18 @@ def _invalid_workflow_request(message: str) -> HTTPException:
         },
     )
 
+
+def _validate_runtime_tier_intent_for_submit(
+    runtime_payload: Mapping[str, Any] | None,
+    *,
+    field_name: str,
+) -> dict[str, Any]:
+    try:
+        return validate_runtime_tier_intent(runtime_payload, field_name=field_name)
+    except RuntimeIntentValidationError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+
+
 def _reject_submit_version_identity(task_payload: dict[str, Any]) -> None:
     try:
         reject_workflow_capability_identity_versions(
@@ -7301,7 +7317,11 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 raise _invalid_workflow_request(
                     f"payload.workflow.steps[{index}].runtime must be an object."
                 )
-            normalized_runtime: dict[str, str] = {}
+            validated_runtime = _validate_runtime_tier_intent_for_submit(
+                runtime_payload,
+                field_name=f"payload.workflow.steps[{index}].runtime",
+            )
+            normalized_runtime: dict[str, Any] = {}
             for source_key, target_key in (
                 ("mode", "mode"),
                 ("targetRuntime", "mode"),
@@ -7310,10 +7330,11 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 ("effort", "effort"),
                 ("profileId", "profileId"),
                 ("providerProfile", "providerProfile"),
+                ("providerProfileRef", "providerProfileRef"),
                 ("executionProfileRef", "executionProfileRef"),
                 ("execution_profile_ref", "executionProfileRef"),
             ):
-                value = runtime_payload.get(source_key)
+                value = validated_runtime.get(source_key)
                 if value is not None and not isinstance(value, (Mapping, list)):
                     normalized_value = str(value).strip()
                     if not normalized_value:
@@ -7328,6 +7349,18 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                                 "codex_cloud, jules."
                             )
                     normalized_runtime[target_key] = normalized_value
+            if "modelTier" in validated_runtime:
+                normalized_runtime["modelTier"] = validated_runtime["modelTier"]
+            if "tierFallback" in validated_runtime:
+                normalized_runtime["tierFallback"] = validated_runtime["tierFallback"]
+            if isinstance(validated_runtime.get("profileSelector"), Mapping):
+                normalized_runtime["profileSelector"] = dict(
+                    validated_runtime["profileSelector"]
+                )
+            if isinstance(validated_runtime.get("hardOverrideAudit"), Mapping):
+                normalized_runtime["hardOverrideAudit"] = dict(
+                    validated_runtime["hardOverrideAudit"]
+                )
             if normalized_runtime:
                 normalized_step["runtime"] = normalized_runtime
 
@@ -7666,6 +7699,7 @@ async def _resolve_step_runtime_selections(
         raw_step_profile_id = str(
             runtime_payload.get("profileId")
             or runtime_payload.get("providerProfile")
+            or runtime_payload.get("providerProfileRef")
             or runtime_payload.get("executionProfileRef")
             or ""
         ).strip() or None
@@ -7710,6 +7744,7 @@ async def _resolve_step_runtime_selections(
         if raw_step_profile_id:
             resolved_runtime["profileId"] = raw_step_profile_id
             resolved_runtime["providerProfile"] = raw_step_profile_id
+            resolved_runtime["providerProfileRef"] = raw_step_profile_id
         elif task_profile_id and not raw_step_profile_id:
             resolved_runtime.setdefault("inheritedProfileId", task_profile_id)
         if "effort" not in resolved_runtime and isinstance(
@@ -9551,7 +9586,10 @@ async def _create_execution_from_workflow_request(
         task_payload.get("manifestArtifactRef") or payload.get("manifestArtifactRef")
     )
     runtime_payload = (
-        task_payload.get("runtime")
+        _validate_runtime_tier_intent_for_submit(
+            task_payload.get("runtime"),
+            field_name="payload.workflow.runtime",
+        )
         if isinstance(task_payload.get("runtime"), dict)
         else {}
     )
@@ -9748,10 +9786,13 @@ async def _create_execution_from_workflow_request(
     raw_profile_id = str(
         runtime_payload.get("profileId")
         or runtime_payload.get("providerProfile")
+        or runtime_payload.get("providerProfileRef")
         or task_payload.get("profileId")
         or task_payload.get("providerProfile")
+        or task_payload.get("providerProfileRef")
         or payload.get("profileId")
         or payload.get("providerProfile")
+        or payload.get("providerProfileRef")
         or ""
     ).strip() or None
     # Preserve the original requested model byte-for-byte (Compatibility Policy:
@@ -9782,7 +9823,11 @@ async def _create_execution_from_workflow_request(
     _provider_profile = None
     if raw_profile_id and session is not None:
         from api_service.db.models import ManagedAgentProviderProfile
-        _provider_profile = await session.get(ManagedAgentProviderProfile, raw_profile_id)
+
+        _provider_profile = await session.get(
+            ManagedAgentProviderProfile,
+            raw_profile_id,
+        )
         if _provider_profile is None:
             raise _invalid_workflow_request(
                 f"Provider profile not found: {raw_profile_id!r}."
@@ -9833,6 +9878,14 @@ async def _create_execution_from_workflow_request(
         "publishMode": publish_payload["mode"],
         "stepCount": step_count,
     }
+    if "modelTier" in runtime_payload:
+        initial_parameters["modelTier"] = runtime_payload.get("modelTier")
+    if "tierFallback" in runtime_payload:
+        initial_parameters["tierFallback"] = runtime_payload.get("tierFallback")
+    if isinstance(runtime_payload.get("profileSelector"), Mapping):
+        initial_parameters["profileSelector"] = dict(
+            runtime_payload["profileSelector"]
+        )
     if known_refs:
         initial_parameters["knownRefs"] = sorted(known_refs)
     if story_output_payload:
@@ -10108,12 +10161,16 @@ async def _resolve_recurring_runtime_metadata(
     if not task_payload and parameter_payload is not request_payload:
         _task_key, task_payload = _recurring_workflow_payload(request_payload)
 
-    runtime_payload = (
+    raw_runtime_payload = (
         task_payload.get("runtime")
         if isinstance(task_payload.get("runtime"), Mapping)
         else parameter_payload.get("runtime")
         if isinstance(parameter_payload.get("runtime"), Mapping)
         else {}
+    )
+    runtime_payload = _validate_runtime_tier_intent_for_submit(
+        raw_runtime_payload,
+        field_name="payload.workflow.runtime",
     )
     raw_target_runtime = (
         request_payload.get("targetRuntime")
@@ -10136,13 +10193,17 @@ async def _resolve_recurring_runtime_metadata(
     for candidate_profile_id in (
         runtime_payload.get("profileId"),
         runtime_payload.get("providerProfile"),
+        runtime_payload.get("providerProfileRef"),
         runtime_payload.get("executionProfileRef"),
         task_payload.get("profileId"),
         task_payload.get("providerProfile"),
+        task_payload.get("providerProfileRef"),
         parameter_payload.get("profileId"),
         parameter_payload.get("providerProfile"),
+        parameter_payload.get("providerProfileRef"),
         request_payload.get("profileId"),
         request_payload.get("providerProfile"),
+        request_payload.get("providerProfileRef"),
     ):
         if candidate_profile_id is None:
             continue
@@ -10188,6 +10249,12 @@ async def _resolve_recurring_runtime_metadata(
         metadata["effort"] = runtime_payload.get("effort")
     elif "effort" in parameter_payload:
         metadata["effort"] = parameter_payload.get("effort")
+    if "modelTier" in runtime_payload:
+        metadata["modelTier"] = runtime_payload.get("modelTier")
+    if "tierFallback" in runtime_payload:
+        metadata["tierFallback"] = runtime_payload.get("tierFallback")
+    if isinstance(runtime_payload.get("profileSelector"), Mapping):
+        metadata["profileSelector"] = dict(runtime_payload["profileSelector"])
     return metadata
 
 
@@ -10210,6 +10277,10 @@ def _stamp_recurring_runtime_metadata(
         initial_parameters["profileId"] = runtime_metadata["profileId"]
     if "effort" in runtime_metadata:
         initial_parameters["effort"] = runtime_metadata.get("effort")
+    if "modelTier" in runtime_metadata:
+        initial_parameters["modelTier"] = runtime_metadata.get("modelTier")
+    if "tierFallback" in runtime_metadata:
+        initial_parameters["tierFallback"] = runtime_metadata.get("tierFallback")
 
     task_key, task_payload = _recurring_workflow_payload(initial_parameters)
     if task_key is None:
@@ -10230,6 +10301,13 @@ def _stamp_recurring_runtime_metadata(
         profile_id = runtime_metadata["profileId"]
         runtime_payload["profileId"] = profile_id
         runtime_payload["providerProfile"] = profile_id
+        runtime_payload["providerProfileRef"] = profile_id
+    if "modelTier" in runtime_metadata:
+        runtime_payload["modelTier"] = runtime_metadata.get("modelTier")
+    if "tierFallback" in runtime_metadata:
+        runtime_payload["tierFallback"] = runtime_metadata.get("tierFallback")
+    if isinstance(runtime_metadata.get("profileSelector"), Mapping):
+        runtime_payload["profileSelector"] = dict(runtime_metadata["profileSelector"])
     if runtime_payload:
         task_payload["runtime"] = runtime_payload
         initial_parameters[task_key] = task_payload
