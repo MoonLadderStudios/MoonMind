@@ -540,16 +540,6 @@ def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -
     assert payload["file_templates"][2]["content_template"]["api_key"] == "[REDACTED]"
     assert payload["command_behavior"]["authorization"] == "[REDACTED_AUTHORIZATION]"
     assert payload["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
-    assert payload["model_tiers"] == [
-        {
-            "label": "Runtime default",
-            "model": None,
-            "effort": None,
-            "parameters": {},
-            "annotations": {},
-        }
-    ]
-    assert payload["default_model_tier"] == 1
 
 
 def test_manager_profile_payload_redacts_model_tier_metadata() -> None:
@@ -718,20 +708,22 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
     assert data["rate_limit_policy"] == "queue"
     assert data["default_model"] == "test-model-v2"
     assert data["default_effort"] == "high"
+    assert data["model_overrides"] == {"smart": "test-model-v3"}
     assert data["model_tiers"] == [
         {
-            "label": "Legacy default",
+            "label": "Plan",
+            "model": "test-model-v1",
+            "effort": "low",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Build",
             "model": "test-model-v2",
             "effort": "high",
             "parameters": {},
             "annotations": {},
-        }
-    ]
-    assert data["default_model_tier"] == 1
-    assert data["model_overrides"] == {"smart": "test-model-v3"}
-    assert data["model_tiers"] == [
-        {"label": "Plan", "model": "test-model-v1", "effort": "low"},
-        {"label": "Build", "model": "test-model-v2", "effort": "high"},
+        },
     ]
     assert data["default_model_tier"] == 2
     assert data["is_default"] is True
@@ -779,13 +771,36 @@ async def test_provider_profile_tier_policy_round_trips_through_get_and_update(
     assert update_response.status_code == 200
     assert get_response.status_code == 200
     data = get_response.json()
-    assert data["model_tiers"] == update_payload["model_tiers"]
+    expected_tiers = [
+        {
+            "label": "Cheap",
+            "model": "gpt-5-nano",
+            "effort": "low",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Deep",
+            "model": "gpt-5.5",
+            "effort": "xhigh",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Fallback",
+            "model": None,
+            "effort": None,
+            "parameters": {},
+            "annotations": {},
+        },
+    ]
+    assert data["model_tiers"] == expected_tiers
     assert data["default_model_tier"] == 2
 
     async with db_base.async_session_maker() as session:
         row = await session.get(ManagedAgentProviderProfile, profile_id)
         assert row is not None
-        assert row.model_tiers == update_payload["model_tiers"]
+        assert row.model_tiers == expected_tiers
         assert row.default_model_tier == 2
 
 
