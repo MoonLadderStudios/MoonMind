@@ -25,7 +25,7 @@ This skill answers:
 
 ## Source Acceptance Matrix Verification
 
-When `artifacts/moonspec/source-acceptance.json` or `artifacts/moonspec/acceptance-assessment.json` exists and its rows apply to the selected verification baseline, verify every repo-verifiable source row. Do not choose `FULLY_IMPLEMENTED` unless every required repo-verifiable source row for the selected baseline is satisfied. In source-direct verification mode, ignore stale or unrelated acceptance artifacts whose source, feature directory, issue reference, or requirement IDs do not match the selected source.
+When `artifacts/moonspec/source-acceptance.json` or `artifacts/moonspec/acceptance-assessment.json` exists and its `featureId`, source, feature directory, issue reference, or requirement IDs match the selected verification baseline, verify every repo-verifiable source row for that baseline. Do not choose `FULLY_IMPLEMENTED` unless every required repo-verifiable source row for the selected baseline is satisfied. In source-direct verification mode, ignore stale or unrelated acceptance artifacts whose source metadata does not match the selected source.
 
 ## Inputs
 
@@ -85,7 +85,7 @@ Resolve the verification baseline in this order:
 3. An explicitly provided `spec.md` or feature directory.
 4. An active feature directory discovered from repository context by running `.specify/scripts/bash/check-prerequisites.sh --json --paths-only`.
 
-The first usable source defines the bounded scope. Later sources are supplemental context and traceability only. If the current request or workflow step contains only verifier guidance or process instructions, continue to issue-brief, spec, feature-directory, or discovered active-feature sources before selecting the baseline. When a canonical declarative document and a derived artifact conflict, follow `docs/Workflows/MoonSpecDocumentModel.md`: the canonical document wins unless verified evidence requires reconciliation.
+The first usable source defines the bounded scope. Later sources are supplemental context and traceability only. Workflow-stage prose such as "run the final gate", ad hoc verifier guidance such as "focus on API tests", or other process instructions are operational guidance, not source-direct authority; do not let them outrank an explicit feature directory, `spec.md`, original request, issue brief, declarative source document, or discovered active-feature source. When a canonical declarative document and a derived artifact conflict, follow `docs/Workflows/MoonSpecDocumentModel.md`: the canonical document wins unless verified evidence requires reconciliation.
 
 In source-direct verification mode:
 

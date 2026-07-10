@@ -1,2 +1,4 @@
-name: MoonSpec Assess
-instructions: Use the moonspec-assess skill to produce artifacts/moonspec/acceptance-assessment.json from source acceptance evidence.
+interface:
+  display_name: "MoonSpec Assess"
+  short_description: "Assess source acceptance coverage before planning."
+  default_prompt: "Use $moonspec-assess to produce artifacts/moonspec/acceptance-assessment.json from matching source acceptance evidence."

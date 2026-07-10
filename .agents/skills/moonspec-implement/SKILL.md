@@ -30,7 +30,7 @@ Do not use this skill to split a broad design, write a spec, create a plan, or g
 - Work from the active feature directory resolved by the prerequisite script.
 - Require `spec.md`, `plan.md`, and `tasks.md`.
 - Read `AGENTS.md` when present for project principles, repo constraints, and test discipline.
-- When `artifacts/moonspec/acceptance-assessment.json` exists, treat `boundedBacklog` as the authoritative implementation backlog. Do not add unrelated improvements unless they are required by a source acceptance row.
+- When `artifacts/moonspec/acceptance-assessment.json` exists and its `featureId` matches the active feature, treat `boundedBacklog` as the authoritative implementation backlog. Do not add unrelated improvements unless they are required by a source acceptance row.
 - The spec must contain exactly one independently testable user story.
 - `tasks.md` must be specific enough to execute without inventing hidden product scope.
 - Use absolute paths in reports and cite files changed or validated.
