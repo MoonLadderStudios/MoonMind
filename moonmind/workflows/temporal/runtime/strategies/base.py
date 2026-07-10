@@ -365,6 +365,10 @@ class ManagedRuntimeStrategy(ABC):
             ).effort
         return getattr(profile, "default_effort", None)
 
+    def effort_application_status(self, effort: str | None) -> str:
+        """Describe how this strategy applies a backend-resolved effort value."""
+        return "unknown" if effort else "metadata_only"
+
     def shape_environment(
         self,
         base_env: dict[str, str],

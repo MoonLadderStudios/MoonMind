@@ -303,6 +303,43 @@ def test_assert_profile_launch_ready_accepts_connected_enum_auth_state():
 
     ManagedRuntimeLauncher._assert_profile_launch_ready(profile)
 
+
+def test_apply_resolved_tier_policy_merges_defaults_and_records_codex_effort_status():
+    from moonmind.workflows.temporal.runtime.strategies.codex_cli import CodexCliStrategy
+
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        enabled=True,
+        authState="connected",
+        disabledReason=None,
+        model_tiers=[
+            {
+                "label": "Implementation",
+                "model": "gpt-tier-model",
+                "effort": "xhigh",
+                "parameters": {"temperature": 0, "output_format": "strict_json"},
+            }
+        ],
+        default_model_tier=1,
+    )
+    request = _make_request(
+        parameters={"modelTier": 1, "temperature": 0.5},
+    )
+
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request,
+        profile=profile,
+        strategy=CodexCliStrategy(),
+    )
+
+    assert request.parameters["model"] == "gpt-tier-model"
+    assert request.parameters["effort"] == "xhigh"
+    assert request.parameters["temperature"] == 0.5
+    assert request.parameters["output_format"] == "strict_json"
+    resolution = request.parameters["metadata"]["moonmind"]["modelEffortResolution"]
+    assert resolution["effectiveModelTier"] == 1
+    assert resolution["effortApplicationStatus"] == "not_supported"
+
 def test_build_command_per_runtime():
     store = ManagedRunStore("/tmp/test-store")
     launcher = ManagedRuntimeLauncher(store)

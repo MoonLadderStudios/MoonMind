@@ -61,6 +61,7 @@ class ResolvedModelEffort:
     effort_source: str
     fallback_reason: str | None
     effort_application_status: str | None
+    tier_parameters: dict[str, Any]
     preview_mismatch: bool = False
 
     def as_metadata(self) -> dict[str, Any]:
@@ -195,6 +196,7 @@ def resolve_model_effort(
                 effort_source=effort_source,
                 fallback_reason=None,
                 effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
+                tier_parameters={},
             ),
             advisory_preview,
         )
@@ -238,6 +240,7 @@ def resolve_model_effort(
                 effort_source=effort_source,
                 fallback_reason=fallback_reason,
                 effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
+                tier_parameters=dict(tier.get("parameters") or {}),
             ),
             advisory_preview,
         )
@@ -267,6 +270,7 @@ def resolve_model_effort(
             effort_source=effort_source,
             fallback_reason=None,
             effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
+            tier_parameters={},
         ),
         advisory_preview,
     )
@@ -338,9 +342,17 @@ def _profile_model_tiers(profile: Any | None) -> list[dict[str, Any]]:
 
     tiers: list[dict[str, Any]] = []
     for entry in raw:
+        if isinstance(entry, Mapping):
+            tiers.append(dict(entry))
+            continue
+        model_dump = getattr(entry, "model_dump", None)
+        if callable(model_dump):
+            dumped = model_dump(mode="python")
+            if isinstance(dumped, Mapping):
+                tiers.append(dict(dumped))
+                continue
         if not isinstance(entry, Mapping):
             raise ValueError("profile.model_tiers entries must be mappings")
-        tiers.append(dict(entry))
     return tiers
 
 
