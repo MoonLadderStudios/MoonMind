@@ -1882,6 +1882,14 @@ def test_pr_resolver_skill_requires_orchestrated_merge_completion() -> None:
     assert "status=blocked" in skill_text
     assert "mergeAutomationDisposition=manual_review" in skill_text
     assert "branch is ahead of origin" in skill_text
+    assert "ACTIVE_SKILLS_DIR" in skill_text
+    assert "PR_RESOLVER_SKILL_DIR" in skill_text
+    assert (
+        'python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_orchestrate.py"'
+        in skill_text
+    )
+    assert "python3 .agents/skills/pr-resolver/bin/" not in skill_text
+    assert "read `.agents/skills/fix-" not in skill_text
 
     repeated_blocker_step = (
         "If the same blocker repeats after its specialized skill ran and no remote "
@@ -1890,6 +1898,27 @@ def test_pr_resolver_skill_requires_orchestrated_merge_completion() -> None:
     skill_execution_step = "Execute the matching specialized skill exactly once"
     assert skill_text.index(repeated_blocker_step) < skill_text.index(
         skill_execution_step
+    )
+
+
+def test_pr_resolver_snapshot_resolves_required_skill_from_active_root(
+    pr_resolve_snapshot_module: dict[str, Any], tmp_path: Path
+) -> None:
+    script_dir = tmp_path / "active-snapshot" / "pr-resolver" / "bin"
+
+    resolved = pr_resolve_snapshot_module["_sibling_skill_file"](
+        script_dir,
+        "fix-comments",
+        "tools",
+        "get_branch_pr_comments.py",
+    )
+
+    assert resolved == (
+        tmp_path
+        / "active-snapshot"
+        / "fix-comments"
+        / "tools"
+        / "get_branch_pr_comments.py"
     )
 
 

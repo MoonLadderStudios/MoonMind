@@ -41,10 +41,20 @@ The task is not complete until the target PR is merged or is proven already merg
   wait immediately.
 
 ## Primary Command (mandatory first action)
+Resolve the active snapshot directory before making repository changes:
+
+- Read the active skill path from the runtime activation summary that selected this
+  skill. Set `ACTIVE_SKILLS_DIR` to that path and `PR_RESOLVER_SKILL_DIR` to its
+  `pr-resolver` child.
+- Do not substitute the repository's `.agents/skills` directory when the activation
+  summary says it is repo-authored source rather than the active snapshot.
+- Fail as blocked if `$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_orchestrate.py` is
+  missing. Do not search for or execute a different copy.
+
 Run the orchestration entrypoint before making manual changes. **You MUST provide the `--pr` argument** (using either the PR number or the branch name) to ensure the script targets the correct PR, even if you are on a different branch or detached HEAD:
 
 ```bash
-python3 .agents/skills/pr-resolver/bin/pr_resolve_orchestrate.py \
+python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_orchestrate.py" \
   --pr <pr_number_or_branch> \
   --merge-method <merge|squash|rebase> \
   --fix-max-iterations <maxIterations> \
@@ -58,7 +68,7 @@ This writes:
 - `var/pr_resolver/result.json` (terminal orchestration summary)
 - `var/pr_resolver/attempts/*.json` (per-attempt finalize/full artifacts)
 - `artifacts/publish_result.json` (canonical auto-publish evidence, generated
-  by `.agents/skills/_shared/publish_evidence.py`)
+  by `$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py`)
 
 If this command does not run, does not write `var/pr_resolver/result.json`, does not write `artifacts/publish_result.json`, or exits before producing parseable artifacts, stop as blocked with the command output and do not report success.
 
@@ -149,9 +159,9 @@ Repeat this state machine until a terminal success or manual blocker:
 ## Manual Remediation Loop (only when needed)
 When orchestration returns `status=blocked` or `status=attempts_exhausted`, inspect `next_step` in `var/pr_resolver/result.json`:
 
-- `run_fix_merge_conflicts_skill`: read `.agents/skills/fix-merge-conflicts/SKILL.md` and execute it.
-- `run_fix_comments_skill`: read `.agents/skills/fix-comments/SKILL.md` and execute it.
-- `run_fix_ci_skill`: read `.agents/skills/fix-ci/SKILL.md` and execute it.
+- `run_fix_merge_conflicts_skill`: read `$ACTIVE_SKILLS_DIR/fix-merge-conflicts/SKILL.md` and execute it.
+- `run_fix_comments_skill`: read `$ACTIVE_SKILLS_DIR/fix-comments/SKILL.md` and execute it.
+- `run_fix_ci_skill`: read `$ACTIVE_SKILLS_DIR/fix-ci/SKILL.md` and execute it.
 - `wait_for_ci_and_retry_finalize` / `retry_finalize_after_backoff`: do not mutate; wait and re-run orchestration.
 - `manual_review`: stop and report the blocker with artifact details.
 
@@ -161,13 +171,13 @@ After applying any fix, run the orchestration command again. Do not summarize th
 - Finalize-only gate checker:
 
 ```bash
-python3 .agents/skills/pr-resolver/bin/pr_resolve_finalize.py --pr <pr_number_or_branch> --merge-method <merge|squash|rebase>
+python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_finalize.py" --pr <pr_number_or_branch> --merge-method <merge|squash|rebase>
 ```
 
 - Full gate classifier (no merge, deterministic state classification):
 
 ```bash
-python3 .agents/skills/pr-resolver/bin/pr_resolve_full.py --pr <pr_number_or_branch> --merge-method <merge|squash|rebase> --max-iterations <maxIterations>
+python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_full.py" --pr <pr_number_or_branch> --merge-method <merge|squash|rebase> --max-iterations <maxIterations>
 ```
 
 ## Constraints
@@ -176,7 +186,7 @@ python3 .agents/skills/pr-resolver/bin/pr_resolve_full.py --pr <pr_number_or_bra
 - Respect retry caps; if retries are exhausted, return `attempts_exhausted` and stop.
 - This skill owns publishing under `task.publish.mode = "auto"` and may commit, push, or merge only as required to resolve the target PR. Before reporting success, ensure `artifacts/publish_result.json` exists. The orchestration command normally generates it by running:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py from-pr-resolver-result \
+  python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" from-pr-resolver-result \
     --result var/pr_resolver/result.json
   ```
 - A failed push, missing GitHub auth, or missing remote branch update is an unresolved PR blocker, even if all code changes are committed locally.
