@@ -1217,6 +1217,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                                     "failure_class": derived_failure_class,
                                     "summary": derived_summary or summary,
                                     "metadata": metadata,
+                                    "retry_recommendation": metadata.get(
+                                        "retryRecommendation"
+                                    ),
                                 }
                             )
                             updated_result = True

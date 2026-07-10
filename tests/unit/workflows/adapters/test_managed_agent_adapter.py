@@ -2769,8 +2769,14 @@ async def test_fetch_result_fails_when_expected_pr_resolver_artifact_missing(
         "run-result-pr-missing-artifact", pr_resolver_expected=True
     )
 
-    assert result.failure_class == "user_error"
-    assert "pr-resolver result artifact missing" in (result.summary or "")
+    assert result.failure_class == "execution_error"
+    assert "pr-resolver execution incomplete" in (result.summary or "")
+    assert result.retry_recommendation == "retry_new_session"
+    assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert result.metadata["contractId"] == "pr-resolver.v1"
+    assert result.metadata["terminalResultPresent"] is False
+    assert result.metadata["missingEvidence"] == ["var/pr_resolver/result.json"]
+    assert result.metadata["latestAttemptRef"].endswith("attempt-1.json")
     assert "reported status 'blocked'" not in (result.summary or "")
     assert result.metadata["prResolverLatestAttempt"]["reason"] == "ci_running"
     assert "mergeAutomationDisposition" not in result.metadata

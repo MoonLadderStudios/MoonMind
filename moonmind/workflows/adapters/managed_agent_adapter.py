@@ -88,6 +88,9 @@ _PR_RESOLVER_TERMINAL_STATUSES: frozenset[str] = (
 _PR_RESOLVER_TERMINAL_DISPOSITIONS: frozenset[str] = frozenset(
     {"merged", "already_merged", "reenter_gate", "manual_review", "hard_failure"}
 )
+_PR_RESOLVER_USER_ACTIONABLE_REASONS: frozenset[str] = frozenset(
+    {"actionable_comments", "ci_failures", "merge_conflicts", "publish_unavailable"}
+)
 _PR_RESOLVER_REENTER_NEXT_STEPS: frozenset[str] = frozenset(
     {
         "run_fix_comments_skill",
@@ -769,9 +772,10 @@ def _derive_pr_resolver_failure(
     payload = evidence.payload
     if payload is None:
         return (
-            "user_error",
+            "execution_error",
             (
-                "pr-resolver result artifact missing; expected one of "
+                "pr-resolver execution incomplete: no valid terminal result; "
+                "expected one of "
                 f"{_PR_RESOLVER_RESULT_PATH_LIST}"
             ),
         )
@@ -792,10 +796,27 @@ def _derive_pr_resolver_failure(
         summary_parts.append(reason)
     if next_step:
         summary_parts.append(f"next_step={next_step}")
-    failure_class = (
-        "user_error" if status in _PR_RESOLVER_BLOCKED_STATUSES else "execution_error"
+    normalized_reason = reason.lower()
+    disposition = _pr_resolver_disposition(
+        payload, merge_gate_owned=merge_gate_owned
     )
+    failure_class = "execution_error"
+    if (
+        disposition == "manual_review"
+        and normalized_reason in _PR_RESOLVER_USER_ACTIONABLE_REASONS
+    ):
+        failure_class = "user_error"
     return failure_class, "; ".join(summary_parts)
+
+
+def _pr_resolver_terminal_failure_code(evidence: _PrResolverEvidence) -> str:
+    failures = " ".join(evidence.validation_failures).lower()
+    if "stale terminal artifact" in failures:
+        return "TERMINAL_ARTIFACT_STALE"
+    if evidence.validation_failures:
+        return "TERMINAL_ARTIFACT_INVALID"
+    return "INCOMPLETE_TERMINAL_CONTRACT"
+
 
 def _derive_pr_resolver_metadata(
     workspace_path: str | None,
@@ -833,6 +854,19 @@ def _derive_pr_resolver_metadata(
         metadata["prResolverLatestAttempt"] = compact
     payload = evidence.payload
     if payload is None:
+        metadata.update(
+            {
+                "contractId": "pr-resolver.v1",
+                "failureCode": _pr_resolver_terminal_failure_code(evidence),
+                "terminalResultPresent": False,
+                "missingEvidence": [str(_PR_RESOLVER_RESULT_PATHS[0])],
+                "retryRecommendation": (
+                    "continue_same_session" if merge_gate_owned else "retry_new_session"
+                ),
+            }
+        )
+        if diagnostics.provenance:
+            metadata["latestAttemptRef"] = diagnostics.provenance
         return metadata
 
     status = _pr_resolver_status(payload)
@@ -1211,6 +1245,7 @@ class ManagedAgentAdapter:
                     output_refs=output_refs,
                     failure_class=failure_class,
                     provider_error_code=record.provider_error_code,
+                    retry_recommendation=metadata.get("retryRecommendation"),
                     metadata=metadata,
                 )
         return AgentRunResult()
