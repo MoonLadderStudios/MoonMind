@@ -342,7 +342,7 @@ class TestResolveModelEffortTiers:
         assert resolved.effort_source == "provider_profile_default"
         assert resolved.fallback_reason is None
 
-    def test_explicit_effort_only_bypasses_tier_policy_independently(self):
+    def test_explicit_effort_only_preserves_requested_tier_model(self):
         resolved = resolve_model_effort(
             runtime_id="codex_cli",
             profile=self._profile(default_model="profile-model"),
@@ -351,11 +351,11 @@ class TestResolveModelEffortTiers:
             env={},
         )
 
-        assert resolved.model == "profile-model"
+        assert resolved.model == "tier-2-model"
         assert resolved.effort == "xhigh"
-        assert resolved.effective_model_tier is None
-        assert resolved.tier_label is None
-        assert resolved.model_source == "provider_profile_default"
+        assert resolved.effective_model_tier == 2
+        assert resolved.tier_label == "Tier 2"
+        assert resolved.model_source == "requested_tier"
         assert resolved.effort_source == "task_override"
         assert resolved.fallback_reason is None
 

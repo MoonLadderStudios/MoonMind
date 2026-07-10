@@ -90,7 +90,9 @@ def _validate_model_tiers_value(value: object) -> list[dict[str, Any]]:
     for tier in value:
         if not isinstance(tier, dict):
             raise ValueError("model_tiers entries must be mappings")
-        normalized.append(dict(tier))
+        normalized.append(
+            ProviderModelEffortTier.model_validate(tier).model_dump(mode="json")
+        )
     return normalized
 
 

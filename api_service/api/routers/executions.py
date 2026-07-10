@@ -6921,8 +6921,8 @@ def _resolve_runtime_model_effort(
 ) -> tuple[str | None, str, str | None, dict[str, Any] | None]:
     requested_tier = _runtime_model_tier(runtime_payload)
     requested_effort = runtime_payload.get("effort")
-    if requested_effort is not None:
-        requested_effort = str(requested_effort)
+    if requested_effort is not None and not isinstance(requested_effort, str):
+        raise _invalid_workflow_request("runtime.effort must be a string.")
     tier_fallback = str(runtime_payload.get("tierFallback") or "clamp")
 
     if profile is not None and (requested_tier is not None or _profile_has_model_tiers(profile)):
@@ -6952,6 +6952,33 @@ def _resolve_runtime_model_effort(
         workflow_settings=settings.workflow,
     )
     return resolved_model, model_source, requested_effort, None
+
+
+async def _load_default_provider_profile_for_runtime(
+    *,
+    session: Any,
+    runtime_id: str | None,
+) -> ManagedAgentProviderProfile | None:
+    if session is None or not runtime_id:
+        return None
+    execute = getattr(session, "execute", None)
+    if not callable(execute):
+        return None
+    stmt = (
+        select(ManagedAgentProviderProfile)
+        .where(
+            ManagedAgentProviderProfile.runtime_id == runtime_id,
+            ManagedAgentProviderProfile.enabled.is_(True),
+        )
+        .order_by(
+            ManagedAgentProviderProfile.is_default.desc(),
+            ManagedAgentProviderProfile.priority.desc(),
+            ManagedAgentProviderProfile.profile_id.asc(),
+        )
+        .limit(1)
+    )
+    result = await execute(stmt)
+    return result.scalars().first()
 
 
 def _runtime_model_tier(runtime_payload: Mapping[str, Any]) -> int | None:
@@ -7407,6 +7434,8 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 ("target_runtime", "mode"),
                 ("model", "model"),
                 ("effort", "effort"),
+                ("modelTier", "modelTier"),
+                ("tierFallback", "tierFallback"),
                 ("profileId", "profileId"),
                 ("providerProfile", "providerProfile"),
                 ("executionProfileRef", "executionProfileRef"),
@@ -7426,7 +7455,19 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                                 "Must be one of: codex_cli, claude_code, "
                                 "codex_cloud, jules."
                             )
-                    normalized_runtime[target_key] = normalized_value
+                    if target_key == "modelTier":
+                        if (
+                            isinstance(value, bool)
+                            or not isinstance(value, int)
+                            or value < 1
+                        ):
+                            raise _invalid_workflow_request(
+                                f"payload.workflow.steps[{index}].runtime.modelTier "
+                                "must be an integer greater than or equal to 1."
+                            )
+                        normalized_runtime[target_key] = value
+                    else:
+                        normalized_runtime[target_key] = normalized_value
             if normalized_runtime:
                 normalized_step["runtime"] = normalized_runtime
 
@@ -9886,15 +9927,21 @@ async def _create_execution_from_workflow_request(
         normalized_runtime_for_planner["mode"] = canonical_target_runtime
         normalized_task_for_planner["runtime"] = normalized_runtime_for_planner
 
-    # Load provider profile when a profileId is supplied.
+    # Load provider profile when a profileId is supplied. For tier-aware
+    # submissions without an exact profile, use the same runtime default profile
+    # selection order as the ProviderProfileManager.
     _provider_profile = None
     if raw_profile_id and session is not None:
-        from api_service.db.models import ManagedAgentProviderProfile
         _provider_profile = await session.get(ManagedAgentProviderProfile, raw_profile_id)
         if _provider_profile is None:
             raise _invalid_workflow_request(
                 f"Provider profile not found: {raw_profile_id!r}."
             )
+    elif _runtime_model_tier(runtime_payload) is not None:
+        _provider_profile = await _load_default_provider_profile_for_runtime(
+            session=session,
+            runtime_id=canonical_target_runtime,
+        )
 
     (
         resolved_model,
@@ -10284,6 +10331,11 @@ async def _resolve_recurring_runtime_metadata(
             raise _invalid_workflow_request(
                 f"Provider profile not found: {raw_profile_id!r}."
             )
+    elif _runtime_model_tier(runtime_payload) is not None:
+        provider_profile = await _load_default_provider_profile_for_runtime(
+            session=session,
+            runtime_id=canonical_target_runtime,
+        )
 
     (
         resolved_model,
@@ -10330,6 +10382,10 @@ def _stamp_recurring_runtime_metadata(
         initial_parameters["requestedModel"] = runtime_metadata["requestedModel"]
     if runtime_metadata.get("modelSource"):
         initial_parameters["modelSource"] = runtime_metadata["modelSource"]
+    if runtime_metadata.get("modelTierResolution") is not None:
+        initial_parameters["modelTierResolution"] = runtime_metadata[
+            "modelTierResolution"
+        ]
     if runtime_metadata.get("profileId"):
         initial_parameters["profileId"] = runtime_metadata["profileId"]
     if "effort" in runtime_metadata:
@@ -10348,6 +10404,10 @@ def _stamp_recurring_runtime_metadata(
         runtime_payload["mode"] = runtime_metadata["targetRuntime"]
     if runtime_metadata.get("model"):
         runtime_payload["model"] = runtime_metadata["model"]
+    if runtime_metadata.get("modelTierResolution") is not None:
+        runtime_payload["modelTierResolution"] = runtime_metadata[
+            "modelTierResolution"
+        ]
     if "effort" in runtime_metadata:
         runtime_payload["effort"] = runtime_metadata.get("effort")
     if runtime_metadata.get("profileId"):

@@ -150,7 +150,7 @@ def resolve_model_effort(
 
     clean_requested_model = _clean(requested_model)
     clean_requested_effort = _clean(requested_effort)
-    if clean_requested_model or clean_requested_effort:
+    if clean_requested_model:
         runtime_model, runtime_effort = _runtime_defaults(
             runtime_id,
             workflow_settings=workflow_settings,
@@ -201,6 +201,7 @@ def resolve_model_effort(
             (runtime_model, _MODEL_SOURCE_RUNTIME_DEFAULT),
         )
         effort, effort_source = _first_value(
+            (clean_requested_effort, _MODEL_SOURCE_TASK_OVERRIDE),
             (tier_effort, tier_source),
             (_legacy_profile_value(profile, "default_effort"), _MODEL_SOURCE_PROFILE_DEFAULT),
             (runtime_effort, _MODEL_SOURCE_RUNTIME_DEFAULT),
@@ -227,6 +228,7 @@ def resolve_model_effort(
         (runtime_model, _MODEL_SOURCE_RUNTIME_DEFAULT),
     )
     effort, effort_source = _first_value(
+        (clean_requested_effort, _MODEL_SOURCE_TASK_OVERRIDE),
         (_legacy_profile_value(profile, "default_effort"), _MODEL_SOURCE_PROFILE_DEFAULT),
         (runtime_effort, _MODEL_SOURCE_RUNTIME_DEFAULT),
     )
