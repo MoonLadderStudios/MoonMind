@@ -38,6 +38,8 @@ from moonmind.auth.secret_refs import (
 from moonmind.provider_profiles.model_tiers import (
     ProviderModelEffortTier,
     coerce_model_effort_tier_policy,
+    is_single_runtime_default_model_effort_tier,
+    legacy_default_model_effort_tier,
 )
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
 from moonmind.utils.logging import (
@@ -504,21 +506,59 @@ async def update_profile(
     requested_is_default = update_data.pop("is_default", None)
     model_tiers_supplied = "model_tiers" in update_data
     default_model_tier_supplied = "default_model_tier" in update_data
-    if model_tiers_supplied or default_model_tier_supplied:
+    legacy_default_supplied = (
+        "default_model" in update_data or "default_effort" in update_data
+    )
+    should_refresh_single_default_tier = (
+        legacy_default_supplied
+        and not model_tiers_supplied
+        and not default_model_tier_supplied
+        and (
+            is_single_runtime_default_model_effort_tier(profile.model_tiers)
+            or (
+                isinstance(profile.model_tiers, list)
+                and len(profile.model_tiers) == 1
+                and profile.default_model_tier == 1
+                and profile.model_tiers[0]
+                == legacy_default_model_effort_tier(
+                    legacy_default_model=profile.default_model,
+                    legacy_default_effort=profile.default_effort,
+                )
+            )
+        )
+    )
+    if (
+        model_tiers_supplied
+        or default_model_tier_supplied
+        or should_refresh_single_default_tier
+    ):
         raw_model_tiers = update_data.pop("model_tiers", None)
         raw_default_model_tier = update_data.pop("default_model_tier", None)
+        legacy_default_model = update_data.get(
+            "default_model",
+            profile.default_model,
+        )
+        legacy_default_effort = update_data.get(
+            "default_effort",
+            profile.default_effort,
+        )
         try:
             model_tiers, default_model_tier = coerce_model_effort_tier_policy(
                 model_tiers=(
-                    raw_model_tiers if model_tiers_supplied else profile.model_tiers
+                    raw_model_tiers
+                    if model_tiers_supplied
+                    else None
+                    if should_refresh_single_default_tier
+                    else profile.model_tiers
                 ),
                 default_model_tier=(
                     raw_default_model_tier
                     if default_model_tier_supplied
                     else profile.default_model_tier
                 ),
-                legacy_default_model=profile.default_model,
-                legacy_default_effort=profile.default_effort,
+                legacy_default_model=legacy_default_model,
+                legacy_default_effort=legacy_default_effort,
+                empty_as_missing=should_refresh_single_default_tier,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

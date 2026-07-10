@@ -22,6 +22,18 @@ _SENSITIVE_KEY_TERMS = (
     "session",
 )
 
+_SAFE_KEY_EXCLUSIONS = frozenset(
+    {
+        "max_tokens",
+        "prompt_tokens",
+        "completion_tokens",
+        "tokens_per_minute",
+        "session_timeout",
+        "refresh_interval",
+        "auto_refresh",
+    }
+)
+
 
 class ProviderModelEffortTier(BaseModel):
     """Profile-local model/effort tier definition."""
@@ -54,6 +66,35 @@ def runtime_default_model_effort_tier() -> dict[str, Any]:
     }
 
 
+def legacy_default_model_effort_tier(
+    *,
+    legacy_default_model: str | None,
+    legacy_default_effort: str | None,
+) -> dict[str, Any]:
+    return {
+        "label": "Legacy default",
+        "model": legacy_default_model,
+        "effort": legacy_default_effort,
+        "parameters": {},
+        "annotations": {},
+    }
+
+
+def is_single_runtime_default_model_effort_tier(model_tiers: Any) -> bool:
+    if not isinstance(model_tiers, list) or len(model_tiers) != 1:
+        return False
+    tier = model_tiers[0]
+    if not isinstance(tier, Mapping):
+        return False
+    return (
+        tier.get("label") == "Runtime default"
+        and tier.get("model") is None
+        and tier.get("effort") is None
+        and (tier.get("parameters") or {}) == {}
+        and (tier.get("annotations") or {}) == {}
+    )
+
+
 def coerce_model_effort_tier_policy(
     *,
     model_tiers: Any,
@@ -68,16 +109,24 @@ def coerce_model_effort_tier_policy(
     it receives a runtime-default tier.
     """
 
-    if model_tiers is None or (empty_as_missing and model_tiers == []):
-        if legacy_default_model is not None or legacy_default_effort is not None:
+    has_legacy_default = (
+        legacy_default_model is not None or legacy_default_effort is not None
+    )
+    if (
+        model_tiers is None
+        or (empty_as_missing and model_tiers == [])
+        or (
+            empty_as_missing
+            and has_legacy_default
+            and is_single_runtime_default_model_effort_tier(model_tiers)
+        )
+    ):
+        if has_legacy_default:
             raw_tiers: Any = [
-                {
-                    "label": "Legacy default",
-                    "model": legacy_default_model,
-                    "effort": legacy_default_effort,
-                    "parameters": {},
-                    "annotations": {},
-                }
+                legacy_default_model_effort_tier(
+                    legacy_default_model=legacy_default_model,
+                    legacy_default_effort=legacy_default_effort,
+                )
             ]
         else:
             raw_tiers = [runtime_default_model_effort_tier()]
@@ -104,6 +153,10 @@ def _contains_sensitive_key(value: Any) -> bool:
     if isinstance(value, Mapping):
         for key, nested in value.items():
             normalized_key = str(key).strip().lower().replace("-", "_")
+            if normalized_key in _SAFE_KEY_EXCLUSIONS:
+                if _contains_sensitive_key(nested):
+                    return True
+                continue
             if any(term in normalized_key for term in _SENSITIVE_KEY_TERMS):
                 return True
             if _contains_sensitive_key(nested):

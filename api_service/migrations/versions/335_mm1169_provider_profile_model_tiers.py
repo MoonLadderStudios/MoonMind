@@ -20,7 +20,14 @@ down_revision: Union[str, None] = "334_mm1152_bridge_sessions"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-__all__ = ["revision", "down_revision", "upgrade", "downgrade"]
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+    "upgrade",
+    "downgrade",
+]
 
 profiles_table = table(
     "managed_agent_provider_profiles",

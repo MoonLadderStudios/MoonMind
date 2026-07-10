@@ -108,6 +108,7 @@ def _manager_profile_payload(
         legacy_default_effort=row.default_effort,
         empty_as_missing=True,
     )
+    redacted_model_tiers = redact_sensitive_payload(model_tiers)
     return {
         "profile_id": row.profile_id,
         "is_default": row.is_default,
@@ -116,7 +117,7 @@ def _manager_profile_payload(
         "provider_label": row.provider_label,
         "default_model": row.default_model,
         "default_effort": row.default_effort,
-        "model_tiers": model_tiers,
+        "model_tiers": redacted_model_tiers,
         "default_model_tier": default_model_tier,
         "model_overrides": row.model_overrides or {},
         "credential_source": row.credential_source.value if row.credential_source else None,
