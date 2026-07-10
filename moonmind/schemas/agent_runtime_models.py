@@ -700,6 +700,18 @@ class AgentRunResult(BaseModel):
             )
         return self
 
+class ProviderModelEffortTier(BaseModel):
+    """Profile-local model/effort tier policy entry."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    label: str | None = Field(None, alias="label")
+    model: str | None = Field(None, alias="model")
+    effort: str | None = Field(None, alias="effort")
+    parameters: dict[str, Any] = Field(default_factory=dict, alias="parameters")
+    annotations: dict[str, Any] = Field(default_factory=dict, alias="annotations")
+
+
 class ManagedAgentProviderProfile(BaseModel):
     """Named managed-runtime provider profile contract.
 
@@ -716,7 +728,10 @@ class ManagedAgentProviderProfile(BaseModel):
     provider_id: str | None = Field(None, alias="providerId")
     provider_label: str | None = Field(None, alias="providerLabel")
     default_model: str | None = Field(None, alias="defaultModel")
+    default_effort: str | None = Field(None, alias="defaultEffort")
     model_overrides: dict[str, str] = Field(default_factory=dict, alias="modelOverrides")
+    model_tiers: list[ProviderModelEffortTier] = Field(default_factory=list, alias="modelTiers")
+    default_model_tier: int = Field(default=1, alias="defaultModelTier", ge=1)
 
     # -- Credential & materialization strategy (required) --
     credential_source: str = Field(..., alias="credentialSource", min_length=1)
@@ -827,6 +842,17 @@ class ManagedAgentProviderProfile(BaseModel):
             )
         if self.enabled:
             self.disabled_reason = None
+
+        if not self.model_tiers:
+            self.model_tiers = [
+                ProviderModelEffortTier(
+                    label="Default",
+                    model=self.default_model,
+                    effort=self.default_effort,
+                )
+            ]
+        if self.default_model_tier > len(self.model_tiers):
+            raise ValueError("defaultModelTier must reference a configured model tier")
 
         validate_codex_oauth_profile_refs(
             runtime_id=self.runtime_id,
@@ -1637,6 +1663,8 @@ class ManagedRuntimeProfile(BaseModel):
     default_model: str | None = Field(None, alias="defaultModel")
     model_overrides: dict[str, str] = Field(default_factory=dict, alias="modelOverrides")
     default_effort: str | None = Field(None, alias="defaultEffort")
+    model_tiers: list[ProviderModelEffortTier] = Field(default_factory=list, alias="modelTiers")
+    default_model_tier: int = Field(default=1, alias="defaultModelTier", ge=1)
     default_timeout_seconds: int = Field(3600, alias="defaultTimeoutSeconds", ge=1)
     workspace_mode: WorkspaceMode = Field("tempdir", alias="workspaceMode")
     env_overrides: dict[str, str] = Field(default_factory=dict, alias="envOverrides")
@@ -2048,6 +2076,7 @@ __all__ = [
     "MoonMindOpsRuntime",
     "MoonMindOpsRuntimeOperation",
     "ProfileSelector",
+    "ProviderModelEffortTier",
     "ProviderCapabilityDescriptor",
     "TERMINAL_AGENT_RUN_STATES",
     "WorkspaceMode",

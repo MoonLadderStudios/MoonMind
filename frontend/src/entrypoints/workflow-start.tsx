@@ -577,12 +577,89 @@ interface ProviderProfile {
   provider_label?: string | null;
   default_model?: string | null;
   default_effort?: string | null;
+  model_tiers?: ProviderModelEffortTier[] | null;
+  default_model_tier?: number | null;
   is_default?: boolean;
   enabled?: boolean;
   launch_ready?: boolean;
   launchReady?: boolean;
   priority?: number | null;
   tags?: string[] | null;
+}
+
+interface ProviderModelEffortTier {
+  label?: string | null;
+  model?: string | null;
+  effort?: string | null;
+  parameters?: Record<string, unknown> | null;
+  annotations?: Record<string, unknown> | null;
+}
+
+type TierFallbackMode = "clamp" | "strict";
+
+export interface ModelTierPreview {
+  requestedTier: number;
+  effectiveTier: number;
+  label: string;
+  model: string;
+  effort: string;
+  fallbackReason: "requested_tier_above_configured_range" | null;
+  warning: string | null;
+}
+
+function modelTiersForProfile(profile: ProviderProfile | undefined): ProviderModelEffortTier[] {
+  if (!profile) {
+    return [];
+  }
+  if (Array.isArray(profile.model_tiers) && profile.model_tiers.length > 0) {
+    return profile.model_tiers;
+  }
+  return [
+    {
+      label: "Default",
+      model: profile.default_model ?? null,
+      effort: profile.default_effort ?? null,
+      parameters: {},
+      annotations: {},
+    },
+  ];
+}
+
+export function previewModelTier(
+  profile: ProviderProfile | undefined,
+  requestedTierValue: string,
+): ModelTierPreview | null {
+  const requestedTier = Number.parseInt(requestedTierValue.trim(), 10);
+  if (!Number.isInteger(requestedTier) || requestedTier < 1) {
+    return null;
+  }
+  const tiers = modelTiersForProfile(profile);
+  if (tiers.length === 0) {
+    return {
+      requestedTier,
+      effectiveTier: requestedTier,
+      label: `Tier ${requestedTier}`,
+      model: "backend resolved model",
+      effort: "backend resolved effort",
+      fallbackReason: null,
+      warning: null,
+    };
+  }
+  const effectiveTier = Math.min(requestedTier, tiers.length);
+  const tier = tiers[effectiveTier - 1] || {};
+  const fallbackReason =
+    requestedTier > tiers.length ? "requested_tier_above_configured_range" : null;
+  return {
+    requestedTier,
+    effectiveTier,
+    label: tier.label || `Tier ${effectiveTier}`,
+    model: tier.model || "runtime default model",
+    effort: tier.effort || "runtime default effort",
+    fallbackReason,
+    warning: fallbackReason
+      ? `Requested Tier ${requestedTier}, used Tier ${effectiveTier} because the selected profile only defines ${tiers.length} ${tiers.length === 1 ? "tier" : "tiers"}.`
+      : null,
+  };
 }
 
 interface BranchOption {
@@ -911,6 +988,8 @@ interface StepState {
   runtimeModel: string;
   runtimeEffort: string;
   runtimeProviderProfile: string;
+  runtimeModelTier: string;
+  runtimeTierFallback: TierFallbackMode;
   presetKey: string;
   presetInputValues: Record<string, unknown>;
   presetInputErrors: Record<string, string>;
@@ -1356,6 +1435,13 @@ export function buildEditParametersPatch({
   ).trim();
   const submittedRuntimeModel = String(submittedRuntime.model || "").trim();
   const submittedRuntimeEffort = String(submittedRuntime.effort || "").trim();
+  const submittedRuntimeModelTier = Number.parseInt(
+    String(submittedRuntime.modelTier || "").trim(),
+    10,
+  );
+  const submittedRuntimeTierFallback = String(
+    submittedRuntime.tierFallback || "",
+  ).trim();
   const submittedRuntimeProfile = String(
     submittedRuntime.profileId ||
       submittedRuntime.providerProfile ||
@@ -1369,6 +1455,15 @@ export function buildEditParametersPatch({
   parametersPatch.requestedModel = submittedRuntimeModel || null;
   parametersPatch.resolvedModel = submittedRuntimeModel || null;
   parametersPatch.effort = submittedRuntimeEffort || null;
+  parametersPatch.modelTier =
+    Number.isInteger(submittedRuntimeModelTier) && submittedRuntimeModelTier >= 1
+      ? submittedRuntimeModelTier
+      : null;
+  parametersPatch.tierFallback =
+    submittedRuntimeTierFallback === "clamp" ||
+    submittedRuntimeTierFallback === "strict"
+      ? submittedRuntimeTierFallback
+      : null;
   parametersPatch.profileId = submittedRuntimeProfile || null;
   delete parametersPatch.task;
   if (!("mergeAutomation" in submittedPayload)) {
@@ -1707,6 +1802,8 @@ function createStepStateEntry(
     runtimeModel: "",
     runtimeEffort: "",
     runtimeProviderProfile: "",
+    runtimeModelTier: "",
+    runtimeTierFallback: "clamp",
     presetKey: "",
     presetInputValues: {},
     presetInputErrors: {},
@@ -2015,6 +2112,10 @@ function createStepStateEntriesFromTemporalDraft(
       runtimeEffort: step.runtime?.effort || "",
       runtimeProviderProfile:
         step.runtime?.profileId || step.runtime?.providerProfile || "",
+      runtimeModelTier:
+        step.runtime?.modelTier != null ? String(step.runtime.modelTier) : "",
+      runtimeTierFallback:
+        step.runtime?.tierFallback === "strict" ? "strict" : "clamp",
       toolId:
         step.stepType === "tool"
           ? String(toolPayload.id || toolPayload.name || step.skillId || "").trim()
@@ -2062,7 +2163,9 @@ function hasAdvancedStepOptionValues(steps: StepState[]): boolean {
       Boolean(step.runtimeMode.trim()) ||
       Boolean(step.runtimeModel.trim()) ||
       Boolean(step.runtimeEffort.trim()) ||
-      Boolean(step.runtimeProviderProfile.trim()),
+      Boolean(step.runtimeProviderProfile.trim()) ||
+      Boolean(step.runtimeModelTier.trim()) ||
+      step.runtimeTierFallback === "strict",
   );
 }
 
@@ -5772,6 +5875,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         "",
     ),
   );
+  const [effortManualOverride, setEffortManualOverride] = useState(false);
+  const [modelTier, setModelTier] = useState("1");
+  const [tierFallback, setTierFallback] = useState<TierFallbackMode>("clamp");
   const [repository, setRepository] = useState(initialRepository);
   const [providerProfile, setProviderProfile] = useState("");
   const [branch, setBranch] = useState("");
@@ -6144,6 +6250,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
     if (runtimeChanged || profileChanged) {
       setModelManualOverride(false);
+      setEffortManualOverride(false);
     }
 
     if (runtimeChanged) {
@@ -6241,6 +6348,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (draft.effort) {
       setEffort(draft.effort);
+      setEffortManualOverride(true);
+    }
+    if (draft.modelTier != null) {
+      setModelTier(String(draft.modelTier));
+    }
+    if (draft.tierFallback === "strict" || draft.tierFallback === "clamp") {
+      setTierFallback(draft.tierFallback);
     }
     if (draft.repository) {
       setRepository(draft.repository);
@@ -6334,6 +6448,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (draft.runtime?.effort) {
       setEffort(draft.runtime.effort);
+      setEffortManualOverride(true);
+    }
+    if (draft.runtime?.modelTier != null) {
+      setModelTier(String(draft.runtime.modelTier));
+    }
+    if (draft.runtime?.tierFallback === "strict" || draft.runtime?.tierFallback === "clamp") {
+      setTierFallback(draft.runtime.tierFallback);
     }
     if (draft.instructions) {
       setSteps([
@@ -7619,6 +7740,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       isDefault: Boolean(profile.is_default),
     }));
 
+  const selectedProviderProfileForPreview = providerProfilesQuery.isPlaceholderData
+    ? undefined
+    : (providerProfilesQuery.data || []).find(
+        (profile) => profile.profile_id === providerProfile,
+      );
+  const workflowTierPreview = previewModelTier(
+    selectedProviderProfileForPreview,
+    modelTier,
+  );
+
   // MM-936: the primary step always carries the publish-mode capability (gh)
   // when publishing as a PR, surfaced as a non-removable derived chip.
   const stepPublishModeRequiresGh =
@@ -8343,12 +8474,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     );
   }
 
-  function stepRuntimePayload(step: StepState): Record<string, string> | null {
+  function stepRuntimePayload(step: StepState): Record<string, string | number> | null {
     const mode = step.runtimeMode.trim();
     const modelValue = step.runtimeModel.trim();
     const effortValue = step.runtimeEffort.trim();
     const profileId = step.runtimeProviderProfile.trim();
-    if (!mode && !modelValue && !effortValue && !profileId) {
+    const modelTierValue = step.runtimeModelTier.trim();
+    const modelTier = Number.parseInt(modelTierValue, 10);
+    const hasModelTier = Number.isInteger(modelTier) && modelTier >= 1;
+    const tierFallback = step.runtimeTierFallback === "strict" ? "strict" : "clamp";
+    if (!mode && !modelValue && !effortValue && !profileId && !hasModelTier && tierFallback !== "strict") {
       return null;
     }
     return {
@@ -8356,6 +8491,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ...(modelValue ? { model: modelValue } : {}),
       ...(effortValue ? { effort: effortValue } : {}),
       ...(profileId ? { profileId } : {}),
+      ...(hasModelTier ? { modelTier } : {}),
+      ...(hasModelTier || tierFallback === "strict" ? { tierFallback } : {}),
     };
   }
 
@@ -9496,6 +9633,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       clearSubmitBusy();
       return;
     }
+    const submittedModelTier = Number.parseInt(modelTier.trim(), 10);
+    if (!Number.isInteger(submittedModelTier) || submittedModelTier < 1) {
+      setSubmitMessage("Model tier must be a positive number.");
+      clearSubmitBusy();
+      return;
+    }
     const invalidStepRuntime = submissionSteps.find((step) => {
       const stepRuntime = step.runtimeMode.trim().toLowerCase();
       return stepRuntime && !supportedAgentRuntimeIds.includes(stepRuntime);
@@ -9505,6 +9648,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       setSubmitMessage(
         `Step ${stepIndex} runtime must be one of: ${supportedAgentRuntimes.join(", ")}.`,
       );
+      clearSubmitBusy();
+      return;
+    }
+    const invalidStepModelTier = submissionSteps.find((step) => {
+      const value = step.runtimeModelTier.trim();
+      if (!value) {
+        return false;
+      }
+      const parsed = Number.parseInt(value, 10);
+      return !Number.isInteger(parsed) || parsed < 1;
+    });
+    if (invalidStepModelTier) {
+      const stepIndex = submissionSteps.indexOf(invalidStepModelTier) + 1;
+      setSubmitMessage(`Step ${stepIndex} model tier must be a positive number.`);
       clearSubmitBusy();
       return;
     }
@@ -10455,10 +10612,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           (profile) => profile.profile_id === providerProfile,
         );
     const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
-    const selectedProviderDefaultEffort =
-      selectedProviderProfile?.default_effort?.trim?.() || "";
-    const submittedEffort =
-      providerProfile && selectedProviderDefaultEffort ? "" : effort.trim();
+    const submittedModel = modelManualOverride ? model.trim() : "";
+    const submittedEffort = effortManualOverride ? effort.trim() : "";
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsForSubmit,
@@ -10475,7 +10630,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       proposeTasks,
       runtime: {
         mode: normalizedRuntime,
-        ...(model.trim() ? { model: model.trim() } : {}),
+        modelTier: submittedModelTier,
+        tierFallback,
+        ...(submittedModel ? { model: submittedModel } : {}),
         ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
         ...(selectedProviderId
@@ -11381,6 +11538,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               const stepCapabilityTokens = stepCapabilityChips.map(
                 (chip) => chip.token,
               );
+              const stepPreviewProfileId =
+                step.runtimeProviderProfile.trim() || providerProfile;
+              const stepPreviewProfile = providerProfilesQuery.isPlaceholderData
+                ? undefined
+                : (providerProfilesQuery.data || []).find(
+                    (profile) => profile.profile_id === stepPreviewProfileId,
+                  );
+              const stepTierPreview = previewModelTier(
+                stepPreviewProfile,
+                step.runtimeModelTier,
+              );
               const isPentestTool = step.toolId.trim() === PENTEST_TOOL_ID;
               const pentestScopeValues = isPentestTool
                 ? pentestGeneratedScopeValues(
@@ -12242,7 +12410,55 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                         />
                       </label>
                       <label>
-                        {`Step ${index + 1} Model`}
+                        {`Step ${index + 1} Model tier intent`}
+                        <input
+                          data-step-field="runtimeModelTier"
+                          data-step-index={String(index)}
+                          type="number"
+                          min="1"
+                          value={step.runtimeModelTier}
+                          placeholder={isPrimaryStep ? "inherit workflow tier" : "inherit"}
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              runtimeModelTier: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        {`Step ${index + 1} Tier fallback`}
+                        <select
+                          data-step-field="runtimeTierFallback"
+                          data-step-index={String(index)}
+                          value={step.runtimeTierFallback}
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              runtimeTierFallback:
+                                event.target.value === "strict" ? "strict" : "clamp",
+                            })
+                          }
+                        >
+                          <option value="clamp">Clamp to configured tiers</option>
+                          <option value="strict">Reject if unavailable</option>
+                        </select>
+                      </label>
+                      {stepTierPreview ? (
+                        <div
+                          className={`runtime-command-preview${stepTierPreview.warning ? " runtime-command-preview--warning" : ""}`}
+                          aria-label={`Step ${index + 1} model tier preview`}
+                        >
+                          <span className="runtime-command-preview-label">
+                            {`Tier ${stepTierPreview.requestedTier} · ${stepTierPreview.label} · ${stepTierPreview.model} · ${stepTierPreview.effort}`}
+                          </span>
+                          {stepTierPreview.warning ? (
+                            <span className="runtime-command-preview-description">
+                              {stepTierPreview.warning}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <label>
+                        {`Step ${index + 1} Hard override model`}
                         <input
                           data-step-field="runtimeModel"
                           data-step-index={String(index)}
@@ -12257,7 +12473,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                         />
                       </label>
                       <label>
-                        {`Step ${index + 1} Effort`}
+                        {`Step ${index + 1} Hard override effort`}
                         <input
                           data-step-field="runtimeEffort"
                           data-step-index={String(index)}
@@ -12651,9 +12867,50 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ) : null}
         </div>
 
+        <div className="grid-2" aria-label="Workflow model tier intent">
+          <label>
+            Model tier intent
+            <input
+              name="modelTier"
+              type="number"
+              min="1"
+              value={modelTier}
+              onChange={(event) => setModelTier(event.target.value)}
+            />
+          </label>
+          <label>
+            Tier fallback
+            <select
+              name="tierFallback"
+              value={tierFallback}
+              onChange={(event) =>
+                setTierFallback(event.target.value === "strict" ? "strict" : "clamp")
+              }
+            >
+              <option value="clamp">Clamp to configured tiers</option>
+              <option value="strict">Reject if unavailable</option>
+            </select>
+          </label>
+        </div>
+        {workflowTierPreview ? (
+          <div
+            className={`runtime-command-preview${workflowTierPreview.warning ? " runtime-command-preview--warning" : ""}`}
+            aria-label="Workflow model tier preview"
+          >
+            <span className="runtime-command-preview-label">
+              {`Tier ${workflowTierPreview.requestedTier} · ${workflowTierPreview.label} · ${workflowTierPreview.model} · ${workflowTierPreview.effort}`}
+            </span>
+            {workflowTierPreview.warning ? (
+              <span className="runtime-command-preview-description">
+                {workflowTierPreview.warning}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="grid-2">
           <label>
-            Model
+            Hard override model
             <input
               name="model"
               list={MODEL_OPTIONS_DATALIST_ID}
@@ -12667,13 +12924,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             />
           </label>
           <label>
-            Effort
+            Hard override effort
             <input
               name="effort"
               list={EFFORT_OPTIONS_DATALIST_ID}
               value={effort}
               placeholder="runtime default"
-              onChange={(event) => setEffort(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setEffort(next);
+                setEffortManualOverride(next !== "");
+              }}
             />
           </label>
         </div>

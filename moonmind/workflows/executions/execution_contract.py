@@ -1294,7 +1294,7 @@ class WorkflowSkillSelection(BaseModel):
         return dict(value)
 
 class WorkflowRuntimeSelection(BaseModel):
-    """Runtime mode and optional model/effort overrides."""
+    """Runtime mode plus optional tier intent or hard model/effort overrides."""
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
@@ -1310,6 +1310,8 @@ class WorkflowRuntimeSelection(BaseModel):
         alias="providerProfile",
         validation_alias=AliasChoices("providerProfile", "profileId"),
     )
+    model_tier: int | None = Field(None, alias="modelTier", ge=1)
+    tier_fallback: str | None = Field(None, alias="tierFallback")
 
     @field_validator("mode", mode="before")
     @classmethod
@@ -1320,6 +1322,17 @@ class WorkflowRuntimeSelection(BaseModel):
     @classmethod
     def _normalize_optional_strings(cls, value: object) -> str | None:
         return _clean_optional_str(value)
+
+    @field_validator("tier_fallback", mode="before")
+    @classmethod
+    def _normalize_tier_fallback(cls, value: object) -> str | None:
+        normalized = _clean_optional_str(value)
+        if normalized is None:
+            return None
+        normalized = normalized.lower()
+        if normalized not in {"clamp", "strict"}:
+            raise WorkflowContractError("task.runtime.tierFallback must be clamp or strict")
+        return normalized
 
 class WorkflowGitSelection(BaseModel):
     """Branch-selection values for task execution."""

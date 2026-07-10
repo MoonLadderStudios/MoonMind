@@ -100,6 +100,15 @@ def _manager_profile_payload(
     *,
     managed_secret_statuses: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    model_tiers = row.model_tiers or [
+        {
+            "label": "Default",
+            "model": row.default_model,
+            "effort": row.default_effort,
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
     return {
         "profile_id": row.profile_id,
         "is_default": row.is_default,
@@ -109,6 +118,8 @@ def _manager_profile_payload(
         "default_model": row.default_model,
         "default_effort": row.default_effort,
         "model_overrides": row.model_overrides or {},
+        "model_tiers": model_tiers,
+        "default_model_tier": row.default_model_tier or 1,
         "credential_source": row.credential_source.value if row.credential_source else None,
         "runtime_materialization_mode": row.runtime_materialization_mode.value if row.runtime_materialization_mode else None,
         "volume_ref": row.volume_ref,

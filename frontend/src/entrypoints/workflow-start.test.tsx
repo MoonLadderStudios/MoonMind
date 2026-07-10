@@ -28,6 +28,7 @@ import {
   LIQUID_GL_OPTIONS,
   buildEditParametersPatch,
   preferredTemplate,
+  previewModelTier,
   deriveExplicitWorkflowTitle,
   resolveDefaultProviderProfileId,
   resolveObjectiveInstructions,
@@ -98,6 +99,31 @@ describe("deriveExplicitWorkflowTitle", () => {
     expect(title).toBeDefined();
     expect(title).toHaveLength(151);
     expect(title).not.toContain("token-999");
+  });
+});
+
+describe("previewModelTier", () => {
+  it("MM-1173 shows concise fallback copy when requested tier exceeds configured tiers", () => {
+    const preview = previewModelTier(
+      {
+        profile_id: "codex_openai_api",
+        model_tiers: [
+          { label: "Plan", model: "gpt-5.5", effort: "medium" },
+          { label: "Implement", model: "gpt-5.5", effort: "xhigh" },
+        ],
+      },
+      "3",
+    );
+
+    expect(preview).toMatchObject({
+      requestedTier: 3,
+      effectiveTier: 2,
+      label: "Implement",
+      model: "gpt-5.5",
+      effort: "xhigh",
+      fallbackReason: "requested_tier_above_configured_range",
+      warning: "Requested Tier 3, used Tier 2 because the selected profile only defines 2 tiers.",
+    });
   });
 });
 
@@ -18619,9 +18645,11 @@ describe("Task Create runtime switch layout stability", () => {
 
     expect(request.payload.task.runtime).toMatchObject({
       mode: "codex_cli",
-      model: "gpt-5.4",
+      modelTier: 1,
+      tierFallback: "clamp",
       profileId: "profile:codex-default",
     });
+    expect(request.payload.task.runtime).not.toHaveProperty("model");
     expect(request.payload.task.runtime).not.toHaveProperty("effort");
   });
 });

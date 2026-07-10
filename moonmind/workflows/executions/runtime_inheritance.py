@@ -182,7 +182,16 @@ def has_explicit_child_runtime(
 
     runtime_node = task_payload.get("runtime") if isinstance(task_payload, Mapping) else None
     if isinstance(runtime_node, Mapping):
-        for key in ("mode", "model", "effort", "providerProfile", "profileId", "executionProfileRef"):
+        for key in (
+            "mode",
+            "model",
+            "effort",
+            "modelTier",
+            "tierFallback",
+            "providerProfile",
+            "profileId",
+            "executionProfileRef",
+        ):
             if _coerce_str(runtime_node.get(key)):
                 return True
 

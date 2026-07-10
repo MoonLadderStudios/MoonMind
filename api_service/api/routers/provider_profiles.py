@@ -68,6 +68,51 @@ def validate_secret_refs_helper(value: dict[str, str] | None) -> dict[str, str] 
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 
+class ProviderModelEffortTier(BaseModel):
+    label: Optional[str] = None
+    model: Optional[str] = None
+    effort: Optional[str] = Field(default=None, max_length=64)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    annotations: dict[str, Any] = Field(default_factory=dict)
+
+
+def _normalize_model_tiers(
+    value: list[ProviderModelEffortTier] | list[dict[str, Any]] | None,
+    *,
+    default_model: str | None = None,
+    default_effort: str | None = None,
+) -> list[dict[str, Any]]:
+    raw_items: list[Any]
+    if value:
+        raw_items = list(value)
+    else:
+        raw_items = [
+            {
+                "label": "Default",
+                "model": default_model,
+                "effort": default_effort,
+                "parameters": {},
+                "annotations": {},
+            }
+        ]
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_items, start=1):
+        tier = item if isinstance(item, ProviderModelEffortTier) else ProviderModelEffortTier.model_validate(item)
+        normalized.append(
+            {
+                "label": tier.label or f"Tier {index}",
+                "model": tier.model,
+                "effort": tier.effort,
+                "parameters": tier.parameters,
+                "annotations": tier.annotations,
+            }
+        )
+    if not normalized:
+        raise ValueError("model_tiers must include at least one tier")
+    return normalized
+
+
 class ProviderProfileCreate(BaseModel):
     profile_id: str = Field(..., max_length=128)
     runtime_id: str = Field(..., max_length=64)
@@ -76,6 +121,8 @@ class ProviderProfileCreate(BaseModel):
     default_model: Optional[str] = None
     default_effort: Optional[str] = Field(default=None, max_length=64)
     model_overrides: Optional[dict[str, str]] = None
+    model_tiers: Optional[list[ProviderModelEffortTier]] = None
+    default_model_tier: int = Field(default=1, ge=1)
     
     credential_source: str = Field(..., pattern="^(oauth_volume|secret_ref|none)$")
     runtime_materialization_mode: str = Field(..., pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
@@ -146,6 +193,13 @@ class ProviderProfileCreate(BaseModel):
             volume_ref_field_name="volume_ref",
             volume_mount_path_field_name="volume_mount_path",
         )
+        self.model_tiers = _normalize_model_tiers(
+            self.model_tiers,
+            default_model=self.default_model,
+            default_effort=self.default_effort,
+        )
+        if self.default_model_tier > len(self.model_tiers):
+            raise ValueError("default_model_tier must reference a configured model tier")
         return self
 
 class ProviderProfileUpdate(BaseModel):
@@ -154,6 +208,8 @@ class ProviderProfileUpdate(BaseModel):
     default_model: Optional[str] = None
     default_effort: Optional[str] = Field(default=None, max_length=64)
     model_overrides: Optional[dict[str, str]] = None
+    model_tiers: Optional[list[ProviderModelEffortTier]] = None
+    default_model_tier: Optional[int] = Field(default=None, ge=1)
     credential_source: Optional[str] = Field(default=None, pattern="^(oauth_volume|secret_ref|none)$")
     runtime_materialization_mode: Optional[str] = Field(default=None, pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
     volume_ref: Optional[str] = None
@@ -210,6 +266,10 @@ class ProviderProfileUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_runtime_env_update(self) -> "ProviderProfileUpdate":
+        if self.model_tiers is not None:
+            self.model_tiers = _normalize_model_tiers(self.model_tiers)
+            if self.default_model_tier is not None and self.default_model_tier > len(self.model_tiers):
+                raise ValueError("default_model_tier must reference a configured model tier")
         return self
 
 class ProviderProfileResponse(BaseModel):
@@ -220,6 +280,8 @@ class ProviderProfileResponse(BaseModel):
     default_model: Optional[str] = None
     default_effort: Optional[str] = None
     model_overrides: dict[str, str] = Field(default_factory=dict)
+    model_tiers: list[ProviderModelEffortTier] = Field(default_factory=list)
+    default_model_tier: int = 1
     credential_source: str
     runtime_materialization_mode: str
     volume_ref: Optional[str]
@@ -391,6 +453,8 @@ async def create_profile(
         default_model=body.default_model,
         default_effort=body.default_effort,
         model_overrides=body.model_overrides,
+        model_tiers=body.model_tiers,
+        default_model_tier=body.default_model_tier,
         credential_source=ProviderCredentialSource(body.credential_source),
         runtime_materialization_mode=RuntimeMaterializationMode(body.runtime_materialization_mode),
         volume_ref=body.volume_ref,
@@ -491,6 +555,17 @@ async def update_profile(
         elif key == "last_auth_method" and value is not None:
             value = ProviderProfileAuthMethod(value)
         setattr(profile, key, value)
+    if profile.default_model_tier > len(
+        _normalize_model_tiers(
+            profile.model_tiers,
+            default_model=profile.default_model,
+            default_effort=profile.default_effort,
+        )
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="default_model_tier must reference a configured model tier",
+        )
 
     if profile.enabled:
         if profile.auth_state != ProviderProfileAuthState.CONNECTED:
@@ -1597,6 +1672,12 @@ def _row_to_dict(
         "default_model": row.default_model,
         "default_effort": row.default_effort,
         "model_overrides": row.model_overrides or {},
+        "model_tiers": _normalize_model_tiers(
+            row.model_tiers,
+            default_model=row.default_model,
+            default_effort=row.default_effort,
+        ),
+        "default_model_tier": row.default_model_tier or 1,
         "credential_source": row.credential_source.value if row.credential_source else None,
         "runtime_materialization_mode": row.runtime_materialization_mode.value if row.runtime_materialization_mode else None,
         "volume_ref": row.volume_ref,

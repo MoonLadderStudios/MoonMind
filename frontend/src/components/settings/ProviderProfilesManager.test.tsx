@@ -226,6 +226,39 @@ describe('toFormState', () => {
   });
 });
 
+describe('provider profile tier mapping display', () => {
+  it('MM-1173 renders tier number, label, model, and effort in Settings', () => {
+    renderProviderProfilesManager([
+      {
+        profile_id: 'codex_openai_api',
+        runtime_id: 'codex_cli',
+        provider_id: 'openai',
+        credential_source: 'secret_ref',
+        runtime_materialization_mode: 'api_key_env',
+        secret_refs: {},
+        max_parallel_runs: 1,
+        cooldown_after_429_seconds: 300,
+        rate_limit_policy: 'backoff',
+        enabled: true,
+        is_default: true,
+        model_tiers: [
+          { label: 'Plan and verify', model: 'gpt-5.5', effort: 'medium' },
+          { label: 'Implementation', model: 'gpt-5.5', effort: 'xhigh' },
+        ],
+        default_model_tier: 1,
+      },
+    ]);
+
+    const mapping = screen.getByLabelText('codex_openai_api model tier mapping');
+    expect(mapping.textContent).toContain(
+      'Tier 1 default · Plan and verify · gpt-5.5 · medium',
+    );
+    expect(mapping.textContent).toContain(
+      'Tier 2 · Implementation · gpt-5.5 · xhigh',
+    );
+  });
+});
+
 describe('parseCommandBehavior', () => {
   it('returns null for empty or blank input', () => {
     expect(parseCommandBehavior('')).toBe(null);

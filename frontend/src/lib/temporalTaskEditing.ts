@@ -52,6 +52,8 @@ export type TemporalTaskEditingExecutionContract = {
   requestedModel?: string | null;
   resolvedModel?: string | null;
   effort?: string | null;
+  modelTier?: number | null;
+  tierFallback?: string | null;
   repository?: string | null;
   branch?: string | null;
   startingBranch?: string | null;
@@ -107,6 +109,8 @@ export type TemporalSubmissionDraft = {
   providerProfile: string | null;
   model: string | null;
   effort: string | null;
+  modelTier: number | null;
+  tierFallback: 'clamp' | 'strict' | null;
   repository: string | null;
   branch: string | null;
   legacyBranchWarning: string | null;
@@ -125,6 +129,8 @@ export type TemporalSubmissionDraft = {
       mode?: string | null;
       model?: string | null;
       effort?: string | null;
+      modelTier?: number | null;
+      tierFallback?: string | null;
       profileId?: string | null;
       providerProfile?: string | null;
       executionProfileRef?: string | null;
@@ -328,6 +334,26 @@ function stringValue(...values: unknown[]): string {
     }
   }
   return '';
+}
+
+function positiveIntegerValue(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = Number.parseInt(String(value ?? '').trim(), 10);
+    if (Number.isInteger(parsed) && parsed >= 1) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function tierFallbackValue(...values: unknown[]): 'clamp' | 'strict' | null {
+  for (const value of values) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'clamp' || normalized === 'strict') {
+      return normalized;
+    }
+  }
+  return null;
 }
 
 function stepInstructions(value: unknown): string[] {
@@ -558,6 +584,12 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
               : {}),
             ...(stringValue(runtime.model) ? { model: stringValue(runtime.model) } : {}),
             ...(stringValue(runtime.effort) ? { effort: stringValue(runtime.effort) } : {}),
+            ...(positiveIntegerValue(runtime.modelTier) != null
+              ? { modelTier: positiveIntegerValue(runtime.modelTier) }
+              : {}),
+            ...(tierFallbackValue(runtime.tierFallback)
+              ? { tierFallback: tierFallbackValue(runtime.tierFallback) }
+              : {}),
             ...(stringValue(runtime.profileId)
               ? { profileId: stringValue(runtime.profileId) }
               : {}),
@@ -798,12 +830,16 @@ function snapshotDraftTask(
   const runtime = stringValue(snapshotDraft.runtime);
   const model = stringValue(snapshotDraft.model);
   const effort = stringValue(snapshotDraft.effort);
+  const modelTier = positiveIntegerValue(snapshotDraft.modelTier);
+  const tierFallback = tierFallbackValue(snapshotDraft.tierFallback);
   const providerProfile = stringValue(snapshotDraft.providerProfile);
-  if (runtime || model || effort || providerProfile) {
+  if (runtime || model || effort || providerProfile || modelTier != null || tierFallback) {
     task.runtime = {
       ...(runtime ? { mode: runtime } : {}),
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
+      ...(modelTier != null ? { modelTier } : {}),
+      ...(tierFallback ? { tierFallback } : {}),
       ...(providerProfile ? { profileId: providerProfile } : {}),
     };
   }
@@ -965,6 +1001,20 @@ export function buildTemporalSubmissionDraftFromExecution(
       params.effort,
       runtime.effort,
       artifactRuntime.effort,
+    ),
+    modelTier: positiveIntegerValue(
+      snapshotDraft.modelTier,
+      execution.modelTier,
+      params.modelTier,
+      runtime.modelTier,
+      artifactRuntime.modelTier,
+    ),
+    tierFallback: tierFallbackValue(
+      snapshotDraft.tierFallback,
+      execution.tierFallback,
+      params.tierFallback,
+      runtime.tierFallback,
+      artifactRuntime.tierFallback,
     ),
     repository: nullableStringValue(
       snapshotDraft.repository,
