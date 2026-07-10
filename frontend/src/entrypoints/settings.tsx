@@ -15,6 +15,7 @@ import {
   ProviderProfilesManager,
   type ProviderProfile,
 } from '../components/settings/ProviderProfilesManager';
+import { resetDashboardPreferences } from '../utils/dashboardPreferences';
 
 function ProvidersKeyIcon() {
   return (
@@ -380,6 +381,26 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       {section === 'user-workspace' ? (
         <div className="space-y-6">
           <GeneratedSettingsSection />
+
+          <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
+            <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+              Dashboard preferences
+            </h3>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+              Clear saved list layouts, selected workflows and recurring schedules, and other
+              browser-local dashboard choices.
+            </p>
+            <button
+              type="button"
+              className="mt-4 rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mm-accent dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              onClick={() => {
+                resetDashboardPreferences();
+                setNotice({ level: 'ok', text: 'Dashboard preferences reset.' });
+              }}
+            >
+              Reset dashboard preferences
+            </button>
+          </section>
 
           <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
             {isLoading ? (
