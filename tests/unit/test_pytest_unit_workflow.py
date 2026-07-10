@@ -59,6 +59,13 @@ def test_required_unit_workflow_runs_status_token_audit() -> None:
     assert "tools/audit_status_tokens.py --fail-on-unknown" in command
 
 
+def test_required_unit_workflow_runs_for_merge_queue_candidates() -> None:
+    workflow = _load_workflow()
+    triggers = workflow.get("on", workflow.get(True))
+
+    assert triggers["merge_group"]["types"] == ["checks_requested"]
+
+
 def test_required_unit_workflow_checks_out_moonspec_submodule() -> None:
     workflow = _load_workflow()
     checkout = workflow["jobs"]["ci-required"]["steps"][0]
