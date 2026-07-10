@@ -2639,6 +2639,9 @@ describe('Dashboard shared entry', () => {
     const activeRule = cssRuleBlock(dashboardCss, '.application-rail .route-nav a.active');
     expect(activeRule).toContain('border-color: rgb(var(--mm-accent) / 0.5);');
     expect(activeRule).toContain('box-shadow: inset 3px 0 0 rgb(var(--mm-accent));');
+    expect(cssRuleBlock(dashboardCss, '.application-rail .route-nav')).toContain(
+      'flex-wrap: nowrap;',
+    );
   });
 
   it('colors only Moon white in the masthead brand', async () => {
@@ -3180,6 +3183,20 @@ describe('Dashboard shared entry', () => {
     expect(
       activeBlocks.some(
         (block) =>
+          block.includes('background: linear-gradient(') &&
+          block.includes('var(--mm-mobile-nav-active-start)') &&
+          block.includes('inset 3px 0 0 var(--mm-mobile-nav-active-edge)'),
+      ),
+    ).toBe(true);
+
+    const scopedActiveBlocks = cssRuleBlocks(
+      dashboardCss,
+      '.application-rail .route-nav a.active',
+    );
+    expect(
+      scopedActiveBlocks.some(
+        (block) =>
+          block.includes('color: white;') &&
           block.includes('background: linear-gradient(') &&
           block.includes('var(--mm-mobile-nav-active-start)') &&
           block.includes('inset 3px 0 0 var(--mm-mobile-nav-active-edge)'),

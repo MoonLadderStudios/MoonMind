@@ -213,7 +213,7 @@ samp {
 }
 .application-rail .masthead-brand { padding: 0 0.45rem 0.65rem; border-bottom: 1px solid rgb(var(--mm-border) / 0.58); }
 .application-rail-nav { min-height: 0; overflow-y: auto; }
-.application-rail .route-nav { flex-direction: column; align-items: stretch; gap: 0.25rem; }
+.application-rail .route-nav { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0.25rem; }
 .application-rail .route-nav a {
   position: relative; display: flex; align-items: center; gap: 0.65rem; min-height: 2.7rem;
   padding: 0.55rem 0.7rem; border: 1px solid transparent; border-radius: 0.6rem;
@@ -7569,6 +7569,18 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 
   .route-nav a.active {
+    color: white;
+    background: linear-gradient(
+      90deg,
+      var(--mm-mobile-nav-active-start),
+      var(--mm-mobile-nav-active-end)
+    );
+    box-shadow:
+      inset 3px 0 0 var(--mm-mobile-nav-active-edge),
+      inset 0 1px 0 var(--mm-mobile-nav-edge);
+  }
+
+  .application-rail .route-nav a.active {
     color: white;
     background: linear-gradient(
       90deg,
