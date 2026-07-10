@@ -51,6 +51,20 @@ _MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST: frozenset[str] = frozenset(
 logger = logging.getLogger(__name__)
 
 _LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
+_MODEL_TIER_DIAGNOSTIC_STRING_LIMIT = 1024
+_MODEL_TIER_DIAGNOSTIC_FIELDS = (
+    "providerProfileId",
+    "requestedModelTier",
+    "effectiveModelTier",
+    "tierLabel",
+    "fallbackReason",
+    "resolvedModel",
+    "resolvedEffort",
+    "modelSource",
+    "effortSource",
+    "effortApplicationStatus",
+    "previewMismatch",
+)
 
 _CLAUDE_WORKSPACE_TRUST_CONFIG_SCRIPT = r"""
 import fcntl
@@ -304,6 +318,28 @@ class ManagedRuntimeLauncher:
             annotation_type=annotation_type,
             metadata={"source": "launcher", **(metadata or {})},
         )
+
+    @staticmethod
+    def _compact_model_tier_resolution(
+        resolution: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Keep launch tier diagnostics bounded to their canonical fields."""
+
+        compact: dict[str, object] = {}
+        truncated_fields: list[str] = []
+        for field in _MODEL_TIER_DIAGNOSTIC_FIELDS:
+            value = resolution.get(field)
+            if (
+                isinstance(value, str)
+                and len(value) > _MODEL_TIER_DIAGNOSTIC_STRING_LIMIT
+            ):
+                compact[field] = value[:_MODEL_TIER_DIAGNOSTIC_STRING_LIMIT]
+                truncated_fields.append(field)
+            elif value is None or isinstance(value, (str, bool, int, float)):
+                compact[field] = value
+        if truncated_fields:
+            compact["truncatedFields"] = truncated_fields
+        return compact
 
     @staticmethod
     def _workspace_root() -> Path:
@@ -1212,8 +1248,9 @@ class ManagedRuntimeLauncher:
                 self._store.save(existing)
             return existing, None, [], []
 
+        from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
-        strategy = get_strategy(profile.runtime_id)
+        strategy = get_strategy(normalize_runtime_id(profile.runtime_id))
         launch_github_token = (
             await resolve_github_token_for_launch()
             if self._request_workspace_needs_github_https_auth(
@@ -1385,7 +1422,54 @@ class ManagedRuntimeLauncher:
                 request.instruction_ref = hinted_instruction_ref
 
             cmd = self.build_command(profile, request, strategy=strategy)
+            parameters = request.parameters
+            model_tier_resolution = (
+                parameters.get("modelTierResolution")
+                if isinstance(parameters, Mapping)
+                else None
+            )
+            launch_resolution: dict[str, object] | None = None
+            if isinstance(model_tier_resolution, Mapping):
+                launch_resolution = dict(model_tier_resolution)
+            elif (
+                isinstance(parameters, Mapping)
+                and parameters.get("modelTier") is not None
+            ):
+                from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+                launch_resolution = resolve_model_effort(
+                    runtime_id=profile.runtime_id,
+                    profile=profile,
+                    requested_model_tier=parameters.get("modelTier"),
+                    tier_fallback=parameters.get("tierFallback"),
+                    advisory_preview=(
+                        parameters.get("tierPreview")
+                        if isinstance(parameters.get("tierPreview"), Mapping)
+                        else None
+                    ),
+                ).as_metadata()
+                launch_resolution["providerProfileId"] = profile.profile_id
+
             self._reset_live_log_spool(resolved_workspace_path)
+            if launch_resolution is not None:
+                if strategy is not None:
+                    launch_resolution["effortApplicationStatus"] = (
+                        strategy.effort_application_status(
+                            launch_resolution.get("resolvedEffort")
+                        )
+                    )
+                self._emit_system_annotation(
+                    run_id=run_id,
+                    workspace_path=resolved_workspace_path,
+                    annotation_type="model_tier_resolution",
+                    text="Launcher: recorded model tier resolution for this run.",
+                    metadata={
+                        "reason": "model_tier_resolution",
+                        "modelTierResolution": self._compact_model_tier_resolution(
+                            launch_resolution
+                        ),
+                    },
+                )
 
             for key in profile.passthrough_env_keys:
                 value = os.environ.get(key)

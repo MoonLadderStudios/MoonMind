@@ -338,9 +338,13 @@ def _profile_model_tiers(profile: Any | None) -> list[dict[str, Any]]:
 
     tiers: list[dict[str, Any]] = []
     for entry in raw:
-        if not isinstance(entry, Mapping):
+        if isinstance(entry, Mapping):
+            tiers.append(dict(entry))
+            continue
+        model_dump = getattr(entry, "model_dump", None)
+        if not callable(model_dump):
             raise ValueError("profile.model_tiers entries must be mappings")
-        tiers.append(dict(entry))
+        tiers.append(dict(model_dump()))
     return tiers
 
 
