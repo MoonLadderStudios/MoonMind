@@ -7626,7 +7626,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: block;
 }
 
-.collection-workspace--with-sidebar {
+.collection-workspace--with-sidebar:not(.workflow-workspace-shell) {
   display: grid;
   grid-template-columns:
     [sidebar-start] var(--mm-collection-sidebar-width)
@@ -7636,11 +7636,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   column-gap: 1.25rem;
 }
 
-.collection-workspace--with-sidebar > .collection-sidebar {
+.collection-workspace--with-sidebar:not(.workflow-workspace-shell) > .collection-sidebar {
   grid-column: sidebar-start / primary-start;
 }
 
-.collection-workspace__primary {
+.collection-workspace:not(.workflow-workspace-shell) > .collection-workspace__primary {
   grid-column: primary-start / primary-end;
   min-width: 0;
 }

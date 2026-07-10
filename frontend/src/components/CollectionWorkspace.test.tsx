@@ -47,7 +47,9 @@ describe('CollectionWorkspace', () => {
     const css = readFileSync(`${process.cwd()}/frontend/src/styles/dashboard.css`, 'utf8');
 
     expect(css).toMatch(/\.collection-workspace\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*none;/);
-    expect(css).toMatch(/\.collection-workspace--with-sidebar\s*\{[^}]*grid-template-columns:[^}]*var\(--mm-collection-sidebar-width\)[^}]*minmax\(0,\s*1fr\)/);
+    expect(css).toMatch(/\.collection-workspace--with-sidebar:not\(\.workflow-workspace-shell\)\s*\{[^}]*grid-template-columns:[^}]*var\(--mm-collection-sidebar-width\)[^}]*minmax\(0,\s*1fr\)/);
+    expect(css).toMatch(/\.collection-workspace--with-sidebar:not\(\.workflow-workspace-shell\) > \.collection-sidebar\s*\{[^}]*grid-column:\s*sidebar-start \/ primary-start/);
+    expect(css).toMatch(/\.collection-workspace:not\(\.workflow-workspace-shell\) > \.collection-workspace__primary\s*\{[^}]*grid-column:\s*primary-start \/ primary-end/);
     expect(css).toMatch(/\.collection-workspace--single\s*\{[^}]*display:\s*block;/);
   });
 });
