@@ -23,6 +23,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/docker-compose.test.yaml"
 TEST_SERVICE="pytest"
 SKIP_BUILD=0
+TEST_COMPOSE_PROJECT_NAME="${MOONMIND_TEST_COMPOSE_PROJECT_NAME:-moonmind-test}"
+
+if [[ ! "$TEST_COMPOSE_PROJECT_NAME" =~ ^moonmind-test(-[a-z0-9][a-z0-9_-]*)?$ ]]; then
+    echo "Error: MOONMIND_TEST_COMPOSE_PROJECT_NAME must be 'moonmind-test' or start with 'moonmind-test-'." >&2
+    exit 2
+fi
 
 # Parse --no-build before forwarding remaining args.
 FORWARD_ARGS=()
@@ -62,7 +68,7 @@ fi
 # Build the test image (cached after first build; only rebuilds when Dockerfile/pyproject.toml changes).
 if [[ "$SKIP_BUILD" == "0" ]]; then
     echo "Building test image (use --no-build to skip)..."
-    "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build "$TEST_SERVICE"
+    "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build "$TEST_SERVICE"
 else
     echo "Skipping image build (--no-build)."
 fi
@@ -79,11 +85,11 @@ fi
 # Ensure compose stack is torn down after tests, including dependency containers (e.g. MinIO).
 cleanup() {
     echo "Tearing down test compose stack..."
-    "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" down --remove-orphans || true
+    "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" down --remove-orphans || true
 }
 trap cleanup EXIT
 
-"${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm \
+"${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm \
     -e MOONMIND_FORCE_LOCAL_TESTS=1 \
     "$TEST_SERVICE" \
     bash -lc "exec /app/tools/test_unit.sh ${INNER_ARGS}"

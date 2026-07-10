@@ -5,6 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/docker-compose.test.yaml"
 NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
+TEST_COMPOSE_PROJECT_NAME="${MOONMIND_TEST_COMPOSE_PROJECT_NAME:-moonmind-test}"
+
+if [[ ! "$TEST_COMPOSE_PROJECT_NAME" =~ ^moonmind-test(-[a-z0-9][a-z0-9_-]*)?$ ]]; then
+  echo "Error: MOONMIND_TEST_COMPOSE_PROJECT_NAME must be 'moonmind-test' or start with 'moonmind-test-'." >&2
+  exit 2
+fi
 
 if [[ -z "${JULES_API_KEY:-}" ]]; then
   echo "Error: JULES_API_KEY must be set to run live Jules provider verification." >&2
@@ -35,8 +41,13 @@ if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   echo "Created Docker network: $NETWORK_NAME"
 fi
 
-"${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build pytest
-"${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm \
+cleanup() {
+  "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" down --remove-orphans >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+"${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build pytest
+"${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm \
   -e JULES_API_KEY \
   -e JULES_API_URL \
   pytest bash -lc \

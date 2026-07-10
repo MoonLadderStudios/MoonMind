@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 import ast
+import os
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+COMPOSE_TEST_RUNNERS = (
+    "tools/test_integration.sh",
+    "tools/test_unit_docker.sh",
+    "tools/test_jules_provider.sh",
+    "tools/test-unit.ps1",
+    "tools/test-integration.ps1",
+    "tools/test-e2e.ps1",
+    "tools/test-provider.ps1",
+)
+
+
 def _module_path(module_name: str) -> Path:
     return REPO_ROOT / Path(*module_name.split(".")).with_suffix(".py")
+
 
 def _marker_names_from_node(node: ast.AST) -> set[str]:
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
@@ -28,6 +42,7 @@ def _marker_names_from_node(node: ast.AST) -> set[str]:
         return {node.attr}
 
     return set()
+
 
 def _marker_names(module_name: str) -> set[str]:
     module_ast = ast.parse(_module_path(module_name).read_text(encoding="utf-8"))
@@ -54,6 +69,7 @@ def _marker_names(module_name: str) -> set[str]:
 
     return marker_names
 
+
 def test_pytest_registers_phase1_taxonomy_markers(pytestconfig) -> None:
     registered_markers = {
         marker.split(":", 1)[0].strip() for marker in pytestconfig.getini("markers")
@@ -64,7 +80,10 @@ def test_pytest_registers_phase1_taxonomy_markers(pytestconfig) -> None:
     assert "jules" in registered_markers
     assert "requires_credentials" in registered_markers
 
-def test_ci_safe_temporal_artifact_and_topology_modules_are_marked_for_integration_ci() -> None:
+
+def test_ci_safe_temporal_artifact_and_topology_modules_are_marked_for_integration_ci() -> (
+    None
+):
     expected_modules = (
         "tests.integration.temporal.test_temporal_artifact_local_dev",
         "tests.integration.temporal.test_temporal_artifact_auth_preview",
@@ -78,6 +97,7 @@ def test_ci_safe_temporal_artifact_and_topology_modules_are_marked_for_integrati
         assert "integration_ci" in marker_names
         assert "integration" in marker_names
 
+
 def test_live_jules_suite_is_provider_verification_only() -> None:
     marker_names = _marker_names("tests.provider.jules.test_jules_integration")
 
@@ -87,18 +107,29 @@ def test_live_jules_suite_is_provider_verification_only() -> None:
     assert "integration_ci" not in marker_names
     assert "integration" not in marker_names
 
+
 def test_provider_verification_suite_lives_outside_tests_integration() -> None:
-    assert not (REPO_ROOT / "tests" / "integration" / "test_jules_integration.py").exists()
-    assert (REPO_ROOT / "tests" / "provider" / "jules" / "test_jules_integration.py").exists()
+    assert not (
+        REPO_ROOT / "tests" / "integration" / "test_jules_integration.py"
+    ).exists()
+    assert (
+        REPO_ROOT / "tests" / "provider" / "jules" / "test_jules_integration.py"
+    ).exists()
+
 
 def test_temporal_topology_integration_suite_stays_jules_free() -> None:
     topology_module = (
-        REPO_ROOT / "tests" / "integration" / "temporal" / "test_activity_worker_topology.py"
+        REPO_ROOT
+        / "tests"
+        / "integration"
+        / "temporal"
+        / "test_activity_worker_topology.py"
     ).read_text(encoding="utf-8")
 
     assert "integration.jules." not in topology_module
     assert "JulesTaskResponse" not in topology_module
     assert "_FakeJulesClient" not in topology_module
+
 
 def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
     shell_runner = (REPO_ROOT / "tools" / "test_integration.sh").read_text(
@@ -111,13 +142,48 @@ def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
         encoding="utf-8"
     )
 
-    assert 'integration_ci' in shell_runner
-    assert 'provider_verification and jules' in provider_runner
-    assert 'pytest tests/provider/jules' in provider_runner
-    assert 'integration_ci' in powershell_runner
+    assert "integration_ci" in shell_runner
+    assert "provider_verification and jules" in provider_runner
+    assert "pytest tests/provider/jules" in provider_runner
+    assert "integration_ci" in powershell_runner
+
+
+def test_compose_tests_use_an_explicit_isolated_project() -> None:
+    compose_file = (REPO_ROOT / "docker-compose.test.yaml").read_text(encoding="utf-8")
+    assert compose_file.startswith("name: moonmind-test\n")
+
+    for relative_path in COMPOSE_TEST_RUNNERS:
+        runner = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert "MOONMIND_TEST_COMPOSE_PROJECT_NAME" in runner, relative_path
+        assert "--project-name" in runner, relative_path
+        assert "moonmind-test" in runner, relative_path
+        assert "down" in runner, relative_path
+        assert "--remove-orphans" in runner, relative_path
+
+
+def test_bash_compose_test_runners_reject_the_deployment_project() -> None:
+    environment = {
+        **os.environ,
+        "MOONMIND_TEST_COMPOSE_PROJECT_NAME": "moonmind",
+    }
+
+    for relative_path in COMPOSE_TEST_RUNNERS[:3]:
+        result = subprocess.run(
+            ["bash", str(REPO_ROOT / relative_path)],
+            cwd=REPO_ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 2, relative_path
+        assert "must be 'moonmind-test'" in result.stderr, relative_path
+
 
 def test_provider_verification_is_not_configured_as_a_github_action() -> None:
-    provider_workflow = REPO_ROOT / ".github" / "workflows" / "provider-verification.yml"
+    provider_workflow = (
+        REPO_ROOT / ".github" / "workflows" / "provider-verification.yml"
+    )
     required_workflow = (
         REPO_ROOT / ".github" / "workflows" / "pytest-integration-ci.yml"
     ).read_text(encoding="utf-8")
@@ -125,6 +191,7 @@ def test_provider_verification_is_not_configured_as_a_github_action() -> None:
     assert not provider_workflow.exists()
     assert "./tools/test_integration.sh" in required_workflow
     assert "./tools/test_jules_provider.sh" not in required_workflow
+
 
 def test_docker_compose_test_runners_provision_the_shared_network() -> None:
     shell_runner = (REPO_ROOT / "tools" / "test_integration.sh").read_text(
@@ -137,15 +204,16 @@ def test_docker_compose_test_runners_provision_the_shared_network() -> None:
         encoding="utf-8"
     )
 
-    assert 'MOONMIND_DOCKER_NETWORK' in shell_runner
+    assert "MOONMIND_DOCKER_NETWORK" in shell_runner
     assert 'docker network inspect "$NETWORK_NAME"' in shell_runner
     assert 'docker network create "$NETWORK_NAME"' in shell_runner
-    assert 'MOONMIND_DOCKER_NETWORK' in provider_runner
+    assert "MOONMIND_DOCKER_NETWORK" in provider_runner
     assert 'docker network inspect "$NETWORK_NAME"' in provider_runner
     assert 'docker network create "$NETWORK_NAME"' in provider_runner
-    assert '$env:MOONMIND_DOCKER_NETWORK' in powershell_runner
-    assert 'docker network inspect $networkName' in powershell_runner
-    assert 'docker network create $networkName' in powershell_runner
+    assert "$env:MOONMIND_DOCKER_NETWORK" in powershell_runner
+    assert "docker network inspect $networkName" in powershell_runner
+    assert "docker network create $networkName" in powershell_runner
+
 
 def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> None:
     """Phase 6: the required integration_ci suite must stay focused on artifacts,
@@ -162,12 +230,13 @@ def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> No
         / "temporal"
         / "test_live_logs_performance.py"
     ).read_text(encoding="utf-8")
-    assert "10000" not in perf_test, (
-        "Performance test should not use 10k events — use deterministic bounds"
-    )
-    assert "500" in perf_test, (
-        "Performance test should use 500 deterministic event count"
-    )
+    assert (
+        "10000" not in perf_test
+    ), "Performance test should not use 10k events — use deterministic bounds"
+    assert (
+        "500" in perf_test
+    ), "Performance test should use 500 deterministic event count"
+
 
 def test_phase6_artifact_authorization_tests_require_oidc() -> None:
     """Phase 6: artifact authorization tests must toggle AUTH_PROVIDER to
