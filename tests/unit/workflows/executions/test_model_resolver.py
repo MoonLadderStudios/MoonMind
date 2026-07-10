@@ -324,6 +324,40 @@ class TestResolveModelEffortTiers:
         assert resolved.effort_source == "task_override"
         assert resolved.fallback_reason is None
 
+    def test_explicit_model_only_bypasses_tier_policy_independently(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(default_effort="profile-effort"),
+            requested_model_tier=2,
+            requested_model="task-model",
+            env={},
+        )
+
+        assert resolved.model == "task-model"
+        assert resolved.effort == "profile-effort"
+        assert resolved.effective_model_tier is None
+        assert resolved.tier_label is None
+        assert resolved.model_source == "task_override"
+        assert resolved.effort_source == "provider_profile_default"
+        assert resolved.fallback_reason is None
+
+    def test_explicit_effort_only_bypasses_tier_policy_independently(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(default_model="profile-model"),
+            requested_model_tier=2,
+            requested_effort="xhigh",
+            env={},
+        )
+
+        assert resolved.model == "profile-model"
+        assert resolved.effort == "xhigh"
+        assert resolved.effective_model_tier is None
+        assert resolved.tier_label is None
+        assert resolved.model_source == "provider_profile_default"
+        assert resolved.effort_source == "task_override"
+        assert resolved.fallback_reason is None
+
     @pytest.mark.parametrize("bad_tier", [0, -1, 1.5, "2", True])
     def test_model_tier_must_be_integer_greater_than_or_equal_to_1(self, bad_tier):
         with pytest.raises(ValueError, match="modelTier"):

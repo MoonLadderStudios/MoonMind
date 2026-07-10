@@ -109,6 +109,8 @@ def _manager_profile_payload(
         "default_model": row.default_model,
         "default_effort": row.default_effort,
         "model_overrides": row.model_overrides or {},
+        "model_tiers": row.model_tiers or [],
+        "default_model_tier": row.default_model_tier or 1,
         "credential_source": row.credential_source.value if row.credential_source else None,
         "runtime_materialization_mode": row.runtime_materialization_mode.value if row.runtime_materialization_mode else None,
         "volume_ref": row.volume_ref,

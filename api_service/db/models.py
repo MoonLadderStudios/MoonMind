@@ -51,6 +51,18 @@ def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
 
     return [member.value for member in enum_cls]
 
+
+def _default_provider_model_tiers() -> list[dict[str, Any]]:
+    return [
+        {
+            "label": "Runtime default",
+            "model": None,
+            "effort": None,
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
+
 # Note: fastapi-users[sqlalchemy] uses GUID/UUID by default for id.
 # If you need an Integer ID, you would use SQLAlchemyBaseUserTable[int]
 # and ensure your UserManager and FastAPIUsers instances are typed accordingly.
@@ -2388,6 +2400,10 @@ class ManagedAgentProviderProfile(Base):
             ")",
             name="ck_provider_profiles_last_auth_method",
         ),
+        CheckConstraint(
+            "default_model_tier >= 1",
+            name="ck_provider_profiles_default_model_tier_positive",
+        ),
         Index(
             "ux_provider_profiles_runtime_default",
             "runtime_id",
@@ -2404,6 +2420,20 @@ class ManagedAgentProviderProfile(Base):
     default_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_effort: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     model_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    model_tiers: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=_default_provider_model_tiers,
+        server_default=text(
+            """'[{"label":"Runtime default","model":null,"effort":null,"parameters":{},"annotations":{}}]'"""
+        ),
+    )
+    default_model_tier: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+    )
     
     credential_source: Mapped[ProviderCredentialSource] = mapped_column(
         Enum(
