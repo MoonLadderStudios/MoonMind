@@ -1439,6 +1439,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/remediations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Remediation Collection
+         * @description List only remediation relationships whose two executions are visible.
+         */
+        get: operations["list_remediation_collection_api_executions_remediations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/remediations": {
         parameters: {
             query?: never;
@@ -3006,6 +3026,26 @@ export interface paths {
          * @description Serve the React-powered RAG index health page.
          */
         get: operations["index_health_route_index_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/remediations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Remediations Route
+         * @description Serve the capability-gated remediation inventory shell.
+         */
+        get: operations["remediations_route_remediations_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9141,6 +9181,47 @@ export interface components {
             /** Maxbudgetusd */
             maxBudgetUsd?: number | null;
         };
+        /** RemediationCollectionItemModel */
+        RemediationCollectionItemModel: {
+            /** Remediationworkflowid */
+            remediationWorkflowId: string;
+            /** Title */
+            title: string;
+            /** Status */
+            status: string;
+            /**
+             * Attentionrequired
+             * @default false
+             */
+            attentionRequired: boolean;
+            /** Targetworkflowid */
+            targetWorkflowId: string;
+            /** Targettitle */
+            targetTitle: string;
+            /** Authoritymode */
+            authorityMode: string;
+            /** Mode */
+            mode: string;
+            /** Latestactionsummary */
+            latestActionSummary?: string | null;
+            /** Resolution */
+            resolution?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** RemediationCollectionResponseModel */
+        RemediationCollectionResponseModel: {
+            /** Items */
+            items: components["schemas"]["RemediationCollectionItemModel"][];
+        };
         /** RemediationLinkSummaryModel */
         RemediationLinkSummaryModel: {
             /** Remediationworkflowid */
@@ -13785,6 +13866,26 @@ export interface operations {
             };
         };
     };
+    list_remediation_collection_api_executions_remediations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemediationCollectionResponseModel"];
+                };
+            };
+        };
+    };
     list_execution_remediations_api_executions__workflow_id__remediations_get: {
         parameters: {
             query?: {
@@ -17025,6 +17126,26 @@ export interface operations {
         };
     };
     index_health_route_index_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    remediations_route_remediations_get: {
         parameters: {
             query?: never;
             header?: never;

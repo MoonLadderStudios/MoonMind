@@ -870,6 +870,16 @@ class TemporalExecutionService:
         await self._attach_remediation_checkpoint_branch_links(links)
         return links
 
+    async def list_remediation_links(self) -> list[TemporalExecutionRemediationLink]:
+        """Return the compact remediation inventory, newest activity first."""
+        stmt = select(TemporalExecutionRemediationLink).order_by(
+            TemporalExecutionRemediationLink.updated_at.desc(),
+            TemporalExecutionRemediationLink.remediation_workflow_id.asc(),
+        )
+        links = await self._scalars_all(stmt)
+        await self._attach_remediation_checkpoint_branch_links(links)
+        return links
+
     async def list_remediations_for_target(
         self, target_workflow_id: str
     ) -> list[TemporalExecutionRemediationLink]:

@@ -1048,6 +1048,23 @@ async def index_health_route(
     )
 
 
+@router.get("/remediations", response_class=HTMLResponse)
+async def remediations_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the capability-gated remediation inventory shell."""
+    return await _render_react_page(
+        request,
+        "remediations",
+        "/remediations",
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
+
 @router.get("/artifacts", response_class=HTMLResponse)
 @router.get("/observability", response_class=HTMLResponse)
 async def artifact_collection_route(
@@ -1244,6 +1261,7 @@ async def get_dashboard_ui_info(
             "skills": True,
             "settings": True,
             "oauthTerminal": True,
+            "remediationCollection": True,
             "omnigentAgents": omnigent_agents_available,
             # No authorized policy inventory read contract exists yet. Advertising
             # this explicitly keeps the rail and route free of dead links.
@@ -1266,6 +1284,7 @@ async def get_dashboard_ui_info(
             "skills": "/api/workflows/skills",
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",
+            "remediations": "/api/executions/remediations",
             **(
                 {"omnigentAgents": f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/agents"}
                 if omnigent_agents_available

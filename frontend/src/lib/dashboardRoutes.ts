@@ -7,6 +7,7 @@ export type DashboardPage =
   | 'manifests'
   | 'omnigent-inventory'
   | 'oauth-terminal'
+  | 'remediations'
   | 'schedules'
   | 'settings'
   | 'skills'
@@ -134,6 +135,9 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
   }
   if (path === '/index-health') {
     return { page: 'index-health', dataWidePanel: true, currentPath: path };
+  }
+  if (path === '/remediations') {
+    return { page: 'remediations', dataWidePanel: true, currentPath: path };
   }
   if (path === '/oauth-terminal') {
     return { page: 'oauth-terminal', dataWidePanel: true, currentPath: path };

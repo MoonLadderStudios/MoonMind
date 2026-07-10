@@ -260,10 +260,12 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert payload["app"] == "moonmind"
     assert payload["apiBase"] == "/api"
     assert payload["features"]["workflowLiveUpdates"] is True
+    assert payload["features"]["remediationCollection"] is True
     assert isinstance(payload["features"]["omnigentAgents"], bool)
     assert payload["features"]["omnigentPolicies"] is False
     assert payload["endpoints"]["workflows"] == "/api/executions"
     assert payload["endpoints"]["workflowUpdatesStream"] == "/api/workflows/updates/stream"
+    assert payload["endpoints"]["remediations"] == "/api/executions/remediations"
     assert payload["workerPause"] == {
         "get": "/api/system/worker-pause",
         "post": "/api/system/worker-pause",
@@ -287,6 +289,7 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
         "/skills",
         "/settings",
         "/oauth-terminal",
+        "/remediations",
         "/omnigent/agents",
         "/omnigent/policies",
     ):

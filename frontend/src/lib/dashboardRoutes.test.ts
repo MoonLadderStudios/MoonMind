@@ -82,4 +82,12 @@ describe('dashboard route resolution', () => {
   it.each(['/schedules', '/manifests'])('uses the fluid shell for the %s collection', (path) => {
     expect(resolveDashboardRoute(path)?.dataWidePanel).toBe(true);
   });
+
+  it('resolves the remediation collection as a data-wide route', () => {
+    expect(resolveDashboardRoute('/remediations')).toEqual({
+      page: 'remediations',
+      dataWidePanel: true,
+      currentPath: '/remediations',
+    });
+  });
 });
