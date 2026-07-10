@@ -1,57 +1,45 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issue_ref": "MoonLadderStudios/MoonMind#3140",
-  "source_verification_artifact": "artifacts/github-issue-implement-verify.json",
+  "issue_ref": "MoonLadderStudios/MoonMind#3141",
   "source_verdict": "ADDITIONAL_WORK_NEEDED",
-  "summary": "Corrected stale terminal evidence coverage and resolved focused adapter-suite failures exposed once the documented test dependencies were installed. Terminal failures now retain manual-review disposition, and terminal artifact freshness allows a one-second precision boundary between filesystem timestamps and run-store start timestamps while still rejecting genuinely stale evidence.",
+  "source_artifact": "artifacts/github-issue-implement-verify.json",
+  "summary": "Added the verifier-requested focused coverage for missing, malformed, and stale terminal evidence; session-aware retry recommendations; and canonical AgentRunResult serialization. No production behavior was changed.",
   "changed_files": [
-    "moonmind/workflows/adapters/managed_agent_adapter.py",
     "tests/unit/workflows/adapters/test_managed_agent_adapter.py",
     "reports/remediation_attempt-1.json"
   ],
   "gap_statuses": [
     {
-      "requirement": "Add coverage for stale terminal evidence",
-      "gap_type": "verification",
-      "status": "fixed",
-      "evidence": "The malformed-and-stale test now uses the current run identity and asserts 'stale terminal artifact', reaching the freshness rejection branch."
+      "gap": "Unit tests for no terminal result with no attempts, malformed terminal result, and stale terminal result",
+      "status": "addressed",
+      "evidence": "Added focused assertions for INCOMPLETE_TERMINAL_CONTRACT, TERMINAL_ARTIFACT_INVALID, TERMINAL_ARTIFACT_STALE, missingEvidence, and latestAttemptRef absence."
     },
     {
-      "requirement": "Run the focused adapter unit and boundary coverage",
-      "gap_type": "verification",
-      "status": "fixed",
-      "evidence": "Installed the declared tests extra and the exact focused runner completed successfully: 78 Python tests passed; the automatic frontend phase also passed."
+      "gap": "Retry recommendation when same-session continuation is supported versus unavailable",
+      "status": "addressed",
+      "evidence": "Added paired merge_gate_owned cases asserting continue_same_session and retry_new_session while retaining incomplete-contract metadata."
     },
     {
-      "requirement": "Preserve established manual-review terminal result behavior",
-      "gap_type": "implementation",
-      "status": "fixed",
-      "evidence": "Focused execution revealed that failed, blocked, and attempts_exhausted terminal results lost mergeAutomationDisposition. They now derive manual_review unless an owned merge gate derives reenter_gate."
+      "gap": "Workflow/adapter boundary test proving canonical AgentRunResult serialization",
+      "status": "addressed",
+      "evidence": "Added an alias-based JSON dump/model-validation round trip asserting failureClass, retryRecommendation, failureCode, and missingEvidence."
     },
     {
-      "requirement": "Reject stale artifacts without rejecting run-boundary writes",
-      "gap_type": "implementation",
-      "status": "fixed",
-      "evidence": "Freshness validation now permits a one-second filesystem/run-store timestamp precision tolerance; the explicit 2020 stale artifact remains rejected."
+      "gap": "Execute focused unit checks",
+      "status": "blocked_by_environment",
+      "evidence": "The named command reached repository prechecks but Python could not import pytest."
     }
   ],
-  "targeted_checks": [
+  "targeted_local_checks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py",
-      "result": "PASS",
-      "notes": "78 Python tests passed with four non-blocking pytest marker warnings. Automatic frontend phase: 63 files passed; 972 tests passed and 238 skipped."
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py tests/unit/workflows/adapters/test_codex_session_adapter.py",
+      "result": "NOT_RUN",
+      "notes": "Repository prechecks passed; test execution stopped with /usr/local/bin/python: No module named pytest."
     },
     {
       "command": "git diff --check",
-      "result": "PASS",
-      "notes": "No whitespace errors."
+      "result": "PASS"
     }
-  ],
-  "remaining_work": [],
-  "scope_controls": {
-    "pull_request_created": false,
-    "github_issue_status_changed": false,
-    "scope_broadened": false
-  }
+  ]
 }

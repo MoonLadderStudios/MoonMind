@@ -35,9 +35,11 @@ from moonmind.auth.env_shaping import (
     shape_environment_for_api_key,
     shape_environment_for_oauth,
 )
+from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ProfileResolutionError,
+    _derive_pr_resolver_metadata,
     _load_pr_resolver_diagnostics,
     _load_pr_resolver_terminal_result,
     _pr_resolver_status,
@@ -117,6 +119,83 @@ def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
         "var/pr_resolver/result.json: malformed JSON object",
         "artifacts/pr_resolver_result.json: stale terminal artifact",
     )
+
+
+def test_pr_resolver_missing_terminal_metadata_without_attempts(tmp_path: Path) -> None:
+    metadata = _derive_pr_resolver_metadata(str(tmp_path))
+
+    assert metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert metadata["missingEvidence"] == ["var/pr_resolver/result.json"]
+    assert metadata["retryRecommendation"] == "retry_new_session"
+    assert "latestAttemptRef" not in metadata
+
+
+@pytest.mark.parametrize(
+    ("contents", "not_before", "failure_code"),
+    [
+        ("not json", None, "TERMINAL_ARTIFACT_INVALID"),
+        (
+            '{"status":"merged","finished_at":"2020-01-01T00:00:00Z"}',
+            "now",
+            "TERMINAL_ARTIFACT_STALE",
+        ),
+    ],
+)
+def test_pr_resolver_invalid_terminal_metadata_has_stable_failure_code(
+    tmp_path: Path,
+    contents: str,
+    not_before: str | None,
+    failure_code: str,
+) -> None:
+    from datetime import UTC, datetime
+
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    (resolver / "result.json").write_text(contents, encoding="utf-8")
+
+    metadata = _derive_pr_resolver_metadata(
+        str(tmp_path),
+        not_before=datetime.now(tz=UTC) if not_before else None,
+    )
+
+    assert metadata["failureCode"] == failure_code
+    assert metadata["terminalResultPresent"] is False
+    assert metadata["missingEvidence"] == ["var/pr_resolver/result.json"]
+
+
+@pytest.mark.parametrize(
+    ("merge_gate_owned", "recommendation"),
+    [(True, "continue_same_session"), (False, "retry_new_session")],
+)
+def test_pr_resolver_incomplete_retry_recommendation_tracks_session_capability(
+    tmp_path: Path, merge_gate_owned: bool, recommendation: str
+) -> None:
+    metadata = _derive_pr_resolver_metadata(
+        str(tmp_path), merge_gate_owned=merge_gate_owned
+    )
+
+    assert metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert metadata["retryRecommendation"] == recommendation
+
+
+def test_incomplete_pr_resolver_result_survives_canonical_serialization(
+    tmp_path: Path,
+) -> None:
+    metadata = _derive_pr_resolver_metadata(str(tmp_path), merge_gate_owned=True)
+    result = AgentRunResult(
+        failureClass="execution_error",
+        retryRecommendation=metadata["retryRecommendation"],
+        metadata=metadata,
+    )
+
+    restored = AgentRunResult.model_validate(
+        result.model_dump(by_alias=True, mode="json")
+    )
+
+    assert restored.failure_class == "execution_error"
+    assert restored.retry_recommendation == "continue_same_session"
+    assert restored.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert restored.metadata["missingEvidence"] == ["var/pr_resolver/result.json"]
 
 
 def test_pr_resolver_treats_naive_terminal_cutoff_as_utc(tmp_path: Path) -> None:
