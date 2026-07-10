@@ -199,23 +199,23 @@ class ProviderProfileCreate(BaseModel):
 
     @field_validator("model_tiers", mode="before")
     @classmethod
-    def _validate_model_tiers(cls, value: object) -> list[dict[str, Any]]:
-        return _validate_model_tiers_value(
-            _default_model_tiers() if value is None else value
-        )
+    def _validate_model_tiers(cls, value: object) -> list[dict[str, Any]] | None:
+        if value is None:
+            return None
+        return _validate_model_tiers_value(value)
 
     @field_validator("default_model_tier", mode="before")
     @classmethod
-    def _validate_default_model_tier(cls, value: object) -> int:
-        default_model_tier = _validate_default_model_tier_input(value)
-        return 1 if default_model_tier is None else default_model_tier
+    def _validate_default_model_tier(cls, value: object) -> int | None:
+        return _validate_default_model_tier_input(value)
 
     @model_validator(mode="after")
     def _validate_runtime_env(self) -> "ProviderProfileCreate":
-        self.default_model_tier = _validate_default_model_tier_value(
-            self.default_model_tier,
-            self.model_tiers,
-        )
+        if self.model_tiers is not None and self.default_model_tier is not None:
+            self.default_model_tier = _validate_default_model_tier_value(
+                self.default_model_tier,
+                self.model_tiers,
+            )
         if self.enabled and self.auth_state != ProviderProfileAuthState.CONNECTED.value:
             raise ValueError("enabled profiles require auth_state=connected")
         if self.enabled:
