@@ -123,12 +123,12 @@ describe('Skills Entrypoint', () => {
     const navigation = await screen.findByRole('region', { name: 'Skill navigation' });
     expect(navigation).toBeTruthy();
     const skill = await screen.findByRole('button', { name: 'pr-resolver' });
-    expect(skill.getAttribute('aria-selected')).toBe('false');
+    expect(skill.getAttribute('aria-current')).toBe('false');
 
     fireEvent.click(skill);
 
     await waitFor(() => {
-      expect(skill.getAttribute('aria-selected')).toBe('true');
+      expect(skill.getAttribute('aria-current')).toBe('true');
       expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'pr-resolver' }));
     });
   });
@@ -386,6 +386,9 @@ describe('Skills Entrypoint', () => {
     const dialog = screen.getByRole('dialog', { name: 'Create or upload skill' });
     const close = screen.getByRole('button', { name: 'Close create skill' });
     const lastAction = screen.getByRole('button', { name: 'Upload Zip' });
+    dialog.querySelectorAll<HTMLElement>('button, input, textarea, select').forEach((element) => {
+      Object.defineProperty(element, 'offsetWidth', { configurable: true, value: 1 });
+    });
 
     close.focus();
     fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });

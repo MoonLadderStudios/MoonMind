@@ -283,11 +283,21 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
     }
     const focusable = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
-    ) ?? []).filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true');
+    ) ?? []).filter((element) => {
+      const isVisible = element.offsetWidth > 0 || element.offsetHeight > 0;
+      const isNotAriaHidden = element.getAttribute('aria-hidden') !== 'true';
+      const isNotTabIndexMinusOne = element.getAttribute('tabindex') !== '-1';
+      return isVisible && isNotAriaHidden && isNotTabIndexMinusOne;
+    });
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
     if (!first || !last) {
       event.preventDefault();
+      return;
+    }
+    if (!drawerRef.current?.contains(document.activeElement)) {
+      event.preventDefault();
+      first.focus();
       return;
     }
     if (event.shiftKey && document.activeElement === first) {
@@ -448,7 +458,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
                   <button
                     key={skillItem.id}
                     type="button"
-                    aria-selected={selectedSkillId === skillItem.id}
+                    aria-current={selectedSkillId === skillItem.id ? 'true' : 'false'}
                     className={selectedSkillId === skillItem.id ? 'queue-submit-primary' : 'secondary'}
                     onClick={() => selectSkill(skillItem.id)}
                   >
