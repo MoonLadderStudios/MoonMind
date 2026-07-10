@@ -35,10 +35,31 @@ class _CreateTaskHandler(BaseHTTPRequestHandler):
                 "body": json.loads(body.decode("utf-8")),
             }
         )
-        payload = json.dumps({"taskId": "mm:child-task-1", "status": "queued"}).encode(
-            "utf-8"
-        )
+        payload = json.dumps(
+            {
+                "workflowId": "mm:child-task-1",
+                "runId": "run-child-task-1",
+                "state": "initializing",
+                "temporalStatus": "running",
+            }
+        ).encode("utf-8")
         self.send_response(201)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
+        assert self.path == "/api/executions/mm%3Achild-task-1"
+        payload = json.dumps(
+            {
+                "workflowId": "mm:child-task-1",
+                "runId": "run-child-task-1",
+                "state": "initializing",
+                "temporalStatus": "running",
+            }
+        ).encode("utf-8")
+        self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
@@ -317,7 +338,10 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
             {
                 "pr": 1337,
                 "branch": "codex/session-child-task",
-                "jobId": "mm:child-task-1",
+                "workflowId": "mm:child-task-1",
+                "runId": "run-child-task-1",
+                "state": "initializing",
+                "temporalStatus": "running",
             }
         ]
         assert len(_CreateTaskHandler.requests) == 1
