@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { ExecutionStatusPill, StepExecutionStatusPill, StepLedgerStatusPill } from '../components/ExecutionStatusPill';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
+import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import {
   DashboardToastProvider,
   useDashboardToast,
@@ -270,7 +271,9 @@ export function WorkflowWorkspaceShell({
         />
       ) : null}
       <main className="workflow-workspace-detail" aria-label="Workflow detail">
-        <WorkflowDetailPage payload={payload} />
+        <EntityDetailFrame entity="workflow">
+          <WorkflowDetailPage payload={payload} />
+        </EntityDetailFrame>
       </main>
     </div>
   );

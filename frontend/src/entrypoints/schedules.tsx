@@ -4,6 +4,7 @@ import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import { DataTable } from '../components/tables/DataTable';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
+import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { WorkflowColumnFilterButton, WorkflowColumnHeader } from '../components/WorkflowColumnHeader';
 
 import { z } from 'zod';
@@ -1154,6 +1155,7 @@ function ScheduleDetailPage({
       isLoading={isSidebarLoading}
       error={sidebarError}
     >
+    <EntityDetailFrame entity="recurring">
     <div className="schedules-page schedules-detail-page stack">
       <header className="toolbar schedules-toolbar">
         <div className="schedules-detail-title">
@@ -1276,7 +1278,7 @@ function ScheduleDetailPage({
         </div>
       )}
 
-      <section className="schedules-summary-grid" aria-label="Schedule detail summary">
+      <section id="schedule-overview" className="schedules-summary-grid" aria-label="Schedule detail summary">
         <div className="schedules-summary-item">
           <span>Next Run</span>
           <strong>{formatWhen(schedule.nextRunAt)}</strong>
@@ -1295,8 +1297,14 @@ function ScheduleDetailPage({
         </div>
       </section>
 
+      <nav className="entity-detail-frame__tabs" aria-label="Schedule detail sections">
+        <a href="#schedule-overview">Overview</a>
+        <a href="#schedule-runs">Runs</a>
+        <a href="#schedule-configuration">Configuration</a>
+      </nav>
+
       <div className="schedules-detail-grid">
-        <section className="panel--data schedules-detail-panel" aria-label="Schedule configuration">
+        <section id="schedule-configuration" className="panel--data schedules-detail-panel" aria-label="Schedule configuration">
           <div className="section-heading-row">
             <h3>Configuration</h3>
           </div>
@@ -1504,7 +1512,7 @@ function ScheduleDetailPage({
         </aside>
       </div>
 
-      <section className="panel--data schedules-detail-panel" aria-label="Schedule run history">
+      <section id="schedule-runs" className="panel--data schedules-detail-panel" aria-label="Schedule run history">
         <div className="section-heading-row">
           <h3>Runs</h3>
         </div>
@@ -1570,6 +1578,7 @@ function ScheduleDetailPage({
         <pre className="schedules-json-block">{formatJsonValue(schedule.target)}</pre>
       </section>
     </div>
+    </EntityDetailFrame>
     </RecurringScheduleWorkspace>
   );
 }
