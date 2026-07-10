@@ -15,7 +15,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from moonmind.workflows.executions.model_resolver import resolve_effective_model
+from moonmind.workflows.executions.model_resolver import (
+    resolve_effective_model,
+    resolve_model_effort,
+)
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 
 # ---------------------------------------------------------------------------
@@ -233,3 +236,100 @@ class TestPrecedenceOrder:
         )
         assert model == "gpt-5.5"
         assert source == "runtime_default"
+
+
+class TestResolveModelEffortTiers:
+    def _profile_with_tiers(self) -> MagicMock:
+        profile = MagicMock()
+        profile.default_model = "legacy-model"
+        profile.default_effort = "medium"
+        profile.default_model_tier = 1
+        profile.model_tiers = [
+            {
+                "label": "Plan",
+                "model": "tier-one-model",
+                "effort": "low",
+                "parameters": {},
+                "annotations": {},
+            },
+            {
+                "label": "Implement",
+                "model": "tier-two-model",
+                "effort": "xhigh",
+                "parameters": {},
+                "annotations": {},
+            },
+        ]
+        return profile
+
+    def test_requested_tier_resolves_model_effort(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile_with_tiers(),
+            requested_model_tier=2,
+            env={},
+        )
+
+        assert resolved.model == "tier-two-model"
+        assert resolved.effort == "xhigh"
+        assert resolved.requested_model_tier == 2
+        assert resolved.effective_model_tier == 2
+        assert resolved.model_source == "requested_tier"
+        assert resolved.effort_source == "requested_tier"
+        assert resolved.fallback_reason is None
+
+    def test_missing_requested_tier_uses_profile_default_tier(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile_with_tiers(),
+            env={},
+        )
+
+        assert resolved.model == "tier-one-model"
+        assert resolved.effective_model_tier == 1
+        assert resolved.model_source == "profile_default_tier"
+        assert resolved.fallback_reason == "profile_default_tier"
+
+    def test_requested_tier_above_range_clamps_and_records_reason(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile_with_tiers(),
+            requested_model_tier=3,
+            env={},
+        )
+
+        assert resolved.effective_model_tier == 2
+        assert resolved.model == "tier-two-model"
+        assert resolved.fallback_reason == "requested_tier_above_configured_range"
+
+    def test_explicit_model_and_effort_override_tier_policy(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile_with_tiers(),
+            requested_model="explicit-model",
+            requested_effort="high",
+            requested_model_tier=2,
+            env={},
+        )
+
+        assert resolved.model == "explicit-model"
+        assert resolved.effort == "high"
+        assert resolved.model_source == "task_override"
+        assert resolved.effort_source == "task_override"
+
+    def test_advisory_preview_mismatch_is_detected(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile_with_tiers(),
+            requested_model_tier=2,
+            advisory_preview={
+                "requestedTier": 2,
+                "effectiveTier": 2,
+                "model": "stale-model",
+                "effort": "xhigh",
+                "fallbackReason": None,
+            },
+            env={},
+        )
+
+        assert resolved.preview_mismatch is True

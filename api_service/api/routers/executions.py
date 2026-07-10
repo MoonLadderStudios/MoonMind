@@ -164,7 +164,10 @@ from moonmind.workflows.temporal.client import TemporalClientAdapter, query_work
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
-from moonmind.workflows.executions.model_resolver import resolve_effective_model
+from moonmind.workflows.executions.model_resolver import (
+    resolve_effective_model,
+    resolve_model_effort,
+)
 from moonmind.workflows.executions.preset_goal_scheduler import (
     GoalPresetSchedule,
     goal_from_payloads,
@@ -7672,6 +7675,25 @@ async def _resolve_step_runtime_selections(
         raw_requested_model: str | None = runtime_payload.get("model") or None
         if raw_requested_model is not None:
             raw_requested_model = str(raw_requested_model)
+        raw_requested_effort: str | None = runtime_payload.get("effort") or None
+        if raw_requested_effort is not None:
+            raw_requested_effort = str(raw_requested_effort)
+        raw_requested_tier = runtime_payload.get("modelTier")
+        try:
+            requested_model_tier = (
+                int(raw_requested_tier) if raw_requested_tier is not None else None
+            )
+        except (TypeError, ValueError) as exc:
+            raise _invalid_workflow_request(
+                f"Invalid payload.workflow.steps[{index}].runtime.modelTier: "
+                f"{raw_requested_tier!r}."
+            ) from exc
+        tier_fallback = str(runtime_payload.get("tierFallback") or "clamp")
+        advisory_preview = (
+            runtime_payload.get("tierPreview")
+            if isinstance(runtime_payload.get("tierPreview"), Mapping)
+            else None
+        )
 
         effective_profile_id = raw_step_profile_id or task_profile_id
         provider_profile = None
@@ -7692,29 +7714,37 @@ async def _resolve_step_runtime_selections(
                     f"payload.workflow.steps[{index}]: {task_profile_id!r}."
                 )
 
-        resolved_model, model_source = resolve_effective_model(
-            runtime_id=canonical_step_runtime,
-            profile=provider_profile,
-            requested_model=raw_requested_model,
-            workflow_settings=settings.workflow,
-        )
+        try:
+            resolved_model_effort = resolve_model_effort(
+                runtime_id=canonical_step_runtime,
+                profile=provider_profile,
+                requested_model=raw_requested_model,
+                requested_effort=raw_requested_effort,
+                requested_model_tier=requested_model_tier,
+                tier_fallback=tier_fallback,
+                advisory_preview=advisory_preview,
+                workflow_settings=settings.workflow,
+            )
+        except ValueError as exc:
+            raise _invalid_workflow_request(str(exc)) from exc
 
         resolved_runtime = dict(runtime_payload)
         if canonical_step_runtime:
             resolved_runtime["mode"] = canonical_step_runtime
-        if resolved_model:
-            resolved_runtime["model"] = resolved_model
+        if resolved_model_effort.model:
+            resolved_runtime["model"] = resolved_model_effort.model
+        if resolved_model_effort.effort:
+            resolved_runtime["effort"] = resolved_model_effort.effort
         if raw_requested_model is not None:
             resolved_runtime["requestedModel"] = raw_requested_model
-        resolved_runtime["modelSource"] = model_source
+        resolved_runtime["modelSource"] = resolved_model_effort.model_source
+        resolved_runtime["modelTierResolution"] = resolved_model_effort.as_metadata()
         if raw_step_profile_id:
             resolved_runtime["profileId"] = raw_step_profile_id
             resolved_runtime["providerProfile"] = raw_step_profile_id
         elif task_profile_id and not raw_step_profile_id:
             resolved_runtime.setdefault("inheritedProfileId", task_profile_id)
-        if "effort" not in resolved_runtime and isinstance(
-            task_runtime.get("effort"), str
-        ):
+        if "effort" not in resolved_runtime and isinstance(task_runtime.get("effort"), str):
             resolved_runtime["effort"] = task_runtime["effort"]
         step["runtime"] = resolved_runtime
 
@@ -9759,6 +9789,24 @@ async def _create_execution_from_workflow_request(
     raw_requested_model: str | None = runtime_payload.get("model") or None
     if raw_requested_model is not None:
         raw_requested_model = str(raw_requested_model)
+    raw_requested_effort: str | None = runtime_payload.get("effort") or None
+    if raw_requested_effort is not None:
+        raw_requested_effort = str(raw_requested_effort)
+    raw_requested_tier = runtime_payload.get("modelTier")
+    try:
+        requested_model_tier = (
+            int(raw_requested_tier) if raw_requested_tier is not None else None
+        )
+    except (TypeError, ValueError) as exc:
+        raise _invalid_workflow_request(
+            f"Invalid runtime.modelTier: {raw_requested_tier!r}."
+        ) from exc
+    tier_fallback = str(runtime_payload.get("tierFallback") or "clamp")
+    advisory_preview = (
+        runtime_payload.get("tierPreview")
+        if isinstance(runtime_payload.get("tierPreview"), Mapping)
+        else None
+    )
 
     # Normalize targetRuntime to canonical form and validate it.
     canonical_target_runtime: str | None = None
@@ -9788,12 +9836,19 @@ async def _create_execution_from_workflow_request(
                 f"Provider profile not found: {raw_profile_id!r}."
             )
 
-    resolved_model, model_source = resolve_effective_model(
-        runtime_id=canonical_target_runtime,
-        profile=_provider_profile,
-        requested_model=raw_requested_model,
-        workflow_settings=settings.workflow,
-    )
+    try:
+        resolved_model_effort = resolve_model_effort(
+            runtime_id=canonical_target_runtime,
+            profile=_provider_profile,
+            requested_model=raw_requested_model,
+            requested_effort=raw_requested_effort,
+            requested_model_tier=requested_model_tier,
+            tier_fallback=tier_fallback,
+            advisory_preview=advisory_preview,
+            workflow_settings=settings.workflow,
+        )
+    except ValueError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
 
     await _resolve_step_runtime_selections(
         steps=normalized_steps,
@@ -9825,11 +9880,12 @@ async def _create_execution_from_workflow_request(
         "priority": request.priority,
         "maxAttempts": request.max_attempts,
         "targetRuntime": canonical_target_runtime,
-        "model": resolved_model,
+        "model": resolved_model_effort.model,
         "requestedModel": raw_requested_model,
-        "modelSource": model_source,
+        "modelSource": resolved_model_effort.model_source,
         "profileId": raw_profile_id if _provider_profile is not None else None,
-        "effort": runtime_payload.get("effort"),
+        "effort": resolved_model_effort.effort,
+        "modelTierResolution": resolved_model_effort.as_metadata(),
         "publishMode": publish_payload["mode"],
         "stepCount": step_count,
     }
@@ -10157,6 +10213,35 @@ async def _resolve_recurring_runtime_metadata(
         ) or parameter_payload.get("model")
     if raw_requested_model is not None:
         raw_requested_model = str(raw_requested_model)
+    raw_requested_effort: str | None = runtime_payload.get("effort") or None
+    if raw_requested_effort is None:
+        raw_requested_effort = parameter_payload.get("effort")
+    if raw_requested_effort is not None:
+        raw_requested_effort = str(raw_requested_effort)
+    raw_requested_tier = runtime_payload.get("modelTier")
+    if raw_requested_tier is None:
+        raw_requested_tier = parameter_payload.get("modelTier")
+    try:
+        requested_model_tier = (
+            int(raw_requested_tier) if raw_requested_tier is not None else None
+        )
+    except (TypeError, ValueError) as exc:
+        raise _invalid_workflow_request(
+            f"Invalid runtime.modelTier: {raw_requested_tier!r}."
+        ) from exc
+    tier_fallback = str(
+        runtime_payload.get("tierFallback")
+        or parameter_payload.get("tierFallback")
+        or "clamp"
+    )
+    advisory_preview = None
+    for preview_candidate in (
+        runtime_payload.get("tierPreview"),
+        parameter_payload.get("tierPreview"),
+    ):
+        if isinstance(preview_candidate, Mapping):
+            advisory_preview = preview_candidate
+            break
 
     provider_profile = None
     session_get = getattr(session, "get", None)
@@ -10170,24 +10255,29 @@ async def _resolve_recurring_runtime_metadata(
                 f"Provider profile not found: {raw_profile_id!r}."
             )
 
-    resolved_model, model_source = resolve_effective_model(
-        runtime_id=canonical_target_runtime,
-        profile=provider_profile,
-        requested_model=raw_requested_model,
-        workflow_settings=settings.workflow,
-    )
+    try:
+        resolved_model_effort = resolve_model_effort(
+            runtime_id=canonical_target_runtime,
+            profile=provider_profile,
+            requested_model=raw_requested_model,
+            requested_effort=raw_requested_effort,
+            requested_model_tier=requested_model_tier,
+            tier_fallback=tier_fallback,
+            advisory_preview=advisory_preview,
+            workflow_settings=settings.workflow,
+        )
+    except ValueError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
     metadata: dict[str, Any] = {
         "targetRuntime": canonical_target_runtime,
-        "model": resolved_model,
+        "model": resolved_model_effort.model,
         "requestedModel": raw_requested_model,
-        "modelSource": model_source,
+        "modelSource": resolved_model_effort.model_source,
+        "modelTierResolution": resolved_model_effort.as_metadata(),
     }
     if raw_profile_id:
         metadata["profileId"] = raw_profile_id
-    if "effort" in runtime_payload:
-        metadata["effort"] = runtime_payload.get("effort")
-    elif "effort" in parameter_payload:
-        metadata["effort"] = parameter_payload.get("effort")
+    metadata["effort"] = resolved_model_effort.effort
     return metadata
 
 
@@ -10206,6 +10296,10 @@ def _stamp_recurring_runtime_metadata(
         initial_parameters["requestedModel"] = runtime_metadata["requestedModel"]
     if runtime_metadata.get("modelSource"):
         initial_parameters["modelSource"] = runtime_metadata["modelSource"]
+    if runtime_metadata.get("modelTierResolution"):
+        initial_parameters["modelTierResolution"] = runtime_metadata[
+            "modelTierResolution"
+        ]
     if runtime_metadata.get("profileId"):
         initial_parameters["profileId"] = runtime_metadata["profileId"]
     if "effort" in runtime_metadata:
@@ -10226,6 +10320,10 @@ def _stamp_recurring_runtime_metadata(
         runtime_payload["model"] = runtime_metadata["model"]
     if "effort" in runtime_metadata:
         runtime_payload["effort"] = runtime_metadata.get("effort")
+    if runtime_metadata.get("modelTierResolution"):
+        runtime_payload["modelTierResolution"] = runtime_metadata[
+            "modelTierResolution"
+        ]
     if runtime_metadata.get("profileId"):
         profile_id = runtime_metadata["profileId"]
         runtime_payload["profileId"] = profile_id

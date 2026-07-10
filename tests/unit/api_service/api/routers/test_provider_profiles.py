@@ -669,6 +669,115 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
 
 
 @pytest.mark.asyncio
+async def test_create_provider_profile_accepts_model_tiers_and_preview(
+    client_app: AsyncClient, _module_db
+) -> None:
+    payload = {
+        "profile_id": "tiered_profile_mm1172",
+        "runtime_id": "codex_cli",
+        "credential_source": "none",
+        "runtime_materialization_mode": "composite",
+        "default_model": "legacy-default",
+        "default_effort": "medium",
+        "model_tiers": [
+            {
+                "label": "Plan",
+                "model": "gpt-5.5",
+                "effort": "medium",
+                "parameters": {},
+                "annotations": {},
+            },
+            {
+                "label": "Implement",
+                "model": "gpt-5.5",
+                "effort": "xhigh",
+                "parameters": {},
+                "annotations": {},
+            },
+        ],
+        "default_model_tier": 1,
+    }
+
+    async with client_app as client:
+        create_response = await client.post("/api/v1/provider-profiles", json=payload)
+        preview_response = await client.post(
+            "/api/v1/provider-profiles/tiered_profile_mm1172/model-tiers:preview",
+            json={
+                "steps": [
+                    {"id": "plan", "modelTier": 1},
+                    {"id": "docs", "modelTier": 3},
+                ]
+            },
+        )
+
+    assert create_response.status_code == 201
+    data = create_response.json()
+    assert data["default_model"] == "legacy-default"
+    assert data["default_effort"] == "medium"
+    assert data["default_model_tier"] == 1
+    assert data["model_tiers"][1]["label"] == "Implement"
+
+    assert preview_response.status_code == 200
+    preview = preview_response.json()
+    assert preview["profileId"] == "tiered_profile_mm1172"
+    assert preview["advisory"] is True
+    assert preview["items"] == [
+        {
+            "stepId": "plan",
+            "requestedTier": 1,
+            "effectiveTier": 1,
+            "model": "gpt-5.5",
+            "effort": "medium",
+            "fallbackReason": None,
+        },
+        {
+            "stepId": "docs",
+            "requestedTier": 3,
+            "effectiveTier": 2,
+            "model": "gpt-5.5",
+            "effort": "xhigh",
+            "fallbackReason": "requested_tier_above_configured_range",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_provider_profile_validates_default_model_tier(
+    client_app: AsyncClient, _module_db
+) -> None:
+    payload = {
+        "profile_id": "tier_bounds_profile_mm1172",
+        "runtime_id": "codex_cli",
+        "credential_source": "none",
+        "runtime_materialization_mode": "composite",
+    }
+
+    async with client_app as client:
+        create_response = await client.post("/api/v1/provider-profiles", json=payload)
+        update_response = await client.patch(
+            "/api/v1/provider-profiles/tier_bounds_profile_mm1172",
+            json={
+                "model_tiers": [
+                    {
+                        "label": "Only",
+                        "model": None,
+                        "effort": None,
+                        "parameters": {},
+                        "annotations": {},
+                    }
+                ],
+                "default_model_tier": 2,
+            },
+        )
+
+    assert create_response.status_code == 201
+    assert update_response.status_code == 422
+    assert update_response.json()["detail"] == (
+        "default_model_tier must refer to a configured model_tiers entry"
+    )
+
+
+@pytest.mark.asyncio
 async def test_create_provider_profile_rejects_overlong_default_effort(
     client_app: AsyncClient, _module_db
 ) -> None:

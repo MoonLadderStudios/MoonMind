@@ -36,6 +36,11 @@ from moonmind.auth.secret_refs import (
     parse_secret_ref,
 )
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
+from moonmind.workflows.executions.model_resolver import (
+    DEFAULT_MODEL_TIER,
+    normalize_model_tiers,
+    resolve_model_effort,
+)
 from moonmind.utils.logging import (
     redact_profile_file_templates,
     redact_sensitive_payload,
@@ -76,6 +81,8 @@ class ProviderProfileCreate(BaseModel):
     default_model: Optional[str] = None
     default_effort: Optional[str] = Field(default=None, max_length=64)
     model_overrides: Optional[dict[str, str]] = None
+    model_tiers: list[dict[str, Any]] = Field(default_factory=lambda: [dict(DEFAULT_MODEL_TIER)])
+    default_model_tier: int = Field(default=1, ge=1)
     
     credential_source: str = Field(..., pattern="^(oauth_volume|secret_ref|none)$")
     runtime_materialization_mode: str = Field(..., pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
@@ -131,6 +138,11 @@ class ProviderProfileCreate(BaseModel):
     def _validate_secret_refs(cls, value: dict[str, str] | None) -> dict[str, str] | None:
         return validate_secret_refs_helper(value)
 
+    @field_validator("model_tiers", mode="after")
+    @classmethod
+    def _validate_model_tiers(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return _validate_model_tiers(value)
+
     @model_validator(mode="after")
     def _validate_runtime_env(self) -> "ProviderProfileCreate":
         if self.enabled and self.auth_state != ProviderProfileAuthState.CONNECTED.value:
@@ -146,6 +158,8 @@ class ProviderProfileCreate(BaseModel):
             volume_ref_field_name="volume_ref",
             volume_mount_path_field_name="volume_mount_path",
         )
+        if self.default_model_tier > len(self.model_tiers):
+            raise ValueError("default_model_tier must refer to a configured model_tiers entry")
         return self
 
 class ProviderProfileUpdate(BaseModel):
@@ -154,6 +168,8 @@ class ProviderProfileUpdate(BaseModel):
     default_model: Optional[str] = None
     default_effort: Optional[str] = Field(default=None, max_length=64)
     model_overrides: Optional[dict[str, str]] = None
+    model_tiers: Optional[list[dict[str, Any]]] = None
+    default_model_tier: Optional[int] = Field(default=None, ge=1)
     credential_source: Optional[str] = Field(default=None, pattern="^(oauth_volume|secret_ref|none)$")
     runtime_materialization_mode: Optional[str] = Field(default=None, pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
     volume_ref: Optional[str] = None
@@ -208,6 +224,13 @@ class ProviderProfileUpdate(BaseModel):
     def _validate_secret_refs_update(cls, value: dict[str, str] | None) -> dict[str, str] | None:
         return validate_secret_refs_helper(value)
 
+    @field_validator("model_tiers", mode="after")
+    @classmethod
+    def _validate_model_tiers_update(
+        cls, value: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        return _validate_model_tiers(value) if value is not None else value
+
     @model_validator(mode="after")
     def _validate_runtime_env_update(self) -> "ProviderProfileUpdate":
         return self
@@ -220,6 +243,8 @@ class ProviderProfileResponse(BaseModel):
     default_model: Optional[str] = None
     default_effort: Optional[str] = None
     model_overrides: dict[str, str] = Field(default_factory=dict)
+    model_tiers: list[dict[str, Any]] = Field(default_factory=lambda: [dict(DEFAULT_MODEL_TIER)])
+    default_model_tier: int = 1
     credential_source: str
     runtime_materialization_mode: str
     volume_ref: Optional[str]
@@ -250,6 +275,37 @@ class ProviderProfileResponse(BaseModel):
     updated_at: Optional[str]
 
     model_config = {"from_attributes": True}
+
+
+class ProviderProfileTierPreviewStep(BaseModel):
+    step_id: str = Field(..., alias="id")
+    model_tier: Optional[int] = Field(default=None, ge=1, alias="modelTier")
+    tier_fallback: Optional[str] = Field(default="clamp", pattern="^(clamp|strict)$", alias="tierFallback")
+
+    model_config = {"populate_by_name": True}
+
+
+class ProviderProfileTierPreviewRequest(BaseModel):
+    steps: list[ProviderProfileTierPreviewStep] = Field(default_factory=list)
+
+
+class ProviderProfileTierPreviewItem(BaseModel):
+    step_id: str = Field(..., alias="stepId")
+    requested_tier: Optional[int] = Field(default=None, alias="requestedTier")
+    effective_tier: Optional[int] = Field(default=None, alias="effectiveTier")
+    model: Optional[str] = None
+    effort: Optional[str] = None
+    fallback_reason: Optional[str] = Field(default=None, alias="fallbackReason")
+
+    model_config = {"populate_by_name": True}
+
+
+class ProviderProfileTierPreviewResponse(BaseModel):
+    profile_id: str = Field(..., alias="profileId")
+    advisory: bool = True
+    items: list[ProviderProfileTierPreviewItem]
+
+    model_config = {"populate_by_name": True}
 
 class ProviderReadinessCheck(BaseModel):
     id: str
@@ -391,6 +447,8 @@ async def create_profile(
         default_model=body.default_model,
         default_effort=body.default_effort,
         model_overrides=body.model_overrides,
+        model_tiers=_model_tiers_for_create(body),
+        default_model_tier=body.default_model_tier,
         credential_source=ProviderCredentialSource(body.credential_source),
         runtime_materialization_mode=RuntimeMaterializationMode(body.runtime_materialization_mode),
         volume_ref=body.volume_ref,
@@ -492,6 +550,12 @@ async def update_profile(
             value = ProviderProfileAuthMethod(value)
         setattr(profile, key, value)
 
+    if not profile.model_tiers:
+        profile.model_tiers = normalize_model_tiers(profile)
+    if not profile.default_model_tier:
+        profile.default_model_tier = 1
+    _validate_profile_tier_bounds(profile.model_tiers, profile.default_model_tier)
+
     if profile.enabled:
         if profile.auth_state != ProviderProfileAuthState.CONNECTED:
             raise HTTPException(
@@ -535,6 +599,51 @@ async def update_profile(
         managed_secret_statuses=secret_statuses,
         secret_ref_results=secret_ref_results.get(profile.profile_id),
     )
+
+
+@router.post(
+    "/{profile_id}/model-tiers:preview",
+    response_model=ProviderProfileTierPreviewResponse,
+)
+async def preview_model_tiers(
+    profile_id: str,
+    body: ProviderProfileTierPreviewRequest,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if not _can_view_profile(profile, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to view this provider profile.",
+        )
+
+    items: list[dict[str, Any]] = []
+    for step in body.steps:
+        try:
+            resolved = resolve_model_effort(
+                runtime_id=profile.runtime_id,
+                profile=profile,
+                requested_model_tier=step.model_tier,
+                tier_fallback=step.tier_fallback,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        items.append(
+            {
+                "stepId": step.step_id,
+                "requestedTier": resolved.requested_model_tier,
+                "effectiveTier": resolved.effective_model_tier,
+                "model": resolved.model,
+                "effort": resolved.effort,
+                "fallbackReason": resolved.fallback_reason,
+            }
+        )
+
+    return {"profileId": profile.profile_id, "advisory": True, "items": items}
 
 @router.post(
     "/{profile_id}/credentials/api-key",
@@ -1597,6 +1706,8 @@ def _row_to_dict(
         "default_model": row.default_model,
         "default_effort": row.default_effort,
         "model_overrides": row.model_overrides or {},
+        "model_tiers": normalize_model_tiers(row),
+        "default_model_tier": row.default_model_tier or 1,
         "credential_source": row.credential_source.value if row.credential_source else None,
         "runtime_materialization_mode": row.runtime_materialization_mode.value if row.runtime_materialization_mode else None,
         "volume_ref": row.volume_ref,
@@ -1642,6 +1753,77 @@ def _row_to_dict(
         payload[key] = redact_sensitive_payload(payload[key])
     payload["file_templates"] = redact_profile_file_templates(payload["file_templates"])
     return payload
+
+
+def _validate_model_tiers(value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("model_tiers must contain at least one tier")
+    normalized: list[dict[str, Any]] = []
+    for index, raw_tier in enumerate(value):
+        if not isinstance(raw_tier, dict):
+            raise ValueError(f"model_tiers[{index}] must be a JSON object")
+        tier = {
+            "label": str(raw_tier.get("label") or f"Tier {index + 1}").strip(),
+            "model": _optional_tier_string(raw_tier.get("model")),
+            "effort": _optional_tier_string(raw_tier.get("effort")),
+            "parameters": dict(raw_tier.get("parameters") or {}),
+            "annotations": dict(raw_tier.get("annotations") or {}),
+        }
+        for field_name in ("parameters", "annotations"):
+            _reject_tier_secret_like_keys(
+                tier[field_name],
+                path=f"model_tiers[{index}].{field_name}",
+            )
+        normalized.append(tier)
+    return normalized
+
+
+def _model_tiers_for_create(body: ProviderProfileCreate) -> list[dict[str, Any]]:
+    if "model_tiers" in body.model_fields_set:
+        return body.model_tiers
+    if body.default_model or body.default_effort:
+        return [
+            {
+                "label": "Default",
+                "model": body.default_model,
+                "effort": body.default_effort,
+                "parameters": {},
+                "annotations": {"migratedFrom": "default_model_default_effort"},
+            }
+        ]
+    return body.model_tiers
+
+
+def _optional_tier_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _reject_tier_secret_like_keys(value: dict[str, Any], *, path: str) -> None:
+    for key, nested in value.items():
+        key_text = str(key).lower()
+        if any(marker in key_text for marker in ("secret", "token", "password", "api_key", "apikey", "credential")):
+            raise ValueError(f"{path} must not contain credential-like key {key!r}")
+        if isinstance(nested, dict):
+            _reject_tier_secret_like_keys(nested, path=f"{path}.{key}")
+
+
+def _validate_profile_tier_bounds(
+    model_tiers: list[dict[str, Any]] | None,
+    default_model_tier: int | None,
+) -> None:
+    tier_count = len(model_tiers or [])
+    if tier_count < 1:
+        raise HTTPException(status_code=422, detail="model_tiers must contain at least one tier")
+    if not default_model_tier or default_model_tier < 1:
+        raise HTTPException(status_code=422, detail="default_model_tier must be at least 1")
+    if default_model_tier > tier_count:
+        raise HTTPException(
+            status_code=422,
+            detail="default_model_tier must refer to a configured model_tiers entry",
+        )
 
 from api_service.services.provider_profile_service import (
     FirstPartyOAuthProfile,
