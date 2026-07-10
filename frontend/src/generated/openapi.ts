@@ -8169,6 +8169,26 @@ export interface components {
             /** Secret Ref */
             secret_ref: string;
         };
+        /**
+         * ProviderModelEffortTier
+         * @description Profile-local model/effort tier definition.
+         */
+        ProviderModelEffortTier: {
+            /** Label */
+            label?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Effort */
+            effort?: string | null;
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            /** Annotations */
+            annotations?: {
+                [key: string]: unknown;
+            };
+        };
         /** ProviderProfileCreate */
         ProviderProfileCreate: {
             /** Profile Id */
@@ -8186,6 +8206,10 @@ export interface components {
             default_model?: string | null;
             /** Default Effort */
             default_effort?: string | null;
+            /** Model Tiers */
+            model_tiers?: components["schemas"]["ProviderModelEffortTier"][] | null;
+            /** Default Model Tier */
+            default_model_tier?: number | null;
             /** Model Overrides */
             model_overrides?: {
                 [key: string]: string;
@@ -8301,6 +8325,10 @@ export interface components {
             default_model?: string | null;
             /** Default Effort */
             default_effort?: string | null;
+            /** Model Tiers */
+            model_tiers: components["schemas"]["ProviderModelEffortTier"][];
+            /** Default Model Tier */
+            default_model_tier: number;
             /** Model Overrides */
             model_overrides?: {
                 [key: string]: string;
@@ -8407,6 +8435,10 @@ export interface components {
             default_model?: string | null;
             /** Default Effort */
             default_effort?: string | null;
+            /** Model Tiers */
+            model_tiers?: components["schemas"]["ProviderModelEffortTier"][] | null;
+            /** Default Model Tier */
+            default_model_tier?: number | null;
             /** Model Overrides */
             model_overrides?: {
                 [key: string]: string;
