@@ -214,7 +214,7 @@ Best candidates for icons:
 
 The dashboard uses two desktop width modes:
 
-- **Constrained shell** for mastheads, forms, compact controls, and narrative content: roughly `1100-1280px`
+- **Constrained primary-pane shell** for page headers, forms, compact controls, and narrative content: roughly `1100-1280px`
 - **Data-wide shell** for workflow tables, evidence-heavy detail regions, and comparison views: roughly `1500-1800px` or fluid width with generous side gutters
 
 The page shell may transition between these two modes within the same route.
@@ -383,11 +383,27 @@ Run this checklist when changing dashboard motion, glass/LiquidGL surfaces, or a
 
 ### 10.1 Application rail and collection sidebars
 
-Top-level destinations render in the far-left application rail. Active links are unmistakable, hover/focus states brighten, icons and labels use common metrics, and utilities occupy a consistent lower/terminal region.
+Top-level destinations render in the far-left application rail. The rail is a persistent shell primitive rather than a page-level card or a centered row of navigation pills.
+
+Application-rail rules:
+
+- active destinations must be unmistakable;
+- hover, focus, and active states brighten rather than darken;
+- icon and label spacing uses shared metrics;
+- an active destination may use controlled bloom and a slightly stronger shell;
+- the rail uses a refined edge-light or horizon separator at its content boundary;
+- version, environment, account, and settings utilities read like a consistent telemetry/utility cluster rather than leftover labels.
 
 Collection sidebars reuse one header, filter, row, selected state, divider, scrolling container, pinned-current row, and loading/empty/error treatment. They must read as collapsed table slices rather than card stacks. Entity-specific copy and data are adapters; CSS and interaction primitives are shared.
 
-The rail and sidebar must remain coherent without liquidGL. Use glass only for bounded control shells and matte/satin row interiors for sustained scanning.
+Collection-sidebar rules:
+
+- Workflows, Recurring, and Skills share width, header height, row metrics, padding, borders, focus rings, hover treatment, selected treatment, and state components;
+- header copy, row data, compact metadata, filter labels, and accessible names are supplied by the entity adapter;
+- the right divider clearly separates local collection navigation from the primary pane;
+- active state remains visible without relying on color alone;
+- the rail and sidebar remain coherent without liquidGL;
+- use glass only for bounded control shells and matte/satin row interiors for sustained scanning.
 
 ### 10.2 Buttons
 
@@ -527,7 +543,7 @@ Use subtle atmospheric separators instead of hard utilitarian dividers everywher
 
 Examples:
 
-- horizon line beneath the masthead
+- horizon or edge-light separator at the application-rail/content boundary or beneath a page header
 - soft orbital gradient behind section transitions
 - restrained border glows on major surface edges
 
@@ -578,15 +594,21 @@ Specific guidance:
 
 Workflow detail and Recurring schedule detail use the shared `EntityDetailFrame` defined by `docs/UI/CollectionWorkspaceLayout.md`.
 
-Shared composition includes breadcrumb context, title/subtitle/status cluster, primary and overflow actions, summary/facts strip, tabs or section navigation, main content slab, optional facts rail, and localized loading/error states. Typography, spacing, status chips, action placement, tabs, facts-rail geometry, and responsive stacking must match.
+Shared composition includes:
 
-Workflow adapters supply execution progress, evidence, logs, artifacts, remediation, and recovery. Recurring adapters supply cadence, next run, policy, configuration, and run history. The sidebar remains a workspace sibling at the far-left content edge; it is never owned by or centered with the detail frame.
+- concise breadcrumb and summary header;
+- title, subtitle, identity, and status cluster;
+- primary and overflow actions in a consistent location;
+- compact summary/facts strip;
+- tabs or section navigation;
+- main data/evidence slab;
+- optional right facts rail;
+- localized loading, permission, not-found, and error states;
+- an elevated or sticky action surface when the entity needs persistent controls.
 
-Do not allow glass effects to compete with evidence density.
+Typography, spacing, status chips, action placement, tabs, facts-rail geometry, focus behavior, and responsive stacking must match. Workflow adapters supply execution progress, evidence, logs, artifacts, remediation, and recovery. Recurring adapters supply cadence, next run, policy, configuration, and run history.
 
----
-
-## 12. Accessibility and performance
+The collection sidebar remains a workspace sibling at the far-left content edge. It is never owned by or centered with the detail frame. Do not allow glass effects to compete with evidence density.
 
 ---
 

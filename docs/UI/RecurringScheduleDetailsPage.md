@@ -89,7 +89,14 @@ The page should not invent a completely separate visual language. Users should u
 └──────────────────┴──────────────────────────┴───────────────────────────────────────────┘
 ```
 
-The frame uses the same header spacing, panel rhythm, status family, action placement, summary strip, tabs, facts rail, loading states, error states, and responsive stacking as Workflow detail. Schedule-specific tabs remain Overview, Runs, Configuration, and optional Activity. Workflow-only steps, artifacts, logs, and remediation are not copied onto the schedule definition.
+The frame uses the same header spacing, panel rhythm, status family, action placement, summary strip, tabs, facts rail, loading states, error states, and responsive stacking as Workflow detail. Workflow-only steps, artifacts, logs, and remediation are not copied onto the schedule definition.
+
+Default tab behavior:
+
+- **Overview** shows the schedule summary, next run, cadence, timezone, target, policy, and latest dispatch status.
+- **Runs** loads recent and historical runs from `/api/recurring-workflows/{definitionId}/runs`; each spawned run links to its Workflow detail page.
+- **Configuration** shows editable schedule fields in read-only form until the user chooses **Edit schedule**.
+- **Activity** is optional and may show audit events, reconciliation warnings, and the latest Temporal describe metadata when available.
 
 ---
 

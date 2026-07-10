@@ -2,7 +2,7 @@
 
 Status: Proposed
 Owners: MoonMind Engineering
-Last Updated: 2026-07-09
+Last Updated: 2026-07-10
 Canonical for: Skills workspace layout, shared sidebar adaptation, skill list/detail behavior, and create-skill presentation
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
@@ -35,7 +35,7 @@ On desktop, `/skills` is a list–detail workspace that reuses the dashboard's e
 
 - `/skills` uses the shared `CollectionWorkspace`: the Skills sidebar is the first content-region column immediately right of the far-left application rail, and the primary pane is its sibling.
 - The Skills sidebar is always present for desktop preview and create states; it is not optional Workflow list-display state.
-- The sidebar starts at the dashboard content region's far-left edge and is never inside a centered/max-width page wrapper and follows the shared sidebar width, divider, row-height, and independent-scroll behavior.
+- The sidebar starts at the dashboard content region's far-left edge and is never inside a centered/max-width page wrapper. It follows the shared sidebar width, divider, row-height, and independent-scroll behavior.
 - The primary pane uses the remaining width for the selected skill preview or create form. Readable-width constraints may be applied inside the pane, but not around the entire split workspace.
 - The left side must not render a bespoke **Available Skills** card or a vertical stack of primary/secondary buttons as a second navigation design.
 - **View mode:** the selected skill renders `SKILL.md` as HTML using the shared Markdown component. Rendered, raw, and metadata views may remain tabs inside the primary pane.
