@@ -1,0 +1,763 @@
+{
+  "source": {
+    "title": "Provider Profile Model and Effort Tiers",
+    "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+    "referencePath": "docs/Security/ProviderProfileModelEffortTiers.md",
+    "requestedPath": "docs/ManagedAgents/ProviderProfileModelTiers.md",
+    "sourceDocumentClass": "canonical-declarative",
+    "selectionNote": "The requested Source document path was not readable in this checkout; the readable canonical docs match is docs/Security/ProviderProfileModelEffortTiers.md.",
+    "originalDesignText": "# Provider Profile Model and Effort Tiers\n\n**Related design documents:** [ProviderProfiles.md](./ProviderProfiles.md), [SecretsSystem.md](./SecretsSystem.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [SettingsPage.md](../UI/SettingsPage.md)\n\nStatus: **Desired-State Design**\nOwners: MoonMind Engineering\nLast Updated: 2026-07-09\n\n> [!NOTE]\n> This document extends the Provider Profiles model with declarative model/effort tiers.\n>\n> A tier is a profile-local policy entry that maps a small integer such as `1`, `2`, or `3` to a runtime-specific model and optional effort level. Presets and workflow steps should request tiers by number. The backend remains authoritative for resolving the final model and effort at submit or launch time.\n\n---\n\n## 1. Summary\n\nMoonMind presets should be able to express model intent declaratively without hardcoding concrete model names in every step.\n\nExample preset intent:\n\n```text\nStep 1 - Tier 1 - Generate a plan\nStep 2 - Tier 2 - Implement the plan in the codebase\nStep 3 - Tier 1 - Verify the implementation against the plan\nStep 4 - Tier 3 - Make sure documents reference the correct code paths\n```\n\nThe selected Provider Profile owns what each tier means:\n\n```yaml\nprofile_id: codex_openai_api\nruntime_id: codex_cli\nprovider_id: openai\n\nmodel_tiers:\n  - label: Plan and verify\n    model: gpt-5.5\n    effort: medium\n  - label: Implementation\n    model: gpt-5.5\n    effort: xhigh\n  - label: Documentation path audit\n    model: gpt-5.3-codex-spark\n    effort: xhigh\n\ndefault_model_tier: 1\n```\n\nA preset remains portable because it asks for `modelTier: 2`, not `gpt-5.5` with `xhigh`. If the profile owner later changes Tier 2, future launches use the updated profile policy without editing every preset.\n\n---\n\n## 2. Design Goals\n\nThe tier system must support:\n\n1. **Profile-local tier definitions**\n   - Tier numbers are interpreted relative to the selected Provider Profile.\n   - Tier 2 on one profile does not have to mean the same model or cost as Tier 2 on another profile.\n\n2. **Preset portability**\n   - Presets should request semantic tiers rather than concrete provider model names.\n\n3. **Backend authority**\n   - The frontend may preview tier resolution, but the backend must resolve the final effective model and effort.\n\n4. **Deterministic fallback**\n   - If Tier 3 is requested on a profile with only two tiers, MoonMind falls back to Tier 2 by default.\n\n5. **Minimum one tier**\n   - Every Provider Profile must have at least one model tier.\n   - A tier may intentionally leave `model` or `effort` null to use runtime defaults.\n\n6. **Runtime-specific effort handling**\n   - Effort values are runtime/provider-specific strings.\n   - Runtime strategies decide whether a resolved effort can be applied as a flag, config entry, environment variable, or metadata-only annotation.\n\n7. **Auditability**\n   - Runs must record requested tier, effective tier, resolved model, resolved effort, source, and fallback reason.\n\n---\n\n## 3. Non-Goals\n\nThis design does **not** attempt to:\n\n- create a global cross-provider quality scale,\n- define universal effort enum values for every provider,\n- make tiers independent capacity pools,\n- replace Provider Profile slot leasing,\n- remove direct model/effort overrides for expert workflows,\n- make the frontend authoritative for model policy,\n- freeze a preset to one concrete model forever unless the user explicitly requests a hard override or snapshot mode.\n\n---\n\n## 4. Key Concepts\n\n### 4.1 Provider Profile tier policy\n\nA Provider Profile owns a `model_tiers` array and a `default_model_tier` integer.\n\nThe array order defines tier numbers:\n\n```text\nmodel_tiers[0] -> Tier 1\nmodel_tiers[1] -> Tier 2\nmodel_tiers[2] -> Tier 3\n```\n\nThe tier number is intentionally one-based because it is user-facing.\n\n### 4.2 Requested tier\n\nA requested tier is the tier number supplied by a preset step, manual workflow step, or API caller.\n\n```yaml\nruntime:\n  modelTier: 2\n```\n\n### 4.3 Effective tier\n\nThe effective tier is the tier actually used after fallback/clamping.\n\n```text\nrequested tier: 3\nconfigured tiers: 2\neffective tier: 2\nfallback reason: requested_tier_above_configured_range\n```\n\n### 4.4 Concrete model and effort\n\nThe concrete model and effort are resolved from the effective tier.\n\n```yaml\neffective_model: gpt-5.5\neffective_effort: xhigh\n```\n\n### 4.5 Hard override\n\nA hard override bypasses tier policy.\n\n```yaml\nruntime:\n  model: gpt-5.5\n  effort: xhigh\n  source: manual_override\n```\n\nHard overrides are allowed for advanced users and debugging, but they are no longer the recommended preset format.\n\n---\n\n## 5. Provider Profile Contract\n\n### 5.1 Canonical fields\n\nAdd these fields to the Provider Profile contract:\n\n```yaml\nManagedAgentProviderProfile:\n  model_tiers: [ProviderModelEffortTier]\n  default_model_tier: int\n\nProviderModelEffortTier:\n  label: str | null\n  model: str | null\n  effort: str | null\n  parameters: dict[str, object]\n  annotations: dict[str, object]\n```\n\n### 5.2 Field semantics\n\n#### `model_tiers`\n\nOrdered list of model/effort combinations.\n\nRules:\n\n```text\nlen(model_tiers) >= 1\nmodel_tiers must be a JSON array\nmodel_tiers entries must be JSON objects\n```\n\nThe array order is the tier contract. Reordering tiers is a policy change because it changes what future `modelTier` requests resolve to.\n\n#### `default_model_tier`\n\nThe one-based tier number used when no step-level tier is requested.\n\nRules:\n\n```text\ndefault_model_tier >= 1\ndefault_model_tier <= len(model_tiers)\n```\n\n#### `label`\n\nHuman-readable tier label for Settings and workflow UI.\n\nExamples:\n\n```text\nPlan and verify\nImplementation\nDocs audit\nLow cost\nHigh reasoning\n```\n\nThe label is not used for routing.\n\n#### `model`\n\nRuntime/provider-specific model string. The value is opaque to the Provider Profile system and interpreted by the runtime strategy.\n\nExamples:\n\n```text\ngpt-5.5\ngpt-5.3-codex-spark\nclaude-opus-4-8\nMiniMax-M2.7\n```\n\nA null model means “use runtime default model after tier selection.”\n\n#### `effort`\n\nRuntime/provider-specific effort string.\n\nExamples:\n\n```text\nlow\nmedium\nhigh\nxhigh\n```\n\nA null effort means “use runtime default effort if one exists, otherwise omit effort.”\n\n#### `parameters`\n\nOptional non-secret runtime parameters associated with the tier.\n\nExample:\n\n```yaml\nparameters:\n  temperature: 0\n  output_format: strict_json\n```\n\nThis field must not contain raw credentials.\n\n#### `annotations`\n\nOptional metadata for UI, billing labels, documentation, or rollout flags.\n\nExample:\n\n```yaml\nannotations:\n  costClass: premium\n  recommendedFor:\n    - implementation\n    - complex_refactor\n```\n\nAnnotations are not used for required launch behavior unless a later design explicitly promotes a key into the contract.\n\n---\n\n## 6. Declarative Examples\n\n### 6.1 Codex CLI OpenAI profile\n\n```yaml\nprofile_id: codex_openai_api\nruntime_id: codex_cli\nprovider_id: openai\nprovider_label: OpenAI\n\nmodel_tiers:\n  - label: Plan and verify\n    model: gpt-5.5\n    effort: medium\n    parameters: {}\n    annotations:\n      recommendedFor: [planning, verification]\n\n  - label: Implementation\n    model: gpt-5.5\n    effort: xhigh\n    parameters: {}\n    annotations:\n      recommendedFor: [implementation, refactor]\n\n  - label: Documentation path audit\n    model: gpt-5.3-codex-spark\n    effort: xhigh\n    parameters: {}\n    annotations:\n      recommendedFor: [documentation, path_audit]\n\ndefault_model_tier: 1\n```\n\n### 6.2 Runtime-default-only profile\n\nA setup stub or minimal custom profile can still satisfy the minimum-one-tier rule without hardcoding a model.\n\n```yaml\nmodel_tiers:\n  - label: Runtime default\n    model: null\n    effort: null\n    parameters: {}\n    annotations: {}\n\ndefault_model_tier: 1\n```\n\n### 6.3 Cost-biased custom profile\n\n```yaml\nmodel_tiers:\n  - label: Cheap planning\n    model: provider-small-coding\n    effort: medium\n\n  - label: Standard implementation\n    model: provider-coding\n    effort: high\n\n  - label: Expensive escalation\n    model: provider-frontier-coding\n    effort: xhigh\n\ndefault_model_tier: 2\n```\n\n---\n\n## 7. Preset Contract\n\nPresets should request tiers through step runtime metadata.\n\n```yaml\nsteps:\n  - title: Generate a plan\n    instructions: Generate a concise implementation plan.\n    skill:\n      id: auto\n      runtime:\n        modelTier: 1\n\n  - title: Implement the plan\n    instructions: Implement the approved plan in the codebase.\n    skill:\n      id: auto\n      runtime:\n        modelTier: 2\n\n  - title: Verify implementation\n    instructions: Verify the implementation against the plan.\n    skill:\n      id: auto\n      runtime:\n        modelTier: 1\n\n  - title: Audit documentation paths\n    instructions: Make sure documentation references the correct code paths.\n    skill:\n      id: auto\n      runtime:\n        modelTier: 3\n```\n\nThe preset is not required to name a Provider Profile directly. A workflow may select the profile through normal Provider Profile selection:\n\n```yaml\nruntime:\n  providerProfileRef: codex_openai_api\n  modelTier: 2\n```\n\nor:\n\n```yaml\nprofileSelector:\n  providerId: openai\n  tagsAll: [default]\nruntime:\n  modelTier: 2\n```\n\n---\n\n## 8. Frontend and Backend Responsibilities\n\n### 8.1 Principle\n\nThe frontend may **preview** tier resolution. The backend must **resolve** tier policy authoritatively.\n\n### 8.2 Frontend responsibilities\n\nThe frontend should:\n\n1. Fetch Provider Profile tier definitions for display.\n2. Show the user the current mapping from tier to model/effort.\n3. Warn when a requested tier will fallback because the selected profile has fewer tiers.\n4. Allow an explicit hard model/effort override for advanced use cases.\n5. Submit requested tier intent instead of replacing it with concrete model/effort values.\n\nExample frontend preview:\n\n```text\nStep 1 · Tier 1 · gpt-5.5 · medium\nStep 2 · Tier 2 · gpt-5.5 · xhigh\nStep 3 · Tier 1 · gpt-5.5 · medium\nStep 4 · Tier 3 · gpt-5.3-codex-spark · xhigh\n```\n\n### 8.3 Backend responsibilities\n\nThe backend should:\n\n1. Validate Provider Profile tier definitions.\n2. Validate requested `modelTier` values when presets or workflows are submitted.\n3. Resolve the selected Provider Profile.\n4. Resolve the final effective tier after profile selection.\n5. Resolve model and effort from the effective tier.\n6. Apply fallback policy.\n7. Record the full resolution in run diagnostics.\n8. Re-check launch readiness at the launch boundary.\n\n### 8.4 Why the frontend is not authoritative\n\nThe frontend must not collapse tier intent into concrete model/effort as the primary contract because:\n\n- Provider Profiles are backend-owned policy records.\n- Profile data can change between frontend preview and backend launch.\n- Workflows may be submitted by API clients, recurring schedules, batch systems, or backend remediation flows without a frontend.\n- Tier fallback and launch readiness need backend-owned state.\n- A preset loses portability if it is saved as concrete model strings instead of tier intent.\n\n### 8.5 Optional advisory preview snapshot\n\nThe frontend may submit an advisory preview snapshot for user-experience auditing and stale-data detection.\n\n```yaml\nruntime:\n  modelTier: 3\n  tierPreview:\n    profileId: codex_openai_api\n    profileVersion: 42\n    model: gpt-5.3-codex-spark\n    effort: xhigh\n```\n\nThe backend may compare the advisory preview to its own resolution. If they differ, the default behavior is to re-resolve using backend state and record a preview mismatch.\n\nA future strict mode may reject stale previews:\n\n```text\n409 stale_profile_tiers\n```\n\n---\n\n## 9. Resolution Semantics\n\n### 9.1 Inputs\n\nThe resolver receives:\n\n```yaml\nruntime_id: str\nprofile: ManagedAgentProviderProfile\nrequested_model_tier: int | null\nrequested_model: str | null\nrequested_effort: str | null\ntier_fallback: clamp | strict\nworkflow_settings: object | null\nenv: mapping | null\n```\n\n### 9.2 Resolution order\n\nModel and effort resolution must use this order:\n\n1. Explicit task or step override.\n2. Requested Provider Profile tier.\n3. Provider Profile default tier.\n4. Legacy `default_model` / `default_effort` compatibility fields.\n5. Runtime default model / effort.\n6. No value.\n\n### 9.3 Tier fallback\n\nDefault fallback policy is `clamp`:\n\n```python\ndef effective_tier(requested_tier: int | None, *, default_tier: int, tier_count: int) -> int:\n    raw = requested_tier or default_tier or 1\n    return max(1, min(raw, tier_count))\n```\n\nExamples:\n\n| Requested tier | Configured tier count | Effective tier | Reason |\n| --- | ---: | ---: | --- |\n| null | 3 | `default_model_tier` | `profile_default_tier` |\n| 1 | 3 | 1 | null |\n| 2 | 3 | 2 | null |\n| 3 | 2 | 2 | `requested_tier_above_configured_range` |\n| 0 | 3 | 1 | `requested_tier_below_configured_range` |\n\nAPI validation should reject tier values lower than 1. Runtime clamping is still required as a defensive safety net.\n\n### 9.4 Strict fallback mode\n\nSome workflows may require a specific tier to exist.\n\n```yaml\nruntime:\n  modelTier: 3\n  tierFallback: strict\n```\n\nIf `tierFallback: strict` and the requested tier is outside the configured range, the backend must reject the workflow step before launch.\n\n```text\n422 requested_model_tier_unavailable\n```\n\n### 9.5 Output\n\nThe resolver returns:\n\n```yaml\nResolvedModelEffort:\n  model: str | null\n  effort: str | null\n  requested_model_tier: int | null\n  effective_model_tier: int | null\n  tier_label: str | null\n  model_source: str\n  effort_source: str\n  fallback_reason: str | null\n  effort_application_status: str | null\n```\n\nRecommended source values:\n\n```text\ntask_override\nrequested_tier\nprofile_default_tier\nprovider_profile_default\nruntime_default\nnone\n```\n\nRecommended effort application statuses:\n\n```text\napplied\nnot_supported\nmetadata_only\nemulated\nunknown\n```\n\n---\n\n## 10. Runtime Strategy Integration\n\n### 10.1 Model application\n\nRuntime strategies consume the resolved model in their existing command/environment/config shaping.\n\nExamples:\n\n- Codex CLI may pass the model through a CLI flag such as `-m` when supported by the current strategy.\n- Claude Code may pass the model through a runtime-specific flag, environment variable, or config entry.\n- Provider-compatible runtimes may map a profile tier model to a generated config profile.\n\n### 10.2 Effort application\n\nEffort is intentionally runtime-specific.\n\nA runtime strategy must declare how effort is applied:\n\n```text\nnative flag\nconfig entry\nenvironment variable\nmetadata only\nunsupported\n```\n\nIf a runtime does not support effort, MoonMind should not pretend the value was applied. The run diagnostics should record:\n\n```yaml\nresolvedEffort: xhigh\neffortApplicationStatus: not_supported\n```\n\n### 10.3 Tier parameters\n\nTier `parameters` may be merged into launch parameters after tier resolution, but before runtime strategy command construction.\n\nPrecedence:\n\n```text\nexplicit step parameters override tier parameters\n```\n\nThis prevents a tier from silently overriding a user’s explicit step-level setting.\n\n### 10.4 Tier policy does not own credentials\n\nTiers must not contain credentials, credential references, OAuth volume refs, or secret materialization rules. Credentials remain Provider Profile and Secrets System responsibilities.\n\n---\n\n## 11. Provider Profile Manager Interaction\n\nThe Provider Profile Manager remains a profile-level slot and cooldown manager.\n\nTiers are **not** capacity pools.\n\nCorrect flow:\n\n```text\n1. Workflow step requests runtime + profile selector + modelTier.\n2. Provider Profile Manager selects and reserves a Provider Profile slot.\n3. Backend resolves modelTier against the selected profile.\n4. Runtime strategy launches with the resolved model/effort.\n```\n\nIncorrect flow:\n\n```text\n1. Create separate slot capacity for Tier 1, Tier 2, Tier 3.\n2. Treat tier selection as profile selection.\n```\n\nThe same profile may run Tier 1 and Tier 3 work concurrently if the profile has available `max_parallel_runs` capacity.\n\n---\n\n## 12. Persistence Model\n\n### 12.1 Table fields\n\nAdd fields to `managed_agent_provider_profiles`:\n\n```sql\nALTER TABLE managed_agent_provider_profiles\n  ADD COLUMN model_tiers JSONB NOT NULL DEFAULT '[{\"label\":\"Runtime default\",\"model\":null,\"effort\":null,\"parameters\":{},\"annotations\":{}}]'::jsonb,\n  ADD COLUMN default_model_tier INTEGER NOT NULL DEFAULT 1;\n```\n\nRecommended PostgreSQL checks when practical:\n\n```sql\nALTER TABLE managed_agent_provider_profiles\n  ADD CONSTRAINT ck_provider_profiles_model_tiers_array\n  CHECK (jsonb_typeof(model_tiers) = 'array' AND jsonb_array_length(model_tiers) >= 1);\n\nALTER TABLE managed_agent_provider_profiles\n  ADD CONSTRAINT ck_provider_profiles_default_model_tier_positive\n  CHECK (default_model_tier >= 1);\n```\n\nThe upper-bound check against `jsonb_array_length(model_tiers)` may be enforced in application validation to preserve cross-database compatibility.\n\n### 12.2 Migration from legacy defaults\n\nExisting profiles should be migrated as follows:\n\n```python\nif profile.default_model or profile.default_effort:\n    profile.model_tiers = [\n        {\n            \"label\": \"Default\",\n            \"model\": profile.default_model,\n            \"effort\": profile.default_effort,\n            \"parameters\": {},\n            \"annotations\": {\"migratedFrom\": \"default_model_default_effort\"},\n        }\n    ]\nelse:\n    profile.model_tiers = [\n        {\n            \"label\": \"Runtime default\",\n            \"model\": None,\n            \"effort\": None,\n            \"parameters\": {},\n            \"annotations\": {\"migratedFrom\": \"runtime_default\"},\n        }\n    ]\n\nprofile.default_model_tier = 1\n```\n\nKeep `default_model` and `default_effort` as compatibility mirrors until all callers move to tier-aware resolution.\n\n### 12.3 Versioning\n\nA future implementation may add a profile `value_version` or policy digest. Until then, runs should persist the resolved model/effort output so historical executions remain auditable even if the profile changes later.\n\n---\n\n## 13. API Contract\n\n### 13.1 Provider Profile create/update\n\nProvider Profile create and update endpoints should accept:\n\n```json\n{\n  \"model_tiers\": [\n    {\n      \"label\": \"Plan and verify\",\n      \"model\": \"gpt-5.5\",\n      \"effort\": \"medium\",\n      \"parameters\": {},\n      \"annotations\": {}\n    },\n    {\n      \"label\": \"Implementation\",\n      \"model\": \"gpt-5.5\",\n      \"effort\": \"xhigh\",\n      \"parameters\": {},\n      \"annotations\": {}\n    }\n  ],\n  \"default_model_tier\": 1\n}\n```\n\n### 13.2 Provider Profile response\n\nProvider Profile responses should include both the declarative tier policy and compatibility fields during migration:\n\n```json\n{\n  \"profile_id\": \"codex_openai_api\",\n  \"default_model\": \"gpt-5.5\",\n  \"default_effort\": \"medium\",\n  \"model_tiers\": [...],\n  \"default_model_tier\": 1\n}\n```\n\n### 13.3 Preview endpoint\n\nA dedicated preview endpoint is optional but recommended for UI clarity.\n\n```http\nPOST /provider-profiles/{profile_id}/model-tiers:preview\n```\n\nRequest:\n\n```json\n{\n  \"steps\": [\n    {\"id\": \"plan\", \"modelTier\": 1},\n    {\"id\": \"implement\", \"modelTier\": 2},\n    {\"id\": \"docs\", \"modelTier\": 3}\n  ]\n}\n```\n\nResponse:\n\n```json\n{\n  \"profileId\": \"codex_openai_api\",\n  \"items\": [\n    {\n      \"stepId\": \"plan\",\n      \"requestedTier\": 1,\n      \"effectiveTier\": 1,\n      \"model\": \"gpt-5.5\",\n      \"effort\": \"medium\",\n      \"fallbackReason\": null\n    },\n    {\n      \"stepId\": \"docs\",\n      \"requestedTier\": 3,\n      \"effectiveTier\": 2,\n      \"model\": \"gpt-5.5\",\n      \"effort\": \"xhigh\",\n      \"fallbackReason\": \"requested_tier_above_configured_range\"\n    }\n  ]\n}\n```\n\nThis endpoint is a preview surface. It does not replace backend launch-time resolution.\n\n---\n\n## 14. Observability and Audit\n\nEvery launched step should record tier resolution metadata in run diagnostics or launch metadata.\n\n```yaml\nmodelTierResolution:\n  providerProfileId: codex_openai_api\n  requestedModelTier: 3\n  effectiveModelTier: 2\n  tierLabel: Implementation\n  fallbackReason: requested_tier_above_configured_range\n  resolvedModel: gpt-5.5\n  resolvedEffort: xhigh\n  modelSource: requested_tier\n  effortSource: requested_tier\n  effortApplicationStatus: applied\n  previewMismatch: false\n```\n\nThe UI should surface fallback in a concise form:\n\n```text\nRequested Tier 3, used Tier 2 because the selected profile only defines two tiers.\n```\n\nHistorical workflow details should show the resolved concrete model/effort used for that launch, even if the Provider Profile is later edited.\n\n---\n\n## 15. Validation Rules\n\n### 15.1 Profile validation\n\nProvider Profile writes must enforce:\n\n```text\nmodel_tiers is present\nmodel_tiers.length >= 1\ndefault_model_tier >= 1\ndefault_model_tier <= model_tiers.length\nmodel_tiers[*].parameters contains no raw credential-like keys\nmodel_tiers[*].annotations contains no raw credential-like keys\n```\n\n### 15.2 Preset and workflow validation\n\nPreset and workflow writes should enforce:\n\n```text\nmodelTier is an integer when present\nmodelTier >= 1\ntierFallback is clamp or strict when present\nhard model/effort overrides are explicit and auditable\n```\n\n### 15.3 Runtime validation\n\nRuntime launch must defensively re-check:\n\n```text\nselected profile exists\nselected profile is launch ready\nselected profile has at least one tier\nrequested tier can be resolved or rejected according to fallback policy\nresolved tier does not introduce raw credentials\n```\n\n---\n\n## 16. Rollout Plan\n\n### Phase 1: Provider Profile schema\n\n- Add `model_tiers` and `default_model_tier` to the database model.\n- Add migration/backfill from `default_model` and `default_effort`.\n- Add API read/write validation.\n\n### Phase 2: Backend resolver\n\n- Add a canonical `resolve_effective_model_effort` helper.\n- Route model and effort resolution through the helper.\n- Preserve legacy behavior when no tier is supplied.\n\n### Phase 3: Preset expansion\n\n- Allow preset step runtime metadata to include `modelTier` and `tierFallback`.\n- Preserve `modelTier` intent through expansion.\n- Do not replace tiers with model/effort in the frontend submission path.\n\n### Phase 4: UI preview\n\n- Show tier tables in Provider Profile settings.\n- Preview preset step tier resolution before submit.\n- Warn about fallback and stale previews.\n\n### Phase 5: Runtime strategy support\n\n- Teach each runtime strategy how to apply or decline resolved effort.\n- Record `effortApplicationStatus` for every launch.\n\n### Phase 6: Compatibility cleanup\n\n- Keep `default_model` and `default_effort` as compatibility fields until all callers are tier-aware.\n- Later, either remove them or define them as denormalized mirrors of `model_tiers[default_model_tier - 1]`.\n\n---\n\n## 17. Acceptance Tests\n\n### Provider Profile validation\n\n- Reject a profile with zero tiers.\n- Reject `default_model_tier` greater than the number of configured tiers.\n- Accept a runtime-default-only tier with null model and effort.\n- Reject tier parameters that contain raw credential-like keys.\n\n### Migration\n\n- A profile with `default_model` and `default_effort` gets one migrated tier.\n- A profile without legacy defaults gets one runtime-default tier.\n- `default_model_tier` is set to 1.\n\n### Resolution\n\n- No requested tier uses `default_model_tier`.\n- Requested Tier 2 resolves to `model_tiers[1]`.\n- Requested Tier 3 with only two tiers clamps to Tier 2 by default.\n- `tierFallback: strict` rejects Tier 3 when only two tiers exist.\n- Explicit step model/effort overrides tier policy.\n- Null tier model falls back to runtime default model.\n- Null tier effort falls back to runtime default effort or no effort.\n\n### Frontend/backend contract\n\n- Frontend preview displays the backend preview response.\n- Frontend submits `modelTier`, not only concrete model/effort.\n- Backend re-resolves and records a preview mismatch when the profile changed after preview.\n\n### Runtime launch\n\n- Codex CLI receives the resolved model through its model application path.\n- Unsupported effort is recorded as `not_supported`, not silently marked applied.\n- Run diagnostics include requested tier, effective tier, resolved model, resolved effort, source, and fallback reason.\n\n---\n\n## 18. Open Questions\n\n1. Should tier ordering be restricted by Settings UI to prevent accidental semantic reordering?\n2. Should MoonMind expose `strict` fallback in the normal UI, or reserve it for API/power-user workflows?\n3. Should recurring workflows default to current profile policy at launch, or support a snapshot mode that freezes tier resolution at schedule creation?\n4. Should profile `default_model` and `default_effort` remain denormalized compatibility fields indefinitely?\n5. Should billing/cost policy eventually define optional tier annotations such as `costClass`, or should those remain UI-only metadata?\n\n---\n\n## 19. Decision Summary\n\n- Provider Profiles own model/effort tier definitions.\n- Presets and workflow steps request tiers by number.\n- The frontend previews tier resolution but does not authoritatively compile tiers into concrete model/effort values.\n- The backend resolves the final model and effort after profile selection.\n- Requested tiers fallback by clamping to the nearest configured tier unless strict mode is requested.\n- Provider Profile Manager continues to manage profile-level slots, not tier-level capacity.\n- Every launched step records the requested tier, effective tier, model, effort, source, and fallback reason for observability.\n",
+    "canonicalClaims": [
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-001",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "1. Summary",
+          "2. Design Goals"
+        ],
+        "summary": "Presets express portable model intent with profile-local model tiers while backend resolution remains authoritative."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-002",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "3. Non-Goals",
+          "11. Provider Profile Manager Interaction"
+        ],
+        "summary": "Tiers are not global quality scales, credential policy, independent capacity pools, or replacements for Provider Profile slot leasing."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-003",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "4. Key Concepts",
+          "5. Provider Profile Contract"
+        ],
+        "summary": "Provider Profiles own ordered model_tiers and default_model_tier fields with typed tier entries."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-004",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "5.2 Field semantics",
+          "15. Validation Rules"
+        ],
+        "summary": "Tier lists, default tier values, labels, model, effort, parameters, and annotations have explicit validation and semantics."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-005",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "7. Preset Contract"
+        ],
+        "summary": "Presets and workflow steps request modelTier and optional tierFallback intent instead of concrete model and effort values."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-006",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "8. Frontend and Backend Responsibilities",
+          "13.3 Preview endpoint"
+        ],
+        "summary": "The frontend may preview tier mappings and fallback, but must submit tier intent while backend resolves authoritatively."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-007",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "9. Resolution Semantics"
+        ],
+        "summary": "Model and effort resolution follows a defined precedence order, clamps tiers by default, supports strict fallback, and returns auditable resolution metadata."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-008",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "10. Runtime Strategy Integration"
+        ],
+        "summary": "Runtime strategies apply resolved model and effort through runtime-specific mechanisms and report unsupported or metadata-only effort honestly."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-009",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "12. Persistence Model"
+        ],
+        "summary": "Provider profile persistence adds model_tiers and default_model_tier with migration from legacy default_model/default_effort fields."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-010",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "13. API Contract"
+        ],
+        "summary": "Provider Profile APIs expose tier policy on create, update, response, and optional preview surfaces."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-011",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "14. Observability and Audit"
+        ],
+        "summary": "Every launched step records requested tier, effective tier, resolved model, resolved effort, source, fallback reason, effort status, and preview mismatch."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-012",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "17. Acceptance Tests"
+        ],
+        "summary": "Validation, migration, resolution, frontend/backend, and runtime launch behavior require acceptance coverage."
+      },
+      {
+        "id": "CLAIM-docs-security-providerprofilemodelefforttiers-013",
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "sections": [
+          "18. Open Questions",
+          "19. Decision Summary"
+        ],
+        "summary": "Open policy choices remain explicit while core decisions establish Provider Profiles as the owner of tier definitions and backend resolution."
+      }
+    ],
+    "coveragePoints": [
+      {
+        "id": "DESIGN-REQ-001",
+        "title": "Profile-local tier definitions",
+        "type": "requirement",
+        "source_section": "2. Design Goals",
+        "explanation": "Tier numbers are interpreted relative to the selected Provider Profile and every profile has at least one tier."
+      },
+      {
+        "id": "DESIGN-REQ-002",
+        "title": "Portable preset tier intent",
+        "type": "integration",
+        "source_section": "1. Summary; 7. Preset Contract",
+        "explanation": "Presets and workflow steps request semantic modelTier values rather than provider-specific model names."
+      },
+      {
+        "id": "DESIGN-REQ-003",
+        "title": "Backend authoritative resolution",
+        "type": "constraint",
+        "source_section": "2. Design Goals; 8. Responsibilities",
+        "explanation": "Frontend previews are advisory; backend resolves final model and effort at submit or launch time."
+      },
+      {
+        "id": "DESIGN-REQ-004",
+        "title": "Provider Profile tier contract",
+        "type": "state-model",
+        "source_section": "5. Provider Profile Contract",
+        "explanation": "Profiles add model_tiers and default_model_tier, and tiers carry label, model, effort, parameters, and annotations."
+      },
+      {
+        "id": "DESIGN-REQ-005",
+        "title": "Tier validation and secret exclusion",
+        "type": "security",
+        "source_section": "5.2 Field semantics; 15. Validation Rules",
+        "explanation": "Profile writes and launch checks enforce valid arrays, default bounds, noncredential parameters, and noncredential annotations."
+      },
+      {
+        "id": "DESIGN-REQ-006",
+        "title": "Resolution precedence and fallback",
+        "type": "state-model",
+        "source_section": "9. Resolution Semantics",
+        "explanation": "Explicit overrides, requested tiers, defaults, legacy fields, runtime defaults, clamp fallback, and strict rejection follow defined semantics."
+      },
+      {
+        "id": "DESIGN-REQ-007",
+        "title": "Resolved output contract",
+        "type": "artifact",
+        "source_section": "9.5 Output",
+        "explanation": "Resolution returns model, effort, requested/effective tier, label, sources, fallback reason, and effort application status."
+      },
+      {
+        "id": "DESIGN-REQ-008",
+        "title": "Runtime strategy application",
+        "type": "integration",
+        "source_section": "10. Runtime Strategy Integration",
+        "explanation": "Runtime strategies consume resolved model/effort through their supported launch shaping and report unsupported effort without pretending it applied."
+      },
+      {
+        "id": "DESIGN-REQ-009",
+        "title": "Tier parameters precedence",
+        "type": "constraint",
+        "source_section": "10.3 Tier parameters",
+        "explanation": "Tier parameters may be merged into launch parameters, but explicit step parameters override tier parameters."
+      },
+      {
+        "id": "DESIGN-REQ-010",
+        "title": "Provider Profile Manager boundaries",
+        "type": "constraint",
+        "source_section": "11. Provider Profile Manager Interaction",
+        "explanation": "The manager still leases profile-level slots and cooldowns; tiers are not capacity pools or profile selectors."
+      },
+      {
+        "id": "DESIGN-REQ-011",
+        "title": "Persistence and migration",
+        "type": "migration",
+        "source_section": "12. Persistence Model",
+        "explanation": "Storage adds model_tiers/default_model_tier and migrates legacy default_model/default_effort into one tier while preserving auditability."
+      },
+      {
+        "id": "DESIGN-REQ-012",
+        "title": "API read/write and preview",
+        "type": "integration",
+        "source_section": "13. API Contract",
+        "explanation": "Provider Profile endpoints accept and return tier policy, and an optional preview endpoint resolves step tier previews."
+      },
+      {
+        "id": "DESIGN-REQ-013",
+        "title": "Frontend tier UI and submission",
+        "type": "requirement",
+        "source_section": "8.2 Frontend responsibilities",
+        "explanation": "Settings and workflow UI display tiers, warn on fallback, allow explicit overrides, and submit requested tier intent."
+      },
+      {
+        "id": "DESIGN-REQ-014",
+        "title": "Run diagnostics and historical audit",
+        "type": "observability",
+        "source_section": "14. Observability and Audit",
+        "explanation": "Launch metadata records tier resolution and historical workflow details show concrete resolved model/effort even after profile edits."
+      },
+      {
+        "id": "DESIGN-REQ-015",
+        "title": "Non-goal guardrails",
+        "type": "non-goal",
+        "source_section": "3. Non-Goals",
+        "explanation": "The design avoids universal quality scales, tier capacity pools, frontend authority, and removal of expert hard overrides."
+      },
+      {
+        "id": "DESIGN-REQ-016",
+        "title": "Acceptance coverage expectations",
+        "type": "constraint",
+        "source_section": "17. Acceptance Tests",
+        "explanation": "Implementation must cover validation, migration, resolution, frontend/backend contract, and runtime launch behaviors."
+      }
+    ]
+  },
+  "sourceDocumentClass": "canonical-declarative",
+  "extractedAt": "2026-07-10T00:32:50Z",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "storyOutputMode": "jira",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Add Provider Profile model tier contract and migration",
+      "shortName": "profile-tier-contract",
+      "description": "As an operator managing provider profiles, I need each profile to declare ordered model/effort tiers and a default tier so workflows can request portable tier intent against profile-owned policy.",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "title": "Provider Profile Model and Effort Tiers",
+        "sections": [
+          "4. Key Concepts",
+          "5. Provider Profile Contract",
+          "12. Persistence Model",
+          "15.1 Profile validation"
+        ],
+        "claimIds": [
+          "CLAIM-docs-security-providerprofilemodelefforttiers-003",
+          "CLAIM-docs-security-providerprofilemodelefforttiers-004",
+          "CLAIM-docs-security-providerprofilemodelefforttiers-009"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "why": "This creates the durable profile-owned data model that all tier-aware resolution, APIs, UI, and launch diagnostics depend on.",
+      "scope": [
+        "Add model_tiers and default_model_tier to the Provider Profile contract and persistence model.",
+        "Backfill existing default_model/default_effort into one default tier.",
+        "Validate non-empty tier arrays, default bounds, tier object shape, and credential-like keys in parameters or annotations."
+      ],
+      "outOfScope": [
+        "Workflow step tier resolution",
+        "Settings UI rendering",
+        "Runtime launch application"
+      ],
+      "independentTest": "Create and update provider profiles through the backend model/service layer, run migration/backfill tests, and assert invalid tier shapes and credential-like tier metadata are rejected.",
+      "acceptanceCriteria": [
+        "Every Provider Profile persists model_tiers with at least one entry and default_model_tier within the configured range.",
+        "Existing profiles with legacy default_model/default_effort receive one migrated tier preserving those values.",
+        "Profiles without legacy defaults receive a Runtime default tier with null model and effort.",
+        "Tier parameters and annotations reject raw credential-like keys.",
+        "Reordering model_tiers is treated as changing the profile policy because tier numbers follow array order."
+      ],
+      "requirements": [
+        "Add typed ProviderModelEffortTier fields label, model, effort, parameters, and annotations.",
+        "Keep model and effort strings opaque to the Provider Profile system.",
+        "Preserve compatibility fields only as migration/read compatibility until callers are tier-aware."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Defines profile-local tier ownership and minimum tier availability.",
+        "DESIGN-REQ-004": "Owns the Provider Profile tier fields and field semantics.",
+        "DESIGN-REQ-005": "Owns profile validation and secret-exclusion rules.",
+        "DESIGN-REQ-011": "Owns persistence changes and migration from legacy defaults."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "The implementation may keep existing legacy default_model/default_effort fields as mirrors during the documented migration period."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Resolve requested model tiers authoritatively in the backend",
+      "shortName": "tier-resolver",
+      "description": "As a workflow submitter, I need MoonMind to resolve requested model tiers against the selected Provider Profile on the backend so launch behavior is deterministic, auditable, and independent of stale frontend previews.",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "title": "Provider Profile Model and Effort Tiers",
+        "sections": [
+          "8. Frontend and Backend Responsibilities",
+          "9. Resolution Semantics",
+          "15.2 Preset and workflow validation",
+          "15.3 Runtime validation"
+        ],
+        "claimIds": [
+          "CLAIM-docs-security-providerprofilemodelefforttiers-001",
+          "CLAIM-docs-security-providerprofilemodelefforttiers-007"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "why": "Backend resolution is the core behavior that turns portable tier intent into concrete model and effort values without trusting clients.",
+      "scope": [
+        "Add a canonical resolver for model/effort precedence.",
+        "Support clamp fallback and strict fallback rejection.",
+        "Return a ResolvedModelEffort shape with source and fallback metadata.",
+        "Keep explicit model/effort overrides auditable and higher precedence than tier policy."
+      ],
+      "outOfScope": [
+        "Database migration",
+        "Frontend tier preview UI",
+        "Runtime-specific command construction"
+      ],
+      "independentTest": "Run resolver unit tests against profile fixtures with requested tiers, missing tiers, strict fallback, explicit overrides, null model/effort, and legacy defaults.",
+      "acceptanceCriteria": [
+        "No requested tier uses default_model_tier.",
+        "Requested Tier 2 resolves to model_tiers[1].",
+        "Requested Tier 3 with two configured tiers clamps to Tier 2 by default and records requested_tier_above_configured_range.",
+        "tierFallback strict rejects unavailable tiers before launch.",
+        "Explicit model or effort overrides bypass tier policy and record task_override source.",
+        "The resolver returns model, effort, requested tier, effective tier, tier label, model source, effort source, fallback reason, and effort application status placeholder."
+      ],
+      "requirements": [
+        "Validate modelTier as an integer greater than or equal to 1.",
+        "Preserve the documented resolution order from explicit overrides through runtime defaults.",
+        "Fail explicitly for missing or launch-unready selected profiles."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-003": "Owns backend authority over final resolution.",
+        "DESIGN-REQ-006": "Owns resolution order, clamp fallback, and strict fallback semantics.",
+        "DESIGN-REQ-007": "Owns the resolved output contract.",
+        "DESIGN-REQ-015": "Keeps hard overrides available and auditable without making frontend policy authoritative."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Preserve modelTier intent through preset and workflow submission",
+      "shortName": "preset-tier-intent",
+      "description": "As a preset author, I need presets and workflow steps to carry modelTier and tierFallback intent so reusable workflows remain portable across Provider Profiles.",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "title": "Provider Profile Model and Effort Tiers",
+        "sections": [
+          "1. Summary",
+          "7. Preset Contract",
+          "15.2 Preset and workflow validation"
+        ],
+        "claimIds": [
+          "CLAIM-docs-security-providerprofilemodelefforttiers-001",
+          "CLAIM-docs-security-providerprofilemodelefforttiers-005"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "why": "Tier-aware presets only work if expansion and submission preserve semantic tier requests rather than compiling them to concrete model strings early.",
+      "scope": [
+        "Allow preset step runtime metadata to include modelTier and tierFallback.",
+        "Preserve tier fields through preset expansion and API submission.",
+        "Validate tier values and explicit hard overrides as auditable choices."
+      ],
+      "outOfScope": [
+        "Provider Profile settings forms",
+        "Preview endpoint implementation",
+        "Runtime strategy application"
+      ],
+      "independentTest": "Expand a preset containing modelTier and tierFallback, submit a workflow payload, and assert backend-bound step runtime metadata still contains tier intent rather than only concrete model/effort values.",
+      "acceptanceCriteria": [
+        "Preset runtime metadata accepts modelTier on steps.",
+        "Preset runtime metadata accepts tierFallback values clamp and strict when present.",
+        "Expanded workflows preserve modelTier until backend resolution.",
+        "Frontend or API submissions do not replace tier intent with only concrete model/effort values.",
+        "Hard model/effort overrides remain explicit and auditable."
+      ],
+      "requirements": [
+        "Support providerProfileRef and profileSelector based profile selection with modelTier intent.",
+        "Reject invalid modelTier and tierFallback values at write or submit boundaries."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-002": "Owns portable preset and workflow tier intent.",
+        "DESIGN-REQ-006": "Feeds resolver fallback mode and requested tier inputs.",
+        "DESIGN-REQ-015": "Preserves expert hard overrides without making them the recommended preset format."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Expose Provider Profile tier APIs and preview resolution",
+      "shortName": "tier-api-preview",
+      "description": "As a UI or API client, I need Provider Profile endpoints to read, write, and preview tier policy so users can understand how requested tiers will resolve before submitting a workflow.",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "title": "Provider Profile Model and Effort Tiers",
+        "sections": [
+          "8.2 Frontend responsibilities",
+          "8.5 Optional advisory preview snapshot",
+          "13. API Contract"
+        ],
+        "claimIds": [
+          "CLAIM-docs-security-providerprofilemodelefforttiers-006",
+          "CLAIM-docs-security-providerprofilemodelefforttiers-010"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013"
+        ]
+      },
+      "why": "Clients need typed tier policy surfaces for Settings and workflow preview while backend authority remains intact.",
+      "scope": [
+        "Add model_tiers and default_model_tier to Provider Profile create/update and response payloads.",
+        "Add or wire a preview surface that resolves step modelTier requests against a selected profile.",
+        "Support advisory preview snapshots and preview mismatch recording inputs where applicable."
+      ],
+      "outOfScope": [
+        "Visual Settings page implementation",
+        "Runtime launch diagnostics rendering"
+      ],
+      "independentTest": "Call Provider Profile create/update/read APIs and the tier preview API with representative step inputs, then assert response tiers, fallback reasons, and backend resolver parity.",
+      "acceptanceCriteria": [
+        "Provider Profile create/update accepts model_tiers and default_model_tier.",
+        "Provider Profile responses include tier policy plus compatibility fields during migration.",
+        "The preview endpoint returns requested tier, effective tier, model, effort, and fallback reason for each requested step.",
+        "Preview output is advisory and does not replace launch-time backend resolution.",
+        "Backend can detect and record preview mismatch when submitted preview state differs from current profile policy."
+      ],
+      "requirements": [
+        "Use backend resolver logic for preview parity.",
+        "Do not require presets to name concrete models for preview."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-003": "Maintains backend authority despite preview support.",
+        "DESIGN-REQ-012": "Owns Provider Profile API read/write and preview surfaces.",
+        "DESIGN-REQ-013": "Provides the backend data needed by UI tier tables and warnings."
+      },
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "The preview endpoint is optional in the design, but this story treats it as the smallest complete client contract for Jira-ready implementation."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Render tier policy and fallback preview in Settings and workflow UI",
+      "shortName": "tier-ui-preview",
+      "description": "As an operator selecting models for workflows, I need Settings and submission UI to show Provider Profile tier mappings, fallback warnings, and explicit override controls while submitting tier intent to the backend.",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "title": "Provider Profile Model and Effort Tiers",
+        "sections": [
+          "8.2 Frontend responsibilities",
+          "8.4 Why the frontend is not authoritative",
+          "14. Observability and Audit"
+        ],
+        "claimIds": [
+          "CLAIM-docs-security-providerprofilemodelefforttiers-006",
+          "CLAIM-docs-security-providerprofilemodelefforttiers-011"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "why": "Users need visibility into profile-local tier meanings without the frontend taking over model policy resolution.",
+      "scope": [
+        "Display tier tables in Provider Profile settings.",
+        "Preview workflow step tier resolution before submit.",
+        "Warn when requested tiers will fallback.",
+        "Allow explicit hard model/effort overrides for advanced users.",
+        "Submit requested tier intent and optional advisory preview rather than concrete-only model/effort values."
+      ],
+      "outOfScope": [
+        "Backend resolver implementation",
+        "Database migration",
+        "Runtime strategy launch wiring"
+      ],
+      "independentTest": "Run frontend/unit or integration tests that render profiles with tier mappings, preview a workflow with fallback, submit the form, and assert the payload includes modelTier rather than only resolved model/effort.",
+      "acceptanceCriteria": [
+        "Settings shows the current mapping from tier number to label, model, and effort.",
+        "Workflow submission preview shows effective model/effort for each tiered step.",
+        "Fallback warnings explain when a requested tier exceeds configured tiers.",
+        "Explicit hard override controls remain available and visibly distinct from tier intent.",
+        "Submitted payload preserves modelTier and tierFallback fields."
+      ],
+      "requirements": [
+        "The frontend must not be the authoritative tier compiler.",
+        "UI copy must make fallback concise and understandable."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-003": "Keeps frontend preview advisory.",
+        "DESIGN-REQ-013": "Owns tier display, warning, override, and submission behavior.",
+        "DESIGN-REQ-014": "Surfaces fallback and resolved model/effort in user-facing history or launch detail views where applicable."
+      },
+      "dependencies": [
+        "STORY-004"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Apply resolved tiers at runtime launch boundaries",
+      "shortName": "runtime-tier-launch",
+      "description": "As a workflow runner, I need runtime strategies to launch with the backend-resolved model, effort, and tier parameters while reporting when effort cannot be applied.",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "title": "Provider Profile Model and Effort Tiers",
+        "sections": [
+          "10. Runtime Strategy Integration",
+          "11. Provider Profile Manager Interaction",
+          "15.3 Runtime validation"
+        ],
+        "claimIds": [
+          "CLAIM-docs-security-providerprofilemodelefforttiers-002",
+          "CLAIM-docs-security-providerprofilemodelefforttiers-008"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "why": "Resolved tier policy must actually shape launches while preserving existing provider profile slot and credential boundaries.",
+      "scope": [
+        "Pass resolved model into runtime strategy command, environment, or config shaping.",
+        "Apply effort through supported runtime-specific mechanisms or record unsupported/metadata-only status.",
+        "Merge tier parameters before runtime command construction with explicit step parameters taking precedence.",
+        "Keep Provider Profile Manager capacity at profile level, not tier level."
+      ],
+      "outOfScope": [
+        "UI tier tables",
+        "Provider Profile schema migration"
+      ],
+      "independentTest": "Launch representative runtime strategy tests with resolved tier outputs and assert command/config/env shaping, effort application status, parameter precedence, and unchanged Provider Profile slot leasing behavior.",
+      "acceptanceCriteria": [
+        "Codex CLI receives the resolved model through its model application path when supported.",
+        "Unsupported effort is recorded as not_supported rather than applied.",
+        "Tier parameters are merged only when not overridden by explicit step parameters.",
+        "Tier definitions never carry credentials or credential refs into runtime launch materialization.",
+        "Provider Profile Manager leases capacity for the selected profile, not for individual tiers."
+      ],
+      "requirements": [
+        "Runtime launch defensively re-checks selected profile readiness and tier resolvability.",
+        "Effort application status values include applied, not_supported, metadata_only, emulated, or unknown as appropriate."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-008": "Owns runtime model and effort application.",
+        "DESIGN-REQ-009": "Owns tier parameter merge precedence.",
+        "DESIGN-REQ-010": "Owns Provider Profile Manager capacity boundaries.",
+        "DESIGN-REQ-015": "Maintains non-goals around capacity pools and credential ownership."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Record tier resolution diagnostics and acceptance coverage",
+      "shortName": "tier-audit-coverage",
+      "description": "As an operator auditing historical workflow behavior, I need every launched step to record tier resolution metadata and tests to prove validation, migration, resolution, preview, and runtime launch behavior.",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfileModelEffortTiers.md",
+        "title": "Provider Profile Model and Effort Tiers",
+        "sections": [
+          "14. Observability and Audit",
+          "17. Acceptance Tests",
+          "18. Open Questions",
+          "19. Decision Summary"
+        ],
+        "claimIds": [
+          "CLAIM-docs-security-providerprofilemodelefforttiers-011",
+          "CLAIM-docs-security-providerprofilemodelefforttiers-012",
+          "CLAIM-docs-security-providerprofilemodelefforttiers-013"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-016"
+        ]
+      },
+      "why": "The design is only operationally useful if launches preserve evidence of what was requested, what was used, and why.",
+      "scope": [
+        "Persist modelTierResolution metadata in run diagnostics or launch metadata.",
+        "Display historical resolved model/effort even if the profile changes later.",
+        "Add acceptance coverage across validation, migration, resolution, frontend/backend contract, and runtime launch scenarios.",
+        "Track unresolved policy choices from the design as explicit assumptions or follow-up decisions, not hidden behavior."
+      ],
+      "outOfScope": [
+        "Implementing open policy decisions such as snapshot mode or indefinite compatibility mirrors unless selected by product owner"
+      ],
+      "independentTest": "Run end-to-end or boundary tests that launch tiered steps and inspect diagnostics for requested/effective tier, fallback, resolved model/effort, sources, effort status, preview mismatch, and historical stability after profile edits.",
+      "acceptanceCriteria": [
+        "Run diagnostics include providerProfileId, requestedModelTier, effectiveModelTier, tierLabel, fallbackReason, resolvedModel, resolvedEffort, modelSource, effortSource, effortApplicationStatus, and previewMismatch where applicable.",
+        "Historical workflow details continue to show the concrete resolved model and effort after Provider Profile edits.",
+        "Tests cover profile validation, migration, resolution, frontend/backend contract, and runtime launch acceptance cases from the source design.",
+        "Open policy questions remain visible and are not silently resolved by implementation defaults outside the documented decisions."
+      ],
+      "requirements": [
+        "Diagnostics must not include raw credentials.",
+        "Coverage must include degraded or unsupported effort paths."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-014": "Owns audit metadata and historical visibility.",
+        "DESIGN-REQ-016": "Owns acceptance coverage expectations."
+      },
+      "dependencies": [
+        "STORY-002",
+        "STORY-004",
+        "STORY-006"
+      ],
+      "assumptions": [
+        "Open questions in the source design can become follow-up product decisions after the core tier model is implemented."
+      ],
+      "needsClarification": [
+        "Should recurring workflow schedules use current profile policy at launch or support snapshot mode at schedule creation?",
+        "Should strict fallback be exposed in normal UI or only API/power-user surfaces?"
+      ]
+    }
+  ],
+  "coverageMatrix": {
+    "CLAIM-docs-security-providerprofilemodelefforttiers-001": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-002": [
+      "STORY-006"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-003": [
+      "STORY-001"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-004": [
+      "STORY-001"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-005": [
+      "STORY-003"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-006": [
+      "STORY-004",
+      "STORY-005"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-007": [
+      "STORY-002"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-008": [
+      "STORY-006"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-009": [
+      "STORY-001"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-010": [
+      "STORY-004"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-011": [
+      "STORY-005",
+      "STORY-007"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-012": [
+      "STORY-007"
+    ],
+    "CLAIM-docs-security-providerprofilemodelefforttiers-013": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-002",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-005",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-007"
+    ]
+  }
+}
