@@ -2618,7 +2618,7 @@ export interface paths {
         put?: never;
         /**
          * Create Omnigent Session
-         * @description Create or reuse an Omnigent-shaped session in proxy mode (OB-§8).
+         * @description Create or reuse an Omnigent-shaped session in the configured bridge mode.
          */
         post: operations["create_omnigent_session_api_omnigent_v1_sessions_post"];
         delete?: never;
@@ -2771,6 +2771,66 @@ export interface paths {
         get: operations["list_omnigent_agents_api_omnigent_api_agents_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/v1/hosts/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register Embedded Omnigent Host
+         * @description Register an unchanged host against MoonMind's embedded host facade.
+         */
+        post: operations["register_embedded_omnigent_host_api_omnigent_v1_hosts_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/v1/hosts/{host_id}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Heartbeat Embedded Omnigent Host
+         * @description Accept a host heartbeat through the embedded host facade.
+         */
+        post: operations["heartbeat_embedded_omnigent_host_api_omnigent_v1_hosts__host_id__heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/v1/hosts/{host_id}/sessions/{session_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Embedded Omnigent Host Event
+         * @description Ingest host/session events into the canonical bridge projection.
+         */
+        post: operations["ingest_embedded_omnigent_host_event_api_omnigent_v1_hosts__host_id__sessions__session_id__events_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5491,6 +5551,53 @@ export interface components {
              * @constant
              */
             status: "QUEUED";
+        };
+        /**
+         * EmbeddedHostHeartbeatRequest
+         * @description Host heartbeat payload.
+         */
+        EmbeddedHostHeartbeatRequest: {
+            /**
+             * Status
+             * @default running
+             */
+            status: string;
+            /** Capabilities */
+            capabilities?: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * EmbeddedHostRegisterRequest
+         * @description Host registration payload accepted from an unchanged Omnigent host.
+         */
+        EmbeddedHostRegisterRequest: {
+            /** Hostid */
+            hostId?: string | null;
+            /** Runnerid */
+            runnerId?: string | null;
+            /** Capabilities */
+            capabilities?: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * EmbeddedHostSessionEventRequest
+         * @description Host-to-MoonMind session event payload.
+         */
+        EmbeddedHostSessionEventRequest: {
+            /** Type */
+            type: string;
+            /** Data */
+            data?: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
         };
         /**
          * EnvironmentDiagnosticReferenceModel
@@ -16353,6 +16460,116 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown[];
+                };
+            };
+        };
+    };
+    register_embedded_omnigent_host_api_omnigent_v1_hosts_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmbeddedHostRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    heartbeat_embedded_omnigent_host_api_omnigent_v1_hosts__host_id__heartbeat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                host_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmbeddedHostHeartbeatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_embedded_omnigent_host_event_api_omnigent_v1_hosts__host_id__sessions__session_id__events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                host_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmbeddedHostSessionEventRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
