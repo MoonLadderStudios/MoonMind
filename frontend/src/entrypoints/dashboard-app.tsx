@@ -662,18 +662,10 @@ function WorkflowListDisplayModeControl({
   );
 }
 
-function DashboardNavigation({
+function ApplicationRail({
   uiInfo,
-  listDisplayAccessibleName,
-  workflowListMode,
-  workflowListDisplayStatus,
-  onWorkflowListModeSelect,
 }: {
   uiInfo: DashboardUiInfo | null;
-  listDisplayAccessibleName?: string | undefined;
-  workflowListMode: WorkflowListDisplayMode | null;
-  workflowListDisplayStatus?: string | null | undefined;
-  onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -743,7 +735,7 @@ function DashboardNavigation({
   }, [open]);
 
   return (
-    <header className="masthead">
+    <aside className="application-rail" aria-label="Application rail">
       <Link className="masthead-brand" to="/workflows" aria-label="MoonMind workflows">
         <img
           className="masthead-logo"
@@ -757,15 +749,6 @@ function DashboardNavigation({
           <span className="masthead-brand-mind">Mind</span>
         </h1>
       </Link>
-
-      {workflowListMode ? (
-        <WorkflowListDisplayModeControl
-          {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
-          effectiveMode={workflowListMode}
-          status={workflowListDisplayStatus}
-          onSelect={onWorkflowListModeSelect}
-        />
-      ) : null}
 
       <button
         ref={menuButtonRef}
@@ -792,7 +775,7 @@ function DashboardNavigation({
         />
       ) : null}
 
-      <div className="masthead-nav">
+      <div className="application-rail-nav">
         <nav
           ref={navRef}
           className={`route-nav${open ? ' route-nav--open' : ''}`}
@@ -870,14 +853,14 @@ function DashboardNavigation({
         </nav>
       </div>
 
-      {buildId ? (
-        <div className="masthead-title-meta">
+      <div className="application-rail-utilities">
+        {buildId ? (
           <div className="version-badge" title="MoonMind image version">
             <span className="version-badge-value">v{buildId}</span>
           </div>
-        </div>
-      ) : null}
-    </header>
+        ) : null}
+      </div>
+    </aside>
   );
 }
 
@@ -901,36 +884,40 @@ function AppShell({
   return (
     <DashboardLiveUpdateProvider uiInfo={uiInfo}>
       <main className="dashboard-root">
-        <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
-          <p>
-            <span className="worker-pause-label" data-worker-pause-status>
-              Workers: Running
-            </span>
-            <span className="worker-pause-reason" data-worker-pause-reason />
-            <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
-              Manage operations
-            </Link>
-          </p>
-        </section>
+        <ApplicationRail uiInfo={uiInfo} />
+        <div className="dashboard-content">
+          <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
+            <p>
+              <span className="worker-pause-label" data-worker-pause-status>
+                Workers: Running
+              </span>
+              <span className="worker-pause-reason" data-worker-pause-reason />
+              <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
+                Manage operations
+              </Link>
+            </p>
+          </section>
 
-        <div className="dashboard-shell-full">
-          <DashboardNavigation
-            uiInfo={uiInfo}
-            listDisplayAccessibleName={listDisplayAccessibleName}
-            workflowListMode={workflowListMode}
-            workflowListDisplayStatus={workflowListDisplayStatus}
-            onWorkflowListModeSelect={onWorkflowListModeSelect}
-          />
-        </div>
+          {workflowListMode ? (
+            <div className="dashboard-collection-utilities">
+              <WorkflowListDisplayModeControl
+                {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
+                effectiveMode={workflowListMode}
+                status={workflowListDisplayStatus}
+                onSelect={onWorkflowListModeSelect}
+              />
+            </div>
+          ) : null}
 
-        <div
-          className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
-        >
-          <DashboardAlerts />
+          <div
+            className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
+          >
+            <DashboardAlerts />
+          </div>
+          <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
+            {children}
+          </section>
         </div>
-        <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
-          {children}
-        </section>
       </main>
     </DashboardLiveUpdateProvider>
   );
