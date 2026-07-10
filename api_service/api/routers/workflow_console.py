@@ -126,11 +126,13 @@ _DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
     ),
 }
 
+
 class CreateSkillRequest(BaseModel):
     """Payload for creating a new skill via the dashboard."""
 
     name: str = Field(..., description="The name of the new skill")
     markdown: str = Field(..., description="The markdown content of the new skill")
+
 
 class DashboardSkillOption(BaseModel):
     """Serializable skill option exposed to dashboard clients."""
@@ -199,6 +201,7 @@ class DashboardSkillOption(BaseModel):
         description="Endpoint for the full Skill input contract when not inlined",
     )
 
+
 class DashboardSkillListResponse(BaseModel):
     """Dashboard response containing available skill options."""
 
@@ -207,8 +210,10 @@ class DashboardSkillListResponse(BaseModel):
         default_factory=list, alias="legacyItems"
     )
 
+
 class DashboardSkillInputContractResponse(DashboardSkillOption):
     """Detailed Skill contract response with the full schema inlined."""
+
 
 class DashboardBranchOption(BaseModel):
     """Serializable Git branch option exposed to dashboard clients."""
@@ -217,12 +222,14 @@ class DashboardBranchOption(BaseModel):
     label: str = Field(description="Display label")
     source: str = Field(description="Branch option source")
 
+
 class DashboardBranchListResponse(BaseModel):
     """Dashboard response containing branch options for one repository."""
 
     items: list[DashboardBranchOption] = Field(default_factory=list)
     error: str | None = Field(None)
     default_branch: str | None = Field(None, alias="defaultBranch")
+
 
 class DashboardIssueOption(BaseModel):
     """Serializable GitHub issue option exposed to dashboard clients."""
@@ -235,11 +242,13 @@ class DashboardIssueOption(BaseModel):
     state: str = ""
     labels: list[str] = Field(default_factory=list)
 
+
 class DashboardIssueListResponse(BaseModel):
     """Dashboard response containing GitHub issue options for one repository."""
 
     items: list[DashboardIssueOption] = Field(default_factory=list)
     error: str | None = Field(None)
+
 
 class DashboardUiInfoResponse(BaseModel):
     """Compact client-discoverable dashboard shell config for the SPA."""
@@ -250,6 +259,7 @@ class DashboardUiInfoResponse(BaseModel):
     features: dict[str, bool] = Field(default_factory=dict)
     limits: dict[str, int] = Field(default_factory=dict)
     endpoints: dict[str, str] = Field(default_factory=dict)
+    destinations: list[dict[str, object]] = Field(default_factory=list)
     dashboard_config: dict = Field(..., alias="dashboardConfig")
     settings_permissions: list[str] = Field(
         default_factory=list,
@@ -295,11 +305,13 @@ async def _read_file_backed_skill_input_contract(
         _SKILL_INPUT_CONTRACT_CACHE.pop(oldest_key, None)
     return skill_markdown, dict(contract)
 
+
 class _ValidatedSkillZip(BaseModel):
     skill_name: str
     description: str
     root_prefix: str | None = None
     manifest_path: PurePosixPath
+
 
 class SkillImportResponse(BaseModel):
     """Skill import result returned by the canonical upload contract."""
@@ -313,6 +325,7 @@ class SkillImportResponse(BaseModel):
     description: str
     warnings: list[dict[str, str]] = Field(default_factory=list)
 
+
 def _is_safe_detail_segment(segment: str) -> bool:
     text = segment.strip()
     if not text:
@@ -321,6 +334,7 @@ def _is_safe_detail_segment(segment: str) -> bool:
         return False
     return _SAFE_DETAIL_SEGMENT.fullmatch(text) is not None
 
+
 def _is_safe_workflow_id_segment(segment: str) -> bool:
     text = segment.strip()
     if not text:
@@ -328,6 +342,7 @@ def _is_safe_workflow_id_segment(segment: str) -> bool:
     if text in {".", ".."}:
         return False
     return _SAFE_WORKFLOW_ID_SEGMENT.fullmatch(text) is not None
+
 
 def _normalize_workflow_detail_path(workflow_path: str) -> str | None:
     normalized = workflow_path.strip("/")
@@ -351,17 +366,21 @@ def _normalize_workflow_detail_path(workflow_path: str) -> str | None:
         return f"{parts[0]}/{parts[1]}"
     return None
 
+
 def _is_execution_admin(user: User | None) -> bool:
     return bool(user and getattr(user, "is_superuser", False))
 
+
 def _is_allowed_path(path: str) -> bool:
     return _normalize_workflow_detail_path(path) is not None
+
 
 def _raise_dashboard_route_not_found() -> None:
     raise HTTPException(
         status_code=404,
         detail=_DASHBOARD_ROUTE_NOT_FOUND_DETAIL,
     )
+
 
 def _is_extensionless_dashboard_path(path: str) -> bool:
     normalized = path.strip("/")
@@ -372,6 +391,7 @@ def _is_extensionless_dashboard_path(path: str) -> bool:
         for segment in normalized.split("/")
     )
 
+
 def _worker_pause_sources() -> dict[str, str]:
     return {
         "get": "/api/system/worker-pause",
@@ -379,16 +399,19 @@ def _worker_pause_sources() -> dict[str, str]:
         "shardHealth": "/api/v1/operations/codex/shards",
     }
 
+
 def _skill_input_contract_ref(skill_id: str, contract_digest: str | None) -> str:
     ref = f"/api/workflows/skills/{quote(skill_id, safe='')}/input-contract"
     if contract_digest:
         ref = f"{ref}?digest={quote(contract_digest, safe='')}"
     return ref
 
+
 def _schema_inline_size(input_schema: dict[str, Any]) -> int:
     return len(
         json.dumps(input_schema, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
+
 
 def _skill_option_from_contract(
     *,
@@ -419,12 +442,14 @@ def _skill_option_from_contract(
     return DashboardSkillOption(
         id=skill_id,
         label=label or str(contract.get("label") or skill_id),
-        description=description
-        if description is not None
-        else (
-            str(contract.get("description"))
-            if isinstance(contract.get("description"), str)
-            else None
+        description=(
+            description
+            if description is not None
+            else (
+                str(contract.get("description"))
+                if isinstance(contract.get("description"), str)
+                else None
+            )
         ),
         requiredCapabilities=required_capabilities or [],
         publish=publish,
@@ -440,6 +465,7 @@ def _skill_option_from_contract(
         hasInputSchema=has_input_schema,
         inputContractRef=input_contract_ref,
     )
+
 
 async def _file_backed_skill_option(
     skill_id: str,
@@ -476,16 +502,22 @@ async def _file_backed_skill_option(
                 source_label=str(skill_file),
             )
         )
-        publish = extract_publish_metadata_from_skill_markdown(
-            skill_markdown,
-            skill_name=skill_id,
-            source_label=str(skill_file),
-        ) or None
-        side_effect = extract_side_effect_metadata_from_skill_markdown(
-            skill_markdown,
-            skill_name=skill_id,
-            source_label=str(skill_file),
-        ) or None
+        publish = (
+            extract_publish_metadata_from_skill_markdown(
+                skill_markdown,
+                skill_name=skill_id,
+                source_label=str(skill_file),
+            )
+            or None
+        )
+        side_effect = (
+            extract_side_effect_metadata_from_skill_markdown(
+                skill_markdown,
+                skill_name=skill_id,
+                source_label=str(skill_file),
+            )
+            or None
+        )
         source = {
             "kind": "file",
             "path": str(skill_file),
@@ -504,6 +536,7 @@ async def _file_backed_skill_option(
         inline_large_schema=inline_large_schema,
     )
 
+
 async def _deployment_skill_options(
     session: AsyncSession,
 ) -> list[DashboardSkillOption]:
@@ -520,9 +553,11 @@ async def _deployment_skill_options(
     for definition, metadata_json in result.all():
         metadata = metadata_json if isinstance(metadata_json, dict) else {}
         contract = contract_from_artifact_metadata(
-            metadata.get("input_contract")
-            if isinstance(metadata.get("input_contract"), dict)
-            else {},
+            (
+                metadata.get("input_contract")
+                if isinstance(metadata.get("input_contract"), dict)
+                else {}
+            ),
             skill_id=definition.slug,
             content_digest=definition.content_digest,
         )
@@ -539,9 +574,11 @@ async def _deployment_skill_options(
         side_effect = (
             metadata.get("sideEffect")
             if isinstance(metadata.get("sideEffect"), dict)
-            else metadata.get("side_effect")
-            if isinstance(metadata.get("side_effect"), dict)
-            else None
+            else (
+                metadata.get("side_effect")
+                if isinstance(metadata.get("side_effect"), dict)
+                else None
+            )
         )
         source = {
             "kind": "deployment",
@@ -561,6 +598,7 @@ async def _deployment_skill_options(
             )
         )
     return options
+
 
 def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
     """Return auth dependencies so tests can override them consistently."""
@@ -583,6 +621,7 @@ def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
         dependencies.append(get_current_user())
     return dependencies
 
+
 async def _get_temporal_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TemporalExecutionService:
@@ -596,6 +635,7 @@ async def _get_temporal_service(
             settings.temporal.manifest_continue_as_new_phase_threshold
         ),
     )
+
 
 def _dashboard_ui_error_response(page: str, detail: str) -> HTMLResponse:
     """503 HTML when Vite assets are missing or incomplete (never a silent blank shell)."""
@@ -618,11 +658,13 @@ def _dashboard_ui_error_response(page: str, detail: str) -> HTMLResponse:
     response.headers["Cache-Control"] = DASHBOARD_HTML_CACHE_CONTROL
     return response
 
+
 def _vite_assets_or_error(page: str) -> HTMLResponse | str:
     try:
         return ui_assets("dashboard")
     except DashboardUIAssetsError:
         return _dashboard_ui_error_response(page, _DASHBOARD_UI_ERROR_DETAIL)
+
 
 async def _render_react_page(
     request: Request,
@@ -654,13 +696,16 @@ async def _render_react_page(
     response.headers["Cache-Control"] = DASHBOARD_HTML_CACHE_CONTROL
     return response
 
+
 def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
     mode = (info.external_attr >> 16) & 0o170000
     return mode == stat.S_IFLNK
 
+
 def _is_unsupported_zip_file_type(info: zipfile.ZipInfo) -> bool:
     mode = (info.external_attr >> 16) & 0o170000
     return mode not in {0, stat.S_IFREG}
+
 
 def _normalize_zip_member(name: str) -> PurePosixPath:
     if "\\" in name:
@@ -679,8 +724,10 @@ def _normalize_zip_member(name: str) -> PurePosixPath:
         raise HTTPException(status_code=400, detail="Skill zip contains an empty path.")
     return PurePosixPath(*parts)
 
+
 def _is_ignored_zip_member(path: PurePosixPath) -> bool:
     return "__MACOSX" in path.parts or path.name == ".DS_Store"
+
 
 def _validate_imported_skill_name(skill_name: str) -> str:
     try:
@@ -696,6 +743,7 @@ def _validate_imported_skill_name(skill_name: str) -> str:
             ),
         )
     return normalized
+
 
 def _parse_skill_manifest_metadata(markdown: str, parent_name: str) -> tuple[str, str]:
     lines = markdown.splitlines()
@@ -749,6 +797,7 @@ def _parse_skill_manifest_metadata(markdown: str, parent_name: str) -> tuple[str
             detail="Skill manifest name must match the parent directory.",
         )
     return skill_name, raw_description.strip()
+
 
 def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkillZip:
     if not payload:
@@ -811,9 +860,13 @@ def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkill
             normalized_paths.append(normalized_path)
 
         if not normalized_paths:
-            raise HTTPException(status_code=400, detail="Skill zip must contain skill files.")
+            raise HTTPException(
+                status_code=400, detail="Skill zip must contain skill files."
+            )
 
-        skill_files = [path for path in normalized_paths if path.name.lower() == "skill.md"]
+        skill_files = [
+            path for path in normalized_paths if path.name.lower() == "skill.md"
+        ]
         top_level_names = {path.parts[0] for path in normalized_paths}
         nested_skill_files = [
             path
@@ -856,6 +909,7 @@ def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkill
             manifest_path=manifest_path,
         )
 
+
 def _write_skill_zip(
     skill_dir: Path,
     payload: bytes,
@@ -894,7 +948,9 @@ def _write_skill_zip(
                     target.chmod(0o755)
 
         if not (temp_dir / "SKILL.md").is_file():
-            raise HTTPException(status_code=400, detail="Skill zip must contain a SKILL.md file.")
+            raise HTTPException(
+                status_code=400, detail="Skill zip must contain a SKILL.md file."
+            )
         if skill_dir.exists():
             detail = f"Skill '{validated.skill_name}' already exists locally."
             if collision_policy == "new_version":
@@ -907,6 +963,7 @@ def _write_skill_zip(
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
+
 
 def _build_skill_import_response(
     payload: bytes,
@@ -924,6 +981,7 @@ def _build_skill_import_response(
         warnings=[],
     )
 
+
 async def _import_skill_zip(
     file: UploadFile,
     collision_policy: Literal["reject", "new_version"],
@@ -940,6 +998,7 @@ async def _import_skill_zip(
     )
     return _build_skill_import_response(payload, validated)
 
+
 @router.get("/secrets")
 async def secrets_route(
     request: Request,
@@ -947,6 +1006,7 @@ async def secrets_route(
 ) -> RedirectResponse:
     """Redirect the legacy secrets page into unified settings."""
     return RedirectResponse(url="/settings?section=providers-secrets", status_code=307)
+
 
 @router.get("/workflows", name="workflow_console_root", response_class=HTMLResponse)
 async def workflow_console_root(
@@ -965,6 +1025,7 @@ async def workflow_console_root(
         user=_user,
     )
 
+
 @router.get("/schedules", response_class=HTMLResponse)
 async def schedules_route(
     request: Request,
@@ -975,6 +1036,7 @@ async def schedules_route(
     return await _render_react_page(
         request, "schedules", "/schedules", session=session, user=_user
     )
+
 
 @router.get("/schedules/{schedule_id}", response_class=HTMLResponse)
 async def schedule_detail_route(
@@ -994,6 +1056,7 @@ async def schedule_detail_route(
         user=_user,
     )
 
+
 @router.get("/manifests", response_class=HTMLResponse)
 async def manifests_route(
     request: Request,
@@ -1005,6 +1068,7 @@ async def manifests_route(
         request, "manifests", "/manifests", session=session, user=_user
     )
 
+
 @router.get("/manifests/new", status_code=307, response_class=RedirectResponse)
 async def task_manifest_submit_route(
     request: Request,
@@ -1012,6 +1076,7 @@ async def task_manifest_submit_route(
 ) -> RedirectResponse:
     """Redirect the legacy manifest submit route into the unified manifests page."""
     return RedirectResponse(url="/manifests", status_code=307)
+
 
 @router.get("/manifests/{manifest_name}", response_class=HTMLResponse)
 async def task_manifest_detail_route(
@@ -1030,6 +1095,7 @@ async def task_manifest_detail_route(
         session=session,
         user=_user,
     )
+
 
 @router.get("/index-health", response_class=HTMLResponse)
 async def index_health_route(
@@ -1083,6 +1149,7 @@ async def artifact_collection_route(
         user=_user,
     )
 
+
 @router.get("/workers")
 async def task_workers_route(
     request: Request,
@@ -1090,6 +1157,7 @@ async def task_workers_route(
 ) -> RedirectResponse:
     """Redirect the legacy workers page into unified settings."""
     return RedirectResponse(url="/settings?section=operations", status_code=307)
+
 
 @router.get("/settings", response_class=HTMLResponse)
 async def task_settings_route(
@@ -1107,6 +1175,7 @@ async def task_settings_route(
         user=_user,
     )
 
+
 @router.get("/settings/{dashboard_path:path}", response_class=HTMLResponse)
 async def settings_spa_fallback_route(
     request: Request,
@@ -1118,6 +1187,7 @@ async def settings_spa_fallback_route(
     if not _is_extensionless_dashboard_path(dashboard_path):
         _raise_dashboard_route_not_found()
     return await task_settings_route(request, session=session, _user=_user)
+
 
 @router.get("/oauth-terminal", response_class=HTMLResponse)
 async def oauth_terminal_route(
@@ -1156,6 +1226,7 @@ async def omnigent_inventory_route(
         user=_user,
     )
 
+
 @router.get("/workflows/new", response_class=HTMLResponse)
 async def task_create_route(
     request: Request,
@@ -1172,6 +1243,7 @@ async def task_create_route(
         user=_user,
     )
 
+
 @router.get("/skills", response_class=HTMLResponse)
 async def skills_route(
     request: Request,
@@ -1182,6 +1254,7 @@ async def skills_route(
     return await _render_react_page(
         request, "skills", "/skills", session=session, user=_user
     )
+
 
 @router.get("/skills/{dashboard_path:path}", response_class=HTMLResponse)
 async def skills_spa_fallback_route(
@@ -1200,6 +1273,7 @@ async def skills_spa_fallback_route(
         session=session,
         user=_user,
     )
+
 
 @router.get("/workflows/{workflow_path:path}", response_class=HTMLResponse)
 async def workflow_console_route(
@@ -1222,6 +1296,31 @@ async def workflow_console_route(
         session=session,
         user=_user,
     )
+
+
+@router.get("/artifacts/{dashboard_path:path}", response_class=HTMLResponse)
+@router.get("/observability/{dashboard_path:path}", response_class=HTMLResponse)
+@router.get("/remediations/{dashboard_path:path}", response_class=HTMLResponse)
+@router.get("/omnigent/agents/{dashboard_path:path}", response_class=HTMLResponse)
+@router.get("/omnigent/policies/{dashboard_path:path}", response_class=HTMLResponse)
+async def collection_spa_fallback_route(
+    request: Request,
+    dashboard_path: str,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve recognized extensionless collection deep links from the SPA shell."""
+    if not _is_extensionless_dashboard_path(dashboard_path):
+        _raise_dashboard_route_not_found()
+    return await _render_react_page(
+        request,
+        "dashboard",
+        request.url.path,
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
 
 @router.get("/api/ui/info", response_model=DashboardUiInfoResponse)
 async def get_dashboard_ui_info(
@@ -1260,6 +1359,7 @@ async def get_dashboard_ui_info(
             "schedules": True,
             "skills": True,
             "settings": True,
+            "manifests": True,
             "oauthTerminal": True,
             "remediationCollection": True,
             "omnigentAgents": omnigent_agents_available,
@@ -1284,6 +1384,7 @@ async def get_dashboard_ui_info(
             "skills": "/api/workflows/skills",
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",
+            "manifests": "/api/manifests",
             "remediations": "/api/executions/remediations",
             **(
                 {"omnigentAgents": f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/agents"}
@@ -1291,10 +1392,128 @@ async def get_dashboard_ui_info(
                 else {}
             ),
         },
+        destinations=[
+            {
+                "key": "workflows",
+                "label": "Workflows",
+                "iconKey": "scroll-text",
+                "canonicalPath": "/workflows",
+                "pathPatterns": [
+                    "/workflows",
+                    "/workflows/:workflowId",
+                    "/workflows/:workflowId/:detailTab",
+                ],
+                "navigationGroup": "primary",
+                "pageClassification": "workspace",
+                "capabilityKey": "workflowList",
+                "endpointKey": "workflows",
+                "displayMode": "workflow-list",
+            },
+            {
+                "key": "create",
+                "label": "Create",
+                "iconKey": "rocket",
+                "canonicalPath": "/workflows/new",
+                "pathPatterns": ["/workflows/new"],
+                "navigationGroup": "primary",
+                "pageClassification": "create",
+                "capabilityKey": "workflowActions",
+            },
+            {
+                "key": "recurring",
+                "label": "Recurring",
+                "iconKey": "moon",
+                "canonicalPath": "/schedules",
+                "pathPatterns": ["/schedules", "/schedules/:definitionId"],
+                "navigationGroup": "primary",
+                "pageClassification": "workspace",
+                "capabilityKey": "schedules",
+                "endpointKey": "schedules",
+                "displayMode": "recurring-list",
+            },
+            {
+                "key": "skills",
+                "label": "Skills",
+                "iconKey": "sparkles",
+                "canonicalPath": "/skills",
+                "pathPatterns": ["/skills/*"],
+                "navigationGroup": "primary",
+                "pageClassification": "workspace",
+                "capabilityKey": "skills",
+                "endpointKey": "skills",
+            },
+            {
+                "key": "manifests",
+                "label": "RAG / Manifests",
+                "iconKey": "manifest",
+                "canonicalPath": "/manifests",
+                "pathPatterns": ["/manifests", "/manifests/:manifestName"],
+                "navigationGroup": "operations",
+                "pageClassification": "collection",
+                "capabilityKey": "manifests",
+                "endpointKey": "manifests",
+            },
+            {
+                "key": "omnigent-agents",
+                "label": "Omnigent Agents",
+                "iconKey": "bot",
+                "canonicalPath": "/omnigent/agents",
+                "pathPatterns": ["/omnigent/agents/*"],
+                "navigationGroup": "operations",
+                "pageClassification": "collection",
+                "capabilityKey": "omnigentAgents",
+                "endpointKey": "omnigentAgents",
+            },
+            {
+                "key": "omnigent-policies",
+                "label": "Omnigent Policies",
+                "iconKey": "shield-check",
+                "canonicalPath": "/omnigent/policies",
+                "pathPatterns": ["/omnigent/policies/*"],
+                "navigationGroup": "operations",
+                "pageClassification": "collection",
+                "capabilityKey": "omnigentPolicies",
+                "endpointKey": "omnigentPolicies",
+            },
+            {
+                "key": "remediation",
+                "label": "Remediation",
+                "iconKey": "wrench",
+                "canonicalPath": "/remediations",
+                "pathPatterns": ["/remediations/*"],
+                "navigationGroup": "operations",
+                "pageClassification": "collection",
+                "capabilityKey": "remediationCollection",
+                "endpointKey": "remediations",
+            },
+            {
+                "key": "artifacts",
+                "label": "Artifacts / Observability",
+                "iconKey": "archive",
+                "canonicalPath": "/artifacts",
+                "pathPatterns": ["/artifacts/*", "/observability/*"],
+                "navigationGroup": "operations",
+                "pageClassification": "collection",
+                "capabilityKey": "artifacts",
+                "endpointKey": "artifacts",
+            },
+            {
+                "key": "settings",
+                "label": "Settings",
+                "iconKey": "settings",
+                "canonicalPath": "/settings",
+                "pathPatterns": ["/settings/*"],
+                "navigationGroup": "system",
+                "pageClassification": "utility",
+                "capabilityKey": "settings",
+                "endpointKey": "settings",
+            },
+        ],
         dashboardConfig=dashboard_config,
         settingsPermissions=sorted(settings_permissions_for_user(_user)),
         workerPause=_worker_pause_sources(),
     )
+
 
 @router.get("/api/workflows/skills", response_model=DashboardSkillListResponse)
 async def list_dashboard_skills(
@@ -1332,6 +1551,7 @@ async def list_dashboard_skills(
         items=items,
         legacyItems=[merged_items[key] for key in sorted(merged_items)],
     )
+
 
 @router.get(
     "/api/workflows/skills/{skill_id}/input-contract",
@@ -1379,9 +1599,11 @@ async def get_dashboard_skill_input_contract(
     definition, metadata_json = row
     metadata = metadata_json if isinstance(metadata_json, dict) else {}
     contract = contract_from_artifact_metadata(
-        metadata.get("input_contract")
-        if isinstance(metadata.get("input_contract"), dict)
-        else {},
+        (
+            metadata.get("input_contract")
+            if isinstance(metadata.get("input_contract"), dict)
+            else {}
+        ),
         skill_id=definition.slug,
         content_digest=definition.content_digest,
     )
@@ -1401,9 +1623,11 @@ async def get_dashboard_skill_input_contract(
     side_effect = (
         metadata.get("sideEffect")
         if isinstance(metadata.get("sideEffect"), dict)
-        else metadata.get("side_effect")
-        if isinstance(metadata.get("side_effect"), dict)
-        else None
+        else (
+            metadata.get("side_effect")
+            if isinstance(metadata.get("side_effect"), dict)
+            else None
+        )
     )
     option = _skill_option_from_contract(
         skill_id=definition.slug,
@@ -1421,6 +1645,7 @@ async def get_dashboard_skill_input_contract(
         inline_large_schema=True,
     )
     return DashboardSkillInputContractResponse(**option.model_dump(by_alias=True))
+
 
 @router.get("/api/github/branches", response_model=DashboardBranchListResponse)
 async def list_dashboard_github_branches(
@@ -1443,6 +1668,7 @@ def list_dashboard_github_issues(
 
     payload = build_repository_issue_options(repository, q)
     return DashboardIssueListResponse(**payload)
+
 
 @router.post(
     "/api/workflows/skills",
@@ -1474,6 +1700,7 @@ async def create_dashboard_skill(
 
     return {"status": "success"}
 
+
 @router.post(
     "/api/skills/imports",
     status_code=201,
@@ -1488,6 +1715,7 @@ async def create_skill_import(
 
     return await _import_skill_zip(file, collision_policy)
 
+
 @router.post(
     "/api/workflows/skills/upload",
     status_code=201,
@@ -1501,6 +1729,7 @@ async def upload_dashboard_skill_zip(
     result = await _import_skill_zip(file, "reject")
 
     return {"status": "success", "skill": result.name}
+
 
 __all__ = [
     "router",

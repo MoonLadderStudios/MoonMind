@@ -1,8 +1,46 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveDashboardRoute } from './dashboardRoutes';
+import {
+  DASHBOARD_DESTINATIONS,
+  DASHBOARD_REACT_ROUTE_PATHS,
+  destinationState,
+  matchesDashboardDestinationRegistry,
+  resolveDashboardRoute,
+} from './dashboardRoutes';
 
 describe('dashboard route resolution', () => {
+  it('keeps one canonical typed inventory for every major destination', () => {
+    expect(DASHBOARD_DESTINATIONS.map(({ key }) => key)).toEqual([
+      'workflows', 'create', 'recurring', 'skills', 'manifests',
+      'omnigent-agents', 'omnigent-policies', 'remediation', 'artifacts', 'settings',
+    ]);
+    expect(new Set(DASHBOARD_DESTINATIONS.map(({ canonicalPath }) => canonicalPath)).size).toBe(10);
+    expect(DASHBOARD_REACT_ROUTE_PATHS).toEqual(
+      Array.from(new Set(DASHBOARD_DESTINATIONS.flatMap(({ pathPatterns }) => pathPatterns))),
+    );
+    expect(DASHBOARD_DESTINATIONS.find(({ key }) => key === 'skills')?.displayMode).toBeUndefined();
+  });
+
+  it('derives shown, hidden, and unavailable states from capability data', () => {
+    const skills = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'skills')!;
+    expect(destinationState(skills, { features: { skills: true } })).toBe('shown');
+    expect(destinationState(skills, { features: {} })).toBe('hidden');
+    expect(destinationState(skills, { features: { skills: false } })).toBe('unavailable');
+  });
+
+  it('detects backend destination inventory drift', () => {
+    const serverInventory = DASHBOARD_DESTINATIONS.map(({ page: _page, dataWidePanel: _wide, ...item }) => ({ ...item }));
+    expect(matchesDashboardDestinationRegistry(serverInventory)).toBe(true);
+    expect(matchesDashboardDestinationRegistry(serverInventory.slice(1))).toBe(false);
+    expect(matchesDashboardDestinationRegistry(serverInventory.map((item, index) => (
+      index === 0 ? { ...item, capabilityKey: 'drifted' } : item
+    )))).toBe(false);
+  });
+
+  it.each(['/artifacts/report/123', '/observability/runs/today', '/remediations/mm%3A123', '/omnigent/agents/coding']) (
+    'resolves the extensionless collection deep link %s',
+    (path) => expect(resolveDashboardRoute(path)).not.toBeNull(),
+  );
   it.each(['/omnigent/agents', '/omnigent/policies'])(
     'resolves the %s inventory route independently',
     (path) => {

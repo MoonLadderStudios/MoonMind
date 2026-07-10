@@ -3294,6 +3294,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/omnigent/policies/{dashboard_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Collection Spa Fallback Route
+         * @description Serve recognized extensionless collection deep links from the SPA shell.
+         */
+        get: operations["collection_spa_fallback_route_omnigent_policies__dashboard_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/omnigent/agents/{dashboard_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Collection Spa Fallback Route
+         * @description Serve recognized extensionless collection deep links from the SPA shell.
+         */
+        get: operations["collection_spa_fallback_route_omnigent_agents__dashboard_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/remediations/{dashboard_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Collection Spa Fallback Route
+         * @description Serve recognized extensionless collection deep links from the SPA shell.
+         */
+        get: operations["collection_spa_fallback_route_remediations__dashboard_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/observability/{dashboard_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Collection Spa Fallback Route
+         * @description Serve recognized extensionless collection deep links from the SPA shell.
+         */
+        get: operations["collection_spa_fallback_route_observability__dashboard_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/artifacts/{dashboard_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Collection Spa Fallback Route
+         * @description Serve recognized extensionless collection deep links from the SPA shell.
+         */
+        get: operations["collection_spa_fallback_route_artifacts__dashboard_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/ui/info": {
         parameters: {
             query?: never;
@@ -5600,6 +5700,10 @@ export interface components {
             endpoints?: {
                 [key: string]: string;
             };
+            /** Destinations */
+            destinations?: {
+                [key: string]: unknown;
+            }[];
             /** Dashboardconfig */
             dashboardConfig: {
                 [key: string]: unknown;
@@ -17424,6 +17528,161 @@ export interface operations {
             header?: never;
             path: {
                 workflow_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    collection_spa_fallback_route_omnigent_policies__dashboard_path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboard_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    collection_spa_fallback_route_omnigent_agents__dashboard_path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboard_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    collection_spa_fallback_route_remediations__dashboard_path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboard_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    collection_spa_fallback_route_observability__dashboard_path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboard_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    collection_spa_fallback_route_artifacts__dashboard_path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboard_path: string;
             };
             cookie?: never;
         };
