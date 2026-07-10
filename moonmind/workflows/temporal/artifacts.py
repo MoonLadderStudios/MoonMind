@@ -908,6 +908,21 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().unique().all())
 
+    async def list_collection_candidates(
+        self,
+    ) -> list[db_models.TemporalArtifact]:
+        """Return collection candidates; authorization is applied by the service."""
+        stmt: Select[tuple[db_models.TemporalArtifact]] = (
+            select(db_models.TemporalArtifact)
+            .where(db_models.TemporalArtifact.deleted_at.is_(None))
+            .order_by(
+                db_models.TemporalArtifact.created_at.desc(),
+                db_models.TemporalArtifact.artifact_id.desc(),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def latest_for_execution_link(
         self,
         *,
@@ -1798,6 +1813,47 @@ class TemporalArtifactService:
         pinned = await self._repository.get_pin(artifact.artifact_id)
         read_policy = await self.get_read_policy(artifact=artifact, principal=principal)
         return artifact, links, pinned is not None, read_policy
+
+    async def list_authorized_collection(
+        self,
+        *,
+        principal: str,
+        category: str,
+        query: str | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[tuple[db_models.TemporalArtifact, list[db_models.TemporalArtifactLink]]], int]:
+        """Return a compact, authorization-filtered artifact collection page."""
+        normalized_query = (query or "").strip().casefold()
+        matches: list[tuple[db_models.TemporalArtifact, list[db_models.TemporalArtifactLink]]] = []
+        for artifact in await self._repository.list_collection_candidates():
+            try:
+                await self._assert_artifact_read_access(artifact, principal=principal)
+            except TemporalArtifactAuthorizationError:
+                continue
+            links = await self._repository.list_links(artifact.artifact_id)
+            link_types = {link.link_type for link in links}
+            if category == "reports" and not any(value.startswith("report.") for value in link_types):
+                continue
+            if category == "observability" and not any(
+                value.startswith(("output.logs", "debug.", "observability."))
+                for value in link_types
+            ):
+                continue
+            if category == "artifacts" and any(
+                value.startswith(("report.", "output.logs", "debug.", "observability."))
+                for value in link_types
+            ):
+                continue
+            searchable = " ".join(
+                [artifact.artifact_id, artifact.content_type or ""]
+                + [link.label or "" for link in links]
+                + list(link_types)
+            ).casefold()
+            if normalized_query and normalized_query not in searchable:
+                continue
+            matches.append((artifact, links))
+        return matches[offset : offset + limit], len(matches)
 
     async def presign_download(
         self,

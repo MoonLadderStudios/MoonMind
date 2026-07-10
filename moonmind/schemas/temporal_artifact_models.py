@@ -195,6 +195,39 @@ class ArtifactListResponse(BaseModel):
 
     artifacts: list[ArtifactMetadataModel] = Field(default_factory=list)
 
+
+class ArtifactCollectionRowModel(BaseModel):
+    """Compact, identity-safe row for dashboard evidence collections."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    artifact_id: str
+    created_at: datetime
+    content_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    status: TemporalArtifactStatus
+    retention_class: TemporalArtifactRetentionClass
+    link_type: Optional[str] = None
+    label: Optional[str] = None
+    workflow_id: Optional[str] = None
+    run_id: Optional[str] = None
+    view_url: str
+    download_url: str
+
+
+class ArtifactCollectionResponse(BaseModel):
+    """Paged compact rows for one independently gated evidence surface."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    category: Literal["artifacts", "reports", "observability"]
+    items: list[ArtifactCollectionRowModel] = Field(default_factory=list)
+    total: int = 0
+    offset: int = 0
+    limit: int = 50
+    refreshed_at: datetime
+
+
 class ArtifactSessionGroupModel(BaseModel):
     """Server-defined grouping of workflow-scoped session artifacts."""
 

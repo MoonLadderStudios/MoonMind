@@ -279,6 +279,8 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
         "/workflows/new",
         "/manifests",
         "/index-health",
+        "/artifacts",
+        "/observability",
         "/schedules",
         "/skills",
         "/settings",
