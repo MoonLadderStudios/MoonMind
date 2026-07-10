@@ -57,4 +57,13 @@ describe('dashboard masthead brand styles', () => {
       'color: rgb(var(--mm-ink));',
     );
   });
+
+  it('MM-1192 layers the compact navigation without overlap and disables large reduced-motion transitions', () => {
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 1180px\)\s*\{[\s\S]*\.route-nav\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*51;[\s\S]*\.dashboard-nav-backdrop\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*50;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.route-nav,[\s\S]*\.dashboard-nav-backdrop\s*\{[^}]*animation:\s*none !important;[^}]*transition:\s*none !important;[^}]*transform:\s*none !important;/s,
+    );
+  });
 });
