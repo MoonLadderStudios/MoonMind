@@ -1322,6 +1322,38 @@ def test_runtime_skill_failure_signal_overrides_assistant_text(
     assert response.metadata["failureClass"] == "permanent"
     assert response.metadata["reason"] == "child_workflow_queue_failed"
 
+
+def test_runtime_caches_valid_skill_outcome_for_current_turn(tmp_path: Path) -> None:
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+    turn_started_at = time.time()
+    outcome_path = _spool_skill_outcome_path(request)
+    outcome_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "failed",
+                "reason": "child_workflow_queue_failed",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    first = runtime._read_skill_outcome(turn_started_at=turn_started_at)
+    outcome_path.unlink()
+    second = runtime._read_skill_outcome(turn_started_at=turn_started_at)
+
+    assert first is not None
+    assert second == first
+
 def test_runtime_no_op_signal_ignored_when_schema_version_wrong(
     tmp_path: Path,
 ) -> None:

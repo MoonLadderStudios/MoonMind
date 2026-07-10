@@ -539,6 +539,7 @@ class CodexManagedSessionRuntime:
             float(missing_turn_visibility_grace_seconds),
         )
         self._client: CodexAppServerRpcClient | None = None
+        self._skill_outcome_cache: tuple[float, dict[str, Any]] | None = None
 
     @property
     def _state_path(self) -> Path:
@@ -1813,6 +1814,7 @@ class CodexManagedSessionRuntime:
         session (or from any prior session that reused this spool) would
         otherwise mask a real transient empty-output failure.
         """
+        self._skill_outcome_cache = None
         outcome_path = self._artifact_spool_path / _SKILL_OUTCOME_FILENAME
         try:
             outcome_path.unlink()
@@ -1842,6 +1844,12 @@ class CodexManagedSessionRuntime:
         """
         if turn_started_at is None:
             return None
+        cache_key = float(turn_started_at)
+        if (
+            self._skill_outcome_cache is not None
+            and self._skill_outcome_cache[0] == cache_key
+        ):
+            return self._skill_outcome_cache[1]
         outcome_path = self._artifact_spool_path / _SKILL_OUTCOME_FILENAME
         try:
             stat_result = outcome_path.stat()
@@ -1869,6 +1877,7 @@ class CodexManagedSessionRuntime:
             *_SKILL_OUTCOME_FAILURE_STATUSES,
         }:
             return None
+        self._skill_outcome_cache = (cache_key, payload)
         return payload
 
     @staticmethod

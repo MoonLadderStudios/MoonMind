@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 API_EXECUTIONS_ENDPOINT = "/api/executions"
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
-TERMINAL_FAILURE_STATES = {"failed", "canceled"}
+TERMINAL_FAILURE_STATES = {"failed", "canceled", "terminated"}
 
 @dataclass
 class JobSubmission:

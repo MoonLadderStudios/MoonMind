@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 API_EXECUTIONS_ENDPOINT = "/api/executions"
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
+TERMINAL_FAILURE_STATES = {"failed", "canceled", "terminated"}
 DEFAULT_TITLE_REGEX = r"^Bump .+ from \S+ to \S+(?: in /.+)?$"
 DEPENDABOT_BRANCH_PREFIX = "dependabot/"
 
@@ -736,6 +738,8 @@ async def _submit_jobs_via_http(
     *,
     moonmind_url: str,
     worker_token: str | None,
+    verify_attempts: int = 5,
+    verify_delay_seconds: float = 1.0,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     created: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -764,20 +768,23 @@ async def _submit_jobs_via_http(
                 response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
                 response.raise_for_status()
                 data = response.json()
-                job_id = (
-                    str(
-                        data.get("workflowId")
-                        or data.get("taskId")
-                        or data.get("id")
-                        or ""
-                    )
-                    or "(unknown)"
+                workflow_id = str(data.get("workflowId") or "").strip()
+                if not workflow_id:
+                    raise RuntimeError("create response did not include workflowId")
+                described = await _verify_execution_visible(
+                    client,
+                    workflow_id,
+                    attempts=verify_attempts,
+                    delay_seconds=verify_delay_seconds,
                 )
                 created.append(
                     {
                         "pr": submission.pr_number,
                         "branch": submission.branch,
-                        "jobId": job_id,
+                        "workflowId": workflow_id,
+                        "runId": described.get("runId") or data.get("runId"),
+                        "state": described.get("state"),
+                        "temporalStatus": described.get("temporalStatus"),
                     }
                 )
             except Exception as exc:  # noqa: BLE001 - record per-PR submission errors
@@ -785,10 +792,52 @@ async def _submit_jobs_via_http(
                     {
                         "pr": submission.pr_number,
                         "branch": submission.branch,
-                        "error": str(exc),
+                        "error": _http_error_text(exc),
                     }
                 )
     return created, errors
+
+
+def _http_error_text(exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        body = exc.response.text.strip()
+        return f"{exc.response.status_code} {exc.response.reason_phrase}: {body[:500]}"
+    return str(exc)
+
+
+async def _verify_execution_visible(
+    client: httpx.AsyncClient,
+    workflow_id: str,
+    *,
+    attempts: int,
+    delay_seconds: float,
+) -> dict[str, Any]:
+    encoded_workflow_id = quote(workflow_id, safe="")
+    last_error = "not checked"
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            response = await client.get(
+                f"{API_EXECUTIONS_ENDPOINT}/{encoded_workflow_id}"
+            )
+            response.raise_for_status()
+            data = response.json()
+            actual_workflow_id = str(data.get("workflowId") or "").strip()
+            if actual_workflow_id != workflow_id:
+                raise RuntimeError(
+                    "describe returned workflowId "
+                    f"{actual_workflow_id!r}, expected {workflow_id!r}"
+                )
+            state = str(data.get("state") or "").strip().lower()
+            if state in TERMINAL_FAILURE_STATES:
+                raise RuntimeError(
+                    f"execution {workflow_id} is already terminal state {state}"
+                )
+            return data
+        except Exception as exc:  # noqa: BLE001 - preserve verification evidence
+            last_error = _http_error_text(exc)
+            if attempt < max(1, attempts) and delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+    raise RuntimeError(f"workflow {workflow_id} was not verified: {last_error}")
 
 
 async def _submit_jobs(

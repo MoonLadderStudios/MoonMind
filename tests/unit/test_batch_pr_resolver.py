@@ -829,6 +829,15 @@ def test_build_queue_request_required_capabilities_toplevel() -> None:
         "requiredCapabilities" not in skill
     ), "requiredCapabilities must not be nested inside skill"
 
+
+def test_terminal_failure_states_include_terminated() -> None:
+    module = _load_module()
+    assert module["TERMINAL_FAILURE_STATES"] == {
+        "failed",
+        "canceled",
+        "terminated",
+    }
+
 def test_write_run_artifacts_emits_no_op_when_zero_queued_no_errors(tmp_path: Path) -> None:
     """A genuine no-op run writes skill_outcome.json declaring status=no_op."""
     module = _load_module()
