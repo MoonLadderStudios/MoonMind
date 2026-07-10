@@ -7597,6 +7597,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .skills-page.collection-workspace {
+  --mm-rail-width: var(--workflow-list-column-workflow-width);
+  --mm-rail-bleed: 1rem;
+
   display: grid;
   grid-template-columns: [rail-start] var(--mm-rail-width) [content-start] minmax(0, 1fr) [content-end];
   width: 100%;

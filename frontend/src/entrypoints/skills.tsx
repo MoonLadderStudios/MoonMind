@@ -403,7 +403,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
 
   return (
     <div className="skills-page collection-workspace">
-      <aside role="navigation" className="workflow-workspace-sidebar collection-sidebar" aria-label="Skill navigation">
+      <nav className="workflow-workspace-sidebar collection-sidebar" aria-label="Skill navigation">
         <div role="table" aria-label="Skill list table slice" className="workflow-workspace-sidebar-table">
           <div role="rowgroup" className="workflow-workspace-sidebar-header">
             <div role="row" className="workflow-workspace-sidebar-header-row">
@@ -454,7 +454,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
             ))}
           </div>
         </div>
-      </aside>
+      </nav>
       <main className="skills-primary workflow-workspace-detail px-4 py-4 sm:px-6 sm:py-6">
         <div className="space-y-5 sm:space-y-6">
         <header className="flex items-start justify-between gap-4 px-1 sm:px-0">
