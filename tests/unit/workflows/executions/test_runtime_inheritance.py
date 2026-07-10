@@ -75,6 +75,12 @@ def test_has_explicit_child_runtime_profile_id() -> None:
     assert has_explicit_child_runtime({"task": {"profileId": "p-1"}})
 
 
+def test_has_explicit_child_runtime_provider_profile_ref() -> None:
+    assert has_explicit_child_runtime(
+        {"task": {"runtime": {"providerProfileRef": "child-profile"}}}
+    )
+
+
 def test_has_explicit_child_runtime_false_when_only_inheritance() -> None:
     assert not has_explicit_child_runtime({"runtimeInheritance": "caller", "task": {}})
 
@@ -482,6 +488,28 @@ def test_apply_inherited_runtime_skips_execution_profile_ref_when_explicit_profi
 
     assert task_payload["runtime"]["profileId"] == "child-explicit"
     assert "executionProfileRef" not in task_payload["runtime"]
+
+
+def test_apply_inherited_runtime_preserves_explicit_provider_profile_ref() -> None:
+    payload: dict[str, Any] = {
+        "task": {"runtime": {"providerProfileRef": "child-explicit"}}
+    }
+    task_payload = payload["task"]
+    inherited = InheritedRuntime(
+        target_runtime="codex_cli",
+        profile_id="parent-default",
+        execution_profile_ref="parent-default",
+    )
+
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=task_payload,
+        inherited=inherited,
+    )
+
+    assert task_payload["runtime"]["providerProfileRef"] == "child-explicit"
+    assert "executionProfileRef" not in task_payload["runtime"]
+    assert "profileId" not in task_payload["runtime"]
 
 
 def test_apply_inherited_runtime_skips_profile_backfill_when_child_sets_execution_profile_ref() -> None:
