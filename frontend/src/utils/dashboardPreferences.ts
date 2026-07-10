@@ -233,7 +233,7 @@ function migrateStoredPreferences(envelope: Partial<StoredEnvelope>): unknown {
   if (envelope.version === DASHBOARD_PREFERENCES_VERSION) return envelope.preferences;
   if (envelope.version !== 1 || !isPlainObject(envelope.preferences)) return null;
 
-  const legacy = envelope.preferences;
+  const legacy = envelope.preferences as Record<string, unknown>;
   return {
     ...legacy,
     workflowListDisplayMode:

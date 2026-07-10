@@ -1053,6 +1053,11 @@ function RoutedDashboardPage({
     const normalizedPath = location.pathname.replace(/\/$/, '');
     if (normalizedPath === '/workflows') {
       setRequestedMode('table');
+    } else if (normalizedPath === '/workflows/new') {
+      if (requestedMode === 'table') {
+        updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
+      }
+      setRequestedMode((mode) => (mode === 'table' ? 'hidden' : mode));
     } else if (normalizedPath.startsWith('/workflows/')) {
       if (requestedMode === 'table') {
         updateDashboardPreferences({ workflowListDisplayMode: 'sidebar' });
@@ -1085,12 +1090,12 @@ function RoutedDashboardPage({
           const authorizedRememberedId = rememberedId
             ? await authorizedRecurringDefinitionId(apiBase, rememberedId)
             : null;
+          if (pendingRequestRef.current !== requestId) {
+            return;
+          }
           if (rememberedId && !authorizedRememberedId) {
             setLastSelectedDefinitionId(null);
             updateDashboardPreferences({ lastSelectedDefinitionId: '' });
-          }
-          if (pendingRequestRef.current !== requestId) {
-            return;
           }
           const targetDefinitionId = authorizedRememberedId || await firstVisibleRecurringDefinitionId(apiBase);
           if (pendingRequestRef.current !== requestId) {
@@ -1153,12 +1158,12 @@ function RoutedDashboardPage({
         const authorizedRememberedId = rememberedId
           ? await authorizedWorkflowId(apiBase, rememberedId, search)
           : null;
+        if (pendingRequestRef.current !== requestId) {
+          return;
+        }
         if (rememberedId && !authorizedRememberedId) {
           setLastSelectedWorkflowId(null);
           updateDashboardPreferences({ lastSelectedWorkflowId: '' });
-        }
-        if (pendingRequestRef.current !== requestId) {
-          return;
         }
         const targetWorkflowId = authorizedRememberedId || await firstVisibleWorkflowId(apiBase, search);
         if (pendingRequestRef.current !== requestId) {
