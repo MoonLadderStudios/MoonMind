@@ -27,4 +27,6 @@ if ($test_file) {
 
 docker-compose --project-name $testComposeProjectName -f docker-compose.test.yaml build
 docker-compose --project-name $testComposeProjectName -f docker-compose.test.yaml up --abort-on-container-exit
+$testExitCode = $LASTEXITCODE
 docker-compose --project-name $testComposeProjectName -f docker-compose.test.yaml down --remove-orphans
+exit $testExitCode

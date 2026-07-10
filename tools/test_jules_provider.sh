@@ -6,11 +6,20 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/docker-compose.test.yaml"
 NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
 TEST_COMPOSE_PROJECT_NAME="${MOONMIND_TEST_COMPOSE_PROJECT_NAME:-moonmind-test}"
+COMPOSE_CMD=()
 
-if [[ ! "$TEST_COMPOSE_PROJECT_NAME" =~ ^moonmind-test(-[a-z0-9][a-z0-9_-]*)?$ ]]; then
+project_name_regex='^moonmind-test(-[a-z0-9][a-z0-9_-]*)?$'
+if [[ ! "$TEST_COMPOSE_PROJECT_NAME" =~ $project_name_regex ]]; then
   echo "Error: MOONMIND_TEST_COMPOSE_PROJECT_NAME must be 'moonmind-test' or start with 'moonmind-test-'." >&2
   exit 2
 fi
+
+cleanup() {
+  if (( ${#COMPOSE_CMD[@]} )); then
+    "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" down --remove-orphans >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
 
 if [[ -z "${JULES_API_KEY:-}" ]]; then
   echo "Error: JULES_API_KEY must be set to run live Jules provider verification." >&2
@@ -40,11 +49,6 @@ if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   docker network create "$NETWORK_NAME" >/dev/null
   echo "Created Docker network: $NETWORK_NAME"
 fi
-
-cleanup() {
-  "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" down --remove-orphans >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
 
 "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build pytest
 "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm \

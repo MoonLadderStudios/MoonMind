@@ -150,7 +150,8 @@ def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
 
 def test_compose_tests_use_an_explicit_isolated_project() -> None:
     compose_file = (REPO_ROOT / "docker-compose.test.yaml").read_text(encoding="utf-8")
-    assert compose_file.startswith("name: moonmind-test\n")
+    # Keep the file parseable by legacy docker-compose; runners own the project name.
+    assert not compose_file.startswith("name:")
 
     for relative_path in COMPOSE_TEST_RUNNERS:
         runner = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
@@ -159,6 +160,30 @@ def test_compose_tests_use_an_explicit_isolated_project() -> None:
         assert "moonmind-test" in runner, relative_path
         assert "down" in runner, relative_path
         assert "--remove-orphans" in runner, relative_path
+
+
+def test_powershell_compose_runners_preserve_test_exit_codes_after_cleanup() -> None:
+    for relative_path in (
+        "tools/test-unit.ps1",
+        "tools/test-integration.ps1",
+        "tools/test-e2e.ps1",
+    ):
+        runner = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        capture_index = runner.index("$testExitCode = $LASTEXITCODE")
+        cleanup_index = runner.rindex("down --remove-orphans")
+        exit_index = runner.rindex("exit $testExitCode")
+        assert capture_index < cleanup_index < exit_index, relative_path
+
+
+def test_bash_compose_runners_register_cleanup_before_setup() -> None:
+    for relative_path in (
+        "tools/test_integration.sh",
+        "tools/test_jules_provider.sh",
+    ):
+        runner = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert runner.index("trap cleanup EXIT") < runner.index("docker network inspect"), (
+            relative_path
+        )
 
 
 def test_bash_compose_test_runners_reject_the_deployment_project() -> None:

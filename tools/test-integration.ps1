@@ -32,9 +32,12 @@ if ($LASTEXITCODE -ne 0) {
 
 if ($test_file) {
     docker-compose --project-name $testComposeProjectName -f docker-compose.test.yaml run --rm -e TEST_TYPE="integration/$test_file" pytest
+    $testExitCode = $LASTEXITCODE
     docker-compose --project-name $testComposeProjectName -f docker-compose.test.yaml down --remove-orphans
 } else {
     docker-compose --project-name $testComposeProjectName -f docker-compose.test.yaml build pytest
     docker-compose --project-name $testComposeProjectName -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"
+    $testExitCode = $LASTEXITCODE
     docker-compose --project-name $testComposeProjectName -f docker-compose.test.yaml down --remove-orphans
 }
+exit $testExitCode

@@ -23,4 +23,6 @@ if (!(Test-Path ".env")) {
 
 docker-compose --project-name $testComposeProjectName -f docker-compose.test.yaml build pytest
 docker-compose --project-name $testComposeProjectName -f docker-compose.test.yaml run --rm pytest
+$testExitCode = $LASTEXITCODE
 docker-compose --project-name $testComposeProjectName -f docker-compose.test.yaml down --remove-orphans
+exit $testExitCode
