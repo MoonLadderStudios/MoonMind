@@ -40,8 +40,8 @@ import {
 import { navigateTo as navigateToDashboardRoute } from '../lib/navigation';
 import {
   readWorkflowListDisplayMode,
-  type WorkflowListDisplayMode,
-} from '../lib/workflowListDisplayMode';
+  type CollectionListDisplayMode,
+} from '../lib/collectionListDisplayMode';
 import {
   WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
   WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
@@ -234,7 +234,7 @@ export function WorkflowWorkspaceShell({
   payload: BootPayload;
   workflowId: string;
   search: URLSearchParams;
-  displayMode?: WorkflowListDisplayMode | undefined;
+  displayMode?: CollectionListDisplayMode | undefined;
 }) {
   const cfg = readDashboardConfig(payload);
   const effectiveDisplayMode = displayMode ?? (

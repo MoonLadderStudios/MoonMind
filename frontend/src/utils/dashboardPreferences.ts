@@ -17,9 +17,9 @@
 
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '../components/PageSizeSelector';
 import {
-  isWorkflowListDisplayMode,
-  type WorkflowListDisplayMode,
-} from '../lib/workflowListDisplayMode';
+  isCollectionListDisplayMode,
+  type CollectionListDisplayMode,
+} from '../lib/collectionListDisplayMode';
 
 export const DASHBOARD_PREFERENCES_STORAGE_KEY = 'moonmind.dashboard.preferences';
 export const DASHBOARD_PREFERENCES_CHANGED_EVENT = 'moonmind:dashboard-preferences-changed';
@@ -82,7 +82,7 @@ export type DashboardPreferences = {
    * `/schedules/{definitionId}` can honor a persisted `hidden`; `/schedules`
    * always resolves to `table` regardless of this value (route-owned).
    */
-  recurringListDisplayMode: WorkflowListDisplayMode;
+  recurringListDisplayMode: CollectionListDisplayMode;
   /** Last recurring schedule definition explicitly opened by the operator. */
   lastSelectedDefinitionId: string;
   /** Preferred default workflow detail tab. */
@@ -176,8 +176,8 @@ function sanitizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function sanitizeRecurringListDisplayMode(value: unknown): WorkflowListDisplayMode {
-  return typeof value === 'string' && isWorkflowListDisplayMode(value)
+function sanitizeRecurringListDisplayMode(value: unknown): CollectionListDisplayMode {
+  return typeof value === 'string' && isCollectionListDisplayMode(value)
     ? value
     : DEFAULT_DASHBOARD_PREFERENCES.recurringListDisplayMode;
 }

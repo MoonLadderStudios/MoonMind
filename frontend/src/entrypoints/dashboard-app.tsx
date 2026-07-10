@@ -45,11 +45,11 @@ import {
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
 import {
-  WORKFLOW_LIST_DISPLAY_MODES,
+  COLLECTION_LIST_DISPLAY_MODES,
   resolveRecurringListDisplay,
   resolveWorkflowListDisplay,
-  type WorkflowListDisplayMode,
-} from '../lib/workflowListDisplayMode';
+  type CollectionListDisplayMode,
+} from '../lib/collectionListDisplayMode';
 import { requestRecurringScheduleFocus } from '../lib/recurringScheduleFocus';
 import {
   DASHBOARD_PREFERENCES_CHANGED_EVENT,
@@ -96,7 +96,7 @@ type NavIconProps = {
 };
 
 function requestRecurringFocusForMode(
-  mode: WorkflowListDisplayMode,
+  mode: CollectionListDisplayMode,
   definitionId: string | null | undefined,
 ): void {
   if (mode === 'table') {
@@ -582,22 +582,22 @@ function DashboardLiveUpdateProvider({
   return <>{children}</>;
 }
 
-function WorkflowListDisplayModeControl({
+function CollectionListDisplayModeControl({
   accessibleName = 'Workflow list display',
   effectiveMode,
   status,
   onSelect,
 }: {
   accessibleName?: string;
-  effectiveMode: WorkflowListDisplayMode;
+  effectiveMode: CollectionListDisplayMode;
   status?: string | null | undefined;
-  onSelect: (mode: WorkflowListDisplayMode) => void;
+  onSelect: (mode: CollectionListDisplayMode) => void;
 }) {
   const selectByKey = (
     event: KeyboardEvent<HTMLButtonElement>,
     currentIndex: number,
   ) => {
-    const lastIndex = WORKFLOW_LIST_DISPLAY_MODES.length - 1;
+    const lastIndex = COLLECTION_LIST_DISPLAY_MODES.length - 1;
     let nextIndex: number | null = null;
 
     if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
@@ -615,7 +615,7 @@ function WorkflowListDisplayModeControl({
     }
 
     event.preventDefault();
-    const nextMode = WORKFLOW_LIST_DISPLAY_MODES[nextIndex];
+    const nextMode = COLLECTION_LIST_DISPLAY_MODES[nextIndex];
     if (!nextMode) {
       return;
     }
@@ -632,7 +632,7 @@ function WorkflowListDisplayModeControl({
       role="radiogroup"
       aria-label={accessibleName}
     >
-      {WORKFLOW_LIST_DISPLAY_MODES.map((mode, index) => {
+      {COLLECTION_LIST_DISPLAY_MODES.map((mode, index) => {
         const Icon = iconForWorkflowListMode(mode.icon);
         const checked = effectiveMode === mode.value;
         return (
@@ -671,9 +671,9 @@ function DashboardNavigation({
 }: {
   uiInfo: DashboardUiInfo | null;
   listDisplayAccessibleName?: string | undefined;
-  workflowListMode: WorkflowListDisplayMode | null;
+  workflowListMode: CollectionListDisplayMode | null;
   workflowListDisplayStatus?: string | null | undefined;
-  onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
+  onWorkflowListModeSelect: (mode: CollectionListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -759,7 +759,7 @@ function DashboardNavigation({
       </Link>
 
       {workflowListMode ? (
-        <WorkflowListDisplayModeControl
+        <CollectionListDisplayModeControl
           {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
           effectiveMode={workflowListMode}
           status={workflowListDisplayStatus}
@@ -893,9 +893,9 @@ function AppShell({
   dataWidePanel: boolean;
   uiInfo: DashboardUiInfo | null;
   listDisplayAccessibleName?: string | undefined;
-  workflowListMode: WorkflowListDisplayMode | null;
+  workflowListMode: CollectionListDisplayMode | null;
   workflowListDisplayStatus?: string | null | undefined;
-  onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
+  onWorkflowListModeSelect: (mode: CollectionListDisplayMode) => void;
   children: ReactNode;
 }) {
   return (
@@ -948,10 +948,10 @@ function RoutedDashboardPage({
   const location = useLocation();
   const navigate = useNavigate();
   const pendingRequestRef = useRef<symbol | null>(null);
-  const [requestedMode, setRequestedMode] = useState<WorkflowListDisplayMode>(() => (
+  const [requestedMode, setRequestedMode] = useState<CollectionListDisplayMode>(() => (
     readDashboardPreferences().workflowWorkspaceSidebarCollapsed ? 'hidden' : 'sidebar'
   ));
-  const [requestedRecurringMode, setRequestedRecurringMode] = useState<WorkflowListDisplayMode>(
+  const [requestedRecurringMode, setRequestedRecurringMode] = useState<CollectionListDisplayMode>(
     () => readDashboardPreferences().recurringListDisplayMode,
   );
   const [lastSelectedWorkflowId, setLastSelectedWorkflowId] = useState<string | null>(
@@ -1067,7 +1067,7 @@ function RoutedDashboardPage({
     setResolutionStatus(null);
   }, [location.pathname]);
 
-  const handleWorkflowListModeSelect = async (mode: WorkflowListDisplayMode) => {
+  const handleWorkflowListModeSelect = async (mode: CollectionListDisplayMode) => {
     const selectedMode = mode;
     const search = new URLSearchParams(location.search);
     pendingRequestRef.current = null;

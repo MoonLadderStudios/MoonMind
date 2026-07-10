@@ -26,7 +26,7 @@ import {
 } from "../lib/temporalTaskEditing";
 import {
   readWorkflowListDisplayMode,
-} from "../lib/workflowListDisplayMode";
+} from "../lib/collectionListDisplayMode";
 import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowWorkspaceSidebar";
 import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
 import {
