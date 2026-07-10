@@ -488,6 +488,58 @@ def test_apply_resolved_tier_policy_merges_defaults_and_records_codex_effort_sta
     assert resolution["effectiveModelTier"] == 1
     assert resolution["effortApplicationStatus"] == "not_supported"
 
+
+def test_apply_resolved_tier_policy_preserves_original_tier_intent():
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        enabled=True,
+        authState="connected",
+        disabledReason=None,
+        model_tiers=[
+            {
+                "model": "tier-model",
+                "parameters": {"output_format": "strict_json"},
+            }
+        ],
+        default_model_tier=1,
+    )
+    request = _make_request(
+        parameters={
+            "model": "tier-model",
+            "requestedModel": None,
+            "modelTier": 1,
+        },
+    )
+
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request,
+        profile=profile,
+        strategy=None,
+    )
+
+    assert request.parameters["output_format"] == "strict_json"
+    resolution = request.parameters["metadata"]["moonmind"]["modelEffortResolution"]
+    assert resolution["effectiveModelTier"] == 1
+
+
+def test_apply_resolved_tier_policy_initializes_missing_parameters():
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        enabled=True,
+        authState="connected",
+        disabledReason=None,
+    )
+    request = _make_request(parameters=None)
+
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request,
+        profile=profile,
+        strategy=None,
+    )
+
+    assert isinstance(request.parameters, dict)
+    assert "modelEffortResolution" in request.parameters["metadata"]["moonmind"]
+
 def test_build_command_per_runtime():
     store = ManagedRunStore("/tmp/test-store")
     launcher = ManagedRuntimeLauncher(store)

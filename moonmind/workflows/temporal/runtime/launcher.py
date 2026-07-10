@@ -1122,11 +1122,15 @@ class ManagedRuntimeLauncher:
         if not isinstance(parameters, dict):
             parameters = {}
             request.parameters = parameters
+        requested_tier = parameters.get("modelTier")
+        requested_model = parameters.get("requestedModel")
+        if requested_model is None and requested_tier is None:
+            requested_model = parameters.get("model")
         resolved = resolve_model_effort(
             runtime_id=profile.runtime_id,
             profile=profile,
-            requested_model_tier=parameters.get("modelTier"),
-            requested_model=parameters.get("model"),
+            requested_model_tier=requested_tier,
+            requested_model=requested_model,
             requested_effort=parameters.get("effort"),
             tier_fallback=parameters.get("tierFallback", "clamp"),
             advisory_preview=parameters.get("tierPreview"),
@@ -1300,6 +1304,7 @@ class ManagedRuntimeLauncher:
 
         from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
+        self._assert_profile_launch_ready(profile)
         strategy = get_strategy(normalize_runtime_id(profile.runtime_id))
         self._apply_resolved_tier_policy(
             request=request,
@@ -1345,7 +1350,6 @@ class ManagedRuntimeLauncher:
             assert_managed_secret_refs_active_for_launch,
             resolve_managed_api_key_reference,
         )
-        self._assert_profile_launch_ready(profile)
         profile_secret_refs = getattr(profile, "secret_refs", None) or {}
         # Refuse to materialize the runtime when any managed SecretRef is
         # disabled, revoked, or missing. Plaintext is never read or surfaced.
