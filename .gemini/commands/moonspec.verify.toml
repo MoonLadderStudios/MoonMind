@@ -1,7 +1,7 @@
 description = "Verify a completed MoonSpec implementation."
 
 prompt = """
-Use the `moonspec-verify` skill to perform final read-only verification for the active MoonSpec feature.
+Use the `moonspec-verify` skill to perform final read-only verification against the provided original instructions, declarative document, issue brief, or optional active MoonSpec feature.
 
 User input:
 {{args}}

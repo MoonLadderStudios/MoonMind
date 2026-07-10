@@ -83,12 +83,36 @@ def test_moonspec_verify_skill_defines_target_modes() -> None:
 
     text = skill_path.read_text(encoding="utf-8")
 
+    assert "Treat the user's instructions as a valid verification baseline" in text
+    assert "referenced declarative document as a valid verification baseline" in text
+    assert "In source-direct verification mode" in text
+    assert "Do not require a MoonSpec feature directory" in text
+    assert "their absence is never by itself a verification gap" in text
+    assert "--json --include-tasks" in text
+    assert "--require-tasks" not in text
     assert "If the user provides issue-brief verification inputs" in text
     assert "use issue-brief verification mode" in text
     assert "issue brief artifact path" in text
     assert "assessment artifact path" in text
     assert "without requiring a MoonSpec feature directory" in text
     assert "Use the issue summary, description, acceptance criteria" in text
+
+
+def test_moonspec_verify_command_does_not_require_feature_artifacts() -> None:
+    command_path = (
+        Path(__file__).resolve().parents[3]
+        / ".specify"
+        / "templates"
+        / "commands"
+        / "moonspec.verify.md"
+    )
+
+    text = command_path.read_text(encoding="utf-8")
+
+    assert "scripts:" not in text
+    assert "original instructions or authoritative declarative source" in text
+    assert "Do not require `spec.md`, `plan.md`, or `tasks.md`" in text
+    assert "--require-tasks" not in text
 
 
 def test_moonspec_verify_skill_defines_report_and_remaining_work_output() -> None:

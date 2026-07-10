@@ -1,7 +1,5 @@
 ---
-description: Verify the final implementation against the original feature request, specification, plan, tasks, repo guidance, and required tests.
-scripts:
-  sh: .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
+description: Verify the final implementation against original instructions, a declarative document, an issue brief, or optional MoonSpec artifacts, plus repo guidance and required tests.
 ---
 
 ## User Input
@@ -48,35 +46,35 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Outline
 
-This command is the final MoonSpec check. It verifies that the completed implementation satisfies the original feature request preserved in `spec.md`, not just the later task list.
+This command is the final MoonSpec check. It verifies that the completed implementation satisfies the original instructions or authoritative declarative source. MoonSpec feature artifacts are optional derived context, not required authority.
 
-1. **Setup**: Run `{SCRIPT}` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute. Derive:
-   - SPEC = FEATURE_DIR/spec.md
-   - PLAN = FEATURE_DIR/plan.md
-   - TASKS = FEATURE_DIR/tasks.md
-   - REPO_GUIDANCE = AGENTS.md when present
+1. **Setup**: Resolve the verification baseline in this order:
+   - explicit user instructions or an explicitly referenced declarative document
+   - issue-brief verification inputs
+   - an explicitly provided `spec.md` or feature directory
+   - an active feature directory discovered from repository context
+   Use absolute paths for file-backed sources. Do not require `spec.md`, `plan.md`, or `tasks.md` when another usable baseline exists.
 
 2. **Load verification sources**:
-   - **Required**: `spec.md`, `plan.md`, `tasks.md`
+   - **Required**: the selected original-instruction, declarative-document, issue-brief, or spec baseline
    - **If present**: `AGENTS.md` for project principles, repo constraints, and test discipline
-   - **If exists**: `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, `checklists/`
-   - Extract the original request from the `**Input**` field in `spec.md`
-   - Extract the single user story, acceptance scenarios or `SCN-*`, functional requirements `FR-*`, success criteria `SC-*`, edge cases, assumptions, independent test, and source design mappings such as `DESIGN-REQ-*` or `DOC-REQ-*`
+   - **If present**: `spec.md`, `plan.md`, `tasks.md`, `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, `checklists/`
+   - Extract requirements, acceptance-critical behavior, constraints, non-goals, stable claims, edge cases, and test expectations directly from the selected baseline
+   - When a spec exists, also extract its user story, `SCN-*`, `FR-*`, `SC-*`, independent test, and source design mappings such as `DESIGN-REQ-*` or `DOC-REQ-*`
    - Extract relevant AGENTS.md `MUST` constraints and any explicit quality gates when present
-   - Treat `plan.md` and `tasks.md` as intent and process context only. They can help identify expected files, commands, and sequencing, but they are never proof that behavior is implemented.
+   - Treat `spec.md`, `plan.md`, and `tasks.md` as optional derived context. They can help identify scope, expected files, commands, and sequencing, but they are never required authority or proof that behavior is implemented.
 
 3. **Build a verification inventory**:
-   - Create an internal checklist keyed by spec IDs and traceable items:
-     - One row per `FR-*`
-     - One row per acceptance scenario or `SCN-*`
-     - One row per observable `SC-*`
+   - Create an internal checklist keyed by source requirements and traceable items:
+     - One row per explicit source-direct requirement or stable declarative claim
+     - One row per `FR-*`, acceptance scenario or `SCN-*`, and observable `SC-*` when a spec provides them
      - One row per relevant AGENTS.md principle, repo constraint, or testing-discipline item that affects implementation or verification
      - One row per in-scope `DESIGN-REQ-*` or `DOC-REQ-*`
    - For each row, track expected behavior, likely production code touchpoints, expected unit or integration tests, current status, evidence, and remaining gap
 
 4. **Inspect implementation evidence**:
-   - Review changed and relevant source files named by `tasks.md`, `plan.md`, contracts, and quickstart
-   - Confirm all tasks in `tasks.md` are marked complete as a process check, not as implementation evidence
+   - Review changed and relevant source files discovered from the selected baseline, repository search, optional tasks or plan, contracts, and quickstart
+   - When `tasks.md` exists, treat checked tasks as a process check, not as implementation evidence
    - Confirm production code exists for each functional requirement
    - Inspect production code before tests so behavior is verified directly, not inferred from test names alone
    - Inspect startup wiring, registration, configuration binding, migrations, routing, background jobs, public contracts, or other integration points when the requirement depends on them
@@ -87,8 +85,8 @@ This command is the final MoonSpec check. It verifies that the completed impleme
    - Confirm implementation does not add hidden scope that contradicts the original request, source design, spec, or relevant repo guidance
 
 5. **Run verification commands when available**:
-   - Run unit test commands from `plan.md`, `tasks.md`, or project conventions
-   - Run integration test commands from `plan.md`, `tasks.md`, quickstart, or project conventions
+   - Run unit test commands from `AGENTS.md`, README, build or CI configuration, `plan.md`, `tasks.md`, or project conventions
+   - Run integration test commands from `AGENTS.md`, README, build or CI configuration, `plan.md`, `tasks.md`, quickstart, or project conventions
    - Run quickstart validation when `quickstart.md` exists and can be executed safely
    - Do not edit tracked files during verification. Normal disposable test artifacts are acceptable only when already ignored by the project.
    - If a command is unsafe, unavailable, or requires missing credentials/services, record it as "Not run" with the exact reason
@@ -102,8 +100,8 @@ This command is the final MoonSpec check. It verifies that the completed impleme
      - `PARTIAL`: some implementation exists, but behavior, wiring, or test coverage is incomplete
      - `MISSING`: no meaningful implementation evidence exists
      - `CONFLICT`: implementation contradicts the spec, original request, source design, or relevant repo guidance
-     - `NO_DETERMINATION`: the spec or repository evidence is too ambiguous to make a defensible call
-   - Do not mark the feature complete unless every in-scope `FR-*`, relevant AGENTS.md principle, and source design requirement is `VERIFIED`
+     - `NO_DETERMINATION`: the selected baseline or repository evidence is too ambiguous to make a defensible call
+   - Do not mark the feature complete unless every in-scope source requirement, relevant AGENTS.md principle, and source design requirement is `VERIFIED`
    - Missing scenario-driven unit coverage or repo-local hermetic validation for required behavior is at least a high-severity gap
    - Missing integration/e2e/map/deployment coverage is non-blocking when the required assets, services, credentials, or runtime fixtures are unavailable in the current checkout/runtime
    - Separate missing implementation from missing validation when both matter
@@ -113,7 +111,7 @@ This command is the final MoonSpec check. It verifies that the completed impleme
    - Check whether success criteria are directly validated, indirectly supported, or unverified
    - Check whether assumptions made during specification still hold
    - Check whether integration tests cover the end-to-end behavior implied by the original request
-   - Treat missing required unit tests or repo-local hermetic checks as a verification failure unless the spec explicitly makes that class irrelevant
+   - Treat missing required unit tests or repo-local hermetic checks as a verification failure unless the selected verification baseline explicitly makes that class irrelevant
    - Do not choose a failing verdict solely because advisory integration/e2e/map/deployment validation cannot run or fails due to unavailable non-repo assets, services, credentials, or tooling. Use `FULLY_IMPLEMENTED` when all controlling evidence verifies; record advisory limitations as residual risk or non-blocking gaps.
    - Treat violated AGENTS.md `MUST` rules as blocking failures
 
@@ -123,8 +121,8 @@ This command is the final MoonSpec check. It verifies that the completed impleme
    # MoonSpec Verification Report
 
    **Feature**: [name]
-   **Spec**: [path]
-   **Original Request Source**: spec.md `Input`
+   **Spec**: [path or N/A for source-direct/issue-brief mode]
+   **Original Request Source**: [original instructions, declarative document path, issue brief, or spec.md `Input`]
    **Verdict**: FULLY_IMPLEMENTED | ADDITIONAL_WORK_NEEDED | NO_DETERMINATION
    **Confidence**: HIGH | MEDIUM | LOW
 
@@ -192,11 +190,12 @@ This command is the final MoonSpec check. It verifies that the completed impleme
 ## Key Rules
 
 - Verification is read-only except for normal test artifacts.
-- `spec.md` defines the bounded one-story verification scope and preserves the original request/source packet.
+- Original instructions, a declarative source document, an issue brief, or an optional `spec.md` may define the bounded verification scope.
+- `spec.md`, `plan.md`, and `tasks.md` are disposable derived artifacts. Their absence never blocks verification when another usable baseline exists.
 - When `spec.md` names a canonical source document, interpret the story against that document's in-scope stable claims; the canonical document remains the durable desired-state authority unless verified drift is handed off to doc reconciliation.
 - Do not require unrelated claims from a larger canonical design to verify for this story, but do not let the temporary spec silently override an in-scope canonical conflict.
 - Relevant AGENTS.md guidance defines repo principles, constraints, and test discipline for the story.
-- `plan.md` and `tasks.md` are useful context but never proof of implementation.
+- `plan.md` and `tasks.md` are optional context but never proof of implementation.
 - Unit tests and repo-local hermetic checks are controlling expected evidence. Integration/e2e/map/deployment checks are expected evidence when available, but they are advisory and non-blocking when they depend on unavailable non-repo assets, services, credentials, or tooling.
 - Prefer direct, citeable repository evidence from production code, wiring, configuration, and tests.
 - Do not mark the feature complete when required behavior is only inferred and not verified.

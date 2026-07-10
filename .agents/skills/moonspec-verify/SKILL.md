@@ -1,6 +1,6 @@
 ---
 name: moonspec-verify
-description: Verify a completed MoonSpec implementation against the original request, one-story `spec.md`, plan, tasks, AGENTS.md repo guidance, source-design mappings, and required tests. Use when the user asks to run or reproduce `/moonspec.verify`, perform the final read-only implementation check, audit unit and integration test evidence, classify requirement coverage, or decide whether more code or test work is needed before closing a spec.
+description: Verify a completed implementation against the original instructions, a declarative source document, an issue brief, or an optional MoonSpec feature packet, plus AGENTS.md repo guidance and required tests. Use when the user asks to run or reproduce `/moonspec.verify`, perform a final read-only implementation check, audit unit and integration test evidence, classify requirement coverage, or decide whether more code or test work is needed.
 metadata:
   required-capabilities:
     - git
@@ -16,8 +16,8 @@ Verify only. Do not modify source code, tests, specs, plans, tasks, docs, migrat
 
 This skill answers:
 
-- Does the implementation satisfy the original request or declarative design preserved in `spec.md`?
-- Is the single story in `spec.md` fully implemented?
+- Does the implementation satisfy the original request or declarative design?
+- Is the bounded verification scope fully implemented?
 - Do unit tests and integration tests provide credible evidence?
 - Which requirements, scenarios, source design mappings, or AGENTS.md principles remain partial, missing, conflicting, or unverified?
 - Which stable canonical source claims are covered by implementation behavior, test evidence, artifact evidence, or a clear gap reason?
@@ -29,15 +29,15 @@ When `artifacts/moonspec/source-acceptance.json` or `artifacts/moonspec/acceptan
 
 ## Inputs
 
-- Treat the user's text as optional verification focus.
-- Work from the active feature directory resolved by the prerequisite script unless the user provides a specific feature directory, `spec.md`, or issue-brief verification inputs.
-- In MoonSpec feature-directory mode, require `spec.md`, `plan.md`, and `tasks.md`.
+- Treat the user's instructions as a valid verification baseline, not merely optional focus.
+- Treat a referenced declarative document as a valid verification baseline. Read it directly and verify its in-scope desired-state claims without requiring a derived MoonSpec feature packet.
 - In issue-brief verification mode, use the provided issue brief artifact, issue reference, acceptance criteria, and assessment artifact as the verification baseline without requiring a MoonSpec feature directory, `spec.md`, `plan.md`, or `tasks.md`.
+- When an active feature directory or `spec.md` exists, use it as optional derived context and traceability. `plan.md` and `tasks.md` are also optional process context; their absence is never by itself a verification gap.
 - Read `AGENTS.md` when present for project principles, repo constraints, and test discipline.
 - Use absolute paths in reports.
 - Keep the verdict conservative when evidence is incomplete.
 
-Stop if the required artifacts for the selected mode cannot be located. If `spec.md` contains multiple stories, report `NO_DETERMINATION` for MoonSpec completion and recommend splitting the design with `/moonspec.breakdown` or regenerating a one-story spec.
+Stop only when no usable verification baseline can be located or the available baseline is genuinely too ambiguous to bound. Do not choose `NO_DETERMINATION`, `BLOCKED`, or `ADDITIONAL_WORK_NEEDED` solely because `spec.md`, `plan.md`, `tasks.md`, or other derived MoonSpec artifacts are absent. If an optional `spec.md` contains multiple stories and no narrower original instruction or declarative scope is available, report `NO_DETERMINATION` and recommend splitting the design with `/moonspec.breakdown` or selecting a narrower verification target.
 
 ## Pre-Verify Hooks
 
@@ -77,6 +77,23 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 
 ## Setup
 
+Resolve the verification baseline in this order:
+
+1. Explicit original instructions or an explicitly referenced declarative document in the current request or workflow step.
+2. Issue-brief verification inputs.
+3. An explicitly provided `spec.md` or feature directory.
+4. An active feature directory discovered from repository context.
+
+The first usable source defines the bounded scope. Later sources are supplemental context and traceability only. When a canonical declarative document and a derived artifact conflict, follow `docs/Workflows/MoonSpecDocumentModel.md`: the canonical document wins unless verified evidence requires reconciliation.
+
+In source-direct verification mode:
+
+1. Preserve the original instruction text or declarative document path as the report's authority reference.
+2. Extract requirements, acceptance-critical behavior, constraints, stable claim IDs, explicit non-goals, and test expectations directly from that source.
+3. Bound verification to the requested change or the in-scope claims named by the instructions. Do not require unrelated claims from a broad document.
+4. Inspect production code and tests directly. Discover test commands from `AGENTS.md`, README, build configuration, CI configuration, and repository conventions when no plan or task packet is available.
+5. Do not require a MoonSpec feature directory, `spec.md`, `plan.md`, `tasks.md`, a source-acceptance artifact, or an assessment artifact.
+
 If the user provides issue-brief verification inputs, use issue-brief verification mode. Accept inputs expressed in prose or preset instructions such as:
 
 - issue provider, for example `jira` or `github`
@@ -102,7 +119,7 @@ Controlling evidence can block `FULLY_IMPLEMENTED`:
 - direct production-code inspection for every in-scope requirement.
 - unit, compile, typecheck, lint, and other repo-local hermetic checks that exercise in-scope behavior and can run with the checked-out repository plus documented local dependencies.
 - hermetic integration tests when their required fixtures, services, and assets are present in the current runtime and the failure identifies a concrete in-scope implementation defect.
-- explicit AGENTS.md, issue brief, or spec `MUST` requirements that are repo-verifiable in the current runtime.
+- explicit original-instruction, declarative-document, AGENTS.md, issue-brief, or spec `MUST` requirements that are repo-verifiable in the current runtime.
 
 Advisory evidence must be reported but must not fail verification by itself:
 
@@ -114,21 +131,23 @@ When an advisory command is unavailable or fails for an advisory-environment rea
 
 If an integration or e2e command failure reveals a concrete in-scope implementation defect that can be fixed in the repository, classify and gate on that underlying defect, not on the suite label. If the implementation, controlling tests, source claims, AGENTS.md principles, and original request alignment all verify, `FULLY_IMPLEMENTED` is allowed even when advisory integration/e2e/map smoke evidence is missing or non-blocking.
 
-If the user provides a specific `spec.md` or feature directory, use it and derive sibling artifacts from that directory.
+If the user provides a specific `spec.md` or feature directory, use it and discover sibling artifacts from that directory when present.
 
-Otherwise run the prerequisite script from the repository root:
+Only when no explicit source-direct, issue-brief, `spec.md`, or feature-directory baseline is available, run the prerequisite script from the repository root:
 
 ```bash
-.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
+.specify/scripts/bash/check-prerequisites.sh --json --include-tasks
 ```
 
-Parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then derive:
+If it succeeds, parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then discover:
 
 - `SPEC = FEATURE_DIR/spec.md`
 - `PLAN = FEATURE_DIR/plan.md`
 - `TASKS = FEATURE_DIR/tasks.md`
 - optional docs from `AVAILABLE_DOCS`
 - `REPO_GUIDANCE = AGENTS.md` when present
+
+If discovery fails because no active feature exists, continue with any usable original instructions or declarative source already available. Derived-artifact discovery failure is not itself a verification failure.
 
 If shell arguments contain single quotes, use shell-safe escaping such as `'I'\''m Groot'`, or double quotes when possible.
 
@@ -149,11 +168,18 @@ Real repo-authored `.agents/skills` directories are valid source input and must 
 
 ## Load Verification Sources
 
-In MoonSpec feature-directory mode, read:
+In source-direct verification mode, read:
+
+- the original instruction text and every explicitly referenced declarative source needed for the bounded scope.
+- `AGENTS.md` and README when present for project constraints and documented verification commands.
+- relevant production code, tests, build files, CI configuration, contracts, and runtime wiring discovered from the source requirements.
+- optional feature artifacts only when they exist and add useful traceability.
+
+In MoonSpec feature-directory mode, read when present:
 
 - `spec.md`: original request in `**Input**`, the single user story, independent test, acceptance scenarios or `SCN-*`, functional requirements `FR-*`, success criteria `SC-*`, edge cases, assumptions, key entities, and source design mappings such as `DESIGN-REQ-*` or `DOC-REQ-*`.
-- `plan.md`: intended architecture, project structure, Principles Check, test commands, test tooling, integration dependencies, and constraints. Treat as context, not proof.
-- `tasks.md`: expected file paths, sequencing, test commands, and process completion. Treat checked tasks as process evidence only, not implementation proof.
+- `plan.md`: intended architecture, project structure, Principles Check, test commands, test tooling, integration dependencies, and constraints. Treat as optional context, not proof.
+- `tasks.md`: expected file paths, sequencing, test commands, and process completion. Treat as optional process evidence only, not implementation proof.
 - `AGENTS.md` when present: project principles, repo constraints, `MUST` rules, and testing discipline.
 - `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `checklists/` when present and relevant.
 - `specs/breakdown.md` when source design coverage or cross-spec dependencies matter.
@@ -203,9 +229,10 @@ Use durable evidence references instead of pasting large source, code, test, art
 
 Build an internal inventory before inspecting code:
 
-- One row per `FR-*`.
-- One row per acceptance scenario or `SCN-*`.
-- One row per observable success criterion or `SC-*`.
+- One row per explicit source-direct requirement or stable declarative claim in scope.
+- One row per `FR-*` when a spec provides them.
+- One row per acceptance scenario or `SCN-*` when present.
+- One row per observable success criterion or `SC-*` when present.
 - One row per edge case that affects behavior.
 - One row per relevant AGENTS.md principle, repo constraint, or testing-discipline item that affects implementation or verification.
 - One row per in-scope `DESIGN-REQ-*` or `DOC-REQ-*`.
@@ -248,8 +275,8 @@ Evidence rules:
 
 Run commands when available and safe:
 
-- Unit test commands from `plan.md`, `tasks.md`, quickstart, or project conventions.
-- Integration test commands from `plan.md`, `tasks.md`, quickstart, or project conventions.
+- Unit test commands from `AGENTS.md`, README, build or CI configuration, `plan.md`, `tasks.md`, quickstart, or project conventions.
+- Integration test commands from `AGENTS.md`, README, build or CI configuration, `plan.md`, `tasks.md`, quickstart, or project conventions.
 - Quickstart validation when executable and safe.
 - Build, lint, or typecheck commands when they are part of the documented validation path or needed to resolve ambiguity.
 
@@ -270,8 +297,8 @@ Use these statuses:
 
 Rules:
 
-- Do not mark the feature `FULLY_IMPLEMENTED` unless every in-scope `FR-*`, relevant AGENTS.md principle, source design requirement, and acceptance-critical behavior is `VERIFIED`.
-- Missing required unit tests or repo-local hermetic checks is a verification failure unless the spec clearly makes that test class irrelevant.
+- Do not mark the feature `FULLY_IMPLEMENTED` unless every in-scope source requirement, relevant AGENTS.md principle, source design requirement, and acceptance-critical behavior is `VERIFIED`.
+- Missing required unit tests or repo-local hermetic checks is a verification failure unless the selected verification baseline clearly makes that test class irrelevant.
 - Missing integration coverage for acceptance scenarios, contracts, workflows, persistence, or external boundaries is a high-severity gap only when that coverage is repo-local, hermetic, and controllable in the current runtime. Integration/e2e/map/deployment evidence that depends on unavailable assets or external runtime fixtures is advisory and non-blocking.
 - Separate missing implementation from missing validation when both matter.
 - Treat violated AGENTS.md `MUST` rules as blocking failures.
@@ -370,6 +397,12 @@ Use this structure:
 
 - [Ordered, concrete code or test changes required before completion]
 
+For source-direct verification mode, set:
+
+- **Feature**: concise source scope or declarative document path
+- **Spec**: N/A (source-direct verification mode)
+- **Original Request Source**: original instructions or absolute declarative document path
+
 For issue-brief verification mode, set:
 
 - **Feature**: issue reference
@@ -425,7 +458,8 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 ## Key Rules
 
 - Verification is read-only except ignored disposable test artifacts.
-- `spec.md` defines the bounded one-story verification scope and preserves the original request/source packet.
+- Original instructions, a declarative source document, an issue brief, or an optional `spec.md` may define the bounded verification scope.
+- `spec.md`, `plan.md`, and `tasks.md` are disposable derived artifacts. Their absence never blocks verification when another usable baseline exists.
 - When `spec.md` names a canonical source document, interpret the story against that document's in-scope stable claims; the canonical document remains the durable desired-state authority unless verified drift is handed off to doc reconciliation.
 - Do not require unrelated claims from a larger canonical design to verify for this story, but do not let the temporary spec silently override an in-scope canonical conflict.
 - Relevant AGENTS.md guidance defines repo principles, constraints, and test discipline for the story.
