@@ -2015,7 +2015,7 @@ async def test_fetch_result_reports_standalone_pr_resolver_next_step_as_failure(
         pr_resolver_expected=True,
     )
 
-    assert result.failure_class == "user_error"
+    assert result.failure_class == "execution_error"
     assert result.summary is not None
     assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
     assert "ci_failures" in result.summary
@@ -2358,7 +2358,7 @@ async def test_fetch_result_does_not_let_merged_attempt_override_terminal_failur
     result = await adapter.fetch_result(
         "run-result-pr-merged-attempt", pr_resolver_expected=True
     )
-    assert result.failure_class == "user_error"
+    assert result.failure_class == "execution_error"
     assert "attempts_exhausted" in (result.summary or "")
     assert result.metadata["mergeAutomationDisposition"] == "manual_review"
 
@@ -2808,6 +2808,49 @@ async def test_fetch_result_fails_when_expected_pr_resolver_artifact_missing(
     assert result.metadata["latestAttemptRef"].endswith("attempt-1.json")
     assert result.metadata["prResolverLatestAttempt"]["reason"] == "ci_running"
     assert "mergeAutomationDisposition" not in result.metadata
+
+
+async def test_fetch_result_fails_when_pr_resolver_artifact_and_attempts_missing(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-no-evidence",
+            agent_id="codex_cli",
+            runtime_id="codex_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-no-evidence",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-no-evidence",
+        pr_resolver_expected=True,
+        pr_resolver_merge_gate_owned=True,
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.retry_recommendation == "continue_same_session"
+    assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert result.metadata["missingEvidence"] == ["var/pr_resolver/result.json"]
+    assert "latestAttemptRef" not in result.metadata
 
 async def test_fetch_result_maps_final_state_merged_pr_resolver_artifact_metadata(
     tmp_path: Path,
