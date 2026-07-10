@@ -789,7 +789,13 @@ def _derive_pr_resolver_failure(
     if status not in _PR_RESOLVER_FAILURE_STATUSES:
         return None, None
 
-    reason = str(payload.get("final_reason") or payload.get("reason") or "").strip()
+    final = _pr_resolver_final_payload(payload)
+    reason = _first_stripped_text(
+        payload.get("final_reason"),
+        payload.get("reason"),
+        final.get("final_reason"),
+        final.get("reason"),
+    )
     next_step = _pr_resolver_next_step(payload)
     summary_parts = [f"pr-resolver reported status '{status}'"]
     if reason:
@@ -856,7 +862,7 @@ def _derive_pr_resolver_metadata(
                 "contractId": _PR_RESOLVER_CONTRACT_ID,
                 "failureCode": _pr_resolver_terminal_failure_code(evidence),
                 "terminalResultPresent": False,
-                "missingEvidence": [str(_PR_RESOLVER_RESULT_PATHS[0])],
+                "missingEvidence": [_PR_RESOLVER_RESULT_PATHS[0].as_posix()],
                 "retryRecommendation": (
                     "continue_same_session" if merge_gate_owned else "retry_new_session"
                 ),
@@ -1184,6 +1190,8 @@ class ManagedAgentAdapter:
                     workflow_id=record.workflow_id,
                     not_before=record.started_at,
                 )
+                if not pr_resolver_expected:
+                    metadata.pop("retryRecommendation", None)
                 if (
                     include_workspace_auto_publish_evidence
                     and "publishResult" not in metadata
