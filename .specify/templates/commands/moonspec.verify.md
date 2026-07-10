@@ -52,7 +52,7 @@ This command is the final MoonSpec check. It verifies that the completed impleme
    - explicit user instructions or an explicitly referenced declarative document
    - issue-brief verification inputs
    - an explicitly provided `spec.md` or feature directory
-   - an active feature directory discovered from repository context
+   - an active feature directory discovered from repository context (run `.specify/scripts/bash/check-prerequisites.sh --json --paths-only` to discover it without requiring `plan.md` or `tasks.md`)
    Use absolute paths for file-backed sources. Do not require `spec.md`, `plan.md`, or `tasks.md` when another usable baseline exists.
 
 2. **Load verification sources**:

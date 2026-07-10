@@ -25,12 +25,13 @@ This skill answers:
 
 ## Source Acceptance Matrix Verification
 
-When `artifacts/moonspec/source-acceptance.json` or `artifacts/moonspec/acceptance-assessment.json` exists, verify every repo-verifiable source row. Do not choose `FULLY_IMPLEMENTED` unless every required repo-verifiable source row is satisfied.
+When `artifacts/moonspec/source-acceptance.json` or `artifacts/moonspec/acceptance-assessment.json` exists and its rows apply to the selected verification baseline, verify every repo-verifiable source row. Do not choose `FULLY_IMPLEMENTED` unless every required repo-verifiable source row for the selected baseline is satisfied. In source-direct verification mode, ignore stale or unrelated acceptance artifacts whose source, feature directory, issue reference, or requirement IDs do not match the selected source.
 
 ## Inputs
 
-- Treat the user's instructions as a valid verification baseline, not merely optional focus.
+- Treat explicitly identified original implementation instructions as a valid verification baseline, not merely optional focus.
 - Treat a referenced declarative document as a valid verification baseline. Read it directly and verify its in-scope desired-state claims without requiring a derived MoonSpec feature packet.
+- Do not treat ad hoc verifier guidance, such as "focus on API tests", workflow meta-instructions, or review-process instructions, as the verification baseline when an issue brief, `spec.md`, feature directory, original implementation request, or declarative source is available. Use that guidance only to prioritize evidence gathering within the real baseline.
 - In issue-brief verification mode, use the provided issue brief artifact, issue reference, acceptance criteria, and assessment artifact as the verification baseline without requiring a MoonSpec feature directory, `spec.md`, `plan.md`, or `tasks.md`.
 - When an active feature directory or `spec.md` exists, use it as optional derived context and traceability. `plan.md` and `tasks.md` are also optional process context; their absence is never by itself a verification gap.
 - Read `AGENTS.md` when present for project principles, repo constraints, and test discipline.
@@ -79,12 +80,12 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 
 Resolve the verification baseline in this order:
 
-1. Explicit original instructions or an explicitly referenced declarative document in the current request or workflow step.
+1. Explicit original implementation instructions or an explicitly referenced declarative document in the current request or workflow step.
 2. Issue-brief verification inputs.
 3. An explicitly provided `spec.md` or feature directory.
-4. An active feature directory discovered from repository context.
+4. An active feature directory discovered from repository context by running `.specify/scripts/bash/check-prerequisites.sh --json --paths-only`.
 
-The first usable source defines the bounded scope. Later sources are supplemental context and traceability only. When a canonical declarative document and a derived artifact conflict, follow `docs/Workflows/MoonSpecDocumentModel.md`: the canonical document wins unless verified evidence requires reconciliation.
+The first usable source defines the bounded scope. Later sources are supplemental context and traceability only. If the current request or workflow step contains only verifier guidance or process instructions, continue to issue-brief, spec, feature-directory, or discovered active-feature sources before selecting the baseline. When a canonical declarative document and a derived artifact conflict, follow `docs/Workflows/MoonSpecDocumentModel.md`: the canonical document wins unless verified evidence requires reconciliation.
 
 In source-direct verification mode:
 
@@ -133,21 +134,21 @@ If an integration or e2e command failure reveals a concrete in-scope implementat
 
 If the user provides a specific `spec.md` or feature directory, use it and discover sibling artifacts from that directory when present.
 
-Only when no explicit source-direct, issue-brief, `spec.md`, or feature-directory baseline is available, run the prerequisite script from the repository root:
+To discover any active feature directory or optional derived context, run the prerequisite script from the repository root in paths-only mode. This discovery is non-blocking and must not replace an already selected source-direct, issue-brief, `spec.md`, or feature-directory baseline:
 
 ```bash
-.specify/scripts/bash/check-prerequisites.sh --json --include-tasks
+.specify/scripts/bash/check-prerequisites.sh --json --paths-only
 ```
 
-If it succeeds, parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then discover:
+If it succeeds, parse `FEATURE_DIR`, then discover whichever sibling artifacts exist:
 
 - `SPEC = FEATURE_DIR/spec.md`
 - `PLAN = FEATURE_DIR/plan.md`
 - `TASKS = FEATURE_DIR/tasks.md`
-- optional docs from `AVAILABLE_DOCS`
+- optional docs such as `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `checklists/`
 - `REPO_GUIDANCE = AGENTS.md` when present
 
-If discovery fails because no active feature exists, continue with any usable original instructions or declarative source already available. Derived-artifact discovery failure is not itself a verification failure.
+If discovery fails because no active feature exists, the feature directory is absent, or derived artifacts such as `plan.md` or `tasks.md` are missing, continue with any usable selected baseline already available. Derived-artifact discovery failure is not itself a verification failure.
 
 If shell arguments contain single quotes, use shell-safe escaping such as `'I'\''m Groot'`, or double quotes when possible.
 
