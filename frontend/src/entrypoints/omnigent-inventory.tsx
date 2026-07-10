@@ -53,7 +53,8 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
   const queryKey = kind === 'agents' ? 'omnigent_agents_q' : 'omnigent_policies_q';
   const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const filter = params.get(queryKey) ?? '';
-  const endpoints = payload.initialData?.uiEndpoints as Record<string, unknown> | undefined;
+  const initialData = payload.initialData as { uiEndpoints?: Record<string, unknown> } | undefined;
+  const endpoints = initialData?.uiEndpoints;
   const enabled = payload.features?.[featureKey] === true;
   const discoveredEndpoint = endpoints?.[kind === 'agents' ? 'omnigentAgents' : 'omnigentPolicies'];
   const endpoint = typeof discoveredEndpoint === 'string' ? discoveredEndpoint : null;
