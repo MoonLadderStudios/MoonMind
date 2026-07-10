@@ -1,0 +1,96 @@
+name: Alembic Migration Gate
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alembic-migration-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migration-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: moonmind
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d moonmind"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: moonmind
+
+    steps:
+      - name: Check out merge candidate
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo rm -f \
+            /etc/apt/sources.list.d/azure-cli.list \
+            /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+
+      - name: Install MoonMind dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .
+
+      - name: Require a single Alembic head
+        run: python tools/check_alembic_graph.py
+
+      - name: Apply all migrations to clean PostgreSQL
+        run: |
+          alembic \
+            -c api_service/migrations/alembic.ini \
+            upgrade head
+
+      - name: Verify database reached the repository head
+        run: |
+          alembic \
+            -c api_service/migrations/alembic.ini \
+            current --check-heads
+
+      - name: Show migration graph after failure
+        if: failure()
+        run: |
+          alembic \
+            -c api_service/migrations/alembic.ini \
+            heads --verbose || true
+          alembic \
+            -c api_service/migrations/alembic.ini \
+            branches --verbose || true
