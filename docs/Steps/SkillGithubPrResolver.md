@@ -86,6 +86,13 @@ Write a machine-readable result to the Workflow artifact directory:
 * `artifacts/pr_resolver_snapshot.json`
 * `artifacts/pr_resolver_result.json`
 
+The managed-agent adapter treats `var/pr_resolver/result.json` as the canonical
+terminal orchestration summary. `artifacts/pr_resolver_result.json` remains a
+supported terminal compatibility path for older resolver producers. Both paths
+must contain a valid terminal disposition and current-run evidence; files under
+`var/pr_resolver/attempts/` are diagnostic evidence only and never determine the
+parent workflow disposition.
+
 Result should include:
 * Resolved PR identity
 * Decision summary (actions taken)

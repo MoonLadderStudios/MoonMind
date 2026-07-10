@@ -38,6 +38,8 @@ from moonmind.auth.env_shaping import (
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ProfileResolutionError,
+    _load_pr_resolver_diagnostics,
+    _load_pr_resolver_terminal_result,
     _pr_resolver_status,
     build_managed_profile_launch_context,
 )
@@ -50,6 +52,122 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 
 pytestmark = [pytest.mark.asyncio]
+
+
+def test_pr_resolver_attempts_are_diagnostic_only(tmp_path: Path) -> None:
+    attempts = tmp_path / "var" / "pr_resolver" / "attempts"
+    attempts.mkdir(parents=True)
+    (attempts / "attempt-1.json").write_text(
+        '{"status":"blocked","reason":"ci_running","next_step":"retry"}',
+        encoding="utf-8",
+    )
+
+    terminal = _load_pr_resolver_terminal_result(str(tmp_path))
+    diagnostics = _load_pr_resolver_diagnostics(str(tmp_path))
+
+    assert terminal.payload is None
+    assert diagnostics.attempt_count == 1
+    assert diagnostics.latest is not None
+    assert diagnostics.latest["reason"] == "ci_running"
+
+
+def test_pr_resolver_terminal_result_wins_over_newer_attempt(tmp_path: Path) -> None:
+    resolver = tmp_path / "var" / "pr_resolver"
+    attempts = resolver / "attempts"
+    attempts.mkdir(parents=True)
+    (resolver / "result.json").write_text(
+        '{"status":"merged","runId":"run-current"}', encoding="utf-8"
+    )
+    (attempts / "attempt-2.json").write_text(
+        '{"status":"blocked","reason":"newer diagnostic"}', encoding="utf-8"
+    )
+
+    terminal = _load_pr_resolver_terminal_result(
+        str(tmp_path), run_id="run-current"
+    )
+
+    assert terminal.payload is not None
+    assert terminal.payload["status"] == "merged"
+    assert terminal.provenance == "var/pr_resolver/result.json"
+
+
+def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
+    tmp_path: Path,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    resolver = tmp_path / "var" / "pr_resolver"
+    artifacts = tmp_path / "artifacts"
+    resolver.mkdir(parents=True)
+    artifacts.mkdir()
+    (resolver / "result.json").write_text("not json", encoding="utf-8")
+    (artifacts / "pr_resolver_result.json").write_text(
+        '{"status":"merged","runId":"current","finished_at":"2020-01-01T00:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    terminal = _load_pr_resolver_terminal_result(
+        str(tmp_path),
+        run_id="current",
+        not_before=datetime.now(tz=UTC) - timedelta(minutes=1),
+    )
+
+    assert terminal.payload is None
+    assert terminal.validation_failures == (
+        "var/pr_resolver/result.json: malformed JSON object",
+        "artifacts/pr_resolver_result.json: stale terminal artifact",
+    )
+
+
+def test_pr_resolver_treats_naive_terminal_cutoff_as_utc(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    (resolver / "result.json").write_text(
+        '{"status":"merged","finished_at":"2026-07-10T12:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    terminal = _load_pr_resolver_terminal_result(
+        str(tmp_path), not_before=datetime(2026, 7, 10, 11, 59, 59)
+    )
+
+    assert terminal.payload is not None
+    assert terminal.payload["status"] == "merged"
+
+
+def test_pr_resolver_rejects_unrecognized_terminal_evidence(tmp_path: Path) -> None:
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    (resolver / "result.json").write_text(
+        '{"message":"resolver still running"}', encoding="utf-8"
+    )
+
+    terminal = _load_pr_resolver_terminal_result(str(tmp_path))
+
+    assert terminal.payload is None
+    assert terminal.validation_failures == (
+        "var/pr_resolver/result.json: unrecognized terminal status/disposition",
+    )
+
+
+def test_pr_resolver_accepts_compatibility_path_with_matching_identity(
+    tmp_path: Path,
+) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "pr_resolver_result.json").write_text(
+        '{"mergeAutomationDisposition":"already_merged","workflowId":"wf-current"}',
+        encoding="utf-8",
+    )
+
+    terminal = _load_pr_resolver_terminal_result(
+        str(tmp_path), workflow_id="wf-current"
+    )
+
+    assert terminal.payload is not None
+    assert terminal.provenance == "artifacts/pr_resolver_result.json"
 
 
 @pytest.mark.parametrize(
@@ -2090,7 +2208,7 @@ async def test_fetch_result_clears_generic_failed_exit_for_reenter_gate(
     assert result.summary == "pr-resolver requested merge automation re-entry."
     assert result.metadata["mergeAutomationDisposition"] == "reenter_gate"
 
-async def test_fetch_result_prefers_newer_pr_resolver_attempt_over_stale_result(
+async def test_fetch_result_prefers_terminal_result_over_newer_attempt(
     tmp_path: Path,
 ):
     from datetime import UTC, datetime
@@ -2107,8 +2225,7 @@ async def test_fetch_result_prefers_newer_pr_resolver_attempt_over_stale_result(
             "{\n"
             '  "status": "attempts_exhausted",\n'
             '  "final_reason": "merge_conflicts",\n'
-            '  "next_step": "run_fix_merge_conflicts_skill",\n'
-            '  "finished_at": "2026-04-05T16:57:44+00:00"\n'
+            '  "next_step": "run_fix_merge_conflicts_skill"\n'
             "}\n"
         ),
         encoding="utf-8",
@@ -2153,8 +2270,9 @@ async def test_fetch_result_prefers_newer_pr_resolver_attempt_over_stale_result(
     )
     assert result.failure_class is None
     assert result.metadata["mergeAutomationDisposition"] == "reenter_gate"
+    assert result.metadata["prResolverLatestAttempt"]["reason"] == "ci_running"
 
-async def test_fetch_result_ignores_stale_failure_when_newer_attempt_is_merged(
+async def test_fetch_result_does_not_let_merged_attempt_override_terminal_failure(
     tmp_path: Path,
 ):
     from datetime import UTC, datetime
@@ -2171,8 +2289,7 @@ async def test_fetch_result_ignores_stale_failure_when_newer_attempt_is_merged(
             "{\n"
             '  "status": "attempts_exhausted",\n'
             '  "final_reason": "merge_conflicts",\n'
-            '  "next_step": "run_fix_merge_conflicts_skill",\n'
-            '  "finished_at": "2026-04-05T16:57:44+00:00"\n'
+            '  "next_step": "manual_review"\n'
             "}\n"
         ),
         encoding="utf-8",
@@ -2213,9 +2330,9 @@ async def test_fetch_result_ignores_stale_failure_when_newer_attempt_is_merged(
     result = await adapter.fetch_result(
         "run-result-pr-merged-attempt", pr_resolver_expected=True
     )
-    assert result.failure_class is None
-    assert result.summary is not None
-    assert "pr-resolver" not in result.summary
+    assert result.failure_class == "user_error"
+    assert "attempts_exhausted" in (result.summary or "")
+    assert result.metadata["mergeAutomationDisposition"] == "manual_review"
 
 async def test_fetch_result_ignores_merged_pr_resolver_artifact(tmp_path: Path):
     from datetime import UTC, datetime
@@ -2621,6 +2738,12 @@ async def test_fetch_result_fails_when_expected_pr_resolver_artifact_missing(
 
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
+    attempts = workspace_path / "var" / "pr_resolver" / "attempts"
+    attempts.mkdir(parents=True)
+    (attempts / "attempt-1.json").write_text(
+        '{"status":"blocked","reason":"ci_running","next_step":"retry"}',
+        encoding="utf-8",
+    )
     store = ManagedRunStore(tmp_path / "run_store")
     store.save(
         ManagedRunRecord(
@@ -2648,6 +2771,9 @@ async def test_fetch_result_fails_when_expected_pr_resolver_artifact_missing(
 
     assert result.failure_class == "user_error"
     assert "pr-resolver result artifact missing" in (result.summary or "")
+    assert "reported status 'blocked'" not in (result.summary or "")
+    assert result.metadata["prResolverLatestAttempt"]["reason"] == "ci_running"
+    assert "mergeAutomationDisposition" not in result.metadata
 
 async def test_fetch_result_maps_final_state_merged_pr_resolver_artifact_metadata(
     tmp_path: Path,

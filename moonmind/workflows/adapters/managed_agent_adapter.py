@@ -28,7 +28,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -84,6 +84,9 @@ _PR_RESOLVER_BLOCKED_STATUSES: frozenset[str] = frozenset(
 _PR_RESOLVER_MERGED_STATUSES: frozenset[str] = frozenset({"merged"})
 _PR_RESOLVER_TERMINAL_STATUSES: frozenset[str] = (
     _PR_RESOLVER_FAILURE_STATUSES | _PR_RESOLVER_MERGED_STATUSES
+)
+_PR_RESOLVER_TERMINAL_DISPOSITIONS: frozenset[str] = frozenset(
+    {"merged", "already_merged", "reenter_gate", "manual_review", "hard_failure"}
 )
 _PR_RESOLVER_REENTER_NEXT_STEPS: frozenset[str] = frozenset(
     {
@@ -276,6 +279,8 @@ def _pr_resolver_disposition(
         or next_step.startswith("run_fix_")
     ):
         return "reenter_gate"
+    if status in _PR_RESOLVER_FAILURE_STATUSES:
+        return "manual_review"
     return ""
 
 
@@ -637,41 +642,109 @@ def _payload_sort_timestamp(path: Path, payload: dict[str, Any]) -> datetime:
     except OSError:
         return datetime.min.replace(tzinfo=UTC)
 
-def _load_pr_resolver_result(workspace_path: str | None) -> dict[str, Any] | None:
-    """Load the most recent pr-resolver payload from result/attempt artifacts."""
+@dataclass(frozen=True, slots=True)
+class _PrResolverEvidence:
+    payload: dict[str, Any] | None
+    provenance: str | None
+    validation_failures: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _PrResolverDiagnostics:
+    attempt_count: int
+    latest: dict[str, Any] | None
+    provenance: str | None
+
+
+def _payload_identity(payload: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _load_pr_resolver_terminal_result(
+    workspace_path: str | None,
+    *,
+    run_id: str | None = None,
+    workflow_id: str | None = None,
+    not_before: datetime | None = None,
+) -> _PrResolverEvidence:
+    """Load and validate only authoritative terminal resolver artifacts."""
 
     workspace = str(workspace_path or "").strip()
     if not workspace:
-        return None
-
-    workspace_root = Path(workspace)
-    candidates: list[tuple[datetime, Path, dict[str, Any]]] = []
-
+        return _PrResolverEvidence(None, None, ())
+    root = Path(workspace)
+    failures: list[str] = []
     for rel_path in _PR_RESOLVER_RESULT_PATHS:
-        result_path = workspace_root / rel_path
-        payload = _load_json_dict(result_path)
-        if payload is not None:
-            candidates.append(
-                (_payload_sort_timestamp(result_path, payload), result_path, payload)
+        path = root / rel_path
+        if not path.exists():
+            continue
+        payload = _load_json_dict(path)
+        provenance = str(rel_path)
+        if payload is None:
+            failures.append(f"{provenance}: malformed JSON object")
+            continue
+        disposition = _pr_resolver_disposition(payload, merge_gate_owned=True)
+        if (
+            _pr_resolver_status(payload) not in _PR_RESOLVER_TERMINAL_STATUSES
+            and disposition not in _PR_RESOLVER_TERMINAL_DISPOSITIONS
+        ):
+            failures.append(f"{provenance}: unrecognized terminal status/disposition")
+            continue
+        artifact_run_id = _payload_identity(
+            payload, "runId", "run_id", "executionId", "execution_id"
+        )
+        if artifact_run_id and run_id and artifact_run_id != run_id:
+            failures.append(f"{provenance}: run identity mismatch")
+            continue
+        artifact_workflow_id = _payload_identity(payload, "workflowId", "workflow_id")
+        if artifact_workflow_id and workflow_id and artifact_workflow_id != workflow_id:
+            failures.append(f"{provenance}: workflow identity mismatch")
+            continue
+        timestamp = _payload_sort_timestamp(path, payload)
+        # Filesystems and the run store do not share guaranteed sub-second clock
+        # precision. Allow a narrow boundary tolerance while still rejecting
+        # artifacts left by an earlier execution.
+        if not_before is not None:
+            cutoff = (
+                not_before
+                if not_before.tzinfo is not None
+                else not_before.replace(tzinfo=UTC)
             )
+            if timestamp < (cutoff.astimezone(UTC) - timedelta(seconds=1)):
+                failures.append(f"{provenance}: stale terminal artifact")
+                continue
+        return _PrResolverEvidence(payload, provenance, tuple(failures))
+    return _PrResolverEvidence(None, None, tuple(failures))
 
-    attempts_dir = workspace_root / _PR_RESOLVER_ATTEMPTS_DIR
+
+def _load_pr_resolver_diagnostics(workspace_path: str | None) -> _PrResolverDiagnostics:
+    """Load bounded attempt evidence which never controls terminal disposition."""
+
+    workspace = str(workspace_path or "").strip()
+    if not workspace:
+        return _PrResolverDiagnostics(0, None, None)
+    root = Path(workspace)
+    attempts_dir = root / _PR_RESOLVER_ATTEMPTS_DIR
+    candidates: list[tuple[datetime, Path, dict[str, Any]]] = []
     try:
-        attempt_paths = sorted(attempts_dir.glob("*.json"))
+        paths = sorted(attempts_dir.glob("*.json"))
     except OSError:
-        attempt_paths = []
-    for attempt_path in attempt_paths:
-        payload = _load_json_dict(attempt_path)
+        paths = []
+    for path in paths:
+        payload = _load_json_dict(path)
         if payload is not None:
-            candidates.append(
-                (_payload_sort_timestamp(attempt_path, payload), attempt_path, payload)
-            )
-
+            candidates.append((_payload_sort_timestamp(path, payload), path, payload))
     if not candidates:
-        return None
-
+        return _PrResolverDiagnostics(0, None, None)
     candidates.sort(key=lambda item: (item[0], str(item[1])))
-    return candidates[-1][2]
+    _, latest_path, latest = candidates[-1]
+    return _PrResolverDiagnostics(
+        len(candidates), latest, str(latest_path.relative_to(root))
+    )
 
 # Type aliases for async signal callables injected by the caller/workflow.
 ProfileFetcherFunc = Callable[..., Awaitable[dict[str, Any]]]
@@ -685,9 +758,15 @@ def _derive_pr_resolver_failure(
     workspace_path: str | None,
     *,
     merge_gate_owned: bool = False,
+    run_id: str | None = None,
+    workflow_id: str | None = None,
+    not_before: datetime | None = None,
 ) -> tuple[str | None, str | None]:
     """Return failure metadata from pr-resolver artifacts when present."""
-    payload = _load_pr_resolver_result(workspace_path)
+    evidence = _load_pr_resolver_terminal_result(
+        workspace_path, run_id=run_id, workflow_id=workflow_id, not_before=not_before
+    )
+    payload = evidence.payload
     if payload is None:
         return (
             "user_error",
@@ -722,15 +801,42 @@ def _derive_pr_resolver_metadata(
     workspace_path: str | None,
     *,
     merge_gate_owned: bool = False,
+    run_id: str | None = None,
+    workflow_id: str | None = None,
+    not_before: datetime | None = None,
 ) -> dict[str, Any]:
     """Return compact metadata from pr-resolver artifacts for parent workflows."""
-    payload = _load_pr_resolver_result(workspace_path)
+    evidence = _load_pr_resolver_terminal_result(
+        workspace_path, run_id=run_id, workflow_id=workflow_id, not_before=not_before
+    )
+    diagnostics = _load_pr_resolver_diagnostics(workspace_path)
+    metadata: dict[str, Any] = {}
+    if evidence.provenance:
+        metadata["prResolverTerminalProvenance"] = evidence.provenance
+    if evidence.validation_failures:
+        metadata["prResolverTerminalValidationFailures"] = list(
+            evidence.validation_failures
+        )
+    if diagnostics.latest is not None:
+        latest = diagnostics.latest
+        compact = {
+            "attemptCount": diagnostics.attempt_count,
+            "provenance": diagnostics.provenance,
+        }
+        for source, target in (
+            ("final_reason", "reason"), ("reason", "reason"),
+            ("next_step", "nextStep"), ("nextStep", "nextStep"),
+        ):
+            value = str(latest.get(source) or "").strip()
+            if value and target not in compact:
+                compact[target] = value
+        metadata["prResolverLatestAttempt"] = compact
+    payload = evidence.payload
     if payload is None:
-        return {}
+        return metadata
 
     status = _pr_resolver_status(payload)
     reason = str(payload.get("final_reason") or payload.get("reason") or "").strip()
-    metadata: dict[str, Any] = {}
     disposition = _pr_resolver_disposition(
         payload, merge_gate_owned=merge_gate_owned
     )
@@ -1043,11 +1149,19 @@ class ManagedAgentAdapter:
                 metadata = _derive_pr_resolver_metadata(
                     record.workspace_path,
                     merge_gate_owned=pr_resolver_merge_gate_owned,
+                    run_id=record.run_id,
+                    workflow_id=record.workflow_id,
+                    not_before=record.started_at,
                 )
                 if (
                     include_workspace_auto_publish_evidence
                     and "publishResult" not in metadata
-                    and _load_pr_resolver_result(record.workspace_path) is None
+                    and _load_pr_resolver_terminal_result(
+                        record.workspace_path,
+                        run_id=record.run_id,
+                        workflow_id=record.workflow_id,
+                        not_before=record.started_at,
+                    ).payload is None
                 ):
                     publish_payload = _load_auto_publish_result_payload(
                         record.workspace_path,
@@ -1063,6 +1177,9 @@ class ManagedAgentAdapter:
                     derived_failure_class, derived_summary = _derive_pr_resolver_failure(
                         record.workspace_path,
                         merge_gate_owned=pr_resolver_merge_gate_owned,
+                        run_id=record.run_id,
+                        workflow_id=record.workflow_id,
+                        not_before=record.started_at,
                     )
                     resolver_disposition = str(
                         metadata.get("mergeAutomationDisposition") or ""
