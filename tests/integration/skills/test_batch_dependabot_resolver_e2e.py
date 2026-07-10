@@ -98,6 +98,7 @@ def _mixed_pr_set() -> list[dict[str, Any]]:
 
 class _FakeAsyncClient:
     submissions: list[dict[str, Any]] = []
+    workflow_ids: set[str] = set()
 
     def __init__(self, **_kwargs: Any) -> None:
         pass
@@ -111,10 +112,28 @@ class _FakeAsyncClient:
     async def post(self, _path: str, **kwargs: Any) -> Any:
         body = kwargs.get("json")
         _FakeAsyncClient.submissions.append(body)
+        workflow_id = f"mm:wf-{len(_FakeAsyncClient.submissions)}"
+        _FakeAsyncClient.workflow_ids.add(workflow_id)
         response = MagicMock()
         response.raise_for_status = MagicMock()
         response.json = MagicMock(
-            return_value={"workflowId": f"mm:wf-{len(_FakeAsyncClient.submissions)}"}
+            return_value={"workflowId": workflow_id, "runId": f"run-{workflow_id}"}
+        )
+        return response
+
+    async def get(self, path: str) -> Any:
+        workflow_id = path.rsplit("/", 1)[-1].replace("%3A", ":")
+        if workflow_id not in _FakeAsyncClient.workflow_ids:
+            raise AssertionError(f"unexpected workflow verification: {workflow_id}")
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json = MagicMock(
+            return_value={
+                "workflowId": workflow_id,
+                "runId": f"run-{workflow_id}",
+                "state": "initializing",
+                "temporalStatus": "running",
+            }
         )
         return response
 
@@ -128,6 +147,7 @@ def _run_main(
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     _FakeAsyncClient.submissions = []
+    _FakeAsyncClient.workflow_ids = set()
     monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
     monkeypatch.delenv("MOONMIND_WORKER_TOKEN", raising=False)
     monkeypatch.delenv("MOONMIND_WORKER_TOKEN_FILE", raising=False)
