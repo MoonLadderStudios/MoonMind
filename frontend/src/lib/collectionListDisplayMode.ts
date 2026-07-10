@@ -1,15 +1,16 @@
 import { workflowListContextParams } from './workflowListContext';
 import { WORKFLOW_DETAIL_SUPPORTED_SUBROUTES } from './workflowDetailRoutes';
 
-export type WorkflowListDisplayMode = 'hidden' | 'sidebar' | 'table';
+/** Entity-neutral presentation shared by every opted-in collection workspace. */
+export type CollectionListDisplayMode = 'hidden' | 'sidebar' | 'table';
 
-export type WorkflowListRegion = 'none' | 'sidebar' | 'primary-surface';
+export type CollectionListRegion = 'none' | 'sidebar' | 'primary-surface';
 
-export type WorkflowListDisplayModeDefinition = {
-  value: WorkflowListDisplayMode;
+export type CollectionListDisplayModeDefinition = {
+  value: CollectionListDisplayMode;
   label: string;
   icon: 'Square' | 'PanelLeft' | 'Rows3';
-  listRegion: WorkflowListRegion;
+  listRegion: CollectionListRegion;
 };
 
 export type WorkflowListDisplaySurface =
@@ -22,7 +23,7 @@ export type WorkflowListSelection = {
   source: 'route' | 'last-selected' | 'first-visible-row' | 'none';
 };
 
-export type WorkflowListDisplayRouteAction =
+export type CollectionListDisplayRouteAction =
   | 'none'
   | 'navigate-workflows'
   | 'navigate-selected-detail'
@@ -34,15 +35,15 @@ export type WorkflowListDisplayPrimarySurface =
   | 'workflow-table'
   | 'empty-workflows';
 
-export type WorkflowListDisplayListSurface = 'none' | 'sidebar' | 'table';
+export type CollectionListDisplayListSurface = 'none' | 'sidebar' | 'table';
 
 export type ResolvedWorkflowListDisplay = {
-  requestedMode: WorkflowListDisplayMode;
-  effectiveMode: WorkflowListDisplayMode;
+  requestedMode: CollectionListDisplayMode;
+  effectiveMode: CollectionListDisplayMode;
   surface: WorkflowListDisplaySurface;
-  routeAction: WorkflowListDisplayRouteAction;
+  routeAction: CollectionListDisplayRouteAction;
   primarySurface: WorkflowListDisplayPrimarySurface;
-  listSurface: WorkflowListDisplayListSurface;
+  listSurface: CollectionListDisplayListSurface;
   selection: WorkflowListSelection;
   targetPath: string;
   status: string | null;
@@ -59,12 +60,12 @@ export type RecurringListSelection = {
 };
 
 export type ResolvedRecurringListDisplay = {
-  requestedMode: WorkflowListDisplayMode;
-  effectiveMode: WorkflowListDisplayMode;
+  requestedMode: CollectionListDisplayMode;
+  effectiveMode: CollectionListDisplayMode;
   surface: RecurringListDisplaySurface;
-  routeAction: WorkflowListDisplayRouteAction;
+  routeAction: CollectionListDisplayRouteAction;
   primarySurface: 'recurring-detail' | 'recurring-table' | 'empty-recurring';
-  listSurface: WorkflowListDisplayListSurface;
+  listSurface: CollectionListDisplayListSurface;
   selection: RecurringListSelection;
   targetPath: string;
   status: string | null;
@@ -72,7 +73,7 @@ export type ResolvedRecurringListDisplay = {
 
 export type ResolveRecurringListDisplayInput = {
   pathname: string;
-  requestedMode: WorkflowListDisplayMode;
+  requestedMode: CollectionListDisplayMode;
   search?: string | URLSearchParams | null;
   selectedDefinitionId?: string | null;
   firstVisibleDefinitionId?: string | null;
@@ -80,7 +81,7 @@ export type ResolveRecurringListDisplayInput = {
 
 export type ResolveWorkflowListDisplayInput = {
   pathname: string;
-  requestedMode: WorkflowListDisplayMode;
+  requestedMode: CollectionListDisplayMode;
   search?: string | URLSearchParams | null;
   selectedWorkflowId?: string | null;
   firstVisibleWorkflowId?: string | null;
@@ -88,7 +89,7 @@ export type ResolveWorkflowListDisplayInput = {
 
 const DETAIL_TABS = new Set<string>(WORKFLOW_DETAIL_SUPPORTED_SUBROUTES);
 
-export const WORKFLOW_LIST_DISPLAY_MODES = [
+export const COLLECTION_LIST_DISPLAY_MODES = [
   {
     value: 'hidden',
     label: 'No list',
@@ -107,22 +108,22 @@ export const WORKFLOW_LIST_DISPLAY_MODES = [
     icon: 'Rows3',
     listRegion: 'primary-surface',
   },
-] as const satisfies readonly WorkflowListDisplayModeDefinition[];
+] as const satisfies readonly CollectionListDisplayModeDefinition[];
 
-export function workflowListDisplayModeByValue(
+export function collectionListDisplayModeByValue(
   value: string,
-): WorkflowListDisplayModeDefinition | null {
-  return WORKFLOW_LIST_DISPLAY_MODES.find((mode) => mode.value === value) ?? null;
+): CollectionListDisplayModeDefinition | null {
+  return COLLECTION_LIST_DISPLAY_MODES.find((mode) => mode.value === value) ?? null;
 }
 
-export function isWorkflowListDisplayMode(value: string): value is WorkflowListDisplayMode {
-  return workflowListDisplayModeByValue(value) !== null;
+export function isCollectionListDisplayMode(value: string): value is CollectionListDisplayMode {
+  return collectionListDisplayModeByValue(value) !== null;
 }
 
-export function readWorkflowListDisplayMode(payload: { initialData?: unknown }): WorkflowListDisplayMode | undefined {
+export function readWorkflowListDisplayMode(payload: { initialData?: unknown }): CollectionListDisplayMode | undefined {
   const raw = payload.initialData as { workflowListDisplayMode?: unknown } | undefined;
   const value = typeof raw?.workflowListDisplayMode === 'string' ? raw.workflowListDisplayMode : '';
-  return isWorkflowListDisplayMode(value) ? value : undefined;
+  return isCollectionListDisplayMode(value) ? value : undefined;
 }
 
 function normalizedPathname(pathname: string): string {

@@ -1,29 +1,29 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  WORKFLOW_LIST_DISPLAY_MODES,
+  COLLECTION_LIST_DISPLAY_MODES,
   resolveRecurringListDisplay,
   resolveWorkflowListDisplay,
-  workflowListDisplayModeByValue,
-  type WorkflowListDisplayMode,
-} from './workflowListDisplayMode';
+  collectionListDisplayModeByValue,
+  type CollectionListDisplayMode,
+} from './collectionListDisplayMode';
 
-const modeValues = (): WorkflowListDisplayMode[] => WORKFLOW_LIST_DISPLAY_MODES.map((mode) => mode.value);
+const modeValues = (): CollectionListDisplayMode[] => COLLECTION_LIST_DISPLAY_MODES.map((mode) => mode.value);
 
-describe('workflow list display mode registry', () => {
+describe('collection list display mode registry', () => {
   it('exposes exactly the canonical hidden, sidebar, and table modes', () => {
     expect(modeValues()).toEqual(['hidden', 'sidebar', 'table']);
-    expect(WORKFLOW_LIST_DISPLAY_MODES).toHaveLength(3);
+    expect(COLLECTION_LIST_DISPLAY_MODES).toHaveLength(3);
   });
 
   it('uses canonical labels, icon identities, and list regions without label matching', () => {
-    expect(WORKFLOW_LIST_DISPLAY_MODES).toEqual([
+    expect(COLLECTION_LIST_DISPLAY_MODES).toEqual([
       { value: 'hidden', label: 'No list', icon: 'Square', listRegion: 'none' },
       { value: 'sidebar', label: 'Sidebar list', icon: 'PanelLeft', listRegion: 'sidebar' },
       { value: 'table', label: 'Full screen table', icon: 'Rows3', listRegion: 'primary-surface' },
     ]);
-    expect(workflowListDisplayModeByValue('hidden')?.label).toBe('No list');
-    expect(workflowListDisplayModeByValue('No list')).toBeNull();
+    expect(collectionListDisplayModeByValue('hidden')?.label).toBe('No list');
+    expect(collectionListDisplayModeByValue('No list')).toBeNull();
   });
 });
 
