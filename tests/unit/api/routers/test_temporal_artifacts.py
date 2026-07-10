@@ -118,7 +118,7 @@ def test_artifact_collection_returns_compact_safe_rows() -> None:
         row = body["items"][0]
         assert row["artifact_id"] == artifact.artifact_id
         assert row["workflow_id"] == "wf-1"
-        assert row["view_url"] == f"/api/artifacts/{artifact.artifact_id}"
+        assert "view_url" not in row
         assert row["download_url"].endswith("/download")
         assert "storage_key" not in row
         assert "created_by_principal" not in row

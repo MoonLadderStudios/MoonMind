@@ -211,7 +211,6 @@ class ArtifactCollectionRowModel(BaseModel):
     label: Optional[str] = None
     workflow_id: Optional[str] = None
     run_id: Optional[str] = None
-    view_url: str
     download_url: str
 
 

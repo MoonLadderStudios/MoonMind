@@ -27,7 +27,6 @@ describe('ArtifactsPage', () => {
             label: 'Final output',
             workflow_id: 'mm:workflow-1',
             run_id: 'run-1',
-            view_url: '/api/artifacts/art_SAFE',
             download_url: '/api/artifacts/art_SAFE/download',
           }] : [],
           total: category === 'artifacts' ? 1 : 0,

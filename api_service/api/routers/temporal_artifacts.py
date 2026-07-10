@@ -356,7 +356,13 @@ async def list_artifact_collection(
     for artifact, links in rows:
         category_prefixes = {
             "reports": ("report.",),
-            "observability": ("output.logs", "debug.", "observability."),
+            "observability": (
+                "output.logs",
+                "debug.",
+                "observability.",
+                "runtime.stderr",
+                "runtime.diagnostics",
+            ),
             "artifacts": (),
         }
         prefixes = category_prefixes[category]
@@ -377,7 +383,6 @@ async def list_artifact_collection(
                 label=link.label if link else None,
                 workflow_id=link.workflow_id if link else None,
                 run_id=link.run_id if link else None,
-                view_url=f"/api/artifacts/{artifact_id}",
                 download_url=f"/api/artifacts/{artifact_id}/download",
             )
         )
