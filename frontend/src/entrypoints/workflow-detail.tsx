@@ -271,9 +271,7 @@ export function WorkflowWorkspaceShell({
         />
       ) : null}
       <main className="workflow-workspace-detail" aria-label="Workflow detail">
-        <EntityDetailFrame entity="workflow">
-          <WorkflowDetailPage payload={payload} />
-        </EntityDetailFrame>
+        <WorkflowDetailPage payload={payload} />
       </main>
     </div>
   );
@@ -9074,7 +9072,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   return (
     <DashboardToastProvider>
-      <WorkflowDetailPageContent payload={payload} />
+      <EntityDetailFrame entity="workflow" main={<WorkflowDetailPageContent payload={payload} />} />
     </DashboardToastProvider>
   );
 }
