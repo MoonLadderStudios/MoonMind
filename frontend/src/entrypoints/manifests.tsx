@@ -124,19 +124,33 @@ function matchesText(haystack: string[], needle: string): boolean {
   return haystack.some((value) => value.toLowerCase().includes(normalized));
 }
 
+function manifestNameFromPath(pathname: string): string {
+  const match = pathname.match(/^\/manifests\/([^/]+)\/?$/);
+  if (!match?.[1]) {
+    return '';
+  }
+  try {
+    const name = decodeURIComponent(match[1]);
+    return name.includes('/') ? '' : name;
+  } catch {
+    return '';
+  }
+}
+
 export function ManifestsPage({ payload }: { payload: BootPayload }) {
+  const routedManifestName = manifestNameFromPath(window.location.pathname);
   const [manifestName, setManifestName] = useState('');
   const [action, setAction] = useState('run');
   const [sourceKind, setSourceKind] = useState<SourceKind>('registry');
   const [manifestContent, setManifestContent] = useState('');
-  const [registryName, setRegistryName] = useState('');
+  const [registryName, setRegistryName] = useState(routedManifestName);
   const [dryRun, setDryRun] = useState(false);
   const [forceFull, setForceFull] = useState(false);
   const [maxDocs, setMaxDocs] = useState('');
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
-  const [manifestFilter, setManifestFilter] = useState('');
+  const [manifestFilter, setManifestFilter] = useState(routedManifestName);
   const [searchFilter, setSearchFilter] = useState('');
 
   const { data, isLoading, isError, error, refetch } = useQuery({

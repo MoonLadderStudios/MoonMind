@@ -57,11 +57,19 @@ describe('dashboard route resolution', () => {
   });
 
   it('resolves encoded manifest and schedule detail IDs', () => {
-    expect(resolveDashboardRoute('/manifests/default%3Aworkflow')?.page).toBe(
-      'manifests',
-    );
-    expect(resolveDashboardRoute('/schedules/nightly%3Abuild')?.page).toBe(
-      'schedules',
-    );
+    expect(resolveDashboardRoute('/manifests/default%3Aworkflow')).toEqual({
+      page: 'manifests',
+      dataWidePanel: true,
+      currentPath: '/manifests/default%3Aworkflow',
+    });
+    expect(resolveDashboardRoute('/schedules/nightly%3Abuild')).toEqual({
+      page: 'schedules',
+      dataWidePanel: true,
+      currentPath: '/schedules/nightly%3Abuild',
+    });
+  });
+
+  it.each(['/schedules', '/manifests'])('uses the fluid shell for the %s collection', (path) => {
+    expect(resolveDashboardRoute(path)?.dataWidePanel).toBe(true);
   });
 });

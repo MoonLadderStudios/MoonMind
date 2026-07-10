@@ -120,6 +120,21 @@ describe('Manifests Entrypoint', () => {
     });
   });
 
+  it('hydrates manifest context from a safe deep link', async () => {
+    window.history.pushState({}, 'Manifest', '/manifests/nightly-docs');
+
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    await screen.findByText('mm:existing-manifest');
+    expect((screen.getByLabelText('Registry Manifest Name') as HTMLInputElement).value).toBe(
+      'nightly-docs',
+    );
+    expect((screen.getByLabelText('Filter by manifest') as HTMLInputElement).value).toBe(
+      'nightly-docs',
+    );
+    expect(screen.queryByText('registry-refresh')).toBeNull();
+  });
+
   it('shows manifest run details, stage-aware status, timing, and accessible row actions', async () => {
     renderWithClient(<ManifestsPage payload={mockPayload} />);
 
