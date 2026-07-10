@@ -797,7 +797,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
 
-  it('MM-1116 renders the sidebar workflow list as a table slice with a filterable header', async () => {
+  it('MM-1186 renders the Workflow adapter through the shared collection sidebar', async () => {
     window.history.pushState({}, 'Workspace Table Slice Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -805,6 +805,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(sidebar.classList.contains('collection-sidebar')).toBe(true);
     const table = await within(sidebar).findByRole('table', { name: 'Workflow list table slice' });
     const header = within(table).getByRole('columnheader', { name: 'Workflow' });
     expect(header.closest('.workflow-workspace-sidebar-header-row')).toBeTruthy();
