@@ -826,6 +826,10 @@ describe("SchedulesPage", () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha")).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha/runs?limit=200")).toBe(true);
     expect(screen.getByRole("complementary", { name: "Recurring schedule navigation" })).not.toBeNull();
+    const sidebarTable = screen.getByRole("table", { name: "Recurring schedule list table slice" });
+    expect(sidebarTable).not.toBeNull();
+    expect(within(sidebarTable).getByRole("columnheader").textContent).toContain("Recurring");
+    expect(screen.getByRole("searchbox", { name: "Recurring schedule sidebar filter" })).not.toBeNull();
     expect(screen.getByRole("link", { name: /Nightly detail sweep/ }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("button", { name: "Edit schedule" })).not.toBeNull();
     expect(screen.getByRole("button", { name: "Run now" })).not.toBeNull();
