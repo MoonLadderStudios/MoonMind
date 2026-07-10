@@ -7623,6 +7623,33 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: var(--mm-rail-width);
 }
 
+.skills-page.collection-workspace {
+  --mm-rail-width: var(--workflow-list-column-workflow-width);
+  --mm-rail-bleed: 1rem;
+
+  display: grid;
+  grid-template-columns: [rail-start] var(--mm-rail-width) [content-start] minmax(0, 1fr) [content-end];
+  width: 100%;
+  min-height: calc(100vh - var(--mm-header-height, 0px));
+}
+
+.skills-page .skills-primary {
+  max-width: none;
+}
+
+@media (max-width: 1023px) {
+  .skills-page.collection-workspace {
+    display: block;
+  }
+
+  .skills-page .collection-sidebar {
+    position: relative;
+    width: 100%;
+    max-height: 18rem;
+    margin-left: 0;
+  }
+}
+
 .workflow-start-primary,
 .workflow-workspace-detail {
   grid-column: content-start / content-end;

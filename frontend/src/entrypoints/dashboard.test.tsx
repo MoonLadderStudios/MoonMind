@@ -1794,6 +1794,10 @@ describe('Dashboard shared entry', () => {
     expect(shellBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
     expect(shellBlock).toContain('[content-start] min(var(--mm-content-max), calc(100% - 2rem))');
 
+    const skillsWorkspaceBlock = cssRuleBlock(dashboardCss, '.skills-page.collection-workspace');
+    expect(skillsWorkspaceBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
+    expect(skillsWorkspaceBlock).toContain('--mm-rail-bleed: 1rem');
+
     // The rail stays fixed to the shared workflow-column width and bleeds left
     // by the same amount as the data slab, so its painted edge reaches x:0.
     const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
