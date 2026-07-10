@@ -129,7 +129,7 @@ def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
     terminal = _load_pr_resolver_terminal_result(
         str(tmp_path),
         run_id="current",
-        not_before=datetime.now(tz=UTC) - timedelta(minutes=1),
+        not_before=datetime.now(tz=timezone.utc) - timedelta(minutes=1),
     )
 
     assert terminal.payload is None
@@ -142,7 +142,7 @@ def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
 def test_pr_resolver_metadata_distinguishes_invalid_stale_and_missing(
     tmp_path: Path,
 ) -> None:
-    from datetime import UTC, datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     resolver = tmp_path / "var" / "pr_resolver"
     resolver.mkdir(parents=True)
