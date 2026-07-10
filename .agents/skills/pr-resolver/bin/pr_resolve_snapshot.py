@@ -74,6 +74,15 @@ def _build_subprocess_env() -> dict[str, str]:
     env["PATH"] = ":".join(existing_parts) if existing_parts else _SYSTEM_PATH_FALLBACK
     return env
 
+
+def _sibling_skill_file(
+    script_dir: Path, skill_name: str, *relative_parts: str
+) -> Path:
+    """Resolve a required skill file from the active snapshot root."""
+
+    return script_dir.parent.parent.joinpath(skill_name, *relative_parts)
+
+
 def _resolve_command(cmd: list[str]) -> list[str]:
     if not cmd:
         return cmd
@@ -958,10 +967,12 @@ def main():
                     }
                 )
 
-    # 3. Fetch Comments
-    # .agents/skills/fix-comments/tools/get_branch_pr_comments.py should be in the root of the project
-    comments_script = Path(
-        ".agents/skills/fix-comments/tools/get_branch_pr_comments.py"
+    # 3. Fetch Comments from the required sibling skill in this active snapshot.
+    comments_script = _sibling_skill_file(
+        SCRIPT_DIR,
+        "fix-comments",
+        "tools",
+        "get_branch_pr_comments.py",
     )
     comments_data = {}
     if not comments_script.exists():
