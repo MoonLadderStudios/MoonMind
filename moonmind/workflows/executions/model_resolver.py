@@ -185,6 +185,9 @@ def resolve_model_effort(
             (_legacy_profile_value(profile, "default_effort"), _MODEL_SOURCE_PROFILE_DEFAULT),
             (runtime_effort, _MODEL_SOURCE_RUNTIME_DEFAULT),
         )
+        tier_parameters = tier.get("parameters") or {}
+        if not isinstance(tier_parameters, Mapping):
+            raise ValueError("profile.model_tiers parameters must be a mapping")
         return _with_preview_mismatch(
             ResolvedModelEffort(
                 model=model,
@@ -240,7 +243,7 @@ def resolve_model_effort(
                 effort_source=effort_source,
                 fallback_reason=fallback_reason,
                 effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
-                tier_parameters=dict(tier.get("parameters") or {}),
+                tier_parameters=dict(tier_parameters),
             ),
             advisory_preview,
         )
