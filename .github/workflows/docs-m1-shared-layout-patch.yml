@@ -6,6 +6,12 @@ on:
       - docs/m1-shared-sidebar-detail-contract
     paths:
       - .github/workflows/docs-m1-shared-layout-patch.yml
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+    paths:
+      - .github/workflows/docs-m1-shared-layout-patch.yml
 
 permissions:
   contents: write
