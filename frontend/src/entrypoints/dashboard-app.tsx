@@ -885,41 +885,67 @@ function AppShell({
     <DashboardLiveUpdateProvider uiInfo={uiInfo}>
       <main className="dashboard-root">
         <ApplicationRail uiInfo={uiInfo} />
-        <div className="dashboard-content">
-          <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
-            <p>
-              <span className="worker-pause-label" data-worker-pause-status>
-                Workers: Running
-              </span>
-              <span className="worker-pause-reason" data-worker-pause-reason />
-              <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
-                Manage operations
-              </Link>
-            </p>
-          </section>
-
-          {workflowListMode ? (
-            <div className="dashboard-collection-utilities">
-              <WorkflowListDisplayModeControl
-                {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
-                effectiveMode={workflowListMode}
-                status={workflowListDisplayStatus}
-                onSelect={onWorkflowListModeSelect}
-              />
-            </div>
-          ) : null}
-
-          <div
-            className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
-          >
-            <DashboardAlerts />
-          </div>
-          <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
-            {children}
-          </section>
-        </div>
+        <DashboardContent
+          dataWidePanel={dataWidePanel}
+          listDisplayAccessibleName={listDisplayAccessibleName}
+          workflowListMode={workflowListMode}
+          workflowListDisplayStatus={workflowListDisplayStatus}
+          onWorkflowListModeSelect={onWorkflowListModeSelect}
+        >
+          {children}
+        </DashboardContent>
       </main>
     </DashboardLiveUpdateProvider>
+  );
+}
+
+function DashboardContent({
+  dataWidePanel,
+  listDisplayAccessibleName,
+  workflowListMode,
+  workflowListDisplayStatus,
+  onWorkflowListModeSelect,
+  children,
+}: {
+  dataWidePanel: boolean;
+  listDisplayAccessibleName?: string | undefined;
+  workflowListMode: WorkflowListDisplayMode | null;
+  workflowListDisplayStatus?: string | null | undefined;
+  onWorkflowListModeSelect: (mode: WorkflowListDisplayMode) => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="dashboard-content">
+      <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
+        <p>
+          <span className="worker-pause-label" data-worker-pause-status>
+            Workers: Running
+          </span>
+          <span className="worker-pause-reason" data-worker-pause-reason />
+          <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
+            Manage operations
+          </Link>
+        </p>
+      </section>
+
+      {workflowListMode ? (
+        <div className="dashboard-collection-utilities">
+          <WorkflowListDisplayModeControl
+            {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
+            effectiveMode={workflowListMode}
+            status={workflowListDisplayStatus}
+            onSelect={onWorkflowListModeSelect}
+          />
+        </div>
+      ) : null}
+
+      <div className="dashboard-alerts-region">
+        <DashboardAlerts />
+      </div>
+      <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
+        {children}
+      </section>
+    </div>
   );
 }
 

@@ -493,7 +493,7 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
     await waitFor(() => {
       expect(document.querySelector('.panel--data-wide')).toBeTruthy();
-      expect(document.querySelector('.dashboard-shell-constrained--data-wide')).toBeTruthy();
+      expect(document.querySelector('.dashboard-alerts-region')).toBeTruthy();
     });
   });
 
@@ -1753,24 +1753,23 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Skills page recovered')).toBeTruthy();
     expect(document.querySelector('.panel--data-wide')).toBeNull();
-    expect(document.querySelector('.dashboard-shell-constrained--data-wide')).toBeNull();
-    expect(document.querySelector('.dashboard-shell-constrained')).toBeTruthy();
+    expect(document.querySelector('.dashboard-alerts-region')).toBeTruthy();
   });
 
-  it('keeps the default panel constrained and centered while data routes opt wider', async () => {
-    expect(dashboardCss).toMatch(
-      /\.panel\s*\{[^}]*margin-left:\s*auto;[^}]*margin-right:\s*auto;[^}]*max-width:\s*min\(72rem,\s*calc\(100vw - 2rem\)\)/s,
-    );
-    expect(dashboardCss).toMatch(
-      /\.panel\.panel--data-wide\s*\{[^}]*max-width:\s*min\(112rem,\s*calc\(100vw - 2rem\)\)/s,
-    );
+  it('MM-1181 keeps route roots fluid and edge-anchored', async () => {
+    const contentRule = cssRuleBlock(dashboardCss, '.dashboard-content');
+    const panelRule = cssRuleBlock(dashboardCss, '.panel');
+    expect(contentRule).toContain('min-width: 0;');
+    expect(contentRule).toContain('width: 100%;');
+    expect(panelRule).toContain('margin-left: 0;');
+    expect(panelRule).toContain('margin-right: 0;');
+    expect(panelRule).toContain('max-width: none;');
+    expect(panelRule).toContain('min-width: 0;');
+    expect(cssRuleBlock(dashboardCss, '.panel.panel--data-wide')).toContain('max-width: none;');
+    expect(cssRuleBlock(dashboardCss, '.dashboard-root')).toContain('overflow-x: clip;');
   });
 
-  it('lets edge-to-edge data panels beat the 112rem cap via higher specificity', async () => {
-    // The edge-to-edge `max-width: none` rule and the `.panel.panel--data-wide`
-    // 112rem cap would otherwise have equal specificity, letting the later cap
-    // win on source order and re-center wide layouts. Prefixing the `:has()`
-    // rule with `.panel` raises its specificity so the edge-to-edge intent wins.
+  it('keeps workflow collection workspaces fluid', async () => {
     expect(dashboardCss).toMatch(
       /\.panel\.panel--data-wide:has\(\.workflow-list-data-slab\),\s*\.panel\.panel--data-wide:has\(\.workflow-workspace-shell\)\s*\{[^}]*max-width:\s*none/s,
     );
@@ -2877,14 +2876,12 @@ describe('Dashboard shared entry', () => {
       '.panel--floating',
       '.panel--utility',
       '.panel.panel--data-wide',
-      '.dashboard-shell-constrained--data-wide',
+      '.dashboard-alerts-region',
     ]) {
       expect(cssRuleBlock(dashboardCss, selector)).not.toBe('');
     }
 
-    expect(cssRuleBlock(dashboardCss, '.panel.panel--data-wide')).toContain(
-      'max-width: min(112rem, calc(100vw - 2rem))',
-    );
+    expect(cssRuleBlock(dashboardCss, '.panel.panel--data-wide')).toContain('max-width: none');
   });
 
   it('enforces MM-430 token-first styling for semantic role surfaces', async () => {
