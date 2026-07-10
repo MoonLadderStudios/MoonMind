@@ -297,6 +297,35 @@ class TestResolveModelEffortTiers:
         assert resolved.model == "tier-2-model"
         assert resolved.fallback_reason == "requested_tier_above_configured_range"
 
+    def test_advisory_preview_mismatch_is_detected(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(),
+            requested_model_tier=2,
+            advisory_preview={
+                "requestedTier": 2,
+                "effectiveTier": 2,
+                "model": "stale-model",
+                "effort": "high",
+                "fallbackReason": None,
+            },
+            env={},
+        )
+
+        assert resolved.preview_mismatch is True
+        assert resolved.as_metadata()["previewMismatch"] is True
+
+    def test_advisory_preview_can_resolve_non_launch_ready_profile(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(enabled=False),
+            requested_model_tier=1,
+            require_launch_ready=False,
+            env={},
+        )
+
+        assert resolved.model == "tier-1-model"
+
     def test_strict_tier_fallback_rejects_unavailable_requested_tier(self):
         with pytest.raises(ValueError, match="requested_model_tier_unavailable"):
             resolve_model_effort(

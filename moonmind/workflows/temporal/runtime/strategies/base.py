@@ -320,12 +320,24 @@ class ManagedRuntimeStrategy(ABC):
         2. ``profile.default_model`` (provider-profile default).
         3. Runtime default from the canonical registry.
         """
-        requested_model = request.parameters.get("model") if request.parameters else None
+        parameters = request.parameters or {}
+        requested_model = parameters.get("model")
 
         if requested_model:
             overrides = getattr(profile, "model_overrides", {}) or {}
             resolved = overrides.get(requested_model, requested_model)
             return resolved
+
+        if parameters.get("modelTier") is not None:
+            from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+            return resolve_model_effort(
+                runtime_id=self.runtime_id,
+                profile=profile,
+                requested_model_tier=parameters.get("modelTier"),
+                tier_fallback=parameters.get("tierFallback"),
+                advisory_preview=parameters.get("tierPreview"),
+            ).model
 
         profile_default = str(getattr(profile, "default_model", None) or "").strip() or None
         if profile_default:
@@ -338,9 +350,20 @@ class ManagedRuntimeStrategy(ABC):
 
     def get_effort(self, profile: Any, request: Any) -> str | None:
         """Extract effort from request parameters or profile default."""
-        return (
-            request.parameters.get("effort") if request.parameters else None
-        ) or getattr(profile, "default_effort", None)
+        parameters = request.parameters or {}
+        if parameters.get("effort"):
+            return parameters.get("effort")
+        if parameters.get("modelTier") is not None:
+            from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+            return resolve_model_effort(
+                runtime_id=self.runtime_id,
+                profile=profile,
+                requested_model_tier=parameters.get("modelTier"),
+                tier_fallback=parameters.get("tierFallback"),
+                advisory_preview=parameters.get("tierPreview"),
+            ).effort
+        return getattr(profile, "default_effort", None)
 
     def shape_environment(
         self,

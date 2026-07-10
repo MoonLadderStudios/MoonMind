@@ -645,6 +645,11 @@ async def test_start_passes_rich_provider_profile_fields_to_launcher() -> None:
             "credential_source": "secret_ref",
             "runtime_materialization_mode": "composite",
             "default_model": "qwen/qwen3.6-plus",
+            "model_tiers": [
+                {"label": "Plan", "model": "gpt-5-mini", "effort": "low"},
+                {"label": "Implement", "model": "gpt-5.5", "effort": "high"},
+            ],
+            "default_model_tier": 2,
             "command_behavior": {"suppress_default_model_flag": True},
             "env_template": {
                 "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"},
@@ -701,6 +706,23 @@ async def test_start_passes_rich_provider_profile_fields_to_launcher() -> None:
     assert profile_payload.get("providerLabel") == "OpenRouter"
     assert profile_payload.get("credentialSource") == "secret_ref"
     assert profile_payload.get("runtimeMaterializationMode") == "composite"
+    assert profile_payload.get("modelTiers") == [
+        {
+            "label": "Plan",
+            "model": "gpt-5-mini",
+            "effort": "low",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Implement",
+            "model": "gpt-5.5",
+            "effort": "high",
+            "parameters": {},
+            "annotations": {},
+        },
+    ]
+    assert profile_payload.get("defaultModelTier") == 2
     assert profile_payload.get("commandBehavior") == {
         "suppress_default_model_flag": True
     }

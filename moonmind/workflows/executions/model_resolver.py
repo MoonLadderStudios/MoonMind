@@ -22,7 +22,7 @@ Usage::
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 from moonmind.workflows.executions.runtime_defaults import (
@@ -61,6 +61,21 @@ class ResolvedModelEffort:
     effort_source: str
     fallback_reason: str | None
     effort_application_status: str | None
+    preview_mismatch: bool = False
+
+    def as_metadata(self) -> dict[str, Any]:
+        return {
+            "requestedModelTier": self.requested_model_tier,
+            "effectiveModelTier": self.effective_model_tier,
+            "tierLabel": self.tier_label,
+            "fallbackReason": self.fallback_reason,
+            "resolvedModel": self.model,
+            "resolvedEffort": self.effort,
+            "modelSource": self.model_source,
+            "effortSource": self.effort_source,
+            "effortApplicationStatus": self.effort_application_status,
+            "previewMismatch": self.preview_mismatch,
+        }
 
 
 def resolve_effective_model(
@@ -135,6 +150,8 @@ def resolve_model_effort(
     requested_model: str | None = None,
     requested_effort: str | None = None,
     tier_fallback: str = _FALLBACK_CLAMP,
+    advisory_preview: Mapping[str, Any] | None = None,
+    require_launch_ready: bool = True,
     workflow_settings: Any | None = None,
     env: Mapping[str, str] | None = None,
 ) -> ResolvedModelEffort:
@@ -144,7 +161,8 @@ def resolve_model_effort(
     ``resolve_effective_model`` tuple helper remains available for current
     callers that only need the effective model and source.
     """
-    _ensure_launch_ready_profile(profile)
+    if require_launch_ready:
+        _ensure_launch_ready_profile(profile)
     requested_tier = _normalize_requested_tier(requested_model_tier)
     fallback_policy = _normalize_tier_fallback(tier_fallback)
 
@@ -166,16 +184,19 @@ def resolve_model_effort(
             (_legacy_profile_value(profile, "default_effort"), _MODEL_SOURCE_PROFILE_DEFAULT),
             (runtime_effort, _MODEL_SOURCE_RUNTIME_DEFAULT),
         )
-        return ResolvedModelEffort(
-            model=model,
-            effort=effort,
-            requested_model_tier=requested_tier,
-            effective_model_tier=None,
-            tier_label=None,
-            model_source=model_source,
-            effort_source=effort_source,
-            fallback_reason=None,
-            effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
+        return _with_preview_mismatch(
+            ResolvedModelEffort(
+                model=model,
+                effort=effort,
+                requested_model_tier=requested_tier,
+                effective_model_tier=None,
+                tier_label=None,
+                model_source=model_source,
+                effort_source=effort_source,
+                fallback_reason=None,
+                effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
+            ),
+            advisory_preview,
         )
 
     tiers = _profile_model_tiers(profile)
@@ -206,16 +227,19 @@ def resolve_model_effort(
             (_legacy_profile_value(profile, "default_effort"), _MODEL_SOURCE_PROFILE_DEFAULT),
             (runtime_effort, _MODEL_SOURCE_RUNTIME_DEFAULT),
         )
-        return ResolvedModelEffort(
-            model=model,
-            effort=effort,
-            requested_model_tier=requested_tier,
-            effective_model_tier=effective_tier,
-            tier_label=tier_label,
-            model_source=model_source,
-            effort_source=effort_source,
-            fallback_reason=fallback_reason,
-            effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
+        return _with_preview_mismatch(
+            ResolvedModelEffort(
+                model=model,
+                effort=effort,
+                requested_model_tier=requested_tier,
+                effective_model_tier=effective_tier,
+                tier_label=tier_label,
+                model_source=model_source,
+                effort_source=effort_source,
+                fallback_reason=fallback_reason,
+                effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
+            ),
+            advisory_preview,
         )
 
     runtime_model, runtime_effort = _runtime_defaults(
@@ -232,21 +256,44 @@ def resolve_model_effort(
         (_legacy_profile_value(profile, "default_effort"), _MODEL_SOURCE_PROFILE_DEFAULT),
         (runtime_effort, _MODEL_SOURCE_RUNTIME_DEFAULT),
     )
-    return ResolvedModelEffort(
-        model=model,
-        effort=effort,
-        requested_model_tier=requested_tier,
-        effective_model_tier=None,
-        tier_label=None,
-        model_source=model_source,
-        effort_source=effort_source,
-        fallback_reason=None,
-        effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
+    return _with_preview_mismatch(
+        ResolvedModelEffort(
+            model=model,
+            effort=effort,
+            requested_model_tier=requested_tier,
+            effective_model_tier=None,
+            tier_label=None,
+            model_source=model_source,
+            effort_source=effort_source,
+            fallback_reason=None,
+            effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
+        ),
+        advisory_preview,
     )
 
 
 def _clean(value: Any | None) -> str | None:
     return str(value).strip() if value is not None and str(value).strip() else None
+
+
+def _with_preview_mismatch(
+    resolved: ResolvedModelEffort,
+    advisory_preview: Mapping[str, Any] | None,
+) -> ResolvedModelEffort:
+    if not advisory_preview:
+        return resolved
+    expected = {
+        "requestedTier": resolved.requested_model_tier,
+        "effectiveTier": resolved.effective_model_tier,
+        "model": resolved.model,
+        "effort": resolved.effort,
+        "fallbackReason": resolved.fallback_reason,
+    }
+    preview_mismatch = any(
+        key in advisory_preview and advisory_preview.get(key) != value
+        for key, value in expected.items()
+    )
+    return replace(resolved, preview_mismatch=preview_mismatch)
 
 
 def _runtime_defaults(

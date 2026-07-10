@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -78,6 +79,27 @@ class TestConcreteDefaults:
             )
             is None
         )
+
+    def test_tier_policy_resolves_against_launch_profile(self) -> None:
+        s = self._MinimalStrategy()
+        profile = SimpleNamespace(
+            enabled=True,
+            auth_state="connected",
+            default_model=None,
+            default_effort=None,
+            model_tiers=[
+                {"label": "Plan", "model": "tier-one-model", "effort": "low"},
+                {"label": "Implement", "model": "tier-two-model", "effort": "high"},
+            ],
+            default_model_tier=1,
+            model_overrides={},
+        )
+        request = SimpleNamespace(
+            parameters={"modelTier": 2, "tierFallback": "strict"}
+        )
+
+        assert s.get_model(profile, request) == "tier-two-model"
+        assert s.get_effort(profile, request) == "high"
 
     @pytest.mark.parametrize(
         ("failure_class", "expected"),

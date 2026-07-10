@@ -797,6 +797,23 @@ export interface paths {
         patch: operations["update_profile_api_v1_provider_profiles__profile_id__patch"];
         trace?: never;
     };
+    "/api/v1/provider-profiles/{profile_id}/model-tiers:preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Model Tiers */
+        post: operations["preview_model_tiers_api_v1_provider_profiles__profile_id__model_tiers_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/provider-profiles/{profile_id}/credentials/api-key": {
         parameters: {
             query?: never;
@@ -8425,6 +8442,50 @@ export interface components {
             /** Rate Limit Policy */
             rate_limit_policy: string;
         };
+        /** ProviderProfileTierPreviewItem */
+        ProviderProfileTierPreviewItem: {
+            /** Stepid */
+            stepId: string;
+            /** Requestedtier */
+            requestedTier?: number | null;
+            /** Effectivetier */
+            effectiveTier?: number | null;
+            /** Model */
+            model?: string | null;
+            /** Effort */
+            effort?: string | null;
+            /** Fallbackreason */
+            fallbackReason?: string | null;
+        };
+        /** ProviderProfileTierPreviewRequest */
+        ProviderProfileTierPreviewRequest: {
+            /** Steps */
+            steps?: components["schemas"]["ProviderProfileTierPreviewStep"][];
+        };
+        /** ProviderProfileTierPreviewResponse */
+        ProviderProfileTierPreviewResponse: {
+            /** Profileid */
+            profileId: string;
+            /**
+             * Advisory
+             * @default true
+             */
+            advisory: boolean;
+            /** Items */
+            items: components["schemas"]["ProviderProfileTierPreviewItem"][];
+        };
+        /** ProviderProfileTierPreviewStep */
+        ProviderProfileTierPreviewStep: {
+            /** Id */
+            id: string;
+            /** Modeltier */
+            modelTier?: number | null;
+            /**
+             * Tierfallback
+             * @default clamp
+             */
+            tierFallback: string | null;
+        };
         /** ProviderProfileUpdate */
         ProviderProfileUpdate: {
             /** Provider Id */
@@ -12166,6 +12227,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_model_tiers_api_v1_provider_profiles__profile_id__model_tiers_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderProfileTierPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderProfileTierPreviewResponse"];
                 };
             };
             /** @description Validation Error */

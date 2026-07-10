@@ -6939,6 +6939,11 @@ def _resolve_runtime_model_effort(
     if requested_effort is not None and not isinstance(requested_effort, str):
         raise _invalid_workflow_request("runtime.effort must be a string.")
     tier_fallback = str(runtime_payload.get("tierFallback") or "clamp")
+    advisory_preview = (
+        runtime_payload.get("tierPreview")
+        if isinstance(runtime_payload.get("tierPreview"), Mapping)
+        else None
+    )
 
     if profile is not None and (requested_tier is not None or _profile_has_model_tiers(profile)):
         try:
@@ -6949,6 +6954,7 @@ def _resolve_runtime_model_effort(
                 requested_model=requested_model,
                 requested_effort=requested_effort,
                 tier_fallback=tier_fallback,
+                advisory_preview=advisory_preview,
                 workflow_settings=settings.workflow,
             )
         except ValueError as exc:
@@ -7027,17 +7033,7 @@ def _model_tier_resolution_payload(
     *,
     profile: Any,
 ) -> dict[str, Any]:
-    payload = {
-        "requestedModelTier": resolved.requested_model_tier,
-        "effectiveModelTier": resolved.effective_model_tier,
-        "tierLabel": resolved.tier_label,
-        "fallbackReason": resolved.fallback_reason,
-        "resolvedModel": resolved.model,
-        "resolvedEffort": resolved.effort,
-        "modelSource": resolved.model_source,
-        "effortSource": resolved.effort_source,
-        "effortApplicationStatus": resolved.effort_application_status,
-    }
+    payload = resolved.as_metadata()
     profile_id = (
         profile.get("profile_id")
         if isinstance(profile, Mapping)

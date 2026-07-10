@@ -1655,6 +1655,11 @@ class ManagedRuntimeProfile(BaseModel):
     default_model: str | None = Field(None, alias="defaultModel")
     model_overrides: dict[str, str] = Field(default_factory=dict, alias="modelOverrides")
     default_effort: str | None = Field(None, alias="defaultEffort")
+    model_tiers: list[ProviderModelEffortTier] = Field(
+        default_factory=list,
+        alias="modelTiers",
+    )
+    default_model_tier: int = Field(1, alias="defaultModelTier", ge=1)
     default_timeout_seconds: int = Field(3600, alias="defaultTimeoutSeconds", ge=1)
     workspace_mode: WorkspaceMode = Field("tempdir", alias="workspaceMode")
     env_overrides: dict[str, str] = Field(default_factory=dict, alias="envOverrides")

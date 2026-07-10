@@ -42,6 +42,7 @@ from moonmind.provider_profiles.model_tiers import (
     legacy_default_model_effort_tier,
 )
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
+from moonmind.workflows.executions.model_resolver import resolve_model_effort
 from moonmind.utils.logging import (
     redact_profile_file_templates,
     redact_sensitive_payload,
@@ -356,6 +357,42 @@ class ProviderProfileResponse(BaseModel):
     updated_at: Optional[str]
 
     model_config = {"from_attributes": True}
+
+
+class ProviderProfileTierPreviewStep(BaseModel):
+    step_id: str = Field(..., alias="id")
+    model_tier: Optional[int] = Field(default=None, ge=1, alias="modelTier")
+    tier_fallback: Optional[str] = Field(
+        default="clamp",
+        pattern="^(clamp|strict)$",
+        alias="tierFallback",
+    )
+
+    model_config = {"populate_by_name": True}
+
+
+class ProviderProfileTierPreviewRequest(BaseModel):
+    steps: list[ProviderProfileTierPreviewStep] = Field(default_factory=list)
+
+
+class ProviderProfileTierPreviewItem(BaseModel):
+    step_id: str = Field(..., alias="stepId")
+    requested_tier: Optional[int] = Field(default=None, alias="requestedTier")
+    effective_tier: Optional[int] = Field(default=None, alias="effectiveTier")
+    model: Optional[str] = None
+    effort: Optional[str] = None
+    fallback_reason: Optional[str] = Field(default=None, alias="fallbackReason")
+
+    model_config = {"populate_by_name": True}
+
+
+class ProviderProfileTierPreviewResponse(BaseModel):
+    profile_id: str = Field(..., alias="profileId")
+    advisory: bool = True
+    items: list[ProviderProfileTierPreviewItem]
+
+    model_config = {"populate_by_name": True}
+
 
 class ProviderReadinessCheck(BaseModel):
     id: str
@@ -722,6 +759,53 @@ async def update_profile(
         managed_secret_statuses=secret_statuses,
         secret_ref_results=secret_ref_results.get(profile.profile_id),
     )
+
+
+@router.post(
+    "/{profile_id}/model-tiers:preview",
+    response_model=ProviderProfileTierPreviewResponse,
+)
+async def preview_model_tiers(
+    profile_id: str,
+    body: ProviderProfileTierPreviewRequest,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if not _can_view_profile(profile, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to view this provider profile.",
+        )
+
+    items: list[dict[str, Any]] = []
+    for step in body.steps:
+        try:
+            resolved = resolve_model_effort(
+                runtime_id=profile.runtime_id,
+                profile=profile,
+                requested_model_tier=step.model_tier,
+                tier_fallback=step.tier_fallback or "clamp",
+                require_launch_ready=False,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        items.append(
+            {
+                "stepId": step.step_id,
+                "requestedTier": resolved.requested_model_tier,
+                "effectiveTier": resolved.effective_model_tier,
+                "model": resolved.model,
+                "effort": resolved.effort,
+                "fallbackReason": resolved.fallback_reason,
+            }
+        )
+
+    return {"profileId": profile.profile_id, "advisory": True, "items": items}
+
 
 @router.post(
     "/{profile_id}/credentials/api-key",

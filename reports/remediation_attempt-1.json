@@ -1,136 +1,89 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issue_ref": "MM-1170",
-  "issue_url": "https://moonladder.atlassian.net/browse/MM-1170",
-  "source_verification_artifact": "/work/agent_jobs/mm:3a4d0574-3f55-438b-8861-be2e0a37020f/artifacts/jira-implement-verify.json",
+  "issue_ref": "MM-1172",
+  "issue_url": "https://moonladder.atlassian.net/browse/MM-1172",
+  "source_verification_artifact": "artifacts/jira-implement-verify.json",
   "source_verdict": "ADDITIONAL_WORK_NEEDED",
   "brief_truncated": false,
-  "summary": "Remediated the verifier-reported MM-1170 gaps by adding persisted Provider Profile tier policy fields, exposing them through provider-profile CRUD and manager sync payloads, and adding the missing focused coverage for provider-profile tier round trips, strict API fallback rejection, and independent model-only / effort-only task override semantics. Scope was bounded to the verifier remainingWork backlog; no pull request was created and Jira status was not changed.",
+  "summary": "Remediated the verifier-reported execution-router gaps for provider profile model tier launch metadata. Legacy provider profiles that only expose default_model/default_effort now preserve the compatibility modelSource provider_profile_default instead of being reclassified as profile_default_tier. Execution launch paths now record modelTierResolution only when tier policy is actually involved: an explicit modelTier, an advisory tierPreview, or a provider profile with configured model_tiers. Added focused launch-path coverage proving stale tierPreview data is advisory, backend resolution re-runs against the current profile policy, and modelTierResolution.previewMismatch is recorded.",
   "changed_files": [
-    "api_service/api/routers/provider_profiles.py",
-    "api_service/db/models.py",
-    "api_service/migrations/versions/335_provider_profile_model_tiers.py",
-    "api_service/services/provider_profile_service.py",
-    "moonmind/workflows/temporal/workflows/provider_profile_manager.py",
+    "api_service/api/routers/executions.py",
+    "moonmind/workflows/executions/model_resolver.py",
     "tests/unit/api/routers/test_executions.py",
-    "tests/unit/api_service/api/routers/test_provider_profiles.py",
-    "tests/unit/workflows/executions/test_model_resolver.py"
+    "reports/remediation_attempt-1.json"
   ],
   "gap_statuses": [
     {
-      "requirement": "Add model_tiers JSON and default_model_tier integer to ManagedAgentProviderProfile with validation/defaults aligned to docs/Security/ProviderProfileModelEffortTiers.md.",
+      "requirement": "Preview output is advisory and does not replace launch-time backend resolution.",
+      "gap_type": "verification",
+      "status": "fixed",
+      "evidence": [
+        "api_service/api/routers/executions.py now gates modelTierResolution emission through _should_record_model_tier_resolution so ordinary non-tier launch payloads retain their prior shape while tier-policy launches still record resolved metadata.",
+        "tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_records_tier_preview_mismatch submits stale tierPreview data and verifies launch-time backend resolution stores the current profile model/effort instead of trusting the preview snapshot.",
+        "./tools/test_unit.sh tests/unit/api/routers/test_executions.py passed."
+      ]
+    },
+    {
+      "requirement": "Backend can detect and record preview mismatch when submitted preview state differs from current profile policy.",
+      "gap_type": "verification",
+      "status": "fixed",
+      "evidence": [
+        "tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_records_tier_preview_mismatch asserts modelTierResolution.previewMismatch is true in initial_parameters when the submitted preview model differs from the resolver output.",
+        "The same test asserts requestedModelTier, effectiveModelTier, resolvedModel, resolvedEffort, modelSource, effortSource, and fallbackReason in the recorded modelTierResolution payload."
+      ]
+    },
+    {
+      "requirement": "Provider profile default compatibility during migration.",
       "gap_type": "implementation",
       "status": "fixed",
       "evidence": [
-        "api_service/db/models.py adds non-null model_tiers JSON with the documented Runtime default tier and default_model_tier integer defaulting to 1.",
-        "api_service/db/models.py adds ck_provider_profiles_default_model_tier_positive.",
-        "api_service/api/routers/provider_profiles.py validates model_tiers as a non-empty list of mappings and default_model_tier as an integer within range."
-      ]
-    },
-    {
-      "requirement": "Add an Alembic migration for model_tiers/default_model_tier with safe defaults for existing profiles.",
-      "gap_type": "implementation",
-      "status": "fixed",
-      "evidence": [
-        "api_service/migrations/versions/335_provider_profile_model_tiers.py adds model_tiers and default_model_tier to managed_agent_provider_profiles with safe non-null server defaults and the positive default tier check."
-      ]
-    },
-    {
-      "requirement": "Extend provider profile create/update/read schemas and _row_to_dict to accept and return tier policy fields, including validation that model_tiers is a non-empty list of mappings and default_model_tier is within range.",
-      "gap_type": "implementation",
-      "status": "fixed",
-      "evidence": [
-        "ProviderProfileCreate, ProviderProfileUpdate, and ProviderProfileResponse now include model_tiers/default_model_tier.",
-        "create_profile persists the fields; update_profile validates row-level tier policy after partial updates; _row_to_dict returns the fields.",
-        "tests/unit/api_service/api/routers/test_provider_profiles.py covers create response, get/update round trip, DB readback, and out-of-range default_model_tier rejection."
-      ]
-    },
-    {
-      "requirement": "Ensure provider profile manager/list/service surfaces preserve model_tiers/default_model_tier so runtime resolution sees real selected profile policy, not only test-double attributes.",
-      "gap_type": "implementation",
-      "status": "fixed",
-      "evidence": [
-        "api_service/services/provider_profile_service.py includes model_tiers/default_model_tier in _manager_profile_payload.",
-        "moonmind/workflows/temporal/workflows/provider_profile_manager.py stores and returns model_tiers/default_model_tier in ProfileSlotState, restore, and sync paths.",
-        "tests/unit/api_service/api/routers/test_provider_profiles.py asserts _manager_profile_payload preserves both fields."
-      ]
-    },
-    {
-      "requirement": "Add API strict fallback rejection coverage.",
-      "gap_type": "verification",
-      "status": "fixed",
-      "evidence": [
-        "tests/unit/api/routers/test_executions.py adds test_create_task_shaped_execution_rejects_strict_unavailable_model_tier, asserting tierFallback strict with out-of-range modelTier rejects before create_execution is called."
-      ]
-    },
-    {
-      "requirement": "Add model-only and effort-only override tests if the intended override semantics require independent bypass behavior.",
-      "gap_type": "verification",
-      "status": "fixed",
-      "evidence": [
-        "tests/unit/workflows/executions/test_model_resolver.py adds independent model-only and effort-only override tests showing the supplied override bypasses tier policy and records task_override for the overridden field."
-      ]
-    },
-    {
-      "requirement": "Run targeted provider profile API/unit tests after adding schema support.",
-      "gap_type": "verification",
-      "status": "fixed",
-      "evidence": [
-        "Focused pytest and ./tools/test_unit.sh targeted runs passed for tests/unit/api_service/api/routers/test_provider_profiles.py."
-      ]
-    },
-    {
-      "requirement": "Run the model resolver and execution router unit tests again after persistence/API wiring changes.",
-      "gap_type": "verification",
-      "status": "fixed",
-      "evidence": [
-        "./tools/test_unit.sh tests/unit/workflows/executions/test_model_resolver.py tests/unit/api/routers/test_executions.py tests/unit/api_service/api/routers/test_provider_profiles.py passed."
-      ]
-    },
-    {
-      "requirement": "Run hermetic integration only if the migration/schema change triggers the repo's integration selector for DB migrations.",
-      "gap_type": "verification",
-      "status": "blocked_by_environment",
-      "evidence": [
-        "./tools/test_integration.sh was attempted because this remediation adds an Alembic migration.",
-        "The command failed before running tests while building the Docker pytest image: Docker reported 'the --mount option requires BuildKit' and compose warned that the buildx plugin is not installed.",
-        "Retrying with DOCKER_BUILDKIT=1 failed with the same BuildKit/buildx environment error before test execution."
+        "moonmind/workflows/executions/model_resolver.py now distinguishes explicitly configured model_tiers from tiers derived from legacy default_model/default_effort fields.",
+        "Legacy profiles without configured model_tiers continue to resolve modelSource=provider_profile_default unless an explicit requested model tier is supplied.",
+        "Previously failing tests test_step_runtime_inherits_task_profile_default_model and test_create_task_shaped_execution_accepts_provider_profile_alias now pass in ./tools/test_unit.sh tests/unit/api/routers/test_executions.py."
       ]
     }
+  ],
+  "unchanged_verified_requirements": [
+    "Provider Profile create/update accepts model_tiers and default_model_tier.",
+    "Provider Profile responses include tier policy plus compatibility fields during migration.",
+    "The preview endpoint returns requested tier, effective tier, model, effort, and fallback reason for each requested step.",
+    "Use backend resolver logic for preview parity.",
+    "Do not require presets to name concrete models for preview."
   ],
   "targeted_checks": [
     {
-      "command": "pytest tests/unit/workflows/executions/test_model_resolver.py tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_resolves_model_tier_against_profile tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_rejects_strict_unavailable_model_tier tests/unit/api_service/api/routers/test_provider_profiles.py::test_create_provider_profile tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_tier_policy_round_trips_through_get_and_update tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_rejects_invalid_default_model_tier tests/unit/api_service/api/routers/test_provider_profiles.py::test_provider_profile_manager_payload_redacts_secret_like_runtime_fields -q",
+      "command": "./tools/test_unit.sh tests/unit/api/routers/test_executions.py",
       "result": "PASS",
-      "notes": "46 passed; warnings were existing FastAPI TestClient/httpx deprecation and google.generativeai package deprecation warnings."
+      "notes": "357 Python tests passed, including the new launch-path preview mismatch coverage and the four previously failing execution-router tests. The runner UI phase also passed: 60 files passed, 942 tests passed, 238 skipped. Warnings were existing Starlette deprecation, AsyncMock resource, and jsdom canvas getContext warnings."
     },
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/executions/test_model_resolver.py tests/unit/api/routers/test_executions.py tests/unit/api_service/api/routers/test_provider_profiles.py",
+      "command": "./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/workflows/executions/test_model_resolver.py",
       "result": "PASS",
-      "notes": "Python segment passed 453 tests; Vitest segment passed 60 files with 942 tests passed and 238 skipped. The wrapper emitted existing jsdom canvas warnings during UI tests."
+      "notes": "82 Python tests passed for provider profile API and model resolver coverage. The runner UI phase also passed: 60 files passed, 942 tests passed, 238 skipped. Warnings were existing google.generativeai deprecation and jsdom canvas getContext warnings."
     },
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_integration.sh",
-      "result": "FAIL_ENVIRONMENT",
-      "notes": "Failed before tests while building the Docker pytest image because BuildKit support was unavailable: Docker reported 'the --mount option requires BuildKit'; compose also warned the buildx plugin is not installed."
-    },
-    {
-      "command": "DOCKER_BUILDKIT=1 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_integration.sh",
-      "result": "FAIL_ENVIRONMENT",
-      "notes": "Retry failed before tests for the same BuildKit/buildx environment issue."
+      "command": "git diff --check",
+      "result": "PASS",
+      "notes": "No whitespace errors reported for the working tree diff."
     }
   ],
+  "remaining_work": [],
   "environment_notes": [
     {
-      "item": "Authoritative verifier artifact location",
-      "status": "NOTE",
-      "detail": "The latest MM-1170 moonspec-verify result was found at /work/agent_jobs/mm:3a4d0574-3f55-438b-8861-be2e0a37020f/artifacts/jira-implement-verify.json. Repo-local reports/remediation_verification-1.json referred to MM-1146 and was not used as authority."
+      "item": "MoonMind RAG retrieved context",
+      "status": "NOT_USED",
+      "detail": "Retrieved context was delivered in degraded local fallback mode and was not needed for this bounded remediation; direct repository files and the authoritative verifier artifact controlled the work."
     },
     {
-      "item": "Integration verification",
-      "status": "BLOCKED_BY_ENVIRONMENT",
-      "detail": "Hermetic integration was attempted due to the migration/schema change, but the runtime Docker environment lacks working BuildKit/buildx support for the integration image build."
+      "item": "Stale prior artifact overwritten",
+      "status": "NOTE",
+      "detail": "reports/remediation_attempt-1.json previously described MM-1146. It was replaced with this MM-1172 remediation attempt record."
     }
-  ]
+  ],
+  "scope_controls": {
+    "pull_request_created": false,
+    "jira_status_changed": false,
+    "scope_broadened": false
+  }
 }
